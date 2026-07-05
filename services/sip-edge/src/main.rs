@@ -1193,6 +1193,24 @@ async fn main() -> Result<(), AnyError> {
     }
 
     let socket = Arc::new(UdpSocket::bind(&bind_addr).await?);
+
+    // Increase UDP receive buffer for high CPS (default ~786KB, set to 4MB)
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let fd = socket.as_raw_fd();
+        let buf_size: i32 = 4 * 1024 * 1024; // 4MB
+        unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                &buf_size as *const i32 as *const libc::c_void,
+                std::mem::size_of::<i32>() as libc::socklen_t,
+            );
+        }
+    }
+
     edge_state.set_socket(Arc::clone(&socket));
     info!(%bind_addr, "sip-edge UDP listener started");
 
