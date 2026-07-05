@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct HeaderName(String);
+pub struct HeaderName(Cow<'static, str>);
 
 impl HeaderName {
     pub fn new(raw: &str) -> SipResult<Self> {
@@ -12,11 +12,14 @@ impl HeaderName {
             return Err(SipParseError::InvalidHeaderLine(raw.to_string()));
         }
 
-        Ok(Self(canonical_header_name_owned(value)))
+        Ok(Self(canonical_header_name(value)))
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        match &self.0 {
+            Cow::Borrowed(s) => s,
+            Cow::Owned(s) => s,
+        }
     }
 }
 
@@ -116,6 +119,7 @@ impl HeaderMap {
 
 fn canonical_header_name(raw: &str) -> Cow<'static, str> {
     match raw.trim().to_ascii_lowercase().as_str() {
+        // Compact single-letter headers
         "b" => Cow::Borrowed("referred-by"),
         "c" => Cow::Borrowed("content-type"),
         "e" => Cow::Borrowed("content-encoding"),
@@ -131,27 +135,37 @@ fn canonical_header_name(raw: &str) -> Cow<'static, str> {
         "u" => Cow::Borrowed("allow-events"),
         "v" => Cow::Borrowed("via"),
         "x" => Cow::Borrowed("session-expires"),
+        // Full common SIP headers (zero-copy from static strings)
+        "via" => Cow::Borrowed("via"),
+        "from" => Cow::Borrowed("from"),
+        "to" => Cow::Borrowed("to"),
+        "call-id" => Cow::Borrowed("call-id"),
+        "contact" => Cow::Borrowed("contact"),
+        "content-type" => Cow::Borrowed("content-type"),
+        "content-length" => Cow::Borrowed("content-length"),
+        "cseq" => Cow::Borrowed("cseq"),
+        "max-forwards" => Cow::Borrowed("max-forwards"),
+        "expires" => Cow::Borrowed("expires"),
+        "authorization" => Cow::Borrowed("authorization"),
+        "www-authenticate" => Cow::Borrowed("www-authenticate"),
+        "proxy-authorization" => Cow::Borrowed("proxy-authorization"),
+        "proxy-authenticate" => Cow::Borrowed("proxy-authenticate"),
+        "record-route" => Cow::Borrowed("record-route"),
+        "route" => Cow::Borrowed("route"),
+        "service-route" => Cow::Borrowed("service-route"),
+        "session-expires" => Cow::Borrowed("session-expires"),
+        "min-se" => Cow::Borrowed("min-se"),
+        "require" => Cow::Borrowed("require"),
+        "supported" => Cow::Borrowed("supported"),
+        "allow" => Cow::Borrowed("allow"),
+        "user-agent" => Cow::Borrowed("user-agent"),
+        "server" => Cow::Borrowed("server"),
+        "subject" => Cow::Borrowed("subject"),
+        "content-encoding" => Cow::Borrowed("content-encoding"),
+        "referred-by" => Cow::Borrowed("referred-by"),
+        "refer-to" => Cow::Borrowed("refer-to"),
+        "event" => Cow::Borrowed("event"),
+        "allow-events" => Cow::Borrowed("allow-events"),
         value => Cow::Owned(value.to_string()),
-    }
-}
-
-fn canonical_header_name_owned(raw: &str) -> String {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "b" => "referred-by".to_string(),
-        "c" => "content-type".to_string(),
-        "e" => "content-encoding".to_string(),
-        "f" => "from".to_string(),
-        "i" => "call-id".to_string(),
-        "k" => "supported".to_string(),
-        "l" => "content-length".to_string(),
-        "m" => "contact".to_string(),
-        "o" => "event".to_string(),
-        "r" => "refer-to".to_string(),
-        "s" => "subject".to_string(),
-        "t" => "to".to_string(),
-        "u" => "allow-events".to_string(),
-        "v" => "via".to_string(),
-        "x" => "session-expires".to_string(),
-        value => value.to_string(),
     }
 }
