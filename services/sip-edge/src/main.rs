@@ -187,7 +187,7 @@ struct InboundTransaction {
     gateway_relay_rtp: Option<RtpEndpoint>,
     gateway_rtp: Option<RtpEndpoint>,
     caller_relay_rtp: Option<RtpEndpoint>,
-    original_request: Option<SipRequest>,
+    original_request: Option<Arc<SipRequest>>,
     inbound_route_set: Vec<String>,
     outbound_route_set: Vec<String>,
     caller_contact: Option<SipUri>,
@@ -830,7 +830,7 @@ impl EdgeState {
                 gateway_relay_rtp,
                 gateway_rtp: None,
                 caller_relay_rtp: None,
-                original_request: Some(request.clone()),
+                original_request: Some(Arc::new(request.clone())),
                 inbound_route_set,
                 outbound_route_set: Vec::new(),
                 caller_contact,
@@ -2243,7 +2243,7 @@ async fn handle_datagram(
                                 final_datagrams.push(PendingDatagram::new(peer_str.clone(), resp));
                             }
                         } else {
-                            let (tx, rx) = tokio::sync::mpsc::channel(16);
+                            let (tx, rx) = tokio::sync::mpsc::channel(4);
                             edge_state.register_server_transaction(key.clone(), tx.clone());
                             transaction::spawn_invite_server_transaction(
                                 key,
@@ -3393,7 +3393,7 @@ async fn handle_out_of_dialog_message(
                 gateway_relay_rtp: None,
                 gateway_rtp: None,
                 caller_relay_rtp: None,
-                original_request: Some(request.clone()),
+                original_request: Some(Arc::new(request.clone())),
                 inbound_route_set,
                 outbound_route_set: Vec::new(),
                 caller_contact: None,
@@ -4141,7 +4141,7 @@ async fn handle_in_dialog_request(
 
                         if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(call_id.as_str()) {
                             t_mut.caller_rtp = Some(remote_ep);
-                            t_mut.original_request = Some(mutable_request.clone());
+                            t_mut.original_request = Some(Arc::new(mutable_request.clone()));
                         }
                     }
                 }
