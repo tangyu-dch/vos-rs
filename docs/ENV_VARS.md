@@ -21,7 +21,7 @@
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `VOS_RS_SIP_AUTH_USERS` | _(空，禁用认证)_ | 用户凭证，格式 `user1:pass1,user2:pass2` |
+| `VOS_RS_SIP_AUTH_USERS` | _(空，禁用认证)_ | 用户凭证，格式 `user1:pass1,user2:pass2` 或 `user1=pass1,user2=pass2` |
 | `VOS_RS_SIP_AUTH_REALM` | `vos-rs` | Digest 认证 Realm |
 | `VOS_RS_SIP_AUTH_NONCE` | `vos-rs-dev-nonce` | 静态 nonce；保留默认值时自动生成动态 nonce |
 
@@ -116,20 +116,51 @@
 | `API_PORT` | `8080` | HTTP 监听端口 |
 | `VOS_RS_RECORDING_DIR` | `target/recordings` | 录音文件目录（用于下载接口） |
 | `VOS_RS_MANAGE_BASE` | `http://127.0.0.1:8082` | sip-edge 管理 API 基础 URL |
-| `RUST_LOG` | `info` | 日志级别 |
+| `RUST_LOG` | `api_server=debug,tower_http=debug,info` | 日志级别 |
 
 **API 端点**：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/health` | 健康检查 |
+| **CDR** | | |
 | GET | `/api/cdrs` | 分页查询 CDR（支持 status/caller/callee/时间范围过滤） |
 | GET | `/api/cdrs/:call_id` | 单条 CDR 详情 |
 | GET | `/api/cdrs/:call_id/dtmf` | DTMF 事件审计 |
+| **仪表盘** | | |
 | GET | `/api/dashboard/stats` | 今日汇总（总量/接通率/MOS/丢包/注册用户） |
 | GET | `/api/dashboard/trend` | 今日每小时趋势 |
+| **报表** | | |
 | GET | `/api/reports/summary` | 报表（按状态/按日聚合） |
 | GET | `/api/reports/export` | CSV 导出 CDR |
+| **用户管理** | | |
+| GET/POST | `/api/users` | 列表 / 创建 SIP 用户 |
+| PUT/DELETE | `/api/users/:username` | 更新 / 删除用户 |
+| **网关管理** | | |
+| GET/POST | `/api/gateways` | 列表 / 创建网关 |
+| PUT/DELETE | `/api/gateways/:id` | 更新 / 删除网关 |
+| **路由管理** | | |
+| GET/POST | `/api/routes` | 列表 / 创建路由 |
+| PUT/DELETE | `/api/routes/:id` | 更新 / 删除路由 |
+| GET | `/api/route-preview` | 预览路由决策 |
+| **注册** | | |
+| GET | `/api/registrations` | 列出 SIP 注册 |
+| **录音** | | |
+| GET | `/api/recordings` | 列出录音文件 |
+| GET | `/api/recordings/:call_id/audio` | 下载录音音频 |
+| **账单** | | |
+| GET/POST | `/api/rates` | 列表 / 创建费率 |
+| PUT/DELETE | `/api/rates/:id` | 更新 / 删除费率 |
+| GET | `/api/accounts` | 列出账户 |
+| POST | `/api/accounts/:username/credit` | 充值 |
+| GET | `/api/ledger` | 列出账单流水 |
 | POST | `/api/billing/reconcile` | 触发账单对账 |
+| **号码** | | |
+| GET/POST | `/api/numbers` | 列表 / 创建号码 |
+| PUT/DELETE | `/api/numbers/:number` | 更新 / 删除号码 |
+| **呼叫控制** | | |
+| GET | `/api/calls/active` | 列出活跃呼叫 |
+| POST | `/api/calls/:call_id/terminate` | 强制结束呼叫 |
 
 ---
 
@@ -149,6 +180,7 @@
 | `VOS_RS_CDR_MAX_DELIVERIES` | `5` | NATS 最大投递次数 |
 | `VOS_RS_CDR_NAK_DELAY_MS` | `1000` | NAK 后重投延迟 |
 | `VOS_RS_CDR_DB_RETRY_ATTEMPTS` | `3` | DB 批量插入重试次数 |
+| `RUST_LOG` | `cdr_worker=info` | 日志级别 |
 
 ---
 
@@ -185,12 +217,12 @@
 |----|------|------|
 | `id` | TEXT | PRIMARY KEY |
 | `prefix` | TEXT | NOT NULL |
-| `priority` | INTEGER | DEFAULT 100 |
-| `gateway_id` | TEXT | FK → sip_gateways.id |
-| `cost` | DOUBLE | DEFAULT 0.0（支持最低成本路由） |
-| `time_start` | TEXT | nullable（HH:MM UTC 格式，时间窗口起点） |
-| `time_end` | TEXT | nullable（时间窗口终点） |
-| `created_at` | TIMESTAMPTZ | DEFAULT now() |
+| `priority` | INTEGER | NOT NULL, DEFAULT 100 |
+| `gateway_id` | TEXT | NOT NULL, FK → sip_gateways.id ON DELETE CASCADE |
+| `cost` | DOUBLE | NOT NULL, DEFAULT 0.0（支持最低成本路由） |
+| `created_at` | TIMESTAMPTZ | NOT NULL, DEFAULT now() |
+| `time_start` | TEXT | nullable（HH:MM UTC 格式，时间窗口起点，ALTER TABLE 迁移添加） |
+| `time_end` | TEXT | nullable（时间窗口终点，ALTER TABLE 迁移添加） |
 
 **匹配逻辑**：最长前缀匹配 → 同前缀按优先级排序 → 同优先级按 cost 升序（LCR）→ 检查时间窗口 → 检查网关健康状态。
 
@@ -211,37 +243,43 @@
 
 | 列 | 类型 | 说明 |
 |----|------|------|
-| `call_id` | TEXT | 呼叫 ID |
+| `id` | BIGSERIAL | PRIMARY KEY |
+| `call_id` | TEXT NOT NULL | 呼叫 ID |
 | `caller` / `callee` | TEXT | 主被叫 |
 | `started_at` / `answered_at` / `ended_at` | TIMESTAMPTZ | 时间戳 |
-| `duration_ms` / `billable_duration_ms` | BIGINT | 时长（毫秒） |
-| `status` | TEXT | answered / canceled / failed |
+| `duration_ms` / `billable_duration_ms` | BIGINT NOT NULL | 时长（毫秒） |
+| `status` | TEXT NOT NULL | answered / canceled / failed |
 | `failure_status_code` | INTEGER | SIP 失败状态码 |
 | `failure_reason` | TEXT | 失败原因 |
 | `caller_rtcp_loss_rate` / `caller_rtcp_jitter_ms` / `caller_rtcp_rtt_ms` | DOUBLE/INT | 呼叫方 RTCP 质量指标 |
 | `gateway_rtcp_loss_rate` / `gateway_rtcp_jitter_ms` / `gateway_rtcp_rtt_ms` | DOUBLE/INT | 网关侧 RTCP 质量指标 |
 | `mos` | DOUBLE | MOS 评分 |
 | `dtmf_digits` | TEXT | DTMF 按键序列 |
+| `inserted_at` | TIMESTAMPTZ NOT NULL | DEFAULT now() |
 
 ### 4.6 dtmf_events — DTMF 审计
 
 | 列 | 类型 | 说明 |
 |----|------|------|
-| `call_id` | TEXT | 呼叫 ID |
-| `digit` | TEXT | DTMF 按键 |
-| `source` | TEXT | RTP / SIP-INFO |
-| `timestamp_ms` | BIGINT | 时间戳 |
+| `id` | BIGSERIAL | PRIMARY KEY |
+| `call_id` | TEXT NOT NULL | 呼叫 ID |
+| `digit` | TEXT NOT NULL | DTMF 按键 |
+| `source` | TEXT NOT NULL | RTP / SIP-INFO |
+| `timestamp_ms` | BIGINT NOT NULL | 时间戳 |
 | `rtp_timestamp` | BIGINT | RTP 时间戳 |
 | `duration_ms` | INTEGER | 持续时间 |
 | `volume` | INTEGER | 音量 |
+| `inserted_at` | TIMESTAMPTZ NOT NULL | DEFAULT now() |
 
 ### 4.7 billing_rates — 费率表
 
 | 列 | 类型 | 说明 |
 |----|------|------|
-| `prefix` | TEXT | 被叫号码前缀（最长匹配） |
-| `rate_per_minute` | DOUBLE | 每分钟费率 |
+| `id` | TEXT | PRIMARY KEY |
+| `prefix` | TEXT NOT NULL | 被叫号码前缀（最长匹配） |
+| `rate_per_minute` | DOUBLE NOT NULL | 每分钟费率 |
 | `description` | TEXT | 描述 |
+| `created_at` | TIMESTAMPTZ NOT NULL | DEFAULT now() |
 
 ### 4.8 billing_accounts — 账户余额
 
@@ -250,17 +288,20 @@
 | `username` | TEXT | 用户名（PK） |
 | `balance` | DOUBLE | 余额，默认 0 |
 | `currency` | TEXT | 币种，默认 CNY |
+| `created_at` | TIMESTAMPTZ NOT NULL | DEFAULT now() |
 
 ### 4.9 billing_ledger — 账单流水
 
 | 列 | 类型 | 说明 |
 |----|------|------|
-| `call_id` | TEXT | UNIQUE，幂等键 |
-| `username` | TEXT | 用户名 |
-| `duration_ms` | BIGINT | 通话时长 |
-| `rate_per_minute` | DOUBLE | 费率 |
-| `amount` | DOUBLE | 扣费金额 |
-| `balance_after` | DOUBLE | 扣费后余额 |
+| `id` | BIGSERIAL | PRIMARY KEY |
+| `call_id` | TEXT NOT NULL | UNIQUE，幂等键 |
+| `username` | TEXT NOT NULL | 用户名 |
+| `duration_ms` | BIGINT NOT NULL | 通话时长 |
+| `rate_per_minute` | DOUBLE NOT NULL | 费率 |
+| `amount` | DOUBLE NOT NULL | 扣费金额 |
+| `balance_after` | DOUBLE NOT NULL | 扣费后余额 |
+| `created_at` | TIMESTAMPTZ NOT NULL | DEFAULT now() |
 
 ### 4.10 number_inventory — 号码库存
 
@@ -268,7 +309,8 @@
 |----|------|------|
 | `number` | TEXT | 号码（PK） |
 | `username` | TEXT | 绑定用户 |
-| `status` | TEXT | available / assigned / reserved |
+| `status` | TEXT NOT NULL | available / assigned / reserved |
+| `created_at` | TIMESTAMPTZ NOT NULL | DEFAULT now() |
 
 ---
 
