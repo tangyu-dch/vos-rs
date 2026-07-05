@@ -717,7 +717,10 @@ struct WavCallRecorder {
     file: File,
     frames_written: u64,
     base_timestamps: [Option<u32>; 2],
+    frames_since_flush: u64,
 }
+
+const FLUSH_INTERVAL: u64 = 100; // flush every 100 frames (2s at 50fps)
 
 impl WavCallRecorder {
     fn create(path: PathBuf) -> io::Result<Self> {
@@ -732,52 +735,58 @@ impl WavCallRecorder {
             file,
             frames_written: 0,
             base_timestamps: [None, None],
+            frames_since_flush: 0,
         })
     }
 
     fn record(&mut self, channel: RecordingChannel, packet: &RtpPacket) -> io::Result<bool> {
-        let Some(codec) = AudioCodec::from_static_payload_type(packet.payload_type) else {
-            return Ok(false);
+        let codec = match AudioCodec::from_static_payload_type(packet.payload_type) {
+            Some(c) => c,
+            None => return Ok(false),
         };
         if packet.payload.is_empty() {
             return Ok(false);
         }
 
-        let samples = decode_g711_payload(codec, &packet.payload);
+        let num_samples = packet.payload.len();
         let start_frame = self.start_frame(channel, packet.timestamp);
-        for (offset, sample) in samples.into_iter().enumerate() {
-            self.write_sample(channel, start_frame + offset as u64, sample)?;
+        self.ensure_frames(start_frame + num_samples as u64)?;
+
+        let base_offset = WAV_HEADER_LEN + start_frame * u64::from(RECORDING_CHANNELS) * 2;
+        let sample_offset = channel.sample_offset();
+        self.file.seek(SeekFrom::Start(base_offset + sample_offset as u64))?;
+
+        // Decode and write samples inline (no Vec allocation)
+        for &payload_byte in &packet.payload {
+            let sample = match codec {
+                AudioCodec::Pcmu => decode_pcmu(payload_byte),
+                AudioCodec::Pcma => decode_pcma(payload_byte),
+            };
+            let bytes = sample.to_le_bytes();
+            self.file.write_all(&bytes)?;
+            if RECORDING_CHANNELS > 1 {
+                let skip = 2_usize * (RECORDING_CHANNELS as usize - 1);
+                let mut skip_buf = [0_u8; 8];
+                self.file.read_exact(&mut skip_buf[..skip])?;
+                self.file.seek(SeekFrom::Current(-(skip as i64)))?;
+            }
         }
-        self.refresh_header()?;
+
+        self.frames_since_flush += num_samples as u64;
+        if self.frames_since_flush >= FLUSH_INTERVAL {
+            self.refresh_header()?;
+            self.flush()?;
+            self.frames_since_flush = 0;
+        } else {
+            // Update header but don't flush yet
+            self.update_header_only()?;
+        }
         Ok(true)
     }
 
     fn start_frame(&mut self, channel: RecordingChannel, timestamp: u32) -> u64 {
         let base = self.base_timestamps[channel.index()].get_or_insert(timestamp);
         u64::from(timestamp.wrapping_sub(*base))
-    }
-
-    fn write_sample(
-        &mut self,
-        channel: RecordingChannel,
-        frame_index: u64,
-        sample: i16,
-    ) -> io::Result<()> {
-        self.ensure_frames(frame_index + 1)?;
-
-        let offset = WAV_HEADER_LEN + frame_index * u64::from(RECORDING_CHANNELS) * 2;
-        let mut frame = [0_u8; 4];
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.read_exact(&mut frame)?;
-
-        let sample_bytes = sample.to_le_bytes();
-        let sample_offset = channel.sample_offset();
-        frame[sample_offset] = sample_bytes[0];
-        frame[sample_offset + 1] = sample_bytes[1];
-
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.write_all(&frame)?;
-        Ok(())
     }
 
     fn ensure_frames(&mut self, target_frames: u64) -> io::Result<()> {
@@ -788,8 +797,15 @@ impl WavCallRecorder {
         self.file.seek(SeekFrom::End(0))?;
         let missing_frames = target_frames - self.frames_written;
         let silence = [0_u8; 4];
-        for _ in 0..missing_frames {
-            self.file.write_all(&silence)?;
+        // Batch write silence in chunks instead of byte-by-byte
+        const SILENCE_CHUNK: usize = 640; // 10ms at 8kHz stereo
+        let mut remaining = missing_frames as usize;
+        while remaining > 0 {
+            let chunk = remaining.min(SILENCE_CHUNK);
+            for _ in 0..chunk {
+                self.file.write_all(&silence)?;
+            }
+            remaining -= chunk;
         }
         self.frames_written = target_frames;
         Ok(())
@@ -803,8 +819,15 @@ impl WavCallRecorder {
         self.file.seek(SeekFrom::Start(0))?;
         write_wav_header(&mut self.file, data_bytes)?;
         self.file.seek(SeekFrom::End(0))?;
-        self.file.flush()?;
         Ok(())
+    }
+
+    fn update_header_only(&mut self) -> io::Result<()> {
+        self.refresh_header()
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
     }
 }
 

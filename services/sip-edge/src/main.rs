@@ -372,6 +372,7 @@ pub(crate) struct EdgeState {
     sbc_engine: sbc::SbcEngine,
     external_to_internal_call_ids: dashmap::DashMap<String, String>,
     internal_to_external_call_ids: dashmap::DashMap<String, String>,
+    gateway_cache: std::sync::RwLock<HashMap<String, (bool, std::time::Instant)>>,
     #[cfg(test)]
     test_gateways: std::sync::Mutex<Vec<String>>,
 }
@@ -422,6 +423,7 @@ impl EdgeState {
             sbc_engine,
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
+            gateway_cache: std::sync::RwLock::new(HashMap::new()),
             #[cfg(test)]
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
@@ -463,6 +465,7 @@ impl EdgeState {
             sbc_engine,
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
+            gateway_cache: std::sync::RwLock::new(HashMap::new()),
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -733,16 +736,33 @@ impl EdgeState {
             }
         }
 
-        if let Some(ref db) = self.db_store {
-            if let Ok(gateways) = db.load_gateways().await {
-                for (_id, host, _port, _transport, _cap) in gateways {
-                    if host == peer_ip {
-                        return true;
-                    }
+        // Check cached result first (TTL 60s)
+        {
+            let cache = self.gateway_cache.read().unwrap();
+            if let Some(entry) = cache.get(&peer_ip) {
+                if entry.1.elapsed().as_secs() < 60 {
+                    return entry.0;
                 }
             }
         }
-        false
+
+        let result = if let Some(ref db) = self.db_store {
+            if let Ok(gateways) = db.load_gateways().await {
+                gateways.iter().any(|(_, host, _, _, _)| host == &peer_ip)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // Update cache
+        {
+            let mut cache = self.gateway_cache.write().unwrap();
+            cache.insert(peer_ip, (result, std::time::Instant::now()));
+        }
+
+        result
     }
 
     fn cancel_client_transaction(&self, key: &ClientTransactionKey) {
