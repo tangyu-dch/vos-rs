@@ -6,6 +6,7 @@ mod outbound;
 mod registrar;
 mod response;
 pub mod sbc;
+mod stun_client;
 mod transaction;
 mod transport;
 
@@ -964,7 +965,46 @@ async fn main() -> Result<(), AnyError> {
             "no outbound route configured; INVITE requests will receive 404"
         );
     }
-    let edge_config = EdgeConfig::from_env();
+    let mut edge_config = EdgeConfig::from_env();
+
+    // STUN: discover public address for media relay if configured
+    if let Ok(stun_server) = env::var("VOS_RS_STUN_SERVER") {
+        if !stun_server.is_empty() {
+            info!(server = %stun_server, "STUN discovery enabled");
+            let fallback = edge_config.media.advertised_addr.clone();
+            let public_ip = stun_client::discover_stun_addr(Some(&stun_server), &fallback).await;
+            edge_config.media.set_advertised_addr(public_ip);
+
+            // Background STUN keepalive: raw UDP binding request to maintain NAT mapping
+            let stun_server_clone = stun_server.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    // Send a raw STUN Binding Request to keep NAT mapping alive
+                    if let Ok(sock) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                        if let Ok(addrs) = tokio::net::lookup_host(&stun_server_clone).await {
+                            if let Some(addr) = addrs.into_iter().next() {
+                                let _ = sock.connect(addr).await;
+                                // Minimal STUN Binding Request: 20 bytes
+                                let mut req = [0u8; 20];
+                                req[0] = 0x00; // type MSB
+                                req[1] = 0x01; // type LSB = BINDING
+                                req[2] = 0x00; req[3] = 0x08; // length = 8
+                                req[4] = 0x21; req[5] = 0x12; req[6] = 0xa4; req[7] = 0x42; // magic cookie
+                                let _ = sock.send(&req).await;
+                                let mut buf = [0u8; 1500];
+                                let _ = tokio::time::timeout(std::time::Duration::from_secs(3), sock.recv(&mut buf)).await;
+                                debug!("STUN keepalive sent");
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
     let media_relay = MediaRelayState::new();
     let cdr_sinks = cdr_sinks_from_env().await?;
     let db_store = cdr_sinks.postgres.clone();
