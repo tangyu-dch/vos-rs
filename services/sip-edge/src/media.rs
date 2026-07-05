@@ -107,7 +107,7 @@ impl MediaConfig {
     #[cfg(test)]
     pub fn with_recording(mut self, enabled: bool, dir: impl Into<PathBuf>) -> Self {
         self.recording_enabled = enabled;
-        self.recording_dir = PathBuf::from(dir);
+        self.recording_dir = dir.into();
         self
     }
 

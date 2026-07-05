@@ -127,15 +127,7 @@ impl AuthConfig {
             }
         }
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        if now < ts || now - ts > max_age_secs {
-            return false;
-        }
-
-        true
+        false
     }
 
     pub async fn verify_request(

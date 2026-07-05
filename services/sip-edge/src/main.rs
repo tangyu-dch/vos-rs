@@ -8616,7 +8616,10 @@ mod tests {
         let nonce = auth.generate_dynamic_nonce();
         assert!(auth.verify_dynamic_nonce(&nonce, 300));
 
-        let tampered = format!("{}-wrongsig", nonce.split_once('-').unwrap().0);
+        // Tamper: replace the signature portion with wrong value
+        // Format is {ts}-{seq}-{sig}, replace last segment
+        let parts: Vec<&str> = nonce.split('-').collect();
+        let tampered = format!("{}-{}-wrongsig", parts[0], parts[1]);
         assert!(!auth.verify_dynamic_nonce(&tampered, 300));
 
         // Use a deterministic older timestamp to test age expiration
@@ -8627,9 +8630,9 @@ mod tests {
             - 10;
         let past_sig = format!(
             "{:x}",
-            md5::compute(format!("{}:{}", past_ts, auth.secret_key).as_bytes())
+            md5::compute(format!("{}:{}:{}", past_ts, 0, auth.secret_key).as_bytes())
         );
-        let past_nonce = format!("{}-{}", past_ts, past_sig);
+        let past_nonce = format!("{}-0-{}", past_ts, past_sig);
 
         assert!(auth.verify_dynamic_nonce(&past_nonce, 15));
         assert!(!auth.verify_dynamic_nonce(&past_nonce, 5));
