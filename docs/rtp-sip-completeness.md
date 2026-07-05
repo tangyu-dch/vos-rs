@@ -47,6 +47,10 @@
 - 对话的分叉（forking）以及早期对话管理。
 - 基于 Redis 存储共享的分布式注册、对话、事务及速率限制计数状态（集群高可用）。
 - 活动呼叫的 HA 副本同步与重启恢复。
+- SUBSCRIBE/NOTIFY 事件包。
+- 拓扑隐藏与除 Path/Service-Route 以外的高级代理。
+- 多租户域策略和每账户授权。
+- 呼叫、注册关系、事务、RTP 中继和 CDR 的高可用（HA）集群。
 
 ## RTP 和 SDP 协议覆盖范围
 
@@ -73,7 +77,7 @@
 - 基于转发生成的 RTCP 报告生成、长窗口丢包统计、抖动趋势跟踪以及 MOS/R-factor 通话质量报告。
 - SRTP、DTLS-SRTP、SDES 密钥处理以及媒体加密策略。
 - 高级对称 RTP 策略、源绑定、基于超时的重新学习和反欺骗（anti-spoofing）。
-- ICE/STUN/TURN 支持。
+- ICE/STUN/TURN 支持（注：基础 STUN 发现已实现，用于公网地址发现）。
 - 更完整的 DTMF 实时事件流、Prometheus 指标导出、按租户策略控制以及失败/异常事件告警（注：DTMF 事件审计明细表已落库至 `dtmf_events`）。
 - 转码、编解码器首选策略、ptime/maxptime 协商、舒适噪音、静音抑制以及当前 PCMU/PCMA 路径之外的动态负载映射。
 - 多个 `m=` 媒体部分、视频、T.38、RTP Bundle 及高级 Offer/Answer 行为。
