@@ -1,11 +1,19 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use stun::agent::TransactionId;
 use stun::client::*;
 use stun::message::*;
 use stun::xoraddr::*;
 use tokio::net::UdpSocket;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
+
+const DEFAULT_STUN_SERVERS: &[&str] = &[
+    "stun.l.google.com:19302",
+    "stun1.l.google.com:19302",
+    "stun2.l.google.com:19302",
+    "stun3.l.google.com:19302",
+];
 
 pub struct StunClient {
     server_host: String,
@@ -28,19 +36,53 @@ impl StunClient {
         })
     }
 
-    pub fn refresh_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.refresh_interval_secs)
+    pub fn refresh_interval(&self) -> Duration {
+        Duration::from_secs(self.refresh_interval_secs)
     }
 
     pub async fn discover_public_addr(&self) -> Option<SocketAddr> {
-        let server_addr = match tokio::net::lookup_host(&format!("{}:{}", self.server_host, self.server_port)).await {
-            Ok(mut addrs) => addrs.next()?,
-            Err(e) => {
-                warn!(error = %e, host = %self.server_host, "STUN DNS lookup failed");
-                return None;
-            }
-        };
+        self.discover_with_retry(3).await
+    }
 
+    async fn discover_with_retry(&self, max_retries: u32) -> Option<SocketAddr> {
+        let server_addr =
+            match tokio::net::lookup_host(&format!("{}:{}", self.server_host, self.server_port))
+                .await
+            {
+                Ok(mut addrs) => addrs.next()?,
+                Err(e) => {
+                    warn!(error = %e, host = %self.server_host, "STUN DNS lookup failed");
+                    return None;
+                }
+            };
+
+        for attempt in 1..=max_retries {
+            let result = self.try_binding(server_addr).await;
+            if let Some(addr) = result {
+                info!(
+                    server = %self.server_host,
+                    public_addr = %addr,
+                    attempt,
+                    "STUN binding: discovered public address"
+                );
+                return Some(addr);
+            }
+            if attempt < max_retries {
+                let backoff = Duration::from_millis(500 * attempt as u64);
+                debug!(
+                    server = %self.server_host,
+                    attempt,
+                    backoff_ms = backoff.as_millis(),
+                    "STUN retry after backoff"
+                );
+                tokio::time::sleep(backoff).await;
+            }
+        }
+        warn!(server = %self.server_host, max_retries, "STUN: all retries exhausted");
+        None
+    }
+
+    async fn try_binding(&self, server_addr: SocketAddr) -> Option<SocketAddr> {
         let conn = UdpSocket::bind("0.0.0.0:0").await.ok()?;
         conn.connect(server_addr).await.ok()?;
 
@@ -62,11 +104,8 @@ impl StunClient {
             .await
             .ok()?;
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            handler_rx.recv(),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(Duration::from_secs(3), handler_rx.recv()).await;
 
         client.close().await.ok();
 
@@ -75,43 +114,33 @@ impl StunClient {
                 let resp = event.event_body.ok()?;
                 let mut xor_addr = XorMappedAddress::default();
                 xor_addr.get_from(&resp).ok()?;
-                let public_addr = SocketAddr::new(xor_addr.ip, xor_addr.port);
-                info!(
-                    server = %self.server_host,
-                    public_addr = %public_addr,
-                    "STUN binding: discovered public address"
-                );
-                Some(public_addr)
+                Some(SocketAddr::new(xor_addr.ip, xor_addr.port))
             }
-            _ => {
-                warn!(server = %self.server_host, "STUN timeout or no response");
-                None
-            }
+            _ => None,
         }
     }
 }
 
-pub async fn discover_stun_addr(stun_server: Option<&str>, fallback_addr: &str) -> String {
-    let Some(server) = stun_server else {
+pub async fn discover_stun_addr(stun_servers: Option<&str>, fallback_addr: &str) -> String {
+    let Some(servers_str) = stun_servers else {
         return fallback_addr.to_string();
     };
 
-    let client = match StunClient::new(server, 30) {
-        Some(c) => c,
-        None => {
-            warn!(server = %server, "invalid STUN server address, using fallback");
-            return fallback_addr.to_string();
-        }
-    };
+    let servers: Vec<&str> = servers_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
 
-    match client.discover_public_addr().await {
-        Some(addr) => {
-            info!(public_addr = %addr, "STUN: discovered public address for media relay");
-            addr.ip().to_string()
-        }
-        None => {
-            warn!("STUN discovery failed, using fallback advertised address");
-            fallback_addr.to_string()
+    for server in &servers {
+        if let Some(client) = StunClient::new(server, 30) {
+            if let Some(addr) = client.discover_public_addr().await {
+                info!(public_addr = %addr, server = %server, "STUN: discovered public address for media relay");
+                return addr.ip().to_string();
+            }
+        } else {
+            warn!(server = %server, "STUN: invalid server address, skipping");
         }
     }
+
+    if !fallback_addr.is_empty() {
+        warn!("STUN: all servers failed, using fallback advertised address");
+    }
+    fallback_addr.to_string()
 }

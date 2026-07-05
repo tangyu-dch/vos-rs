@@ -13,11 +13,26 @@ pub struct UpnpGateway {
 
 /// Discover UPnP gateway and return its control URL.
 pub fn discover_gateway() -> Option<UpnpGateway> {
+    let local_ip = local_ip_address()?;
+
+    for attempt in 1..=3 {
+        match try_discover(&local_ip) {
+            Some(gw) => return Some(gw),
+            None => {
+                if attempt < 3 {
+                    debug!(attempt, "UPnP: SSDP probe failed, retrying");
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn try_discover(local_ip: &str) -> Option<UpnpGateway> {
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     sock.send_to(SSDP_MSEARCH.as_bytes(), SSDP_ADDR).ok()?;
-
-    let local_ip = local_ip_address()?;
 
     let mut buf = [0u8; 2048];
     loop {
@@ -254,7 +269,10 @@ fn soap_request(gw: &UpnpGateway, action: &str, body: &str) -> bool {
     };
 
     let sock = match std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
-        Ok(s) => s,
+        Ok(s) => {
+            let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+            s
+        }
         Err(e) => {
             warn!(error = %e, "UPnP: failed to connect to gateway");
             return false;
