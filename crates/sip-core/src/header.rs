@@ -59,6 +59,18 @@ impl HeaderMap {
         self.entries.push((name, value));
     }
 
+    /// Append text to the last header value (for header folding).
+    pub fn fold_last(&mut self, continuation: &str) {
+        if let Some((_, value)) = self.entries.last_mut() {
+            let old = value.as_str();
+            let mut new_val = String::with_capacity(old.len() + 1 + continuation.len());
+            new_val.push_str(old);
+            new_val.push(' ');
+            new_val.push_str(continuation);
+            *value = HeaderValue(new_val);
+        }
+    }
+
     /// Replace the first occurrence of `name` with `value`.
     /// If no existing entry exists, the new entry is appended.
     pub fn replace(&mut self, name: HeaderName, value: HeaderValue) {

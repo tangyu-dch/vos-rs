@@ -60,24 +60,34 @@ impl SipMessage {
 pub fn parse_message(raw: &[u8]) -> SipResult<SipMessage> {
     let (head, body) = split_head_body(raw);
     let head = String::from_utf8_lossy(head);
-    let mut lines = unfold_header_lines(head.lines().map(trim_trailing_cr));
-    let start_line = lines
-        .next()
-        .filter(|line| !line.trim().is_empty())
-        .ok_or(SipParseError::EmptyMessage)?;
 
-    let start_line = parse_start_line(&start_line)?;
+    let mut lines_iter = head.lines().map(trim_trailing_cr);
+
+    // Parse start line
+    let start_line = lines_iter
+        .by_ref()
+        .find(|line| !line.trim().is_empty())
+        .ok_or(SipParseError::EmptyMessage)?;
+    let start_line = parse_start_line(start_line)?;
+
     let mut headers = HeaderMap::new();
 
-    for line in lines {
+    for line in lines_iter {
         if line.trim().is_empty() {
             continue;
         }
 
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| SipParseError::InvalidHeaderLine(line.to_string()))?;
-        headers.insert(HeaderName::new(name)?, HeaderValue::new(value));
+        // Handle header folding: line starting with SP/HTAB continues previous header value
+        if line.starts_with(' ') || line.starts_with('\t') {
+            headers.fold_last(line.trim());
+            continue;
+        }
+
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(HeaderName::new(name)?, HeaderValue::new(value));
+        } else {
+            return Err(SipParseError::InvalidHeaderLine(line.to_string()));
+        }
     }
 
     match start_line {
@@ -199,21 +209,4 @@ fn split_head_body(raw: &[u8]) -> (&[u8], &[u8]) {
 
 fn trim_trailing_cr(line: &str) -> &str {
     line.strip_suffix('\r').unwrap_or(line)
-}
-
-fn unfold_header_lines<'a>(lines: impl Iterator<Item = &'a str>) -> impl Iterator<Item = String> {
-    let mut unfolded = Vec::<String>::new();
-
-    for line in lines {
-        if line.starts_with(' ') || line.starts_with('\t') {
-            if let Some(last) = unfolded.last_mut() {
-                last.push(' ');
-                last.push_str(line.trim());
-            }
-        } else {
-            unfolded.push(line.to_string());
-        }
-    }
-
-    unfolded.into_iter()
 }
