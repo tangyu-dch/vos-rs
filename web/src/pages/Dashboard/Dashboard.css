@@ -1,0 +1,152 @@
+.dashboard {
+  /* 滚动由 app-content 处理 */
+}
+
+/* ===== 统计卡片 ===== */
+.stat-card.arco-card {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.stat-card .arco-card-body {
+  padding: 20px;
+}
+.stat-card__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.stat-card__icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 22px;
+  flex-shrink: 0;
+  box-shadow: 0 6px 14px rgba(22, 93, 255, 0.18);
+}
+.stat-card__label {
+  font-size: 13px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.stat-card__value {
+  font-size: 34px;
+  font-weight: 700;
+  color: var(--text-1);
+  line-height: 1.1;
+  margin-top: 14px;
+  letter-spacing: -0.5px;
+}
+.stat-card__unit {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-3);
+  margin-left: 2px;
+}
+.stat-card__sub {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-3);
+  min-height: 18px;
+}
+.stat-card__live {
+  color: var(--color-success);
+  font-weight: 500;
+}
+.stat-card__split {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.stat-card__split em {
+  font-style: normal;
+  font-weight: 600;
+  margin-right: 2px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.stat-card__trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ===== 图表区 ===== */
+.trend-chart {
+  height: 300px;
+  width: 100%;
+}
+.donut-chart {
+  height: 300px;
+  width: 100%;
+}
+.chart-empty {
+  position: absolute;
+  inset: 60px 0 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ===== 质量指标卡 ===== */
+.quality-card .arco-card-body {
+  padding: 18px 20px 16px;
+}
+.quality-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.quality-card__head > span:first-child {
+  font-size: 13px;
+  color: var(--text-2);
+  font-weight: 500;
+}
+.quality-grade {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.quality-grade.g-good {
+  color: var(--color-success);
+  background: rgba(0, 180, 42, 0.1);
+}
+.quality-grade.g-ok {
+  color: var(--color-warning);
+  background: rgba(255, 125, 0, 0.1);
+}
+.quality-grade.g-bad {
+  color: var(--color-danger);
+  background: rgba(245, 63, 63, 0.1);
+}
+.quality-grade.g-muted {
+  color: var(--text-3);
+  background: var(--card-bg-soft);
+}
+.quality-card__value {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin: 10px 0 14px;
+  line-height: 1;
+}
+.quality-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--card-bg-soft);
+  overflow: hidden;
+}
+.quality-bar__fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease;
+}
+.quality-card__foot {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 10px;
+}

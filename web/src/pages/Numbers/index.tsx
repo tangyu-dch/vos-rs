@@ -1,0 +1,207 @@
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Card,
+  Table,
+  Button,
+  Space,
+  Modal,
+  Form,
+  Input,
+  Select,
+  Message,
+  Popconfirm,
+  Alert,
+  Empty,
+  Tag,
+} from '@arco-design/web-react';
+import { IconPlus, IconEdit, IconDelete, IconRefresh } from '@arco-design/web-react/icon';
+import { apiService } from '@/services/api';
+import type { NumberInventory } from '@/types';
+
+const FormItem = Form.Item;
+
+const STATUS_MAP: Record<string, { color: string; text: string }> = {
+  available: { color: 'green', text: '可用' },
+  assigned: { color: 'blue', text: '已分配' },
+  blocked: { color: 'red', text: '已停用' },
+};
+
+export default function Numbers() {
+  const [numbers, setNumbers] = useState<NumberInventory[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [editing, setEditing] = useState<NumberInventory | null>(null);
+  const [form] = Form.useForm();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setNumbers(await apiService.getNumbers());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载失败');
+      Message.error('获取号码列表失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleAdd = () => {
+    setEditing(null);
+    form.resetFields();
+    setModalVisible(true);
+  };
+
+  const handleEdit = (n: NumberInventory) => {
+    setEditing(n);
+    form.setFieldsValue({ username: n.username || '', status: n.status });
+    setModalVisible(true);
+  };
+
+  const handleDelete = async (number: string) => {
+    try {
+      await apiService.deleteNumber(number);
+      Message.success('删除成功');
+      load();
+    } catch {
+      Message.error('删除失败');
+    }
+  };
+
+  const handleSubmit = async () => {
+    try {
+      const values = await form.validate();
+      if (editing) {
+        await apiService.updateNumber(editing.number, {
+          username: values.username || undefined,
+          status: values.status,
+        });
+        Message.success('更新成功');
+      } else {
+        await apiService.createNumber({
+          number: values.number,
+          username: values.username || undefined,
+          status: values.status || 'available',
+        });
+        Message.success('创建成功');
+      }
+      setModalVisible(false);
+      load();
+    } catch {
+      /* 校验失败 */
+    }
+  };
+
+  const columns = [
+    {
+      title: '号码',
+      dataIndex: 'number',
+      render: (v: string) => <span className="cell-mono cell-strong">{v}</span>,
+    },
+    {
+      title: '归属用户',
+      dataIndex: 'username',
+      render: (v: string) => (v ? <span className="cell-mono">{v}</span> : '—'),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 110,
+      render: (s: string) => {
+        const m = STATUS_MAP[s] || { color: 'gray', text: s };
+        return <Tag color={m.color}>{m.text}</Tag>;
+      },
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      render: (d: string) => (d ? new Date(d).toLocaleString('zh-CN') : '—'),
+    },
+    {
+      title: '操作',
+      dataIndex: 'actions',
+      width: 180,
+      fixed: 'right' as const,
+      render: (_: any, record: NumberInventory) => (
+        <Space size={4}>
+          <Button type="text" size="small" icon={<IconEdit />} onClick={() => handleEdit(record)}>
+            编辑
+          </Button>
+          <Popconfirm title="确认删除该号码？" icon={null} onOk={() => handleDelete(record.number)}>
+            <Button type="text" size="small" status="danger" icon={<IconDelete />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <div className="page-wrap">
+      <div className="page-header">
+        <div className="page-header__title">
+          <h1>号码库存</h1>
+          <span className="sub">管理号码资源与分配状态</span>
+        </div>
+        <div className="page-header__actions">
+          <Button icon={<IconRefresh />} onClick={load}>
+            刷新
+          </Button>
+          <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>
+            新增号码
+          </Button>
+        </div>
+      </div>
+
+      {error && <Alert type="error" content={error} closable style={{ marginBottom: 16 }} />}
+
+      <Card className="app-card" bordered={false}>
+        <Table
+          className="app-table"
+          columns={columns}
+          data={numbers}
+          rowKey="number"
+          loading={loading}
+          pagination={{ pageSize: 20, sizeCanChange: true }}
+          noDataElement={<Empty description="暂无号码" />}
+        />
+      </Card>
+
+      <Modal
+        title={editing ? '编辑号码' : '新增号码'}
+        visible={modalVisible}
+        onOk={handleSubmit}
+        onCancel={() => setModalVisible(false)}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={form} labelCol={{ span: 5 }} wrapperCol={{ span: 19 }} initialValues={{ status: 'available' }}>
+          <FormItem
+            label="号码"
+            field="number"
+            required
+            rules={[{ required: true, message: '请输入号码' }]}
+          >
+            <Input placeholder="如 13800138000" disabled={!!editing} />
+          </FormItem>
+          <FormItem label="归属用户" field="username">
+            <Input placeholder="可选，如 1001" />
+          </FormItem>
+          <FormItem label="状态" field="status" required rules={[{ required: true, message: '请选择状态' }]}>
+            <Select>
+              <Select.Option value="available">可用</Select.Option>
+              <Select.Option value="assigned">已分配</Select.Option>
+              <Select.Option value="blocked">已停用</Select.Option>
+            </Select>
+          </FormItem>
+        </Form>
+      </Modal>
+    </div>
+  );
+}

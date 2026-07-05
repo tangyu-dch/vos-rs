@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+
+<scenario name="VOS-RS REGISTER + full call">
+  <!-- Phase 1: REGISTER with automatic digest auth -->
+  <send retrans="500">
+    <![CDATA[
+      REGISTER sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      Max-Forwards: 70
+      From: "1001" <sip:1001@[local_ip]:[local_port]>;tag=[pid]vosrsReg[call_number]
+      To: "1001" <sip:1001@[local_ip]:[local_port]>
+      Call-ID: [call_id]
+      CSeq: 1 REGISTER
+      Contact: <sip:1001@[local_ip]:[local_port]>
+      Expires: 3600
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <recv response="401" auth="true" auth_username="1001" auth_password="test1234"/>
+  <recv response="200"/>
+
+  <!-- Phase 2: Pause before making call -->
+  <pause milliseconds="500"/>
+
+  <!-- Phase 3: INVITE -->
+  <send retrans="500">
+    <![CDATA[
+      INVITE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      Max-Forwards: 70
+      From: "1001" <sip:1001@[local_ip]:[local_port]>;tag=[pid]vosrsCaller[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 2 INVITE
+      Contact: <sip:1001@[local_ip]:[local_port]>
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=caller 1 1 IN IP[local_ip_type] [local_ip]
+      s=VOS-RS full flow test
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 0 8 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:8 PCMA/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-16
+    ]]>
+  </send>
+
+  <recv response="100" optional="true"/>
+  <recv response="180"/>
+  <recv response="200" rtd="true"/>
+
+  <send>
+    <![CDATA[
+      ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      Max-Forwards: 70
+      From: "1001" <sip:1001@[local_ip]:[local_port]>;tag=[pid]vosrsCaller[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 2 ACK
+      Contact: <sip:1001@[local_ip]:[local_port]>
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <!-- Phase 4: Hold call for 3 seconds (media flows) -->
+  <pause milliseconds="3000"/>
+
+  <!-- Phase 5: DTMF -->
+  <send retrans="500">
+    <![CDATA[
+      INFO sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      Max-Forwards: 70
+      From: "1001" <sip:1001@[local_ip]:[local_port]>;tag=[pid]vosrsCaller[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 3 INFO
+      Contact: <sip:1001@[local_ip]:[local_port]>
+      Content-Type: application/dtmf-relay
+      Content-Length: [len]
+
+      Signal=5
+      Duration=160
+    ]]>
+  </send>
+
+  <recv response="200"/>
+  <pause milliseconds="200"/>
+
+  <!-- Phase 6: BYE -->
+  <send retrans="500">
+    <![CDATA[
+      BYE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      Max-Forwards: 70
+      From: "1001" <sip:1001@[local_ip]:[local_port]>;tag=[pid]vosrsCaller[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 4 BYE
+      Contact: <sip:1001@[local_ip]:[local_port]>
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <recv response="200" crlf="true"/>
+
+  <ResponseTimeRepartition value="10, 20, 50, 100, 200, 500, 1000"/>
+  <CallLengthRepartition value="10, 50, 100, 500, 1000, 5000"/>
+</scenario>

@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "crates/call-core",
+    "crates/cdr-core",
+    "crates/rtp-core",
+    "crates/sdp-core",
+    "crates/sip-core",
+    "services/cdr-worker",
+    "services/sip-edge",
+    "services/api-server",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "Proprietary"
+rust-version = "1.89"

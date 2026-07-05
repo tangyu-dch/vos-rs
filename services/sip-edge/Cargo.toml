@@ -1,0 +1,32 @@
+[package]
+name = "sip-edge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-nats = "0.38"
+cdr-core = { path = "../../crates/cdr-core" }
+call-core = { path = "../../crates/call-core" }
+dashmap = "6"
+md5 = "0.7"
+rtp-core = { path = "../../crates/rtp-core" }
+sdp-core = { path = "../../crates/sdp-core" }
+sip-core = { path = "../../crates/sip-core" }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+time = "0.3"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tokio-rustls = "0.26"
+rustls-pki-types = "1"
+rustls = "0.23"
+rustls-native-certs = "0.8"
+rustls-pemfile = "2"
+tokio-tungstenite = "0.21"
+futures = "0.3"
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.5", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

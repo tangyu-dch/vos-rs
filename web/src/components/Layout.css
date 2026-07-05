@@ -1,0 +1,294 @@
+/* ============ 整体布局 ============ */
+.app-layout {
+  height: 100vh;
+}
+
+/* ============ 侧边栏（深色） ============ */
+.app-sider {
+  background: var(--sider-bg) !important;
+  box-shadow: var(--shadow-sider);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+  background-image: radial-gradient(
+      120% 80% at 0% 0%,
+      rgba(22, 93, 255, 0.12) 0%,
+      transparent 45%
+    ),
+    linear-gradient(180deg, var(--sider-bg) 0%, var(--sider-bg-2) 100%);
+}
+
+.app-sider .arco-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 品牌区 */
+.sider-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 64px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--sider-divider);
+  flex-shrink: 0;
+}
+.sider-brand.is-collapsed {
+  justify-content: center;
+  padding: 0;
+}
+.sider-brand__logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.sider-brand__text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  overflow: hidden;
+}
+.sider-brand__name {
+  font-size: 17px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.5px;
+}
+.sider-brand__sub {
+  font-size: 11px;
+  color: var(--sider-text);
+  margin-top: 2px;
+}
+
+/* 菜单（自定义 nav，不依赖 Arco Menu，避免分组缩进/标题/折叠态冲突） */
+.sider-nav {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 12px 12px;
+}
+.sider-nav::-webkit-scrollbar {
+  width: 4px;
+}
+.sider-nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.sider-nav__group-title {
+  font-size: 11px;
+  color: var(--text-4);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 14px 12px 6px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.sider-nav__item {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 12px;
+  margin-bottom: 4px;
+  border-radius: var(--radius-md);
+  color: var(--sider-text);
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+  position: relative;
+}
+.sider-nav__item:hover {
+  background: var(--sider-item-hover-bg);
+  color: var(--sider-text-hover);
+}
+.sider-nav__item.is-active {
+  background: var(--sider-item-active-bg);
+  color: var(--sider-text-active);
+}
+.sider-nav__item.is-active::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  border-radius: 0 3px 3px 0;
+  background: var(--brand-gradient);
+}
+
+.sider-nav__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.sider-nav__label {
+  display: flex;
+  flex-direction: column;
+  margin-left: 12px;
+  overflow: hidden;
+}
+.sider-nav__title {
+  font-size: 14px;
+  font-weight: 500;
+}
+.sider-nav__desc {
+  font-size: 11px;
+  color: var(--text-4);
+  margin-top: 1px;
+}
+.sider-nav__item.is-active .sider-nav__desc {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* 折叠态：隐藏文字与分组标题，图标居中 */
+.app-sider.arco-layout-sider-collapsed .sider-nav__label,
+.app-sider.arco-layout-sider-collapsed .sider-nav__group-title {
+  display: none;
+}
+.app-sider.arco-layout-sider-collapsed .sider-nav__item {
+  justify-content: center;
+  padding: 0;
+}
+.app-sider.arco-layout-sider-collapsed .sider-nav {
+  padding: 8px 8px 12px;
+}
+
+/* 底部状态卡 */
+.sider-footer {
+  padding: 12px;
+  flex-shrink: 0;
+}
+.sider-footer__card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--sider-divider);
+}
+.sider-footer__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px rgba(0, 180, 42, 0.2);
+  animation: pulse 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+.sider-footer__title {
+  font-size: 12px;
+  color: var(--sider-text-hover);
+  font-weight: 500;
+}
+.sider-footer__sub {
+  font-size: 11px;
+  color: var(--text-4);
+  margin-top: 1px;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(0, 180, 42, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(0, 180, 42, 0.05);
+  }
+}
+
+/* ============ 顶栏 ============ */
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 60px !important;
+  padding: 0 24px !important;
+  background: var(--card-bg) !important;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.app-header__left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.app-header__collapse {
+  color: var(--text-2) !important;
+}
+.app-header__collapse .arco-icon {
+  font-size: 18px;
+}
+.app-header__crumb {
+  font-size: 14px;
+}
+.app-header__crumb .arco-breadcrumb-item:last-child {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.app-header__right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(0, 180, 42, 0.08);
+  color: var(--color-success);
+  font-size: 12px;
+  font-weight: 500;
+}
+.live-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.env-tag {
+  margin: 0;
+}
+
+.app-header__user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 4px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.app-header__user:hover {
+  background: var(--card-bg-soft);
+}
+.app-header__avatar {
+  background: var(--brand-gradient) !important;
+  color: #fff !important;
+  font-weight: 600;
+  font-size: 13px;
+}
+.app-header__username {
+  font-size: 13px;
+  color: var(--text-1);
+  font-weight: 500;
+}
+
+/* ============ 内容区 ============ */
+.app-content {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--content-bg);
+}

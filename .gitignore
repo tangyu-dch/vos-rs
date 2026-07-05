@@ -1,0 +1,12 @@
+/target/
+*.log
+*.aiff
+/test_recordings/
+/test_recordings/**/
+/tools/sipp/test_speech.wav
+/tools/sipp/speech_raw.aiff
+/tools/sipp/*.log
+.DS_Store
+.env
+.idea/
+target/

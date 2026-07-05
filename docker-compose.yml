@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: vos_rs
+      POSTGRES_PASSWORD: vos_rs
+      POSTGRES_DB: vos_rs
+    ports:
+      - "5433:5432"
+    volumes:
+      - vos_rs_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vos_rs"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  sip-edge:
+    build: .
+    command: ./sip-edge
+    environment:
+      VOS_RS_SIP_UDP_BIND: 0.0.0.0:5060
+      VOS_RS_SIP_DEFAULT_GATEWAY: 127.0.0.1:5070
+      VOS_RS_DATABASE_URL: postgres://vos_rs:vos_rs@postgres:5432/vos_rs
+      VOS_RS_MANAGE_BIND: 0.0.0.0:8082
+      VOS_RS_RECORDING_ENABLED: "true"
+      VOS_RS_RECORDING_DIR: /data/recordings
+      RUST_LOG: sip_edge=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060"
+      - "8082:8082"
+    volumes:
+      - vos_rs_recordings:/data/recordings
+
+  api-server:
+    build: .
+    command: ./api-server
+    environment:
+      DATABASE_URL: postgres://vos_rs:vos_rs@postgres:5432/vos_rs
+      API_PORT: "8080"
+      VOS_RS_RECORDING_DIR: /data/recordings
+      VOS_RS_MANAGE_BASE: http://sip-edge:8082
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sip-edge:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    volumes:
+      - vos_rs_recordings:/data/recordings
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    depends_on:
+      - api-server
+    ports:
+      - "3000:80"
+
+volumes:
+  vos_rs_pg:
+  vos_rs_recordings:
