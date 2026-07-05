@@ -168,6 +168,13 @@ impl AuthConfig {
                 .as_secs();
             cache.retain(|_, &mut exp| exp > now);
 
+            // Evict oldest entries if cache grows too large
+            const MAX_NONCE_CACHE: usize = 100_000;
+            if cache.len() > MAX_NONCE_CACHE {
+                let cutoff = now + 250; // keep entries expiring in 50s+
+                cache.retain(|_, exp| *exp > cutoff);
+            }
+
             let Some(cnonce) = params.get("cnonce") else {
                 return AuthDecision::Challenge;
             };

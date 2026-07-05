@@ -88,6 +88,7 @@ pub struct RateLimiter {
     buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
     capacity: f64,
     fill_rate: f64,
+    max_entries: usize,
 }
 
 impl RateLimiter {
@@ -96,12 +97,19 @@ impl RateLimiter {
             buckets: Mutex::new(HashMap::new()),
             capacity,
             fill_rate,
+            max_entries: 10_000,
         }
     }
 
     pub fn check_rate(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
         let mut buckets = self.buckets.lock().unwrap();
+
+        // Evict stale entries when map is too large
+        if buckets.len() > self.max_entries {
+            buckets.retain(|_, b| now.duration_since(b.last_update).as_secs() < 300);
+        }
+
         let bucket = buckets
             .entry(ip)
             .or_insert_with(|| TokenBucket::new(self.capacity));

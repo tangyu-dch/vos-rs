@@ -1091,6 +1091,9 @@ async fn main() -> Result<(), AnyError> {
         }
     }
 
+    // Wrap EdgeConfig in Arc — all mutations done, now read-only shared access
+    let edge_config = Arc::new(edge_config);
+
     let media_relay = MediaRelayState::new();
     let cdr_sinks = cdr_sinks_from_env().await?;
     let db_store = cdr_sinks.postgres.clone();
@@ -1562,7 +1565,7 @@ fn spawn_client_transaction_retransmission(
     target: String,
     bytes: Vec<u8>,
     key: ClientTransactionKey,
-    edge_config: EdgeConfig,
+    edge_config: Arc<EdgeConfig>,
 ) {
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -1652,7 +1655,7 @@ fn spawn_client_transaction_retransmission(
 fn spawn_session_timer_watchdog(
     edge_state: Arc<EdgeState>,
     socket: Arc<UdpSocket>,
-    edge_config: EdgeConfig,
+    edge_config: Arc<EdgeConfig>,
 ) {
     // Scan interval: every 10 seconds in production, 50ms in tests for speed
     let scan_interval = if cfg!(test) {
@@ -7087,7 +7090,7 @@ mod tests {
             target.clone(),
             req_bytes.to_vec(),
             key.clone(),
-            edge_config(),
+            Arc::new(edge_config()),
         );
 
         tokio::time::sleep(Duration::from_millis(15)).await;
@@ -7165,7 +7168,7 @@ mod tests {
             "127.0.0.1:23456".to_string(),
             datagrams[1].bytes.clone(),
             key,
-            edge_config(),
+            Arc::new(edge_config()),
         );
 
         let mut success = false;
@@ -8893,7 +8896,7 @@ mod tests {
         let mut config = edge_config();
         config.advertised_addr = format!("127.0.0.1:{}", port);
 
-        spawn_session_timer_watchdog(Arc::clone(&edge_state), Arc::clone(&tokio_socket), config);
+        spawn_session_timer_watchdog(Arc::clone(&edge_state), Arc::clone(&tokio_socket), Arc::new(config));
 
         // Wait a bit for watchdog loop to tick
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
