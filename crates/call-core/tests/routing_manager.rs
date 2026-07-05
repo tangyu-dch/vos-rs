@@ -111,7 +111,7 @@ fn call_manager_fails_invite_when_no_route_matches() {
 
 #[test]
 fn outbound_ringing_response_moves_call_to_ringing() {
-    let mut manager = routed_manager_with_call("call-3@example.com");
+    let manager = routed_manager_with_call("call-3@example.com");
     let response = outbound_response(180, "Ringing", "call-3@example.com");
 
     let outcome = manager
@@ -130,7 +130,7 @@ fn outbound_ringing_response_moves_call_to_ringing() {
 
 #[test]
 fn outbound_success_response_establishes_call() {
-    let mut manager = routed_manager_with_call("call-4@example.com");
+    let manager = routed_manager_with_call("call-4@example.com");
     let response = outbound_response(200, "OK", "call-4@example.com");
 
     let outcome = manager
@@ -149,7 +149,7 @@ fn outbound_success_response_establishes_call() {
 
 #[test]
 fn outbound_failure_response_fails_call() {
-    let mut manager = routed_manager_with_call("call-5@example.com");
+    let manager = routed_manager_with_call("call-5@example.com");
     let response = outbound_response(486, "Busy Here", "call-5@example.com");
 
     let outcome = manager
@@ -169,7 +169,7 @@ fn outbound_failure_response_fails_call() {
 
 #[test]
 fn inbound_termination_request_terminates_call() {
-    let mut manager = routed_manager_with_call("call-6@example.com");
+    let manager = routed_manager_with_call("call-6@example.com");
     let response = outbound_response(200, "OK", "call-6@example.com");
     manager.handle_outbound_response(&response).unwrap();
     let bye = bye_request("call-6@example.com");
@@ -196,7 +196,7 @@ fn inbound_termination_request_terminates_call() {
 
 #[test]
 fn inbound_cancel_before_answer_generates_canceled_cdr() {
-    let mut manager = routed_manager_with_call("call-7@example.com");
+    let manager = routed_manager_with_call("call-7@example.com");
     let cancel = cancel_request("call-7@example.com");
 
     let outcome = manager
