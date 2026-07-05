@@ -9,6 +9,7 @@ pub mod sbc;
 mod stun_client;
 mod transaction;
 mod transport;
+mod upnp;
 
 use auth::{AuthConfig, AuthDecision};
 use call_core::{
@@ -1002,6 +1003,59 @@ async fn main() -> Result<(), AnyError> {
                     }
                 }
             });
+        }
+    }
+
+    // UPnP: auto-discover router and add port mappings if enabled
+    let upnp_enabled = env::var("VOS_RS_UPNP_ENABLED")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    if upnp_enabled {
+        info!("UPnP port mapping enabled, discovering gateway...");
+        if let Some(gw) = upnp::discover_gateway() {
+            if let Some(ext_ip) = upnp::get_external_ip(&gw) {
+                info!(external_ip = %ext_ip, "UPnP: router external IP");
+
+                // Map SIP UDP port (5060)
+                let sip_port: u16 = bind_addr.parse::<SocketAddr>()
+                    .map(|a| a.port())
+                    .unwrap_or(5060);
+                upnp::add_port_mapping(&gw, sip_port, sip_port, "UDP", "sip-edge SIP UDP", 3600);
+                upnp::add_port_mapping(&gw, sip_port, sip_port, "TCP", "sip-edge SIP TCP", 3600);
+
+                // Map RTP port range
+                let rtp_min = edge_config.media.port_min;
+                let rtp_max = edge_config.media.port_max;
+                for port in (rtp_min..=rtp_min.min(rtp_max)).step_by(2) {
+                    upnp::add_port_mapping(&gw, port, port, "UDP", "sip-edge RTP", 3600);
+                }
+
+                // Periodic UPnP renewal (every 50 minutes, lease is 3600s = 1h)
+                let gw_clone = upnp::UpnpGateway {
+                    control_url: gw.control_url.clone(),
+                    local_ip: gw.local_ip.clone(),
+                    service_type: gw.service_type.clone(),
+                };
+                let sip_port_renew = sip_port;
+                let rtp_min_renew = rtp_min;
+                let rtp_max_renew = rtp_max;
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(3000));
+                    interval.tick().await;
+                    loop {
+                        interval.tick().await;
+                        upnp::add_port_mapping(&gw_clone, sip_port_renew, sip_port_renew, "UDP", "sip-edge SIP UDP", 3600);
+                        upnp::add_port_mapping(&gw_clone, sip_port_renew, sip_port_renew, "TCP", "sip-edge SIP TCP", 3600);
+                        for port in (rtp_min_renew..=rtp_min_renew.min(rtp_max_renew)).step_by(2) {
+                            upnp::add_port_mapping(&gw_clone, port, port, "UDP", "sip-edge RTP", 3600);
+                        }
+                        debug!("UPnP: port mappings renewed");
+                    }
+                });
+            }
+        } else {
+            warn!("UPnP: no gateway found on network, port mapping disabled");
         }
     }
 
