@@ -1,4 +1,5 @@
 use cdr_core::DtmfEventRecord;
+use dashmap::DashMap;
 use rtp_core::{AudioCodec, RtcpPacket, RtcpReportBlock, RtpPacket, TelephoneEvent};
 use sdp_core::{RtpEndpoint, SdpError, SessionDescription};
 use sip_core::HeaderMap;
@@ -116,9 +117,47 @@ impl MediaConfig {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct MediaRelayState {
-    inner: Arc<Mutex<MediaRelayInner>>,
+    targets: Arc<DashMap<u16, SocketAddr>>,
+    peer_ports: Arc<DashMap<u16, u16>>,
+    metrics: Arc<DashMap<u16, MediaRelayMetrics>>,
+    recordings: Arc<DashMap<u16, RecordingLeg>>,
+    dtmf_states: Arc<DashMap<u16, DtmfState>>,
+    active_loops: Arc<DashMap<u16, Vec<tokio::sync::oneshot::Sender<()>>>>,
+    state: Arc<Mutex<MediaRelayStateInner>>,
+}
+
+impl Clone for MediaRelayState {
+    fn clone(&self) -> Self {
+        Self {
+            targets: Arc::clone(&self.targets),
+            peer_ports: Arc::clone(&self.peer_ports),
+            metrics: Arc::clone(&self.metrics),
+            recordings: Arc::clone(&self.recordings),
+            dtmf_states: Arc::clone(&self.dtmf_states),
+            active_loops: Arc::clone(&self.active_loops),
+            state: Arc::clone(&self.state),
+        }
+    }
+}
+
+impl std::fmt::Debug for MediaRelayState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaRelayState")
+            .field("targets_len", &self.targets.len())
+            .field("peer_ports_len", &self.peer_ports.len())
+            .field("metrics_len", &self.metrics.len())
+            .field("recordings_len", &self.recordings.len())
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+struct MediaRelayStateInner {
+    next_port: u16,
+    leased_rtp_ports: HashSet<u16>,
+    dtmf_accumulators: HashMap<String, String>,
+    dtmf_event_log: HashMap<String, Vec<DtmfEventRecord>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -229,40 +268,26 @@ struct DtmfState {
     last_timestamp: Option<u32>,
 }
 
-#[derive(Debug)]
-struct MediaRelayInner {
-    next_port: u16,
-    leased_rtp_ports: HashSet<u16>,
-    targets: HashMap<u16, SocketAddr>,
-    peer_ports: HashMap<u16, u16>,
-    metrics: HashMap<u16, MediaRelayMetrics>,
-    recordings: HashMap<u16, RecordingLeg>,
-    dtmf_states: HashMap<u16, DtmfState>,
-    dtmf_accumulators: HashMap<String, String>,
-    dtmf_event_log: HashMap<String, Vec<DtmfEventRecord>>,
-    active_loops: HashMap<u16, Vec<tokio::sync::oneshot::Sender<()>>>,
-}
-
 impl MediaRelayState {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(MediaRelayInner {
+            targets: Arc::new(DashMap::new()),
+            peer_ports: Arc::new(DashMap::new()),
+            metrics: Arc::new(DashMap::new()),
+            recordings: Arc::new(DashMap::new()),
+            dtmf_states: Arc::new(DashMap::new()),
+            active_loops: Arc::new(DashMap::new()),
+            state: Arc::new(Mutex::new(MediaRelayStateInner {
                 next_port: DEFAULT_RTP_PORT_MIN,
                 leased_rtp_ports: HashSet::new(),
-                targets: HashMap::new(),
-                peer_ports: HashMap::new(),
-                metrics: HashMap::new(),
-                recordings: HashMap::new(),
-                dtmf_states: HashMap::new(),
                 dtmf_accumulators: HashMap::new(),
                 dtmf_event_log: HashMap::new(),
-                active_loops: HashMap::new(),
             })),
         }
     }
 
     pub fn allocate_endpoint(&self, config: &MediaConfig) -> Result<RtpEndpoint, MediaError> {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
+        let mut inner = self.state.lock().expect("media relay lock poisoned");
         if inner.next_port < config.port_min || inner.next_port > config.port_max {
             inner.next_port = config.port_min;
         }
@@ -312,7 +337,13 @@ impl MediaRelayState {
                 let (rtcp_tx, rtcp_rx) = tokio::sync::oneshot::channel();
 
                 let relay_clone1 = Self {
-                    inner: Arc::clone(&self.inner),
+                    targets: Arc::clone(&self.targets),
+                    peer_ports: Arc::clone(&self.peer_ports),
+                    metrics: Arc::clone(&self.metrics),
+                    recordings: Arc::clone(&self.recordings),
+                    dtmf_states: Arc::clone(&self.dtmf_states),
+                    active_loops: Arc::clone(&self.active_loops),
+                    state: Arc::clone(&self.state),
                 };
                 let rtp_learning = config.symmetric_rtp_learning;
                 tokio::spawn(relay_media_port(
@@ -325,7 +356,13 @@ impl MediaRelayState {
                 ));
 
                 let relay_clone2 = Self {
-                    inner: Arc::clone(&self.inner),
+                    targets: Arc::clone(&self.targets),
+                    peer_ports: Arc::clone(&self.peer_ports),
+                    metrics: Arc::clone(&self.metrics),
+                    recordings: Arc::clone(&self.recordings),
+                    dtmf_states: Arc::clone(&self.dtmf_states),
+                    active_loops: Arc::clone(&self.active_loops),
+                    state: Arc::clone(&self.state),
                 };
                 tokio::spawn(relay_media_port(
                     rtcp_socket,
@@ -336,7 +373,7 @@ impl MediaRelayState {
                     rtcp_rx,
                 ));
 
-                inner.active_loops.insert(port, vec![rtp_tx, rtcp_tx]);
+                self.active_loops.insert(port, vec![rtp_tx, rtcp_tx]);
 
                 debug!(port, rtcp_port, "allocated media relay endpoint");
                 return Ok(RtpEndpoint::new(config.advertised_addr.clone(), port));
@@ -369,29 +406,38 @@ impl MediaRelayState {
     }
 
     pub fn set_target_addr(&self, relay_port: u16, target: SocketAddr) {
-        self.inner
-            .lock()
-            .expect("media relay lock poisoned")
-            .targets
-            .insert(relay_port, target);
+        self.targets.insert(relay_port, target);
     }
 
     pub fn clear_target(&self, relay_port: u16) {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
         let rtp_port = rtp_port_for(relay_port).unwrap_or(relay_port);
-        let peer_port = inner.peer_ports.get(&rtp_port).copied();
-        clear_port_locked(&mut inner, rtp_port);
-        inner.leased_rtp_ports.remove(&rtp_port);
-        inner.recordings.remove(&rtp_port);
-        inner.dtmf_states.remove(&rtp_port);
+        let peer_port = self.peer_ports.get(&rtp_port).map(|v| *v);
+        self.targets.remove(&rtp_port);
+        self.metrics.remove(&rtp_port);
+        self.peer_ports.remove(&rtp_port);
+        self.recordings.remove(&rtp_port);
+        self.dtmf_states.remove(&rtp_port);
+        {
+            let mut state = self.state.lock().expect("media relay lock poisoned");
+            state.leased_rtp_ports.remove(&rtp_port);
+        }
         if let Some(peer_port) = peer_port {
-            inner.recordings.remove(&peer_port);
-            inner.dtmf_states.remove(&peer_port);
+            self.targets.remove(&peer_port);
+            self.metrics.remove(&peer_port);
+            self.peer_ports.remove(&peer_port);
+            self.recordings.remove(&peer_port);
+            self.dtmf_states.remove(&peer_port);
         }
         if let Some(rtcp_port) = rtcp_port_for(rtp_port) {
-            clear_port_locked(&mut inner, rtcp_port);
+            self.targets.remove(&rtcp_port);
+            self.metrics.remove(&rtcp_port);
+            let rtcp_peer = self.peer_ports.get(&rtcp_port).map(|v| *v);
+            self.peer_ports.remove(&rtcp_port);
+            if let Some(rtcp_peer_port) = rtcp_peer {
+                self.peer_ports.remove(&rtcp_peer_port);
+            }
         }
-        if let Some(senders) = inner.active_loops.remove(&rtp_port) {
+        if let Some((_, senders)) = self.active_loops.remove(&rtp_port) {
             for sender in senders {
                 let _ = sender.send(());
             }
@@ -399,8 +445,7 @@ impl MediaRelayState {
     }
 
     pub fn register_port_dtmf_tracking(&self, call_id: &str, port: u16, payload_type: u8) {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
-        inner.dtmf_states.insert(
+        self.dtmf_states.insert(
             port,
             DtmfState {
                 call_id: call_id.to_string(),
@@ -411,23 +456,22 @@ impl MediaRelayState {
     }
 
     pub fn get_dtmf_digits(&self, call_id: &str) -> Option<String> {
-        let inner = self.inner.lock().expect("media relay lock poisoned");
+        let inner = self.state.lock().expect("media relay lock poisoned");
         inner.dtmf_accumulators.get(call_id).cloned()
     }
 
     pub fn clear_dtmf_digits(&self, call_id: &str) {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
+        let mut inner = self.state.lock().expect("media relay lock poisoned");
         inner.dtmf_accumulators.remove(call_id);
     }
 
     pub fn register_info_dtmf_digit(&self, call_id: &str, digit: char) {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
+        let mut inner = self.state.lock().expect("media relay lock poisoned");
         let acc = inner
             .dtmf_accumulators
             .entry(call_id.to_string())
             .or_default();
         acc.push(digit);
-        // Record detailed audit event.
         let record = DtmfEventRecord::from_sip_info(call_id, digit);
         inner
             .dtmf_event_log
@@ -437,35 +481,22 @@ impl MediaRelayState {
         debug!(call_id, digit = %digit, "reconstructed DTMF digit from SIP INFO");
     }
 
-    /// Take all DTMF event records for a call, removing them from the internal log.
     pub fn take_dtmf_events(&self, call_id: &str) -> Vec<DtmfEventRecord> {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
+        let mut inner = self.state.lock().expect("media relay lock poisoned");
         inner.dtmf_event_log.remove(call_id).unwrap_or_default()
     }
 
-    /// Clear DTMF event records for a call.
     pub fn clear_dtmf_events(&self, call_id: &str) {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
+        let mut inner = self.state.lock().expect("media relay lock poisoned");
         inner.dtmf_event_log.remove(call_id);
     }
 
     pub fn target_for_port(&self, relay_port: u16) -> Option<SocketAddr> {
-        self.inner
-            .lock()
-            .expect("media relay lock poisoned")
-            .targets
-            .get(&relay_port)
-            .copied()
+        self.targets.get(&relay_port).map(|v| *v)
     }
 
     pub fn metrics_for_port(&self, relay_port: u16) -> MediaRelayMetrics {
-        self.inner
-            .lock()
-            .expect("media relay lock poisoned")
-            .metrics
-            .get(&relay_port)
-            .copied()
-            .unwrap_or_default()
+        self.metrics.get(&relay_port).map(|v| *v).unwrap_or_default()
     }
 
     #[cfg(test)]
@@ -476,12 +507,9 @@ impl MediaRelayState {
     }
 
     pub fn metrics_totals(&self) -> MediaRelayMetrics {
-        self.inner
-            .lock()
-            .expect("media relay lock poisoned")
-            .metrics
-            .values()
-            .copied()
+        self.metrics
+            .iter()
+            .map(|entry| *entry.value())
             .fold(MediaRelayMetrics::default(), |mut totals, metrics| {
                 totals.received_packets += metrics.received_packets;
                 totals.forwarded_packets += metrics.forwarded_packets;
@@ -527,15 +555,14 @@ impl MediaRelayState {
         )
         .map_err(recording_error)?;
 
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
-        inner.recordings.insert(
+        self.recordings.insert(
             caller_relay_port,
             RecordingLeg {
                 recorder: recorder.clone(),
                 channel: RecordingChannel::Caller,
             },
         );
-        inner.recordings.insert(
+        self.recordings.insert(
             gateway_relay_port,
             RecordingLeg {
                 recorder,
@@ -547,24 +574,18 @@ impl MediaRelayState {
     }
 
     pub fn pair_ports(&self, first_port: u16, second_port: u16) {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
-        inner.peer_ports.insert(first_port, second_port);
-        inner.peer_ports.insert(second_port, first_port);
+        self.peer_ports.insert(first_port, second_port);
+        self.peer_ports.insert(second_port, first_port);
         if let (Some(first_rtcp_port), Some(second_rtcp_port)) =
             (rtcp_port_for(first_port), rtcp_port_for(second_port))
         {
-            inner.peer_ports.insert(first_rtcp_port, second_rtcp_port);
-            inner.peer_ports.insert(second_rtcp_port, first_rtcp_port);
+            self.peer_ports.insert(first_rtcp_port, second_rtcp_port);
+            self.peer_ports.insert(second_rtcp_port, first_rtcp_port);
         }
     }
 
     pub fn peer_port_for(&self, relay_port: u16) -> Option<u16> {
-        self.inner
-            .lock()
-            .expect("media relay lock poisoned")
-            .peer_ports
-            .get(&relay_port)
-            .copied()
+        self.peer_ports.get(&relay_port).map(|v| *v)
     }
 
     fn learn_symmetric_source(
@@ -572,15 +593,13 @@ impl MediaRelayState {
         relay_port: u16,
         source: SocketAddr,
     ) -> Option<SymmetricSourceUpdate> {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
-        let peer_port = *inner.peer_ports.get(&relay_port)?;
-        let previous_target = inner.targets.insert(peer_port, source);
+        let peer_port = *self.peer_ports.get(&relay_port)?;
+        let previous_target = self.targets.insert(peer_port, source);
         if previous_target == Some(source) {
             return None;
         }
 
-        inner
-            .metrics
+        self.metrics
             .entry(relay_port)
             .or_default()
             .learned_source_updates += 1;
@@ -594,8 +613,7 @@ impl MediaRelayState {
     }
 
     fn record_metric(&self, relay_port: u16, update: impl FnOnce(&mut MediaRelayMetrics)) {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
-        update(inner.metrics.entry(relay_port).or_default());
+        update(self.metrics.entry(relay_port).or_default().value_mut());
     }
 
     fn record_rtcp_reports(&self, relay_port: u16, summary: &MediaPacketSummary) {
@@ -609,13 +627,7 @@ impl MediaRelayState {
     }
 
     fn record_rtp_packet(&self, relay_port: u16, packet: &RtpPacket) -> Result<bool, MediaError> {
-        let recording = self
-            .inner
-            .lock()
-            .expect("media relay lock poisoned")
-            .recordings
-            .get(&relay_port)
-            .cloned();
+        let recording = self.recordings.get(&relay_port).map(|v| v.clone());
         let Some(recording) = recording else {
             return Ok(false);
         };
@@ -627,9 +639,8 @@ impl MediaRelayState {
     }
 
     fn process_dtmf_packet(&self, local_port: u16, packet: &RtpPacket) {
-        let mut inner = self.inner.lock().expect("media relay lock poisoned");
         let (call_id, last_timestamp) = {
-            let Some(state) = inner.dtmf_states.get(&local_port) else {
+            let Some(state) = self.dtmf_states.get(&local_port) else {
                 return;
             };
             if packet.payload_type != state.payload_type {
@@ -647,13 +658,12 @@ impl MediaRelayState {
 
         let timestamp = packet.timestamp;
         if Some(timestamp) != last_timestamp {
-            if let Some(state) = inner.dtmf_states.get_mut(&local_port) {
+            if let Some(mut state) = self.dtmf_states.get_mut(&local_port) {
                 state.last_timestamp = Some(timestamp);
             }
+            let mut inner = self.state.lock().expect("media relay lock poisoned");
             let acc = inner.dtmf_accumulators.entry(call_id.clone()).or_default();
             acc.push(digit);
-            inner.metrics.entry(local_port).or_default().dtmf_events += 1;
-            // Record detailed audit event.
             let record = DtmfEventRecord::from_rtp(
                 &call_id,
                 digit,
@@ -666,6 +676,8 @@ impl MediaRelayState {
                 .entry(call_id.clone())
                 .or_default()
                 .push(record);
+            drop(inner);
+            self.metrics.entry(local_port).or_default().dtmf_events += 1;
             debug!(
                 call_id,
                 digit = %digit,
@@ -966,13 +978,6 @@ fn recording_error(error: io::Error) -> MediaError {
     MediaError::Recording(error.to_string())
 }
 
-fn clear_port_locked(inner: &mut MediaRelayInner, relay_port: u16) {
-    inner.targets.remove(&relay_port);
-    if let Some(peer_port) = inner.peer_ports.remove(&relay_port) {
-        inner.peer_ports.remove(&peer_port);
-    }
-}
-
 impl Default for MediaRelayState {
     fn default() -> Self {
         Self::new()
@@ -1258,13 +1263,18 @@ pub async fn spawn_rtp_relay_listeners(
         }
     }
 
-    let mut inner = relay.inner.lock().expect("media relay lock poisoned");
     let mut handles = Vec::new();
 
     for (socket, port, packet_kind) in sockets {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let relay_clone = MediaRelayState {
-            inner: Arc::clone(&relay.inner),
+            targets: Arc::clone(&relay.targets),
+            peer_ports: Arc::clone(&relay.peer_ports),
+            metrics: Arc::clone(&relay.metrics),
+            recordings: Arc::clone(&relay.recordings),
+            dtmf_states: Arc::clone(&relay.dtmf_states),
+            active_loops: Arc::clone(&relay.active_loops),
+            state: Arc::clone(&relay.state),
         };
         let handle = tokio::spawn(relay_media_port(
             socket,
@@ -1277,7 +1287,7 @@ pub async fn spawn_rtp_relay_listeners(
         handles.push(handle);
 
         let rtp_port = rtp_port_for(port).unwrap_or(port);
-        inner.active_loops.entry(rtp_port).or_default().push(tx);
+        relay.active_loops.entry(rtp_port).or_default().push(tx);
     }
 
     Ok(handles)
