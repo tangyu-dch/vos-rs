@@ -186,6 +186,7 @@ pub fn add_port_mapping(
 }
 
 /// Remove a port mapping from the UPnP gateway.
+#[allow(dead_code)]
 pub fn remove_port_mapping(gw: &UpnpGateway, external_port: u16, protocol: &str) -> bool {
     let body = format!(
         r#"<?xml version="1.0"?>

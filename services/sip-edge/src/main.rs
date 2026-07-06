@@ -15,6 +15,7 @@ use auth::{AuthConfig, AuthDecision};
 use call_core::{
     CallError, CallManager, CallQualityMetrics, GatewayHealthTracker, Route, RouteTable, RouteTarget,
 };
+use dashmap::DashMap;
 use cdr_core::{PostgresCdrStore, DEFAULT_CDR_STREAM, DEFAULT_CDR_SUBJECT};
 use dialog::DialogValidationError;
 use media::{MediaConfig, MediaRelayState};
@@ -365,9 +366,9 @@ pub(crate) struct EdgeState {
         RequestTransactionKey,
         tokio::sync::mpsc::Sender<transaction::ServerTransactionEvent>,
     >,
-    socket: std::sync::Mutex<Option<Arc<UdpSocket>>>,
+    socket: std::sync::OnceLock<Arc<UdpSocket>>,
     test_request_cache: dashmap::DashMap<RequestTransactionKey, Vec<PendingDatagram>>,
-    nonce_replay_cache: std::sync::Mutex<HashMap<String, u64>>,
+    nonce_replay_cache: DashMap<String, u64>,
     tcp_connections: dashmap::DashMap<SocketAddr, tokio::sync::mpsc::Sender<Vec<u8>>>,
     sbc_engine: sbc::SbcEngine,
     external_to_internal_call_ids: dashmap::DashMap<String, String>,
@@ -416,9 +417,9 @@ impl EdgeState {
             refer_transfers: dashmap::DashMap::new(),
             bridged_transfers: dashmap::DashMap::new(),
             server_transactions: dashmap::DashMap::new(),
-            socket: std::sync::Mutex::new(None),
+            socket: std::sync::OnceLock::new(),
             test_request_cache: dashmap::DashMap::new(),
-            nonce_replay_cache: std::sync::Mutex::new(HashMap::new()),
+            nonce_replay_cache: DashMap::new(),
             tcp_connections: dashmap::DashMap::new(),
             sbc_engine,
             external_to_internal_call_ids: dashmap::DashMap::new(),
@@ -458,9 +459,9 @@ impl EdgeState {
             refer_transfers: dashmap::DashMap::new(),
             bridged_transfers: dashmap::DashMap::new(),
             server_transactions: dashmap::DashMap::new(),
-            socket: std::sync::Mutex::new(None),
+            socket: std::sync::OnceLock::new(),
             test_request_cache: dashmap::DashMap::new(),
-            nonce_replay_cache: std::sync::Mutex::new(HashMap::new()),
+            nonce_replay_cache: DashMap::new(),
             tcp_connections: dashmap::DashMap::new(),
             sbc_engine,
             external_to_internal_call_ids: dashmap::DashMap::new(),
@@ -489,30 +490,12 @@ impl EdgeState {
             .insert(external_call_id.to_string(), internal_call_id.to_string());
     }
 
-    /// Remove a transaction, apply a closure, and re-insert it.
-    /// Returns None if the call_id doesn't exist.
-    fn with_transaction_mut<F, R>(&self, call_id: &str, f: F) -> Option<R>
-    where
-        F: FnOnce(&mut InboundTransaction) -> R,
-    {
-        let mut tx = self.inbound_transactions.get_mut(call_id)?;
-        Some(f(&mut tx))
-    }
-
-    fn with_transaction<F, R>(&self, call_id: &str, f: F) -> Option<R>
-    where
-        F: FnOnce(&InboundTransaction) -> R,
-    {
-        let tx = self.inbound_transactions.get(call_id)?;
-        Some(f(&*tx))
-    }
-
     fn set_socket(&self, socket: Arc<UdpSocket>) {
-        *self.socket.lock().unwrap() = Some(socket);
+        let _ = self.socket.set(socket);
     }
 
     fn get_socket(&self) -> Option<Arc<UdpSocket>> {
-        self.socket.lock().unwrap().clone()
+        self.socket.get().cloned()
     }
 
     fn register_tcp_connection(&self, addr: SocketAddr, tx: tokio::sync::mpsc::Sender<Vec<u8>>) {
@@ -968,6 +951,7 @@ impl EdgeState {
     }
 }
 
+#[allow(deprecated)]
 fn current_hhmm() -> Option<String> {
     let fmt = time::format_description::parse("[hour]:[minute]").ok()?;
     time::OffsetDateTime::now_utc().format(&fmt).ok()
@@ -8687,7 +8671,7 @@ mod tests {
             HashMap::from([("1001".to_string(), "secret".to_string())]),
         );
 
-        let cache = std::sync::Mutex::new(HashMap::new());
+        let cache = dashmap::DashMap::new();
 
         let raw_invite = concat!(
             "INVITE sip:13800138000@edge.example.com SIP/2.0\r\n",

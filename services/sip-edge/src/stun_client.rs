@@ -8,21 +8,13 @@ use stun::xoraddr::*;
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
-const DEFAULT_STUN_SERVERS: &[&str] = &[
-    "stun.l.google.com:19302",
-    "stun1.l.google.com:19302",
-    "stun2.l.google.com:19302",
-    "stun3.l.google.com:19302",
-];
-
 pub struct StunClient {
     server_host: String,
     server_port: u16,
-    refresh_interval_secs: u64,
 }
 
 impl StunClient {
-    pub fn new(server: &str, refresh_interval_secs: u64) -> Option<Self> {
+    pub fn new(server: &str) -> Option<Self> {
         let (host, port) = if let Some((h, p)) = server.rsplit_once(':') {
             let port: u16 = p.parse().ok()?;
             (h.to_string(), port)
@@ -32,12 +24,7 @@ impl StunClient {
         Some(Self {
             server_host: host,
             server_port: port,
-            refresh_interval_secs,
         })
-    }
-
-    pub fn refresh_interval(&self) -> Duration {
-        Duration::from_secs(self.refresh_interval_secs)
     }
 
     pub async fn discover_public_addr(&self) -> Option<SocketAddr> {
@@ -129,7 +116,7 @@ pub async fn discover_stun_addr(stun_servers: Option<&str>, fallback_addr: &str)
     let servers: Vec<&str> = servers_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
 
     for server in &servers {
-        if let Some(client) = StunClient::new(server, 30) {
+        if let Some(client) = StunClient::new(server) {
             if let Some(addr) = client.discover_public_addr().await {
                 info!(public_addr = %addr, server = %server, "STUN: discovered public address for media relay");
                 return addr.ip().to_string();

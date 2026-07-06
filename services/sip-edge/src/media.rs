@@ -867,16 +867,6 @@ fn write_wav_header(file: &mut File, data_bytes: u32) -> io::Result<()> {
     Ok(())
 }
 
-fn decode_g711_payload(codec: AudioCodec, payload: &[u8]) -> Vec<i16> {
-    payload
-        .iter()
-        .map(|sample| match codec {
-            AudioCodec::Pcmu => decode_pcmu(*sample),
-            AudioCodec::Pcma => decode_pcma(*sample),
-        })
-        .collect()
-}
-
 fn decode_pcmu(sample: u8) -> i16 {
     let sample = !sample;
     let sign = sample & 0x80;
@@ -1043,6 +1033,7 @@ pub fn is_sdp_body(headers: &HeaderMap, body: &[u8]) -> bool {
     false
 }
 
+#[allow(dead_code)]
 pub fn rewrite_sdp_body(body: &[u8], endpoint: RtpEndpoint) -> Result<Vec<u8>, MediaError> {
     let input = str::from_utf8(body).map_err(|_| MediaError::InvalidUtf8)?;
 
@@ -1083,6 +1074,7 @@ pub fn rewrite_sdp_and_extract_endpoint(
 
 /// Fast path: rewrite c= and m= lines directly without full SDP parsing.
 /// Returns None if the SDP doesn't look like a standard audio SDP.
+#[allow(dead_code)]
 fn try_fast_rewrite(input: &str, endpoint: &RtpEndpoint) -> Option<Vec<u8>> {
     try_fast_rewrite_inner(input, endpoint).map(|(bytes, _)| bytes)
 }

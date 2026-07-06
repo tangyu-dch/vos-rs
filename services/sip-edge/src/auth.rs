@@ -1,4 +1,5 @@
 use cdr_core::PostgresCdrStore;
+use dashmap::DashMap;
 use sip_core::SipRequest;
 use std::{collections::HashMap, env};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -134,7 +135,7 @@ impl AuthConfig {
         &self,
         request: &SipRequest,
         db_store: Option<&PostgresCdrStore>,
-        replay_cache: Option<&std::sync::Mutex<HashMap<String, u64>>>,
+        replay_cache: Option<&DashMap<String, u64>>,
     ) -> AuthDecision {
         if !self.is_enabled() && db_store.is_none() {
             return AuthDecision::Disabled;
@@ -160,18 +161,19 @@ impl AuthConfig {
             return AuthDecision::Challenge;
         }
 
-        if let Some(cache_mutex) = replay_cache {
-            let mut cache = cache_mutex.lock().unwrap();
+        if let Some(cache) = replay_cache {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
+
+            // Evict expired entries
             cache.retain(|_, &mut exp| exp > now);
 
             // Evict oldest entries if cache grows too large
             const MAX_NONCE_CACHE: usize = 100_000;
             if cache.len() > MAX_NONCE_CACHE {
-                let cutoff = now + 250; // keep entries expiring in 50s+
+                let cutoff = now + 250;
                 cache.retain(|_, exp| *exp > cutoff);
             }
 
@@ -244,7 +246,7 @@ impl DigestExpectation<'_> {
         let Some(realm) = params.get("realm") else {
             return false;
         };
-        let Some(nonce) = params.get("nonce") else {
+        let Some(_nonce) = params.get("nonce") else {
             return false;
         };
         let Some(uri) = params.get("uri") else {
