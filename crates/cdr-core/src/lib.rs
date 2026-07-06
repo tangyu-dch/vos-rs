@@ -644,14 +644,11 @@ impl PostgresCdrStore {
                     failure_reason, caller_rtcp_loss_rate, caller_rtcp_jitter_ms,
                     caller_rtcp_rtt_ms, gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms,
                     gateway_rtcp_rtt_ms, mos, dtmf_digits
-                ) ",
+                ) "
             );
 
-            for (i, event) in chunk.iter().enumerate() {
-                let separator = if i == 0 { "VALUES " } else { ", " };
-                qb.push(separator);
-                qb.push("(")
-                    .push_bind(event.call_id.as_str())
+            qb.push_values(chunk, |mut b, event| {
+                b.push_bind(event.call_id.as_str())
                     .push_bind(event.caller.as_deref())
                     .push_bind(event.callee.as_deref())
                     .push_bind(offset_from_millis(event.started_at_ms))
@@ -669,9 +666,8 @@ impl PostgresCdrStore {
                     .push_bind(event.gateway_rtcp_jitter_ms)
                     .push_bind(event.gateway_rtcp_rtt_ms.map(|v| v as i32))
                     .push_bind(event.mos)
-                    .push_bind(event.dtmf_digits.as_deref())
-                    .push(")");
-            }
+                    .push_bind(event.dtmf_digits.as_deref());
+            });
 
             qb.build().execute(&mut *tx).await?;
         }
@@ -1061,7 +1057,7 @@ impl PostgresCdrStore {
     }
 
     /// 获取仪表板统计信息
-    pub async fn get_dashboard_stats(&self) -> Result<DashboardStats, sqlx::Error> {
+    pub async fn get_dashboard_stats(&self, active_calls: i64) -> Result<DashboardStats, sqlx::Error> {
         let today_start = OffsetDateTime::now_utc().date().midnight().assume_utc();
 
         let row = sqlx::query(
@@ -1104,7 +1100,7 @@ impl PostgresCdrStore {
         };
 
         Ok(DashboardStats {
-            active_calls: 0,
+            active_calls,
             today_total_calls: total,
             today_answered_calls: answered_num,
             today_canceled_calls: canceled.unwrap_or(0),

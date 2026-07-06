@@ -146,19 +146,38 @@ impl AuthConfig {
             .get("authorization")
             .or_else(|| request.headers.get("proxy-authorization"));
         let Some(raw_authorization) = raw_authorization else {
+            tracing::debug!("no Authorization header found");
             return AuthDecision::Challenge;
         };
 
         let Some(params) = parse_digest_authorization(raw_authorization.as_str()) else {
+            tracing::debug!("failed to parse digest authorization");
             return AuthDecision::Challenge;
         };
 
         let Some(nonce) = params.get("nonce") else {
+            tracing::debug!("missing nonce in digest authorization");
             return AuthDecision::Challenge;
         };
 
         if !self.verify_dynamic_nonce(nonce, 300) {
+            tracing::warn!(nonce = %nonce, secret_key_len = self.secret_key.len(), "nonce verification failed");
             return AuthDecision::Challenge;
+        }
+
+        // Check if nonce is in replay cache (already used)
+        if let Some(cache) = replay_cache {
+            let Some(cnonce) = params.get("cnonce") else {
+                return AuthDecision::Challenge;
+            };
+            let Some(nc) = params.get("nc") else {
+                return AuthDecision::Challenge;
+            };
+            let key = format!("{}:{}:{}", nonce, cnonce, nc);
+            if cache.contains_key(&key) {
+                tracing::warn!(%key, "replay attack detected");
+                return AuthDecision::Challenge;
+            }
         }
 
         if let Some(cache) = replay_cache {
@@ -257,6 +276,7 @@ impl DigestExpectation<'_> {
         };
 
         if realm != self.realm {
+            tracing::debug!(expected = %self.realm, got = %realm, "realm mismatch");
             return false;
         }
 
@@ -268,6 +288,7 @@ impl DigestExpectation<'_> {
         let expected = match params.get("qop") {
             Some(qop) => {
                 if qop != "auth" {
+                    tracing::debug!(got = %qop, "unsupported qop");
                     return false;
                 }
                 let Some(nc) = params.get("nc") else {
@@ -281,7 +302,18 @@ impl DigestExpectation<'_> {
             None => md5_hex(&format!("{ha1}:{}:{ha2}", self.nonce)),
         };
 
-        response.eq_ignore_ascii_case(&expected)
+        let result = response.eq_ignore_ascii_case(&expected);
+        if !result {
+            tracing::debug!(
+                expected = %expected,
+                got = %response,
+                method = %self.method,
+                uri = %uri,
+                ha2 = %ha2,
+                "digest response mismatch"
+            );
+        }
+        result
     }
 }
 

@@ -64,7 +64,8 @@ class SipClient:
         self.remote_ip = remote_ip
         self.remote_port = remote_port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind((local_ip, local_port))
+        self.sock.bind((local_ip, 0))  # Use ephemeral port
+        self.local_port = self.sock.getsockname()[1]
         self.sock.settimeout(5)
         self.call_id = f'call-{int(time.time())}-{random.randint(1000,9999)}@{local_ip}'
         self.from_tag = f'{int(time.time())}tag{random.randint(1000,9999)}'
@@ -114,10 +115,12 @@ class SipClient:
             return hashlib.md5(f'{ha1}:{nonce}:{ha2}'.encode()).hexdigest()
 
     def register(self, username, password):
-        uri = f'sip:{username}@{self.remote_ip}:{self.remote_port}'
+        # Request-URI and Authorization URI must match the target
+        request_uri = f'sip:{self.remote_ip}:{self.remote_port}'
+        auth_uri = f'sip:{username}@{self.remote_ip}:{self.remote_port}'
         cseq = self.next_cseq()
 
-        reg = (f'REGISTER {uri} SIP/2.0\r\n'
+        reg = (f'REGISTER {request_uri} SIP/2.0\r\n'
                f'Via: SIP/2.0/UDP {self.local_ip}:{self.local_port};branch={self.next_branch()}\r\n'
                f'Max-Forwards: 70\r\n'
                f'From: "{username}" <sip:{username}@{self.local_ip}:{self.local_port}>;tag={self.from_tag}\r\n'
@@ -143,10 +146,10 @@ class SipClient:
             qop_match = re.search(r'qop="([^"]*)"', www_auth)
             qop = qop_match.group(1) if qop_match else ''
 
-            auth_resp = self.compute_digest('REGISTER', uri, username, password, realm, nonce, qop)
+            auth_resp = self.compute_digest('REGISTER', auth_uri, username, password, realm, nonce, qop)
 
             cseq = self.next_cseq()
-            reg_auth = (f'REGISTER {uri} SIP/2.0\r\n'
+            reg_auth = (f'REGISTER {request_uri} SIP/2.0\r\n'
                        f'Via: SIP/2.0/UDP {self.local_ip}:{self.local_port};branch={self.next_branch()}\r\n'
                        f'Max-Forwards: 70\r\n'
                        f'From: "{username}" <sip:{username}@{self.local_ip}:{self.local_port}>;tag={self.from_tag}\r\n'
@@ -156,7 +159,7 @@ class SipClient:
                        f'Contact: <sip:{username}@{self.local_ip}:{self.local_port}>\r\n'
                        f'Expires: 3600\r\n'
                        f'Authorization: Digest username="{username}", realm="{realm}", '
-                       f'nonce="{nonce}", uri="{uri}", response="{auth_resp}", '
+                       f'nonce="{nonce}", uri="{auth_uri}", response="{auth_resp}", '
                        f'algorithm=MD5, qop={qop}, nc=00000001, cnonce="c1"\r\n'
                        f'Content-Length: 0\r\n\r\n')
             self.send_sip(reg_auth)
@@ -233,7 +236,7 @@ class SipClient:
                 print(f'  → digest: realm={realm}, nonce={nonce[:20]}..., qop={qop}, response={auth_resp[:16]}...')
 
                 extra = (f'Proxy-Authorization: Digest username="{username}", realm="{realm}", '
-                         f'nonce="{nonce}", uri="{uri}", response="{auth_resp}", '
+                       f'nonce="{nonce}", uri="{request_uri}", response="{auth_resp}", '
                          f'algorithm=MD5, qop={qop}, nc=00000001, cnonce="c1"\r\n')
                 invite_auth, _ = self._build_invite(remote_uri, username, extra)
                 self.send_sip(invite_auth)

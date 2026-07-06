@@ -128,7 +128,20 @@ async fn health() -> &'static str {
 async fn get_dashboard_stats(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardStats>, ApiError> {
-    state.store.get_dashboard_stats()
+    let active_calls = {
+        let url = format!("{}/manage/active-calls", state.sip_manage_base);
+        match reqwest::get(&url).await {
+            Ok(resp) => {
+                let text = resp.text().await.unwrap_or_default();
+                serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| v["active_calls"].as_i64())
+                    .unwrap_or(0)
+            }
+            Err(_) => 0,
+        }
+    };
+    state.store.get_dashboard_stats(active_calls)
         .await
         .map(Json)
         .map_err(|e| ApiError { error: e.to_string() })
