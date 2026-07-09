@@ -12,41 +12,36 @@ pub(crate) mod timers;
 
 // Re-export extracted modules (items accessible as crate::XxxType)
 pub(crate) use edge_state::*;
-
-pub(crate) use net::stun_client;
-pub(crate) use net::transport;
-pub(crate) use net::upnp;
-pub(crate) use security::sbc;
 pub(crate) use sip::auth;
 pub(crate) use sip::dialog;
 pub(crate) use sip::outbound;
-pub(crate) use sip::registrar;
+pub(crate) use sip::registrar::{self, RegisterOutcome, RegistrationStore};
 pub(crate) use sip::response;
 pub(crate) use sip::transaction;
+pub(crate) use net::transport;
+pub(crate) use net::stun_client;
+pub(crate) use net::upnp;
+pub(crate) use security::sbc;
 pub(crate) use timers::{
     calculate_mos_for_legs, spawn_client_transaction_retransmission, spawn_nat_keepalive_loop,
     spawn_session_timer_watchdog,
 };
 
 use call_core::{
-    CallError, CallManager, CallQualityMetrics, GatewayHealthTracker, Route, RouteTable,
-    RouteTarget,
+    CallError, CallManager, Route, RouteTable, RouteTarget,
 };
 use cdr_core::{PostgresCdrStore, DEFAULT_CDR_STREAM, DEFAULT_CDR_SUBJECT};
 use config::EdgeConfig;
-use dashmap::DashMap;
 use media::{MediaConfig, MediaRelayState};
 use nats_cdr::NatsCdrPublisher;
 use net::{
-    create_tls_acceptor, create_tls_connector, handle_stream_connection, handle_ws_connection,
+    create_tls_acceptor, handle_stream_connection, handle_ws_connection,
     SipStream, Transport,
 };
-use rustls_pki_types::ServerName;
 use sdp_core::RtpEndpoint;
 use sip::{
-    build_response_with_owned_headers, not_acceptable_for_request, service_unavailable_for_request,
-    target_addr_for as outbound_target_addr_for, AuthConfig, AuthDecision, ClientTransactionKey,
-    DialogValidationError, RegisterOutcome, RegistrationStore, RequestTransactionKey,
+    AuthConfig, AuthDecision, ClientTransactionKey,
+    DialogValidationError, RequestTransactionKey,
 };
 use sip_core::{
     parse_message, HeaderMap, HeaderName, HeaderValue, Method, SipMessage, SipRequest, SipUri,
@@ -59,7 +54,7 @@ use std::{
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant, SystemTime},
 };
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::UdpSocket;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 

@@ -2,14 +2,13 @@ use crate::sip::transaction::ClientTransactionKey;
 use crate::{
     config::EdgeConfig,
     edge_state::{
-        extract_uri_from_contact, parse_target_addr_from_route, sip_uri_from_peer, EdgeState,
+        parse_target_addr_from_route, sip_uri_from_peer, EdgeState,
         PendingDatagram,
     },
 };
-use call_core::{CallQualityMetrics, GatewayHealthTracker};
+use call_core::CallQualityMetrics;
 use std::{
     net::SocketAddr,
-    str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
 };

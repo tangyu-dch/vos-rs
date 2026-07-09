@@ -2,16 +2,16 @@ use crate::handle_datagram;
 use crate::nats_cdr::NatsCdrPublisher;
 use crate::net::create_tls_connector;
 use crate::sbc;
-use crate::security::sbc::SbcEngine;
 use crate::{
     config::EdgeConfig,
     media::{MediaConfig, MediaRelayState},
-    net::{handle_stream_connection, SipStream, Transport},
+    net::{Transport, handle_stream_connection, SipStream},
     sip::{
         dialog, transaction, AuthConfig, ClientTransactionKey, DialogValidationError,
-        RegistrationStore, RequestTransactionKey, ServerTransactionEvent,
+        RequestTransactionKey,
     },
 };
+use crate::sip::registrar::RegistrationStore;
 use call_core::{CallManager, GatewayHealthTracker};
 use cdr_core::PostgresCdrStore;
 use dashmap::DashMap;
@@ -22,11 +22,11 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     str::FromStr,
-    sync::{atomic::Ordering, Arc},
+    sync::Arc,
     time::Instant,
 };
 use tokio::net::{TcpStream, UdpSocket};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PendingDatagram {

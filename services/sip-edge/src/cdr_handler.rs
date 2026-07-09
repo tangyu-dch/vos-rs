@@ -6,7 +6,7 @@ use sip_core::SipUri;
 use tracing::{debug, info};
 
 use crate::config::{
-    env_non_empty, AnyError, DATABASE_URL_ENV, DEFAULT_GATEWAY_ENV, NATS_CDR_STREAM_ENV,
+    AnyError, DATABASE_URL_ENV, DEFAULT_GATEWAY_ENV, NATS_CDR_STREAM_ENV,
     NATS_CDR_SUBJECT_ENV, NATS_URL_ENV,
 };
 use crate::nats_cdr::NatsCdrPublisher;
