@@ -1,26 +1,40 @@
-mod auth;
-mod dialog;
+mod cdr_handler;
+mod config;
+mod manage;
 mod media;
 mod nats_cdr;
-mod outbound;
-mod registrar;
-mod response;
-pub mod sbc;
-mod stun_client;
-mod transaction;
-mod transport;
-mod upnp;
+mod net;
+mod security;
+mod sip;
 
-use auth::{AuthConfig, AuthDecision};
+// Backward-compatible re-exports for inline module references
+pub(crate) use sip::auth;
+pub(crate) use sip::dialog;
+pub(crate) use sip::outbound;
+pub(crate) use sip::registrar;
+pub(crate) use sip::response;
+pub(crate) use sip::transaction;
+pub(crate) use net::stun_client;
+pub(crate) use net::transport;
+pub(crate) use net::upnp;
+pub(crate) use security::sbc;
+
+use sip::{
+    build_response_with_owned_headers, not_acceptable_for_request, service_unavailable_for_request,
+    target_addr_for as outbound_target_addr_for, AuthConfig, AuthDecision, ClientTransactionKey,
+    DialogValidationError, RegisterOutcome, RegistrationStore, RequestTransactionKey,
+};
+use media::{MediaConfig, MediaRelayState};
+use net::{
+    create_tls_acceptor, create_tls_connector, handle_stream_connection, handle_ws_connection,
+    SipStream, Transport,
+};
 use call_core::{
     CallError, CallManager, CallQualityMetrics, GatewayHealthTracker, Route, RouteTable, RouteTarget,
 };
 use dashmap::DashMap;
 use cdr_core::{PostgresCdrStore, DEFAULT_CDR_STREAM, DEFAULT_CDR_SUBJECT};
-use dialog::DialogValidationError;
-use media::{MediaConfig, MediaRelayState};
 use nats_cdr::NatsCdrPublisher;
-use registrar::{RegisterOutcome, RegistrationStore};
 use rustls_pki_types::ServerName;
 use sdp_core::RtpEndpoint;
 use sip_core::{
@@ -37,11 +51,6 @@ use std::{
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
-use transaction::{ClientTransactionKey, RequestTransactionKey};
-use transport::{
-    create_tls_acceptor, create_tls_connector, handle_stream_connection, handle_ws_connection,
-    SipStream, Transport,
-};
 
 const ADVERTISED_ADDR_ENV: &str = "VOS_RS_SIP_ADVERTISED_ADDR";
 const DATABASE_URL_ENV: &str = "VOS_RS_DATABASE_URL";
@@ -347,7 +356,6 @@ fn parse_target_addr_from_route(route: &str) -> Option<String> {
     Some(format!("{}:{}", uri.host, uri.port.unwrap_or(5060)))
 }
 
-mod manage;
 
 #[derive(Debug)]
 pub(crate) struct EdgeState {
