@@ -148,8 +148,12 @@ pub async fn get_report_summary(
         .collect();
 
     Ok(Json(ReportSummary {
-        start: start.format(&time::format_description::well_known::Rfc3339).unwrap(),
-        end: end.format(&time::format_description::well_known::Rfc3339).unwrap(),
+        start: start
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap(),
+        end: end
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap(),
         total,
         answered: answered.unwrap_or(0),
         canceled: canceled.unwrap_or(0),
@@ -226,9 +230,23 @@ pub async fn export_cdrs_csv(
             csv_quote(&call_id),
             csv_quote(&caller),
             csv_quote(&callee),
-            csv_quote(&started_at.format(&time::format_description::well_known::Rfc3339).unwrap()),
-            csv_quote(&answered_at.map(|a| a.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()).unwrap_or_default()),
-            csv_quote(&ended_at.format(&time::format_description::well_known::Rfc3339).unwrap()),
+            csv_quote(
+                &started_at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap()
+            ),
+            csv_quote(
+                &answered_at
+                    .map(|a| a
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_default())
+                    .unwrap_or_default()
+            ),
+            csv_quote(
+                &ended_at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap()
+            ),
             duration_ms,
             billable_ms,
             csv_quote(&status),

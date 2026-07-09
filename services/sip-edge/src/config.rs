@@ -8,19 +8,16 @@ pub const DATABASE_URL_ENV: &str = "VOS_RS_DATABASE_URL";
 pub const NATS_URL_ENV: &str = "VOS_RS_NATS_URL";
 pub const NATS_CDR_STREAM_ENV: &str = "VOS_RS_NATS_CDR_STREAM";
 pub const NATS_CDR_SUBJECT_ENV: &str = "VOS_RS_NATS_CDR_SUBJECT";
-pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:5060";
 pub const DEFAULT_ADVERTISED_ADDR: &str = "127.0.0.1:5060";
 pub const DEFAULT_GATEWAY_ENV: &str = "VOS_RS_SIP_DEFAULT_GATEWAY";
 pub const TLS_BIND_ENV: &str = "VOS_RS_SIP_TLS_BIND";
 pub const TLS_CERT_PATH_ENV: &str = "VOS_RS_SIP_TLS_CERT_PATH";
 pub const TLS_KEY_PATH_ENV: &str = "VOS_RS_SIP_TLS_KEY_PATH";
-pub const TLS_ALLOW_TEST_CERT_ENV: &str = "VOS_RS_SIP_TLS_ALLOW_TEST_CERT";
 pub const TLS_CA_PATH_ENV: &str = "VOS_RS_SIP_TLS_CA_PATH";
+pub const TLS_ALLOW_TEST_CERT_ENV: &str = "VOS_RS_SIP_TLS_ALLOW_TEST_CERT";
 pub const TLS_INSECURE_SKIP_VERIFY_ENV: &str = "VOS_RS_SIP_TLS_INSECURE_SKIP_VERIFY";
 pub const TLS_SERVER_NAME_ENV: &str = "VOS_RS_SIP_TLS_SERVER_NAME";
-pub const MAX_DATAGRAM_SIZE: usize = 65_535;
 
-pub type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeConfig {
@@ -100,21 +97,6 @@ impl EdgeConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(|| num_cpus::get().max(1)),
             udp_workers_auto: env_bool("VOS_RS_UDP_WORKERS_AUTO").unwrap_or(false),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingDatagram {
-    pub target: String,
-    pub bytes: Vec<u8>,
-}
-
-impl PendingDatagram {
-    pub fn new(target: impl Into<String>, bytes: Vec<u8>) -> Self {
-        Self {
-            target: target.into(),
-            bytes,
         }
     }
 }

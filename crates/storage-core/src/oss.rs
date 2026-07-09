@@ -49,12 +49,7 @@ impl OssStorage {
     }
 
     fn object_url(&self, key: &str) -> String {
-        format!(
-            "{}/{}/{}",
-            self.endpoint,
-            self.bucket,
-            self.full_key(key)
-        )
+        format!("{}/{}/{}", self.endpoint, self.bucket, self.full_key(key))
     }
 
     fn host(&self) -> String {
@@ -66,20 +61,18 @@ impl OssStorage {
     }
 
     fn sign_v4(&self, _method: &str, full_key: &str, date: &str, payload_hash: &str) -> String {
-        let region = std::env::var("VOS_RS_OSS_REGION")
-            .unwrap_or_else(|_| "cn-hangzhou".to_string());
+        let region =
+            std::env::var("VOS_RS_OSS_REGION").unwrap_or_else(|_| "cn-hangzhou".to_string());
         let credential_scope = format!("{}/{}/s3/aws4_request", date, region);
         let host = self.host();
 
         let canonical_headers = format!(
             "content-type:application/octet-stream\nhost:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{date}T000000Z\n"
         );
-        let signed_headers =
-            "content-type;host;x-amz-content-sha256;x-amz-date";
+        let signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date";
 
-        let canonical_request = format!(
-            "GET\n/{full_key}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
-        );
+        let canonical_request =
+            format!("GET\n/{full_key}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
 
         let string_to_sign = format!(
             "AWS4-HMAC-SHA256\n{date}T000000Z\n{credential_scope}\n{:x}",
@@ -114,8 +107,11 @@ impl OssStorage {
         let payload_hash = body
             .as_ref()
             .map(|b| format!("{:x}", Sha256::digest(b)))
-            .unwrap_or_else(|| "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string());
-        let authorization = self.sign_v4(method.as_str(), &self.full_key(key), &date, &payload_hash);
+            .unwrap_or_else(|| {
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()
+            });
+        let authorization =
+            self.sign_v4(method.as_str(), &self.full_key(key), &date, &payload_hash);
 
         let mut req = self
             .client
@@ -136,8 +132,7 @@ impl OssStorage {
 fn hmac_sha256_raw(key: &[u8], data: &[u8]) -> Vec<u8> {
     use hmac::{Hmac, Mac};
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac =
-        HmacSha256::new_from_slice(key).expect("HMAC 可接受任意长度 key");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC 可接受任意长度 key");
     mac.update(data);
     mac.finalize().into_bytes().to_vec()
 }
@@ -179,9 +174,7 @@ impl StorageBackend for OssStorage {
     }
 
     async fn get(&self, key: &str) -> Result<Bytes, StorageError> {
-        let resp = self
-            .do_request(reqwest::Method::GET, key, None)
-            .await?;
+        let resp = self.do_request(reqwest::Method::GET, key, None).await?;
 
         if resp.status() == 404 {
             return Err(StorageError::NotFound(key.to_string()));
@@ -213,9 +206,7 @@ impl StorageBackend for OssStorage {
                 if let Some(start) = line.find("<Key>") {
                     if let Some(end) = line.find("</Key>") {
                         let key = &line[start + 5..end];
-                        let key = key
-                            .strip_prefix(&self.key_prefix)
-                            .unwrap_or(key);
+                        let key = key.strip_prefix(&self.key_prefix).unwrap_or(key);
                         results.push(FileInfo {
                             key: key.to_string(),
                             size: 0,
@@ -230,16 +221,12 @@ impl StorageBackend for OssStorage {
     }
 
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
-        let resp = self
-            .do_request(reqwest::Method::HEAD, key, None)
-            .await?;
+        let resp = self.do_request(reqwest::Method::HEAD, key, None).await?;
         Ok(resp.status().is_success())
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
-        let resp = self
-            .do_request(reqwest::Method::DELETE, key, None)
-            .await?;
+        let resp = self.do_request(reqwest::Method::DELETE, key, None).await?;
 
         if !resp.status().is_success() && resp.status().as_u16() != 404 {
             let status = resp.status();
@@ -254,8 +241,8 @@ impl StorageBackend for OssStorage {
     async fn presign_get(&self, key: &str, expires_secs: u64) -> Result<String, StorageError> {
         let now = Utc::now();
         let date = now.format("%Y%m%d").to_string();
-        let region = std::env::var("VOS_RS_OSS_REGION")
-            .unwrap_or_else(|_| "cn-hangzhou".to_string());
+        let region =
+            std::env::var("VOS_RS_OSS_REGION").unwrap_or_else(|_| "cn-hangzhou".to_string());
 
         let full_key = self.full_key(key);
         let credential_scope = format!("{}/{}/s3/aws4_request", date, region);
@@ -279,7 +266,11 @@ impl StorageBackend for OssStorage {
         let signature = hex::encode(hmac_sha256_raw(&k_signing, string_to_sign.as_bytes()));
 
         let expiry = now.timestamp() + expires_secs as i64;
-        let sep = if self.endpoint.contains('?') { '&' } else { '?' };
+        let sep = if self.endpoint.contains('?') {
+            '&'
+        } else {
+            '?'
+        };
 
         Ok(format!(
             "{}/{}/{full_key}{sep}X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}/{}/s3/aws4_request&X-Amz-Date={date}T000000Z&X-Amz-Expires={expiry}&X-Amz-SignedHeaders=content-type;host;x-amz-content-sha256&X-Amz-Signature={signature}",

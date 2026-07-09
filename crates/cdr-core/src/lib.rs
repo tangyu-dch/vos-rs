@@ -308,7 +308,11 @@ pub struct SipUser {
     pub username: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
-    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<OffsetDateTime>,
 }
 
@@ -332,7 +336,11 @@ pub struct SipGateway {
     pub account_id: Option<i64>,
     pub max_concurrent: Option<i32>,
     pub enabled: Option<bool>,
-    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<OffsetDateTime>,
 }
 
@@ -345,7 +353,11 @@ pub struct SipRoute {
     pub cost: f64,
     pub time_start: Option<String>,
     pub time_end: Option<String>,
-    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<OffsetDateTime>,
 }
 
@@ -357,7 +369,11 @@ pub struct SipRegistration {
     #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
     pub path: Vec<String>,
-    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub updated_at: Option<OffsetDateTime>,
 }
 
@@ -367,7 +383,11 @@ pub struct BillingRate {
     pub prefix: String,
     pub rate_per_minute: f64,
     pub description: Option<String>,
-    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<OffsetDateTime>,
 }
 
@@ -376,7 +396,11 @@ pub struct BillingAccount {
     pub username: String,
     pub balance: f64,
     pub currency: String,
-    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<OffsetDateTime>,
 }
 
@@ -389,7 +413,11 @@ pub struct LedgerEntry {
     pub rate_per_minute: f64,
     pub amount: f64,
     pub balance_after: f64,
-    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<OffsetDateTime>,
 }
 
@@ -409,9 +437,17 @@ pub struct NumberInventory {
     pub max_concurrent: Option<i32>,
     pub current_concurrent: Option<i32>,
     pub status: String,
-    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<OffsetDateTime>,
-    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub updated_at: Option<OffsetDateTime>,
 }
 
@@ -689,7 +725,7 @@ impl PostgresCdrStore {
                     failure_reason, caller_rtcp_loss_rate, caller_rtcp_jitter_ms,
                     caller_rtcp_rtt_ms, gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms,
                     gateway_rtcp_rtt_ms, mos, dtmf_digits, recording_path, direction
-                ) "
+                ) ",
             );
 
             qb.push_values(chunk, |mut b, event| {
@@ -733,7 +769,19 @@ impl PostgresCdrStore {
 
     pub async fn load_gateways(
         &self,
-    ) -> Result<Vec<(String, String, Option<u16>, String, Option<u32>, Option<String>, Option<String>, Option<String>)>, sqlx::Error> {
+    ) -> Result<
+        Vec<(
+            String,
+            String,
+            Option<u16>,
+            String,
+            Option<u32>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )>,
+        sqlx::Error,
+    > {
         let rows =
             sqlx::query("SELECT id, host, port, transport, max_capacity, caller_id_mode, virtual_caller, prefix_rules FROM sip_gateways")
                 .fetch_all(&self.pool)
@@ -750,7 +798,16 @@ impl PostgresCdrStore {
             let caller_id_mode: Option<String> = row.get(5);
             let virtual_caller: Option<String> = row.get(6);
             let prefix_rules: Option<String> = row.get(7);
-            gateways.push((id, host, port, transport, max_capacity, caller_id_mode, virtual_caller, prefix_rules));
+            gateways.push((
+                id,
+                host,
+                port,
+                transport,
+                max_capacity,
+                caller_id_mode,
+                virtual_caller,
+                prefix_rules,
+            ));
         }
         Ok(gateways)
     }
@@ -781,7 +838,18 @@ impl PostgresCdrStore {
 
     pub async fn load_routes(
         &self,
-    ) -> Result<Vec<(String, String, i32, String, f64, Option<String>, Option<String>)>, sqlx::Error> {
+    ) -> Result<
+        Vec<(
+            String,
+            String,
+            i32,
+            String,
+            f64,
+            Option<String>,
+            Option<String>,
+        )>,
+        sqlx::Error,
+    > {
         let rows = sqlx::query(
             "SELECT id, prefix, priority, gateway_id, cost, time_start, time_end FROM sip_routes",
         )
@@ -840,10 +908,7 @@ impl PostgresCdrStore {
         Ok(())
     }
 
-    pub async fn upsert_gateway_full(
-        &self,
-        gw: &SipGateway,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn upsert_gateway_full(&self, gw: &SipGateway) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO sip_gateways (id, host, port, transport, max_capacity, gateway_type, prefix_rules, supports_registration, caller_id_mode, virtual_caller, max_concurrent, account_id, reg_auth_type, reg_username, enabled)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
@@ -1005,10 +1070,7 @@ impl PostgresCdrStore {
     }
 
     /// Insert a single DTMF event record into the audit table.
-    pub async fn insert_dtmf_event(
-        &self,
-        record: &DtmfEventRecord,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn insert_dtmf_event(&self, record: &DtmfEventRecord) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
             INSERT INTO dtmf_events (
@@ -1094,10 +1156,14 @@ impl PostgresCdrStore {
             count_qb.push(" AND status = ").push_bind(s);
         }
         if let Some(c) = caller {
-            count_qb.push(" AND caller ILIKE ").push_bind(format!("%{}%", c));
+            count_qb
+                .push(" AND caller ILIKE ")
+                .push_bind(format!("%{}%", c));
         }
         if let Some(c) = callee {
-            count_qb.push(" AND callee ILIKE ").push_bind(format!("%{}%", c));
+            count_qb
+                .push(" AND callee ILIKE ")
+                .push_bind(format!("%{}%", c));
         }
         if let Some(st) = start_time {
             count_qb.push(" AND started_at >= ").push_bind(st);
@@ -1123,10 +1189,14 @@ impl PostgresCdrStore {
             list_qb.push(" AND status = ").push_bind(s);
         }
         if let Some(c) = caller {
-            list_qb.push(" AND caller ILIKE ").push_bind(format!("%{}%", c));
+            list_qb
+                .push(" AND caller ILIKE ")
+                .push_bind(format!("%{}%", c));
         }
         if let Some(c) = callee {
-            list_qb.push(" AND callee ILIKE ").push_bind(format!("%{}%", c));
+            list_qb
+                .push(" AND callee ILIKE ")
+                .push_bind(format!("%{}%", c));
         }
         if let Some(st) = start_time {
             list_qb.push(" AND started_at >= ").push_bind(st);
@@ -1157,7 +1227,7 @@ impl PostgresCdrStore {
                     failure_reason, caller_rtcp_loss_rate, caller_rtcp_jitter_ms,
                     caller_rtcp_rtt_ms, gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms,
                     gateway_rtcp_rtt_ms, mos, dtmf_digits, recording_path, direction
-             FROM call_cdrs WHERE call_id = $1"
+             FROM call_cdrs WHERE call_id = $1",
         )
         .bind(call_id)
         .fetch_optional(&self.pool)
@@ -1167,7 +1237,10 @@ impl PostgresCdrStore {
     }
 
     /// 获取仪表板统计信息
-    pub async fn get_dashboard_stats(&self, active_calls: i64) -> Result<DashboardStats, sqlx::Error> {
+    pub async fn get_dashboard_stats(
+        &self,
+        active_calls: i64,
+    ) -> Result<DashboardStats, sqlx::Error> {
         let today_start = OffsetDateTime::now_utc().date().midnight().assume_utc();
 
         let row = sqlx::query(
@@ -1178,7 +1251,7 @@ impl PostgresCdrStore {
                     AVG(mos) as avg_mos,
                     AVG(caller_rtcp_loss_rate) as avg_loss_rate,
                     AVG(caller_rtcp_jitter_ms) as avg_jitter
-             FROM call_cdrs WHERE started_at >= $1"
+             FROM call_cdrs WHERE started_at >= $1",
         )
         .bind(today_start)
         .fetch_one(&self.pool)
@@ -1196,11 +1269,10 @@ impl PostgresCdrStore {
             .fetch_one(&self.pool)
             .await?;
 
-        let registrations_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sip_registrations WHERE expires_at > NOW()"
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let registrations_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM sip_registrations WHERE expires_at > NOW()")
+                .fetch_one(&self.pool)
+                .await?;
 
         let answered_num = answered.unwrap_or(0);
         let answer_rate = if total > 0 {
@@ -1234,7 +1306,7 @@ impl PostgresCdrStore {
              FROM call_cdrs
              WHERE started_at >= $1
              GROUP BY h
-             ORDER BY h"
+             ORDER BY h",
         )
         .bind(today_start)
         .fetch_all(&self.pool)
@@ -1242,7 +1314,8 @@ impl PostgresCdrStore {
 
         // 补齐 0~当前小时 的空档，保证折线图横轴连续。
         let now_hour = OffsetDateTime::now_utc().time().hour() as i32;
-        let mut map: std::collections::BTreeMap<i32, (i64, i64)> = std::collections::BTreeMap::new();
+        let mut map: std::collections::BTreeMap<i32, (i64, i64)> =
+            std::collections::BTreeMap::new();
         for r in rows {
             let h: i32 = r.get(0);
             let total: i64 = r.get(1);
@@ -1252,7 +1325,11 @@ impl PostgresCdrStore {
         let mut out = Vec::with_capacity((now_hour + 1) as usize);
         for h in 0..=now_hour {
             let (total, answered) = map.remove(&h).unwrap_or((0, 0));
-            out.push(HourlyTrend { hour: h, total, answered });
+            out.push(HourlyTrend {
+                hour: h,
+                total,
+                answered,
+            });
         }
         Ok(out)
     }
@@ -1292,7 +1369,7 @@ impl PostgresCdrStore {
                     supports_registration, parent_gateway_id, caller_id_mode, virtual_caller,
                     current_concurrent, account_id, max_concurrent, created_at,
                     reg_auth_type, reg_username, enabled
-             FROM sip_gateways ORDER BY id"
+             FROM sip_gateways ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1374,7 +1451,7 @@ impl PostgresCdrStore {
     pub async fn list_registrations(&self) -> Result<Vec<SipRegistration>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT aor, contact_uri, received_from, expires_at, path, updated_at
-             FROM sip_registrations WHERE expires_at > now() ORDER BY aor"
+             FROM sip_registrations WHERE expires_at > now() ORDER BY aor",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1402,10 +1479,13 @@ impl PostgresCdrStore {
 
     // ===== DTMF 事件查询 =====
 
-    pub async fn get_dtmf_events(&self, call_id: &str) -> Result<Vec<DtmfEventRecord>, sqlx::Error> {
+    pub async fn get_dtmf_events(
+        &self,
+        call_id: &str,
+    ) -> Result<Vec<DtmfEventRecord>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT call_id, digit, source, timestamp_ms, rtp_timestamp, duration_ms, volume
-             FROM dtmf_events WHERE call_id = $1 ORDER BY timestamp_ms"
+             FROM dtmf_events WHERE call_id = $1 ORDER BY timestamp_ms",
         )
         .bind(call_id)
         .fetch_all(&self.pool)
@@ -1523,7 +1603,10 @@ impl PostgresCdrStore {
     }
 
     // ===== 计费：扣费明细 =====
-    pub async fn list_ledger(&self, username: Option<&str>) -> Result<Vec<LedgerEntry>, sqlx::Error> {
+    pub async fn list_ledger(
+        &self,
+        username: Option<&str>,
+    ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
         let rows = if let Some(u) = username {
             sqlx::query(
                 "SELECT id, call_id, username, duration_ms, rate_per_minute, amount, balance_after, created_at \

@@ -44,8 +44,12 @@ pub struct FileInfo {
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     /// 上传字节数据到指定 key。
-    async fn put(&self, key: &str, data: Bytes, content_type: Option<&str>)
-        -> Result<(), StorageError>;
+    async fn put(
+        &self,
+        key: &str,
+        data: Bytes,
+        content_type: Option<&str>,
+    ) -> Result<(), StorageError>;
 
     /// 下载指定 key 的内容。
     async fn get(&self, key: &str) -> Result<Bytes, StorageError>;
@@ -67,7 +71,9 @@ pub trait StorageBackend: Send + Sync {
 }
 
 /// 根据存储配置创建对应的存储后端。
-pub async fn create_storage(config: &StorageConfig) -> Result<Box<dyn StorageBackend>, StorageError> {
+pub async fn create_storage(
+    config: &StorageConfig,
+) -> Result<Box<dyn StorageBackend>, StorageError> {
     match &config.backend {
         StorageBackendKind::Local => {
             let base = config.local_dir.as_str();
@@ -93,11 +99,7 @@ pub async fn create_storage(config: &StorageConfig) -> Result<Box<dyn StorageBac
             let prefix = config.oss_key_prefix.clone().unwrap_or_default();
 
             Ok(Box::new(oss::OssStorage::new(
-                endpoint,
-                bucket,
-                access_key,
-                secret_key,
-                prefix,
+                endpoint, bucket, access_key, secret_key, prefix,
             )?))
         }
         StorageBackendKind::Dual => {
@@ -120,11 +122,7 @@ pub async fn create_storage(config: &StorageConfig) -> Result<Box<dyn StorageBac
                     .ok_or_else(|| StorageError::ConfigError("oss_secret_key 未配置".into()))?;
                 let prefix = config.oss_key_prefix.clone().unwrap_or_default();
                 Box::new(oss::OssStorage::new(
-                    endpoint,
-                    bucket,
-                    access_key,
-                    secret_key,
-                    prefix,
+                    endpoint, bucket, access_key, secret_key, prefix,
                 )?)
             };
             let fallback: Box<dyn StorageBackend> =
@@ -137,7 +135,6 @@ pub async fn create_storage(config: &StorageConfig) -> Result<Box<dyn StorageBac
         }
     }
 }
-
 
 /// 双写存储：先写 OSS，失败时回退到本地存储。
 /// 同时支持从两个后端读取。
@@ -174,9 +171,7 @@ impl StorageBackend for DualStorage {
                 }
             }
         }
-        self.fallback
-            .put(key, data, content_type)
-            .await
+        self.fallback.put(key, data, content_type).await
     }
 
     async fn get(&self, key: &str) -> Result<Bytes, StorageError> {

@@ -10,7 +10,9 @@ import type { SipGateway } from '@/types';
 const FormItem = Form.Item;
 
 const TRANSPORT_COLOR: Record<string, string> = {
-  udp: '#165dff', tcp: '#0fc6c2', tls: '#722ed1',
+  udp: 'var(--accent)',
+  tcp: '#60a5fa',
+  tls: 'var(--status-away)',
 };
 
 export default function Gateways() {

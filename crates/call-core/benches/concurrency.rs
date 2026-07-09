@@ -1,8 +1,8 @@
 use call_core::{CallManager, Route, RouteTable, RouteTarget};
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use sip_core::{parse_message, SipMessage, SipUri};
-use std::sync::Arc;
 use std::str::FromStr;
+use std::sync::Arc;
 
 fn test_routes() -> RouteTable {
     RouteTable::new(vec![Route::new(
@@ -35,7 +35,11 @@ fn invite_request(call_id: &str, destination: &str) -> sip_core::SipRequest {
     request
 }
 
-fn outbound_response(status_code: u16, reason_phrase: &str, call_id: &str) -> sip_core::SipResponse {
+fn outbound_response(
+    status_code: u16,
+    reason_phrase: &str,
+    call_id: &str,
+) -> sip_core::SipResponse {
     let raw = format!(
         concat!(
             "SIP/2.0 {status_code} {reason_phrase}\r\n",
@@ -114,7 +118,8 @@ fn bench_handle_outbound_response(c: &mut Criterion) {
                     rt.block_on(async {
                         // Pre-populate calls
                         for i in 0..iters {
-                            let req = invite_request(&format!("call-resp-{i}@bench"), "13800138000");
+                            let req =
+                                invite_request(&format!("call-resp-{i}@bench"), "13800138000");
                             manager.handle_inbound_invite(&req).unwrap();
                         }
                         // Now process responses concurrently
@@ -122,7 +127,8 @@ fn bench_handle_outbound_response(c: &mut Criterion) {
                         for i in 0..iters {
                             let m = Arc::clone(&manager);
                             handles.push(tokio::spawn(async move {
-                                let resp = outbound_response(200, "OK", &format!("call-resp-{i}@bench"));
+                                let resp =
+                                    outbound_response(200, "OK", &format!("call-resp-{i}@bench"));
                                 m.handle_outbound_response(&resp).unwrap();
                             }));
                         }
@@ -159,13 +165,19 @@ fn bench_full_call_lifecycle(c: &mut Criterion) {
                         for i in 0..iters {
                             let m = Arc::clone(&manager);
                             handles.push(tokio::spawn(async move {
-                                let req = invite_request(&format!("lifecycle-{i}@bench"), "13800138000");
+                                let req =
+                                    invite_request(&format!("lifecycle-{i}@bench"), "13800138000");
                                 let out = m.handle_inbound_invite(&req).unwrap();
                                 // Mark ringing
-                                let resp180 = outbound_response(180, "Ringing", &format!("lifecycle-{i}@bench"));
+                                let resp180 = outbound_response(
+                                    180,
+                                    "Ringing",
+                                    &format!("lifecycle-{i}@bench"),
+                                );
                                 m.handle_outbound_response(&resp180).unwrap();
                                 // Mark answered
-                                let resp200 = outbound_response(200, "OK", &format!("lifecycle-{i}@bench"));
+                                let resp200 =
+                                    outbound_response(200, "OK", &format!("lifecycle-{i}@bench"));
                                 m.handle_outbound_response(&resp200).unwrap();
                                 // BYE
                                 let bye_raw = format!(
@@ -181,7 +193,9 @@ fn bench_full_call_lifecycle(c: &mut Criterion) {
                                     ),
                                     i
                                 );
-                                let SipMessage::Request(bye) = parse_message(bye_raw.as_bytes()).unwrap() else {
+                                let SipMessage::Request(bye) =
+                                    parse_message(bye_raw.as_bytes()).unwrap()
+                                else {
                                     panic!()
                                 };
                                 m.handle_inbound_termination(&bye, None, None).unwrap();

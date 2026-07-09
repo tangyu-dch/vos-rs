@@ -492,7 +492,11 @@ impl RouteTable {
                 .len()
                 .cmp(&left.prefix.len())
                 .then_with(|| right.priority.cmp(&left.priority))
-                .then_with(|| left.cost.partial_cmp(&right.cost).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| {
+                    left.cost
+                        .partial_cmp(&right.cost)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
         });
 
         let mut candidates = Vec::with_capacity(matching_routes.len());
@@ -536,7 +540,11 @@ impl RouteTable {
                 .len()
                 .cmp(&left.prefix.len())
                 .then_with(|| right.priority.cmp(&left.priority))
-                .then_with(|| left.cost.partial_cmp(&right.cost).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| {
+                    left.cost
+                        .partial_cmp(&right.cost)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
         });
 
         let mut candidates = Vec::with_capacity(matching_routes.len());
@@ -640,27 +648,9 @@ mod tests {
     #[test]
     fn test_lcr_cost_sort() {
         let routes = vec![
-            Route::with_cost(
-                "r1",
-                "86",
-                100,
-                0.50,
-                make_target("gw1.example.com"),
-            ),
-            Route::with_cost(
-                "r2",
-                "86",
-                100,
-                0.30,
-                make_target("gw2.example.com"),
-            ),
-            Route::with_cost(
-                "r3",
-                "86",
-                100,
-                0.40,
-                make_target("gw3.example.com"),
-            ),
+            Route::with_cost("r1", "86", 100, 0.50, make_target("gw1.example.com")),
+            Route::with_cost("r2", "86", 100, 0.30, make_target("gw2.example.com")),
+            Route::with_cost("r3", "86", 100, 0.40, make_target("gw3.example.com")),
         ];
         let table = RouteTable::new(routes);
         let candidates = table.select_candidates(&make_uri("8613800138000")).unwrap();
@@ -743,12 +733,7 @@ mod tests {
 
     #[test]
     fn test_select_healthy_candidates_fallback_when_all_unhealthy() {
-        let routes = vec![Route::new(
-            "r1",
-            "86",
-            100,
-            make_target("gw1.example.com"),
-        )];
+        let routes = vec![Route::new("r1", "86", 100, make_target("gw1.example.com"))];
         let table = RouteTable::new(routes);
         let mut tracker = GatewayHealthTracker::new(HealthThresholds {
             failure_threshold: 1,

@@ -87,7 +87,7 @@ export default function Accounts() {
       dataIndex: 'balance',
       width: 160,
       render: (v: number) => (
-        <span className="cell-mono" style={{ fontWeight: 600, color: v < 0 ? '#f53f3f' : '#1d2129' }}>
+        <span className="cell-mono" style={{ fontWeight: 600, color: v < 0 ? 'var(--color-danger)' : 'var(--text-primary)' }}>
           {money(v)}
         </span>
       ),
@@ -137,7 +137,7 @@ export default function Accounts() {
     { title: 'Call ID', dataIndex: 'call_id', ellipsis: true, render: (v: string) => <span className="cell-mono">{v}</span> },
     { title: '通话时长', dataIndex: 'duration_ms', width: 110, render: (v: number) => <span className="cell-mono">{Math.round(v / 1000)}s</span> },
     { title: '费率', dataIndex: 'rate_per_minute', width: 110, render: (v: number) => <span className="cell-mono">{money(v)}/分</span> },
-    { title: '扣费', dataIndex: 'amount', width: 110, render: (v: number) => <span className="cell-mono" style={{ color: '#f53f3f' }}>-{money(v)}</span> },
+    { title: '扣费', dataIndex: 'amount', width: 110, render: (v: number) => <span className="cell-mono" style={{ color: 'var(--color-danger)' }}>-{money(v)}</span> },
     { title: '扣后余额', dataIndex: 'balance_after', width: 120, render: (v: number) => <span className="cell-mono">{money(v)}</span> },
   ];
 

@@ -2,29 +2,23 @@ use crate::handle_datagram;
 use crate::nats_cdr::NatsCdrPublisher;
 use crate::net::create_tls_connector;
 use crate::sbc;
+use crate::sip::registrar::RegistrationStore;
 use crate::{
     config::EdgeConfig,
     media::{MediaConfig, MediaRelayState},
-    net::{Transport, handle_stream_connection, SipStream},
+    net::{handle_stream_connection, SipStream, Transport},
     sip::{
         dialog, transaction, AuthConfig, ClientTransactionKey, DialogValidationError,
         RequestTransactionKey,
     },
 };
-use crate::sip::registrar::RegistrationStore;
 use call_core::{CallManager, GatewayHealthTracker};
 use cdr_core::PostgresCdrStore;
 use dashmap::DashMap;
 use rustls_pki_types::ServerName;
 use sdp_core::RtpEndpoint;
 use sip_core::{parse_message, Method, SipRequest, SipUri};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    str::FromStr,
-    sync::Arc,
-    time::Instant,
-};
+use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc, time::Instant};
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::{debug, error, warn};
 

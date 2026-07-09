@@ -42,7 +42,14 @@ pub async fn create_number(
 ) -> Result<StatusCode, E> {
     state
         .store
-        .upsert_number(&b.number, b.username.as_deref(), b.gateway_id.as_deref(), b.direction.as_deref(), b.max_concurrent, &b.status)
+        .upsert_number(
+            &b.number,
+            b.username.as_deref(),
+            b.gateway_id.as_deref(),
+            b.direction.as_deref(),
+            b.max_concurrent,
+            &b.status,
+        )
         .await
         .map_err(err)?;
     Ok(StatusCode::CREATED)
@@ -55,7 +62,14 @@ pub async fn update_number(
 ) -> Result<StatusCode, E> {
     state
         .store
-        .upsert_number(&number, b.username.as_deref(), b.gateway_id.as_deref(), b.direction.as_deref(), b.max_concurrent, b.status.as_deref().unwrap_or("available"))
+        .upsert_number(
+            &number,
+            b.username.as_deref(),
+            b.gateway_id.as_deref(),
+            b.direction.as_deref(),
+            b.max_concurrent,
+            b.status.as_deref().unwrap_or("available"),
+        )
         .await
         .map_err(err)?;
     Ok(StatusCode::OK)
@@ -65,11 +79,7 @@ pub async fn delete_number(
     State(state): State<AppState>,
     Path(number): Path<String>,
 ) -> Result<StatusCode, E> {
-    let deleted = state
-        .store
-        .delete_number(&number)
-        .await
-        .map_err(err)?;
+    let deleted = state.store.delete_number(&number).await.map_err(err)?;
     Ok(if deleted {
         StatusCode::OK
     } else {

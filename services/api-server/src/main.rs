@@ -1,37 +1,36 @@
-mod recording;
-mod report;
 mod billing;
 mod calls;
 mod numbers;
+mod recording;
+mod report;
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post, put},
-    Json,
-    Router,
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
+use time::OffsetDateTime;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use time::OffsetDateTime;
 
-use cdr_core::{
-    CdrEvent, DashboardStats, HourlyTrend, PostgresCdrStore, SipUser, SipGateway, SipRoute,
-    SipRegistration, DtmfEventRecord,
-};
-use recording::{get_recording_audio, list_recordings};
-use report::{export_cdrs_csv, get_report_summary};
 use billing::{
-    credit_account, create_rate, delete_rate, list_accounts, list_ledger, list_rates,
+    create_rate, credit_account, delete_rate, list_accounts, list_ledger, list_rates,
     reconcile as billing_reconcile, update_rate,
 };
 use calls::{list_active, route_preview, terminate_call as calls_terminate};
+use cdr_core::{
+    CdrEvent, DashboardStats, DtmfEventRecord, HourlyTrend, PostgresCdrStore, SipGateway,
+    SipRegistration, SipRoute, SipUser,
+};
 use numbers::{create_number, delete_number, list_numbers, update_number};
+use recording::{get_recording_audio, list_recordings};
+use report::{export_cdrs_csv, get_report_summary};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -161,19 +160,27 @@ async fn get_dashboard_stats(
             Err(_) => 0,
         }
     };
-    state.store.get_dashboard_stats(active_calls)
+    state
+        .store
+        .get_dashboard_stats(active_calls)
         .await
         .map(Json)
-        .map_err(|e| ApiError { error: e.to_string() })
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
 }
 
 async fn get_dashboard_trend(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<HourlyTrend>>, ApiError> {
-    state.store.get_hourly_trend()
+    state
+        .store
+        .get_hourly_trend()
         .await
         .map(Json)
-        .map_err(|e| ApiError { error: e.to_string() })
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
 }
 
 async fn list_cdrs(
@@ -198,7 +205,9 @@ async fn list_cdrs(
             end,
         )
         .await
-        .map_err(|e| ApiError { error: e.to_string() })?;
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
 
     Ok(Json(PaginatedResponse {
         items,
@@ -216,38 +225,52 @@ async fn get_cdr(
     State(state): State<AppState>,
     Path(call_id): Path<String>,
 ) -> Result<Json<Option<CdrEvent>>, ApiError> {
-    state.store.get_cdr(&call_id)
+    state
+        .store
+        .get_cdr(&call_id)
         .await
         .map(Json)
-        .map_err(|e| ApiError { error: e.to_string() })
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
 }
 
 async fn get_dtmf_events(
     State(state): State<AppState>,
     Path(call_id): Path<String>,
 ) -> Result<Json<Vec<DtmfEventRecord>>, ApiError> {
-    state.store.get_dtmf_events(&call_id)
+    state
+        .store
+        .get_dtmf_events(&call_id)
         .await
         .map(Json)
-        .map_err(|e| ApiError { error: e.to_string() })
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
 }
 
-async fn list_users(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<SipUser>>, ApiError> {
-    state.store.list_users()
+async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<SipUser>>, ApiError> {
+    state
+        .store
+        .list_users()
         .await
         .map(Json)
-        .map_err(|e| ApiError { error: e.to_string() })
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
 }
 
 async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state.store.insert_user(&req.username, &req.password)
+    state
+        .store
+        .insert_user(&req.username, &req.password)
         .await
-        .map_err(|e| ApiError { error: e.to_string() })?;
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
     Ok(StatusCode::CREATED)
 }
 
@@ -256,9 +279,13 @@ async fn update_user(
     Path(username): Path<String>,
     Json(req): Json<UpdateUserRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state.store.insert_user(&username, &req.password)
+    state
+        .store
+        .insert_user(&username, &req.password)
         .await
-        .map_err(|e| ApiError { error: e.to_string() })?;
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
     Ok(StatusCode::OK)
 }
 
@@ -266,9 +293,13 @@ async fn delete_user(
     State(state): State<AppState>,
     Path(username): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let deleted = state.store.delete_user(&username)
+    let deleted = state
+        .store
+        .delete_user(&username)
         .await
-        .map_err(|e| ApiError { error: e.to_string() })?;
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
     if deleted {
         Ok(StatusCode::OK)
     } else {
@@ -276,13 +307,15 @@ async fn delete_user(
     }
 }
 
-async fn list_gateways(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<SipGateway>>, ApiError> {
-    state.store.list_gateways_full()
+async fn list_gateways(State(state): State<AppState>) -> Result<Json<Vec<SipGateway>>, ApiError> {
+    state
+        .store
+        .list_gateways_full()
         .await
         .map(Json)
-        .map_err(|e| ApiError { error: e.to_string() })
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
 }
 
 async fn create_gateway(
@@ -310,9 +343,13 @@ async fn create_gateway(
         enabled: req.enabled,
         created_at: None,
     };
-    state.store.upsert_gateway_full(&gw)
+    state
+        .store
+        .upsert_gateway_full(&gw)
         .await
-        .map_err(|e| ApiError { error: e.to_string() })?;
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
     Ok(StatusCode::CREATED)
 }
 
@@ -321,10 +358,19 @@ async fn update_gateway(
     Path(id): Path<String>,
     Json(req): Json<UpdateGatewayRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let existing = state.store.list_gateways_full().await
-        .map_err(|e| ApiError { error: e.to_string() })?;
-    let old = existing.iter().find(|g| g.id == id)
-        .ok_or_else(|| ApiError { error: "网关不存在".into() })?;
+    let existing = state
+        .store
+        .list_gateways_full()
+        .await
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
+    let old = existing
+        .iter()
+        .find(|g| g.id == id)
+        .ok_or_else(|| ApiError {
+            error: "网关不存在".into(),
+        })?;
     let gw = SipGateway {
         id: id.clone(),
         host: req.host,
@@ -346,9 +392,13 @@ async fn update_gateway(
         enabled: req.enabled.or(old.enabled),
         created_at: old.created_at,
     };
-    state.store.upsert_gateway_full(&gw)
+    state
+        .store
+        .upsert_gateway_full(&gw)
         .await
-        .map_err(|e| ApiError { error: e.to_string() })?;
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
     Ok(StatusCode::OK)
 }
 
@@ -356,9 +406,13 @@ async fn delete_gateway(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let deleted = state.store.delete_gateway(&id)
+    let deleted = state
+        .store
+        .delete_gateway(&id)
         .await
-        .map_err(|e| ApiError { error: e.to_string() })?;
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
     if deleted {
         Ok(StatusCode::OK)
     } else {
@@ -366,30 +420,36 @@ async fn delete_gateway(
     }
 }
 
-async fn list_routes(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<SipRoute>>, ApiError> {
-    state.store.list_routes_full()
+async fn list_routes(State(state): State<AppState>) -> Result<Json<Vec<SipRoute>>, ApiError> {
+    state
+        .store
+        .list_routes_full()
         .await
         .map(Json)
-        .map_err(|e| ApiError { error: e.to_string() })
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
 }
 
 async fn create_route(
     State(state): State<AppState>,
     Json(req): Json<CreateRouteRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state.store.insert_route_with_cost(
-        &req.id,
-        &req.prefix,
-        req.priority,
-        &req.gateway_id,
-        req.cost,
-        req.time_start.as_deref(),
-        req.time_end.as_deref(),
-    )
-    .await
-    .map_err(|e| ApiError { error: e.to_string() })?;
+    state
+        .store
+        .insert_route_with_cost(
+            &req.id,
+            &req.prefix,
+            req.priority,
+            &req.gateway_id,
+            req.cost,
+            req.time_start.as_deref(),
+            req.time_end.as_deref(),
+        )
+        .await
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
     Ok(StatusCode::CREATED)
 }
 
@@ -398,17 +458,21 @@ async fn update_route(
     Path(id): Path<String>,
     Json(req): Json<UpdateRouteRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state.store.insert_route_with_cost(
-        &id,
-        &req.prefix,
-        req.priority,
-        &req.gateway_id,
-        req.cost,
-        req.time_start.as_deref(),
-        req.time_end.as_deref(),
-    )
-    .await
-    .map_err(|e| ApiError { error: e.to_string() })?;
+    state
+        .store
+        .insert_route_with_cost(
+            &id,
+            &req.prefix,
+            req.priority,
+            &req.gateway_id,
+            req.cost,
+            req.time_start.as_deref(),
+            req.time_end.as_deref(),
+        )
+        .await
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
     Ok(StatusCode::OK)
 }
 
@@ -416,9 +480,9 @@ async fn delete_route(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let deleted = state.store.delete_route(&id)
-        .await
-        .map_err(|e| ApiError { error: e.to_string() })?;
+    let deleted = state.store.delete_route(&id).await.map_err(|e| ApiError {
+        error: e.to_string(),
+    })?;
     if deleted {
         Ok(StatusCode::OK)
     } else {
@@ -429,10 +493,14 @@ async fn delete_route(
 async fn list_registrations(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SipRegistration>>, ApiError> {
-    state.store.list_registrations()
+    state
+        .store
+        .list_registrations()
         .await
         .map(Json)
-        .map_err(|e| ApiError { error: e.to_string() })
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
 }
 
 #[derive(Serialize)]
@@ -452,6 +520,7 @@ struct AntiFraudConfigItem {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct CreateAntiFraudRuleRequest {
     rule_type: String,
     value: String,
@@ -459,13 +528,13 @@ struct CreateAntiFraudRuleRequest {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct UpdateAntiFraudRuleRequest {
     description: Option<String>,
     enabled: Option<bool>,
 }
 
-async fn list_anti_fraud_rules(
-) -> Result<Json<Vec<AntiFraudRule>>, ApiError> {
+async fn list_anti_fraud_rules() -> Result<Json<Vec<AntiFraudRule>>, ApiError> {
     Ok(Json(Vec::new()))
 }
 
@@ -482,14 +551,11 @@ async fn update_anti_fraud_rule(
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
-async fn delete_anti_fraud_rule(
-    Path(_id): Path<i32>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+async fn delete_anti_fraud_rule(Path(_id): Path<i32>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
-async fn list_anti_fraud_config(
-) -> Result<Json<Vec<AntiFraudConfigItem>>, ApiError> {
+async fn list_anti_fraud_config() -> Result<Json<Vec<AntiFraudConfigItem>>, ApiError> {
     Ok(Json(Vec::new()))
 }
 
@@ -503,15 +569,16 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let database_url = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://localhost/vos_rs".to_string());
+    let database_url =
+        env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/vos_rs".to_string());
 
     let store = PostgresCdrStore::connect(&database_url).await?;
     let storage_config = storage_core::StorageConfig::from_env();
-    let recording_storage: Arc<dyn storage_core::StorageBackend> =
-        Arc::new(storage_core::local::LocalStorage::new(&storage_config.local_dir)?);
-    let sip_manage_base = env::var("VOS_RS_MANAGE_BASE")
-        .unwrap_or_else(|_| "http://127.0.0.1:8082".to_string());
+    let recording_storage: Arc<dyn storage_core::StorageBackend> = Arc::new(
+        storage_core::local::LocalStorage::new(&storage_config.local_dir)?,
+    );
+    let sip_manage_base =
+        env::var("VOS_RS_MANAGE_BASE").unwrap_or_else(|_| "http://127.0.0.1:8082".to_string());
 
     let state = AppState {
         store: Arc::new(store),
@@ -534,7 +601,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/users/:username", put(update_user).delete(delete_user))
         .route("/api/gateways", get(list_gateways).post(create_gateway))
-        .route("/api/gateways/:id", put(update_gateway).delete(delete_gateway))
+        .route(
+            "/api/gateways/:id",
+            put(update_gateway).delete(delete_gateway),
+        )
         .route("/api/routes", get(list_routes).post(create_route))
         .route("/api/routes/:id", put(update_route).delete(delete_route))
         .route("/api/registrations", get(list_registrations))
@@ -552,9 +622,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/calls/:call_id/terminate", post(calls_terminate))
         .route("/api/route-preview", get(route_preview))
         .route("/api/numbers", get(list_numbers).post(create_number))
-        .route("/api/numbers/:number", put(update_number).delete(delete_number))
-        .route("/api/anti-fraud/rules", get(list_anti_fraud_rules).post(create_anti_fraud_rule))
-        .route("/api/anti-fraud/rules/:id", put(update_anti_fraud_rule).delete(delete_anti_fraud_rule))
+        .route(
+            "/api/numbers/:number",
+            put(update_number).delete(delete_number),
+        )
+        .route(
+            "/api/anti-fraud/rules",
+            get(list_anti_fraud_rules).post(create_anti_fraud_rule),
+        )
+        .route(
+            "/api/anti-fraud/rules/:id",
+            put(update_anti_fraud_rule).delete(delete_anti_fraud_rule),
+        )
         .route("/api/anti-fraud/config", get(list_anti_fraud_config))
         .with_state(state)
         .layer(cors)

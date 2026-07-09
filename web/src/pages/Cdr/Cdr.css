@@ -4,13 +4,13 @@
 
 /* 单元格 */
 .cell-mono {
-  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 12.5px;
-  color: var(--text-1);
+  font-size: var(--fs-small);
+  color: var(--text-primary);
 }
 .cell-dash {
-  color: var(--text-4);
+  color: var(--text-muted);
 }
 
 /* 筛选卡 */
@@ -20,7 +20,7 @@
 
 /* ===== 详情抽屉 ===== */
 .cdr-drawer .arco-drawer-header {
-  border-bottom: 1px solid var(--border-color-soft);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .cdr-drawer .arco-drawer-body {
   padding: 20px 24px;
@@ -32,9 +32,9 @@
   justify-content: space-between;
   align-items: center;
   padding: 18px 20px;
-  background: linear-gradient(135deg, rgba(22, 93, 255, 0.06), rgba(15, 198, 194, 0.06));
+  background: linear-gradient(135deg, var(--accent-dim), rgba(167, 139, 250, 0.06));
   border-radius: var(--radius-lg);
-  border: 1px solid var(--border-color-soft);
+  border: 1px solid var(--border-subtle);
 }
 .cdr-detail__hero-left {
   display: flex;
@@ -45,11 +45,11 @@
 .cdr-detail__to {
   font-size: 20px;
   font-weight: 700;
-  color: var(--text-1);
-  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
 }
 .cdr-detail__arrow {
-  color: var(--brand-primary);
+  color: var(--accent);
   font-size: 18px;
   font-weight: 600;
 }
@@ -58,13 +58,13 @@
   margin-top: 24px;
   background: var(--card-bg);
   border-radius: var(--radius-lg);
-  border: 1px solid var(--border-color-soft);
+  border: 1px solid var(--border-subtle);
   padding: 18px 20px;
 }
 .cdr-detail__section-title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-2);
+  color: var(--text-secondary);
   margin-bottom: 14px;
   display: flex;
   align-items: center;
@@ -75,7 +75,7 @@
   width: 3px;
   height: 14px;
   border-radius: 2px;
-  background: var(--brand-gradient);
+  background: linear-gradient(135deg, var(--accent), var(--status-away));
 }
 
 /* 媒体质量网格 */
@@ -91,28 +91,28 @@
 }
 .quality-item__label {
   font-size: 12px;
-  color: var(--text-3);
+  color: var(--text-muted);
   margin-bottom: 6px;
 }
 .quality-item__value {
   font-size: 18px;
   font-weight: 700;
-  color: var(--text-1);
+  color: var(--text-primary);
 }
 .quality-item__value.is-empty {
-  color: var(--text-4);
+  color: var(--text-muted);
   font-weight: 500;
 }
 
 /* DTMF */
 .dtmf-display {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 22px;
   font-weight: 700;
-  color: var(--brand-primary);
+  color: var(--accent);
   letter-spacing: 6px;
   padding: 16px;
-  background: rgba(22, 93, 255, 0.05);
+  background: var(--accent-dim);
   border-radius: var(--radius-md);
   text-align: center;
 }

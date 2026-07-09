@@ -150,17 +150,17 @@ export default function PeerGateways() {
         </div>
       </div>
 
-      <div style={{ padding: '12px 16px', background: '#eff6ff', borderRadius: 8, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ padding: '12px 16px', background: 'var(--accent-dim)', borderRadius: 8, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 16 }}>🔗</span>
-        <span style={{ color: '#2563eb', fontWeight: 500 }}>对接网关 — 我们主动连向其他运营商线路，支持前缀规则处理</span>
+        <span style={{ color: 'var(--accent)', fontWeight: 500 }}>对接网关 — 我们主动连向其他运营商线路，支持前缀规则处理</span>
       </div>
 
-      <div style={{ padding: '10px 16px', background: '#f8fafc', borderRadius: 8, marginBottom: 16, border: '1px solid #e2e8f0' }}>
-        <span style={{ color: '#64748b', fontSize: 13 }}>
+      <div style={{ padding: '10px 16px', background: 'var(--bg-panel-2)', borderRadius: 8, marginBottom: 16, border: '1px solid var(--border-subtle)' }}>
+        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
           <strong>前缀规则格式：</strong>
-          <code style={{ background: '#e2e8f0', padding: '1px 6px', borderRadius: 4 }}>abc:def</code> 替换 ·
-          <code style={{ background: '#e2e8f0', padding: '1px 6px', borderRadius: 4, marginLeft: 4 }}>:def</code> 添加 ·
-          <code style={{ background: '#e2e8f0', padding: '1px 6px', borderRadius: 4, marginLeft: 4 }}>abc:</code> 剥离 ·
+          <code style={{ background: 'var(--bg-panel-3)', padding: '1px 6px', borderRadius: 4 }}>abc:def</code> 替换 ·
+          <code style={{ background: 'var(--bg-panel-3)', padding: '1px 6px', borderRadius: 4, marginLeft: 4 }}>:def</code> 添加 ·
+          <code style={{ background: 'var(--bg-panel-3)', padding: '1px 6px', borderRadius: 4, marginLeft: 4 }}>abc:</code> 剥离 ·
           多条规则用英文逗号分隔
         </span>
       </div>
@@ -207,7 +207,7 @@ export default function PeerGateways() {
               </FormItem>
             </>
           )}
-          <FormItem label="前缀规则" field="prefix_rules" extra={<span style={{ fontSize: 12, color: '#94a3b8' }}>格式：<code>abc:def</code> 替换 · <code>:def</code> 添加 · <code>abc:</code> 剥离 · 逗号分隔多条</span>}>
+          <FormItem label="前缀规则" field="prefix_rules" extra={<span style={{ fontSize: 12, color: 'var(--text-muted)' }}>格式：<code>abc:def</code> 替换 · <code>:def</code> 添加 · <code>abc:</code> 剥离 · 逗号分隔多条</span>}>
             <Input.TextArea placeholder="示例：sdf:abc,:86,00:" rows={2} />
           </FormItem>
         </Form>

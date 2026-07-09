@@ -61,7 +61,12 @@ pub async fn create_rate(
 ) -> Result<StatusCode, E> {
     state
         .store
-        .upsert_rate(&b.id, &b.prefix, b.rate_per_minute, b.description.as_deref())
+        .upsert_rate(
+            &b.id,
+            &b.prefix,
+            b.rate_per_minute,
+            b.description.as_deref(),
+        )
         .await
         .map_err(err)?;
     Ok(StatusCode::CREATED)
@@ -80,9 +85,16 @@ pub async fn update_rate(
     Ok(StatusCode::OK)
 }
 
-pub async fn delete_rate(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, E> {
+pub async fn delete_rate(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, E> {
     let deleted = state.store.delete_rate(&id).await.map_err(err)?;
-    Ok(if deleted { StatusCode::OK } else { StatusCode::NOT_FOUND })
+    Ok(if deleted {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    })
 }
 
 pub async fn list_accounts(State(state): State<AppState>) -> Result<Json<Vec<BillingAccount>>, E> {
@@ -94,7 +106,11 @@ pub async fn credit_account(
     Path(username): Path<String>,
     Json(b): Json<CreditBody>,
 ) -> Result<Json<CreditResult>, E> {
-    let balance = state.store.credit_account(&username, b.amount).await.map_err(err)?;
+    let balance = state
+        .store
+        .credit_account(&username, b.amount)
+        .await
+        .map_err(err)?;
     Ok(Json(CreditResult { username, balance }))
 }
 

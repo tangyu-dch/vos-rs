@@ -51,10 +51,7 @@ impl CallManager {
         *self.routes.write().expect("routes lock poisoned") = routes;
     }
 
-    pub fn handle_inbound_invite(
-        &self,
-        request: &SipRequest,
-    ) -> CallResult<InboundInviteOutcome> {
+    pub fn handle_inbound_invite(&self, request: &SipRequest) -> CallResult<InboundInviteOutcome> {
         let mut call = Call::from_inbound_invite(request)?;
         let call_id = call.id.clone();
 
@@ -271,7 +268,10 @@ impl CallManager {
     }
 
     pub fn completed_cdrs(&self) -> Vec<CallCdr> {
-        self.completed_cdrs.lock().expect("cdr lock poisoned").clone()
+        self.completed_cdrs
+            .lock()
+            .expect("cdr lock poisoned")
+            .clone()
     }
 
     pub fn take_completed_cdrs(&self) -> Vec<CallCdr> {

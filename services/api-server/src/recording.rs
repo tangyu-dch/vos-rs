@@ -1,3 +1,4 @@
+use crate::AppState;
 use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
@@ -5,7 +6,6 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use crate::AppState;
 
 #[derive(Serialize)]
 pub struct RecordingInfo {
@@ -64,10 +64,7 @@ pub async fn list_recordings(
         };
         let stem = file.key.trim_end_matches(".json").to_string();
         let wav_key = format!("{stem}.wav");
-        let has_audio = storage
-            .exists(&wav_key)
-            .await
-            .unwrap_or(false);
+        let has_audio = storage.exists(&wav_key).await.unwrap_or(false);
         let size = if has_audio {
             storage
                 .get(&wav_key)

@@ -50,8 +50,8 @@ async fn main() -> Result<(), AnyError> {
         env::var(NATS_CDR_CONSUMER_ENV).unwrap_or_else(|_| DEFAULT_CDR_CONSUMER.to_string());
     let dlq_subject =
         env::var(NATS_CDR_DLQ_SUBJECT_ENV).unwrap_or_else(|_| DEFAULT_CDR_DLQ_SUBJECT.to_string());
-    let dlq_stream_name = env::var(NATS_CDR_DLQ_STREAM_ENV)
-        .unwrap_or_else(|_| DEFAULT_CDR_DLQ_STREAM.to_string());
+    let dlq_stream_name =
+        env::var(NATS_CDR_DLQ_STREAM_ENV).unwrap_or_else(|_| DEFAULT_CDR_DLQ_STREAM.to_string());
 
     let max_batch_size: usize = env::var(CDR_BATCH_SIZE_ENV)
         .ok()
@@ -302,7 +302,10 @@ async fn process_batch(
 
 /// Publish a payload to the DLQ subject and await the JetStream publish ack.
 async fn publish_to_dlq(jetstream: &jetstream::Context, dlq_subject: &str, payload: &[u8]) {
-    match jetstream.publish(dlq_subject.to_string(), payload.to_vec().into()).await {
+    match jetstream
+        .publish(dlq_subject.to_string(), payload.to_vec().into())
+        .await
+    {
         Ok(ack_future) => {
             if let Err(ack_err) = ack_future.await {
                 error!(%ack_err, "DLQ publish ack failed");

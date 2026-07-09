@@ -1,4 +1,3 @@
-mod cdr_handler;
 pub(crate) mod config;
 pub(crate) mod edge_state;
 pub(crate) mod handlers;
@@ -10,38 +9,40 @@ pub(crate) mod security;
 pub(crate) mod sip;
 pub(crate) mod timers;
 
-// Re-export extracted modules (items accessible as crate::XxxType)
+// Re-export for backward compatibility with inline module references
 pub(crate) use edge_state::*;
+pub(crate) use net::stun_client;
+pub(crate) use net::transport;
+pub(crate) use net::upnp;
+pub(crate) use security::sbc;
 pub(crate) use sip::auth;
 pub(crate) use sip::dialog;
 pub(crate) use sip::outbound;
-pub(crate) use sip::registrar::{self, RegisterOutcome, RegistrationStore};
+pub(crate) use sip::registrar::{self, RegisterOutcome};
 pub(crate) use sip::response;
 pub(crate) use sip::transaction;
-pub(crate) use net::transport;
-pub(crate) use net::stun_client;
-pub(crate) use net::upnp;
-pub(crate) use security::sbc;
+
+// Constants re-exported for tests
+pub(crate) use config::{
+    DATABASE_URL_ENV, DEFAULT_GATEWAY_ENV, NATS_CDR_STREAM_ENV, NATS_CDR_SUBJECT_ENV,
+    NATS_URL_ENV, TLS_BIND_ENV, TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
+};
 pub(crate) use timers::{
     calculate_mos_for_legs, spawn_client_transaction_retransmission, spawn_nat_keepalive_loop,
     spawn_session_timer_watchdog,
 };
 
-use call_core::{
-    CallError, CallManager, Route, RouteTable, RouteTarget,
-};
+use call_core::{CallError, CallManager, Route, RouteTable, RouteTarget};
 use cdr_core::{PostgresCdrStore, DEFAULT_CDR_STREAM, DEFAULT_CDR_SUBJECT};
 use config::EdgeConfig;
 use media::{MediaConfig, MediaRelayState};
 use nats_cdr::NatsCdrPublisher;
 use net::{
-    create_tls_acceptor, handle_stream_connection, handle_ws_connection,
-    SipStream, Transport,
+    create_tls_acceptor, handle_stream_connection, handle_ws_connection, SipStream, Transport,
 };
 use sdp_core::RtpEndpoint;
 use sip::{
-    AuthConfig, AuthDecision, ClientTransactionKey,
-    DialogValidationError, RequestTransactionKey,
+    AuthConfig, AuthDecision, ClientTransactionKey, DialogValidationError, RequestTransactionKey,
 };
 use sip_core::{
     parse_message, HeaderMap, HeaderName, HeaderValue, Method, SipMessage, SipRequest, SipUri,
@@ -58,22 +59,6 @@ use tokio::net::UdpSocket;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-const ADVERTISED_ADDR_ENV: &str = "VOS_RS_SIP_ADVERTISED_ADDR";
-const DATABASE_URL_ENV: &str = "VOS_RS_DATABASE_URL";
-const NATS_URL_ENV: &str = "VOS_RS_NATS_URL";
-const NATS_CDR_STREAM_ENV: &str = "VOS_RS_NATS_CDR_STREAM";
-const NATS_CDR_SUBJECT_ENV: &str = "VOS_RS_NATS_CDR_SUBJECT";
-const DEFAULT_BIND_ADDR: &str = "0.0.0.0:5060";
-const DEFAULT_ADVERTISED_ADDR: &str = "127.0.0.1:5060";
-const DEFAULT_GATEWAY_ENV: &str = "VOS_RS_SIP_DEFAULT_GATEWAY";
-const TLS_BIND_ENV: &str = "VOS_RS_SIP_TLS_BIND";
-const TLS_CERT_PATH_ENV: &str = "VOS_RS_SIP_TLS_CERT_PATH";
-const TLS_KEY_PATH_ENV: &str = "VOS_RS_SIP_TLS_KEY_PATH";
-const TLS_ALLOW_TEST_CERT_ENV: &str = "VOS_RS_SIP_TLS_ALLOW_TEST_CERT";
-const TLS_CA_PATH_ENV: &str = "VOS_RS_SIP_TLS_CA_PATH";
-const TLS_INSECURE_SKIP_VERIFY_ENV: &str = "VOS_RS_SIP_TLS_INSECURE_SKIP_VERIFY";
-const TLS_SERVER_NAME_ENV: &str = "VOS_RS_SIP_TLS_SERVER_NAME";
-const MAX_DATAGRAM_SIZE: usize = 65_535;
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -87,11 +72,10 @@ async fn main() -> Result<(), AnyError> {
     init_tracing();
 
     let bind_addr =
-        env::var("VOS_RS_SIP_UDP_BIND").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
+        env::var("VOS_RS_SIP_UDP_BIND").unwrap_or_else(|_| "0.0.0.0:5060".to_string());
     let route_table = route_table_from_env()?;
     if route_table.is_empty() {
         warn!(
-            env = DEFAULT_GATEWAY_ENV,
             "no outbound route configured; INVITE requests will receive 404"
         );
     }
@@ -328,7 +312,7 @@ async fn main() -> Result<(), AnyError> {
         }
     }
 
-    let socket = Arc::new(UdpSocket::bind(&bind_addr).await?);
+    let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(&bind_addr).await?);
 
     // Increase UDP receive buffer for high CPS (default ~786KB, set to 4MB)
     #[cfg(unix)]
@@ -354,7 +338,7 @@ async fn main() -> Result<(), AnyError> {
     let tcp_listener = match tokio::net::TcpListener::bind(&bind_addr).await {
         Ok(l) => {
             info!(%bind_addr, "sip-edge TCP listener started");
-            Some(Arc::new(l))
+            Some(Arc::new(l) as Arc<tokio::net::TcpListener>)
         }
         Err(e) => {
             warn!(%bind_addr, error = %e, "failed to start TCP listener");
@@ -584,7 +568,7 @@ async fn main() -> Result<(), AnyError> {
     // Start NAT keepalive background loop — sends keepalive probes to active registrations
     spawn_nat_keepalive_loop(Arc::clone(&edge_state), Arc::clone(&socket));
 
-    let mut buffer = [0u8; MAX_DATAGRAM_SIZE];
+    let mut buffer = [0u8; 65_535];
     let mut shutdown_check_interval = tokio::time::interval(Duration::from_millis(500));
     let mut is_draining = false;
     let shutdown_timeout = tokio::time::sleep(Duration::from_secs(999999));
@@ -704,14 +688,6 @@ fn env_non_empty(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn env_bool(name: &str) -> Option<bool> {
-    let value = env::var(name).ok()?;
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
 
 async fn cdr_sinks_from_env() -> Result<CdrSinks, AnyError> {
     let nats = match env::var(NATS_URL_ENV) {

@@ -172,9 +172,9 @@ export default function Cdr() {
       align: 'center' as const,
       render: (v: string | null) =>
         v ? (
-          <span style={{ color: '#00b42a', fontSize: 16 }} title="有录音">●</span>
+          <span style={{ color: 'var(--status-online)', fontSize: 16 }} title="有录音">●</span>
         ) : (
-          <span style={{ color: '#c9cdd4', fontSize: 16 }} title="无录音">○</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 16 }} title="无录音">○</span>
         ),
     },
     {
@@ -182,7 +182,7 @@ export default function Cdr() {
       dataIndex: 'direction',
       width: 70,
       render: (v: string) => (
-        <span style={{ color: v === 'inbound' ? '#165dff' : '#00b42a', fontWeight: 500 }}>
+        <span style={{ color: v === 'inbound' ? 'var(--accent)' : 'var(--status-online)', fontWeight: 500 }}>
           {v === 'inbound' ? '呼入' : '呼出'}
         </span>
       ),
@@ -364,7 +364,7 @@ export default function Cdr() {
                   <a
                     href={apiService.recordingAudioUrl(selectedCdr.call_id)}
                     download
-                    style={{ fontSize: 13, color: '#6366f1' }}
+                    style={{ fontSize: 13, color: 'var(--accent)' }}
                   >
                     下载录音文件
                   </a>

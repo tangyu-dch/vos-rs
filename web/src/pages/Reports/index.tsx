@@ -23,10 +23,23 @@ const STATUS_LABEL: Record<string, string> = {
   failed: '失败',
 };
 const STATUS_COLOR: Record<string, string> = {
-  answered: '#00b42a',
-  canceled: '#ff7d00',
-  failed: '#f53f3f',
+  answered: 'var(--status-online)',
+  canceled: 'var(--status-break)',
+  failed: 'var(--color-danger)',
 };
+
+// Theme-aware ECharts colors
+function getThemeColors() {
+  const style = getComputedStyle(document.documentElement);
+  return {
+    textMuted: style.getPropertyValue('--text-muted').trim() || '#5c5f72',
+    textSecondary: style.getPropertyValue('--text-secondary').trim() || '#a0a3b5',
+    borderSubtle: style.getPropertyValue('--border-subtle').trim() || 'rgba(255,255,255,0.06)',
+    accent: style.getPropertyValue('--accent').trim() || '#3ee8c8',
+    cardBg: style.getPropertyValue('--card-bg').trim() || '#0f1117',
+    textPrimary: style.getPropertyValue('--text-primary').trim() || '#f0f1f5',
+  };
+}
 
 function quickRange(label: string): { start?: string; end?: string } {
   const now = new Date();
@@ -107,75 +120,78 @@ export default function Reports() {
 
     if (trendRef.current) {
       trendChart.current ||= echarts.init(trendRef.current);
-      trendChart.current.setOption({
-        tooltip: { trigger: 'axis' },
-        legend: { data: ['总呼叫', '已接通'], bottom: 0 },
-        grid: { left: 50, right: 16, top: 20, bottom: 40 },
-        xAxis: { type: 'category', data: fullDays, axisLabel: { color: '#86909c', rotate: fullDays.length > 14 ? 30 : 0, formatter: (v: string) => v.slice(5) } },
-        yAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f1f3' } }, axisLabel: { color: '#86909c' }, minInterval: 1 },
-        series: [
-          {
-            name: '总呼叫', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
-            areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(99,102,241,0.2)' }, { offset: 1, color: 'rgba(99,102,241,0.01)' },
-            ]) },
-            lineStyle: { color: '#6366f1', width: 2 },
-            itemStyle: { color: '#6366f1' },
-            data: totalData,
-          },
-          {
-            name: '已接通', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
-            areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(6,182,212,0.2)' }, { offset: 1, color: 'rgba(6,182,212,0.01)' },
-            ]) },
-            lineStyle: { color: '#06b6d4', width: 2 },
-            itemStyle: { color: '#06b6d4' },
-            data: answeredData,
-          },
-        ],
-      });
+    const tc = getThemeColors();
+    trendChart.current.setOption({
+      tooltip: { trigger: 'axis', backgroundColor: tc.cardBg, borderColor: tc.borderSubtle, textStyle: { color: tc.textPrimary } },
+      legend: { data: ['总呼叫', '已接通'], bottom: 0, textStyle: { color: tc.textSecondary } },
+      grid: { left: 50, right: 16, top: 20, bottom: 40 },
+      xAxis: { type: 'category', data: fullDays, axisLabel: { color: tc.textMuted, rotate: fullDays.length > 14 ? 30 : 0, formatter: (v: string) => v.slice(5) } },
+      yAxis: { type: 'value', splitLine: { lineStyle: { color: tc.borderSubtle } }, axisLabel: { color: tc.textMuted }, minInterval: 1 },
+      series: [
+        {
+          name: '总呼叫', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
+          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(129,140,248,0.25)' }, { offset: 1, color: 'rgba(129,140,248,0.01)' },
+          ]) },
+          lineStyle: { color: '#818cf8', width: 2 },
+          itemStyle: { color: '#818cf8' },
+          data: totalData,
+        },
+        {
+          name: '已接通', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
+          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(34,211,238,0.25)' }, { offset: 1, color: 'rgba(34,211,238,0.01)' },
+          ]) },
+          lineStyle: { color: '#22d3ee', width: 2 },
+          itemStyle: { color: '#22d3ee' },
+          data: answeredData,
+        },
+      ],
+    });
     }
 
     if (pieRef.current) {
+      const tc = getThemeColors();
       pieChart.current ||= echarts.init(pieRef.current);
       pieChart.current.setOption({
-        tooltip: { trigger: 'item' },
-        legend: { bottom: 0, icon: 'circle', textStyle: { color: '#4e5969' } },
+        tooltip: { trigger: 'item', backgroundColor: tc.cardBg, borderColor: tc.borderSubtle, textStyle: { color: tc.textPrimary } },
+        legend: { bottom: 0, icon: 'circle', textStyle: { color: tc.textSecondary } },
         series: [{
           type: 'pie', radius: ['50%', '72%'], center: ['50%', '45%'],
-          itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 3 },
+          itemStyle: { borderRadius: 6, borderColor: tc.cardBg, borderWidth: 3 },
           label: { show: false },
           data: summary.by_status.map(s => ({
             name: STATUS_LABEL[s.status] || s.status,
             value: s.count,
-            itemStyle: { color: STATUS_COLOR[s.status] || '#86909c' },
+            itemStyle: { color: STATUS_COLOR[s.status] || tc.textMuted },
           })),
         }],
       });
     }
 
     if (durationRef.current) {
+      const tc = getThemeColors();
       durationChart.current ||= echarts.init(durationRef.current);
       durationChart.current.setOption({
-        tooltip: { trigger: 'axis', formatter: (p: any) => `${p[0]?.name}<br/>${p[0]?.marker} 平均通话: ${p[0]?.value} 秒` },
+        tooltip: { trigger: 'axis', backgroundColor: tc.cardBg, borderColor: tc.borderSubtle, textStyle: { color: tc.textPrimary }, formatter: (p: any) => `${p[0]?.name}<br/>${p[0]?.marker} 平均通话: ${p[0]?.value} 秒` },
         grid: { left: 80, right: 16, top: 16, bottom: 40 },
         xAxis: {
           type: 'category', data: fullDays,
-          axisLabel: { color: '#86909c', rotate: fullDays.length > 14 ? 30 : 0, formatter: (v: string) => v.slice(5) },
+          axisLabel: { color: tc.textMuted, rotate: fullDays.length > 14 ? 30 : 0, formatter: (v: string) => v.slice(5) },
         },
         yAxis: {
           type: 'value', name: '秒',
-          splitLine: { lineStyle: { color: '#f0f1f3' } },
-          axisLabel: { color: '#86909c' },
+          splitLine: { lineStyle: { color: tc.borderSubtle } },
+          axisLabel: { color: tc.textMuted },
         },
         series: [{
           type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
           areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(99,102,241,0.25)' },
-            { offset: 1, color: 'rgba(99,102,241,0.02)' },
+            { offset: 0, color: 'rgba(129,140,248,0.3)' },
+            { offset: 1, color: 'rgba(129,140,248,0.02)' },
           ]) },
-          lineStyle: { color: '#6366f1', width: 2 },
-          itemStyle: { color: '#6366f1' },
+          lineStyle: { color: '#818cf8', width: 2 },
+          itemStyle: { color: '#818cf8' },
           data: fullDays.map(d => {
             const day = dayMap.get(d);
             if (!day || day.answered === 0) return 0;
@@ -186,19 +202,20 @@ export default function Reports() {
     }
 
     if (mosRef.current && summary.avg_mos) {
+      const tc = getThemeColors();
       mosChart.current ||= echarts.init(mosRef.current);
       mosChart.current.setOption({
         series: [{
           type: 'gauge',
           startAngle: 200, endAngle: -20,
           min: 0, max: 5, splitNumber: 5, radius: '90%',
-          axisLine: { lineStyle: { width: 12, color: [[0.3, '#f53f3f'], [0.7, '#ff7d00'], [0.9, '#fadb14'], [1, '#00b42a']] } },
-          pointer: { width: 4, length: '60%', itemStyle: { color: '#1d2129' } },
+          axisLine: { lineStyle: { width: 12, color: [[0.3, '#f87171'], [0.7, '#fbbf24'], [0.9, '#facc15'], [1, '#34d399']] } },
+          pointer: { width: 4, length: '60%', itemStyle: { color: tc.textPrimary } },
           axisTick: { show: false },
-          splitLine: { length: 12, lineStyle: { width: 2, color: '#c9cdd4' } },
-          axisLabel: { distance: 16, color: '#86909c', fontSize: 12 },
-          detail: { valueAnimation: true, formatter: '{value}', color: '#1d2129', fontSize: 28, fontWeight: 'bold', offsetCenter: [0, '70%'] },
-          title: { offsetCenter: [0, '95%'], color: '#86909c', fontSize: 14 },
+          splitLine: { length: 12, lineStyle: { width: 2, color: tc.textMuted } },
+          axisLabel: { distance: 16, color: tc.textMuted, fontSize: 12 },
+          detail: { valueAnimation: true, formatter: '{value}', color: tc.textPrimary, fontSize: 28, fontWeight: 'bold', offsetCenter: [0, '70%'] },
+          title: { offsetCenter: [0, '95%'], color: tc.textMuted, fontSize: 14 },
           data: [{ value: Number(summary.avg_mos.toFixed(1)), name: '平均 MOS' }],
         }],
       });
@@ -314,17 +331,17 @@ export default function Reports() {
           <Card className="app-card" bordered={false} style={{ marginTop: 16 }} title="状态明细">
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid #e5e6eb', textAlign: 'left' }}>
-                  <th style={{ padding: '8px 12px', color: '#86909c', fontSize: 13 }}>状态</th>
-                  <th style={{ padding: '8px 12px', color: '#86909c', fontSize: 13 }}>数量</th>
-                  <th style={{ padding: '8px 12px', color: '#86909c', fontSize: 13 }}>占比</th>
-                  <th style={{ padding: '8px 12px', color: '#86909c', fontSize: 13 }}>总时长</th>
-                  <th style={{ padding: '8px 12px', color: '#86909c', fontSize: 13 }}>平均时长</th>
+                <tr style={{ borderBottom: '1px solid var(--border-subtle)', textAlign: 'left' }}>
+                  <th style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 13 }}>状态</th>
+                  <th style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 13 }}>数量</th>
+                  <th style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 13 }}>占比</th>
+                  <th style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 13 }}>总时长</th>
+                  <th style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 13 }}>平均时长</th>
                 </tr>
               </thead>
               <tbody>
                 {summary.by_status.map(s => (
-                  <tr key={s.status} style={{ borderBottom: '1px solid #f2f3f5' }}>
+                  <tr key={s.status} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                     <td style={{ padding: '8px 12px' }}><Tag color={STATUS_COLOR[s.status] || 'gray'}>{STATUS_LABEL[s.status] || s.status}</Tag></td>
                     <td style={{ padding: '8px 12px', fontFamily: 'monospace' }}>{s.count}</td>
                     <td style={{ padding: '8px 12px', fontFamily: 'monospace' }}>{(s.count / Math.max(summary.total, 1) * 100).toFixed(1)}%</td>
