@@ -15,15 +15,23 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { key: '/dashboard', icon: '⊞', title: '工作台总览', group: '工作台' },
-  { key: '/active-calls', icon: '📞', title: '实时通话', group: '工作台', badge: 3 },
-  { key: '/users', icon: '👥', title: '客户管理', group: '工作台' },
-  { key: '/cdr', icon: '≡', title: '通话记录', group: '工作台' },
-  { key: '/reports', icon: '📊', title: '报表分析', group: '数据' },
-  { key: '/settings', icon: '⚙', title: '系统设置', group: '数据' },
+  { key: '/dashboard', icon: '⊞', title: '工作台总览', group: '实时监控' },
+  { key: '/active-calls', icon: '📞', title: '活跃呼叫', group: '实时监控', badge: 3 },
+  { key: '/users', icon: '👥', title: 'SIP 用户', group: '号码路由' },
+  { key: '/gateways', icon: '🗄', title: '落地网关', group: '号码路由' },
+  { key: '/peer-gateways', icon: '🔗', title: '对接网关', group: '号码路由' },
+  { key: '/routes', icon: '🔀', title: '路由管理', group: '号码路由' },
+  { key: '/registrations', icon: '📋', title: '注册信息', group: '号码路由' },
+  { key: '/numbers', icon: '📞', title: '号码库存', group: '号码路由' },
+  { key: '/cdr', icon: '📝', title: '呼叫记录', group: '数据分析' },
+  { key: '/reports', icon: '📊', title: '报表分析', group: '数据分析' },
+  { key: '/rates', icon: '💰', title: '费率', group: '计费' },
+  { key: '/accounts', icon: '🏦', title: '账户', group: '计费' },
+  { key: '/recordings', icon: '🎙', title: '录音', group: '数据分析' },
+  { key: '/anti-fraud', icon: '🛡', title: '防盗打', group: '安全' },
 ];
 
-const NAV_GROUPS = ['工作台', '数据'];
+const NAV_GROUPS = ['实时监控', '号码路由', '数据分析', '计费', '安全'];
 
 const TAB_ITEMS = [
   { key: '/dashboard', icon: '⊞', label: '工作台' },

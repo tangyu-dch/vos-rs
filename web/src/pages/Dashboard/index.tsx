@@ -1,19 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Spin, Alert, Empty } from '@arco-design/web-react';
-import {
-  IconRefresh,
-  IconNotification,
-  IconFullscreen,
-  IconSettings,
-  IconDashboard,
-  IconPhone,
-  IconUserGroup,
-  IconCommon,
-  IconStorage,
-  IconShareAlt,
-  IconFile,
-} from '@arco-design/web-react/icon';
+import { IconRefresh } from '@arco-design/web-react/icon';
 import * as echarts from 'echarts';
 import { apiService } from '@/services/api';
 import type { DashboardStats, HourlyTrend, ActiveCall } from '@/types';
@@ -88,40 +75,13 @@ function KpiCard({ label, value, trend, sub, barColor = 'var(--accent)', barPerc
   );
 }
 
-// ─── Sidebar Nav Items ───
-interface SidebarItem {
-  key: string;
-  icon: React.ReactNode;
-  title: string;
-  group: string;
-  badge?: number;
-}
-
-const SIDEBAR_ITEMS: SidebarItem[] = [
-  { key: '/dashboard', icon: <IconDashboard />, title: '全局概览', group: '实时监控' },
-  { key: '/active-calls', icon: <IconPhone />, title: '活跃呼叫', group: '实时监控' },
-  { key: '/users', icon: <IconUserGroup />, title: 'SIP 用户', group: '号码路由' },
-  { key: '/gateways', icon: <IconStorage />, title: '落地网关', group: '号码路由' },
-  { key: '/peer-gateways', icon: <IconShareAlt />, title: '对接网关', group: '号码路由' },
-  { key: '/routes', icon: <IconFile />, title: '路由管理', group: '号码路由' },
-  { key: '/registrations', icon: <IconCommon />, title: '注册信息', group: '号码路由' },
-  { key: '/cdr', icon: <IconFile />, title: '呼叫记录', group: '数据分析' },
-  { key: '/reports', icon: <IconCommon />, title: '报表分析', group: '数据分析' },
-  { key: '/settings', icon: <IconSettings />, title: '系统设置', group: '系统' },
-];
-
-const SIDEBAR_GROUPS = ['实时监控', '号码路由', '数据分析', '系统'];
-
 export default function Dashboard() {
-  const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [trend, setTrend] = useState<HourlyTrend[]>([]);
   const [activeCalls, setActiveCalls] = useState<ActiveCall[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [callFilter, setCallFilter] = useState<CallFilter>('all');
-  const [trendPeriod, setTrendPeriod] = useState<'today' | 'week' | 'month'>('today');
-  const [currentTime, setCurrentTime] = useState(new Date());
   const [now, setNow] = useState(Date.now());
 
   const trendRef = useRef<HTMLDivElement>(null);
@@ -131,9 +91,8 @@ export default function Dashboard() {
 
   // ─── Clock ───
   useEffect(() => {
-    const t = setInterval(() => setCurrentTime(new Date()), 1000);
     const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => { clearInterval(t); clearInterval(tick); };
+    return () => clearInterval(tick);
   }, []);
 
   // ─── Load Data ───
@@ -331,8 +290,6 @@ export default function Dashboard() {
   const answerRate = stats?.answer_rate ?? 0;
   const registeredUsers = stats?.registered_users ?? 0;
 
-  const timestamp = `${currentTime.getFullYear()}-${String(currentTime.getMonth() + 1).padStart(2, '0')}-${String(currentTime.getDate()).padStart(2, '0')} ${String(currentTime.getHours()).padStart(2, '0')}:${String(currentTime.getMinutes()).padStart(2, '0')}:${String(currentTime.getSeconds()).padStart(2, '0')}`;
-
   if (loading) {
     return (
       <div className="loading-wrap">
@@ -343,238 +300,156 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="callcenter-layout">
-      {/* ─── Sidebar ─── */}
-      <aside className="cc-sidebar">
-        <div className="cc-sidebar__brand">
-          <div className="cc-sidebar__logo">
-            <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
-              <rect width="32" height="32" rx="8" fill="url(#sb-grad)" />
-              <path d="M9 11.5a3.5 3.5 0 0 1 3.5-3.5h7A3.5 3.5 0 0 1 23 11.5v9A3.5 3.5 0 0 1 19.5 24h-7A3.5 3.5 0 0 1 9 20.5v-9Z" stroke="#fff" strokeWidth="1.8" />
-              <circle cx="16" cy="16" r="2.4" fill="#fff" />
-              <path d="M16 9v3M16 20v3M9 16h3M20 16h3" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
-              <defs><linearGradient id="sb-grad" x1="0" y1="0" x2="32" y2="32"><stop stopColor="#4080FF" /><stop offset="1" stopColor="#0FC6C2" /></linearGradient></defs>
-            </svg>
+    <div className="page-wrap dashboard">
+      {/* Header */}
+      <div className="page-header">
+        <div className="page-header__title">
+          <h1>全局概览</h1>
+          <span className="sub">实时掌握平台呼叫、质量与设备状态</span>
+        </div>
+        <div className="page-header__actions">
+          <span className="live-indicator">
+            <span className="live-indicator__dot" />
+            {activeCalls.length} 通进行中
+          </span>
+          <button className="section-btn" onClick={loadData}>
+            <IconRefresh style={{ marginRight: 4 }} />
+            刷新
+          </button>
+        </div>
+      </div>
+
+      {error && <Alert type="error" content={error} closable style={{ marginBottom: 16 }} />}
+
+      {/* KPI Cards */}
+      <div className="kpi-grid">
+        <KpiCard
+          label="当前活跃呼叫"
+          value={activeCallsCount}
+          trend={{ value: `${activeCalls.length} 通实时`, direction: 'up' }}
+          sub={`已接通 ${answeredCalls} · 失败 ${failedCalls}`}
+          barColor="var(--accent)"
+          barPercent={Math.min(100, activeCallsCount * 2)}
+        />
+        <KpiCard
+          label="今日总话务量"
+          value={totalCalls.toLocaleString()}
+          trend={{ value: `${answerRate.toFixed(1)}% 接通率`, direction: answerRate >= 80 ? 'up' : 'down' }}
+          sub={`呼入 ${answeredCalls.toLocaleString()} · 呼出 ${failedCalls.toLocaleString()}`}
+          barColor="#60a5fa"
+          barPercent={Math.min(100, totalCalls / 100)}
+        />
+        <KpiCard
+          label="注册终端"
+          value={registeredUsers}
+          sub={`${stats?.active_gateways || 0} 个网关在线`}
+          barColor="var(--status-online)"
+          barPercent={Math.min(100, registeredUsers)}
+        />
+        <KpiCard
+          label="平均 MOS"
+          value={stats?.avg_mos ? stats.avg_mos.toFixed(2) : '--'}
+          sub={stats?.avg_mos ? (stats.avg_mos >= 4 ? '语音质量优秀' : '语音质量良好') : '暂无数据'}
+          barColor={stats?.avg_mos && stats.avg_mos >= 4 ? 'var(--status-online)' : 'var(--status-break)'}
+          barPercent={stats?.avg_mos ? (stats.avg_mos / 5) * 100 : 0}
+        />
+      </div>
+
+      {/* Charts Row */}
+      <div className="cc-charts-row">
+        <div className="cc-chart-card">
+          <div className="cc-chart-card__header">
+            <h3 className="cc-chart-card__title">话务量趋势</h3>
           </div>
-          <div className="cc-sidebar__brand-text">
-            <span className="cc-sidebar__brand-name">VOS-RS</span>
-            <span className="cc-sidebar__brand-sub">VoIP 运营平台</span>
+          <div ref={trendRef} className="cc-chart" />
+          {trend.length === 0 && (
+            <div className="cc-chart-empty">
+              <Empty description="今日暂无呼叫数据" />
+            </div>
+          )}
+        </div>
+
+        <div className="cc-chart-card cc-chart-card--donut">
+          <div className="cc-chart-card__header">
+            <h3 className="cc-chart-card__title">呼叫状态分布</h3>
+          </div>
+          <div ref={donutRef} className="cc-chart cc-chart--donut" />
+          {activeCalls.length === 0 && (
+            <div className="cc-chart-empty">
+              <Empty description="当前无活跃呼叫" />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Active Calls Table */}
+      <div className="cc-table-card">
+        <div className="cc-table-card__header">
+          <h3 className="cc-table-card__title">活跃呼叫实时状态</h3>
+          <div className="cc-table-card__filters">
+            {(['all', 'Established', 'Ringing', 'Routing'] as const).map((f) => (
+              <button
+                key={f}
+                className={`cc-filter-btn ${callFilter === f ? 'cc-filter-btn--active' : ''}`}
+                onClick={() => setCallFilter(f)}
+              >
+                {f === 'all' ? '全部' : STATE_CONFIG[f]?.text || f}
+              </button>
+            ))}
           </div>
         </div>
 
-        <nav className="cc-sidebar__nav">
-          {SIDEBAR_GROUPS.map((g) => (
-            <div className="cc-sidebar__group" key={g}>
-              <div className="cc-sidebar__group-title">{g}</div>
-              {SIDEBAR_ITEMS.filter((it) => it.group === g).map((item) => (
-                <div
-                  key={item.key}
-                  className={`cc-sidebar__item ${item.key === '/dashboard' ? 'is-active' : ''}`}
-                  onClick={() => navigate(item.key)}
-                >
-                  <span className="cc-sidebar__icon">{item.icon}</span>
-                  <span className="cc-sidebar__title">{item.title}</span>
-                  {item.badge && <span className="cc-sidebar__badge">{item.badge}</span>}
-                </div>
-              ))}
-            </div>
-          ))}
-        </nav>
-
-        <div className="cc-sidebar__footer">
-          <div className="cc-sidebar__user">
-            <div className="cc-sidebar__user-avatar">A</div>
-            <div className="cc-sidebar__user-info">
-              <span className="cc-sidebar__user-name">Admin</span>
-              <span className="cc-sidebar__user-role">超级管理员</span>
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      {/* ─── Main Content ─── */}
-      <div className="cc-main">
-        {/* Header */}
-        <header className="cc-header">
-          <div className="cc-header__left">
-            <h1 className="cc-header__title">全局概览</h1>
-            <span className="cc-header__time">● {timestamp}</span>
-          </div>
-          <div className="cc-header__right">
-            <button className="cc-header__btn" onClick={loadData} title="刷新">
-              <IconRefresh />
-            </button>
-            <button className="cc-header__btn cc-header__btn--badge" title="通知">
-              <IconNotification />
-              <span className="cc-header__badge">5</span>
-            </button>
-            <button className="cc-header__btn" title="全屏">
-              <IconFullscreen />
-            </button>
-            <div className="theme-toggle" onClick={() => {
-              const html = document.documentElement;
-              const current = html.getAttribute('data-theme');
-              const next = current === 'dark' ? 'light' : 'dark';
-              html.setAttribute('data-theme', next);
-              document.querySelector('.app')?.setAttribute('data-theme', next);
-              localStorage.setItem('vos-theme', next);
-            }} title="切换主题">
-              <span className="theme-toggle__knob">
-                <span>{document.documentElement.getAttribute('data-theme') === 'dark' ? '🌙' : '☀️'}</span>
-              </span>
-            </div>
-            <div className="topbar-avatar">A</div>
-          </div>
-        </header>
-
-        {/* Content */}
-        <main className="cc-content">
-          {error && <Alert type="error" content={error} closable style={{ marginBottom: 16 }} />}
-
-          {/* KPI Cards */}
-          <div className="cc-kpi-grid">
-            <KpiCard
-              label="当前活跃呼叫"
-              value={activeCallsCount}
-              trend={{ value: `${activeCalls.length} 通实时`, direction: 'up' }}
-              sub={`已接通 ${answeredCalls} · 失败 ${failedCalls}`}
-              barColor="var(--accent)"
-              barPercent={Math.min(100, activeCallsCount * 2)}
-            />
-            <KpiCard
-              label="今日总话务量"
-              value={totalCalls.toLocaleString()}
-              trend={{ value: `${answerRate.toFixed(1)}% 接通率`, direction: answerRate >= 80 ? 'up' : 'down' }}
-              sub={`呼入 ${answeredCalls.toLocaleString()} · 呼出 ${failedCalls.toLocaleString()}`}
-              barColor="#60a5fa"
-              barPercent={Math.min(100, totalCalls / 100)}
-            />
-            <KpiCard
-              label="注册终端"
-              value={registeredUsers}
-              sub={`${stats?.active_gateways || 0} 个网关在线`}
-              barColor="var(--status-online)"
-              barPercent={Math.min(100, registeredUsers)}
-            />
-            <KpiCard
-              label="平均 MOS"
-              value={stats?.avg_mos ? stats.avg_mos.toFixed(2) : '--'}
-              sub={stats?.avg_mos ? (stats.avg_mos >= 4 ? '语音质量优秀' : '语音质量良好') : '暂无数据'}
-              barColor={stats?.avg_mos && stats.avg_mos >= 4 ? 'var(--status-online)' : 'var(--status-break)'}
-              barPercent={stats?.avg_mos ? (stats.avg_mos / 5) * 100 : 0}
-            />
-          </div>
-
-          {/* Charts Row */}
-          <div className="cc-charts-row">
-            {/* Traffic Trend */}
-            <div className="cc-chart-card">
-              <div className="cc-chart-card__header">
-                <h3 className="cc-chart-card__title">话务量趋势</h3>
-                <div className="cc-chart-card__tabs">
-                  {(['today', 'week', 'month'] as const).map((p) => (
-                    <button
-                      key={p}
-                      className={`cc-tab-btn ${trendPeriod === p ? 'cc-tab-btn--active' : ''}`}
-                      onClick={() => setTrendPeriod(p)}
-                    >
-                      {p === 'today' ? '今日' : p === 'week' ? '本周' : '本月'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div ref={trendRef} className="cc-chart" />
-              {trend.length === 0 && (
-                <div className="cc-chart-empty">
-                  <Empty description="今日暂无呼叫数据" />
-                </div>
-              )}
-            </div>
-
-            {/* Call State Distribution */}
-            <div className="cc-chart-card cc-chart-card--donut">
-              <div className="cc-chart-card__header">
-                <h3 className="cc-chart-card__title">呼叫状态分布</h3>
-              </div>
-              <div ref={donutRef} className="cc-chart cc-chart--donut" />
-              {activeCalls.length === 0 && (
-                <div className="cc-chart-empty">
-                  <Empty description="当前无活跃呼叫" />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Active Calls Table */}
-          <div className="cc-table-card">
-            <div className="cc-table-card__header">
-              <h3 className="cc-table-card__title">活跃呼叫实时状态</h3>
-              <div className="cc-table-card__filters">
-                {(['all', 'Established', 'Ringing', 'Routing'] as const).map((f) => (
-                  <button
-                    key={f}
-                    className={`cc-filter-btn ${callFilter === f ? 'cc-filter-btn--active' : ''}`}
-                    onClick={() => setCallFilter(f)}
-                  >
-                    {f === 'all' ? '全部' : STATE_CONFIG[f]?.text || f}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="cc-table-wrap">
-              <table className="cc-table">
-                <thead>
-                  <tr>
-                    <th>呼叫 ID</th>
-                    <th>主叫</th>
-                    <th>被叫</th>
-                    <th>状态</th>
-                    <th>通话时长</th>
-                    <th>网关</th>
+        <div className="cc-table-wrap">
+          <table className="cc-table">
+            <thead>
+              <tr>
+                <th>呼叫 ID</th>
+                <th>主叫</th>
+                <th>被叫</th>
+                <th>状态</th>
+                <th>通话时长</th>
+                <th>网关</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredCalls.map((call) => {
+                const stateCfg = STATE_CONFIG[call.state] || { color: 'var(--text-muted)', text: call.state, dot: 'var(--text-muted)' };
+                return (
+                  <tr key={call.call_id}>
+                    <td>
+                      <span className="cc-agent-id">{call.call_id.substring(0, 16)}...</span>
+                    </td>
+                    <td>
+                      <span className="mono">{extractSipUser(call.caller)}</span>
+                    </td>
+                    <td>
+                      <span className="mono">{extractSipUser(call.callee)}</span>
+                    </td>
+                    <td>
+                      <span className="cc-state-tag" style={{ color: stateCfg.color }}>
+                        <span className="cc-state-dot" style={{ background: stateCfg.dot }} />
+                        {stateCfg.text}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="cc-duration mono" style={{ color: call.state === 'Established' ? 'var(--status-online)' : 'var(--text-muted)' }}>
+                        {call.started_at_ms ? formatTime(now - call.started_at_ms) : '--'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="mono">{call.gateway || '--'}</span>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {filteredCalls.map((call) => {
-                    const stateCfg = STATE_CONFIG[call.state] || { color: 'var(--text-muted)', text: call.state, dot: 'var(--text-muted)' };
-                    return (
-                      <tr key={call.call_id}>
-                        <td>
-                          <span className="cc-agent-id">{call.call_id.substring(0, 16)}...</span>
-                        </td>
-                        <td>
-                          <span className="mono">{extractSipUser(call.caller)}</span>
-                        </td>
-                        <td>
-                          <span className="mono">{extractSipUser(call.callee)}</span>
-                        </td>
-                        <td>
-                          <span className="cc-state-tag" style={{ color: stateCfg.color }}>
-                            <span className="cc-state-dot" style={{ background: stateCfg.dot }} />
-                            {stateCfg.text}
-                          </span>
-                        </td>
-                        <td>
-                          <span className="cc-duration mono" style={{ color: call.state === 'Established' ? 'var(--status-online)' : 'var(--text-muted)' }}>
-                            {call.started_at_ms ? formatTime(now - call.started_at_ms) : '--'}
-                          </span>
-                        </td>
-                        <td>
-                          <span className="mono">{call.gateway || '--'}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {filteredCalls.length === 0 && (
-                <div className="cc-table-empty">
-                  <Empty description="当前无活跃呼叫" />
-                </div>
-              )}
+                );
+              })}
+            </tbody>
+          </table>
+          {filteredCalls.length === 0 && (
+            <div className="cc-table-empty">
+              <Empty description="当前无活跃呼叫" />
             </div>
-          </div>
-        </main>
+          )}
+        </div>
       </div>
     </div>
   );

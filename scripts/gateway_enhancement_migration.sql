@@ -14,6 +14,27 @@ ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS supports_registration BOOLEAN 
 -- 分机关联字段：记录是哪个落地网关创建的分机
 ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS parent_gateway_id TEXT DEFAULT '';
 
+-- 添加最大并发字段
+ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS max_concurrent INTEGER DEFAULT 100;
+
+-- 添加 caller_id_mode 字段
+ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS caller_id_mode VARCHAR(20) DEFAULT 'passthrough';
+
+-- 添加 virtual_caller 字段
+ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS virtual_caller TEXT DEFAULT '';
+
+-- 添加 account_id 字段
+ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS account_id INTEGER;
+
+-- 添加 reg_auth_type 字段
+ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_auth_type VARCHAR(20) DEFAULT 'none';
+
+-- 添加 reg_username 字段
+ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_username TEXT DEFAULT '';
+
+-- 添加 enabled 字段
+ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT true;
+
 -- 清理旧字段（如果存在）
 ALTER TABLE sip_gateways DROP COLUMN IF EXISTS prefix_add;
 ALTER TABLE sip_gateways DROP COLUMN IF EXISTS prefix_strip;
