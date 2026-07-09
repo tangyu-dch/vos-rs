@@ -2254,23 +2254,6 @@ mod tests {
     }
 }
 
-# TODO: RTP Atomics 优化
-# 文件: media/relay.rs
-# 问题: record_metric 使用闭包模式，每次调用获取 DashMap shard lock
-#        RTP 热路径每包调用 6-8 次
-# 方案: 1. MediaRelayMetrics 字段改为 AtomicU64
-#        2. record_metric 改为直接原子操作
-#        3. 或合并为单个 DashMap<u16, Arc<RtpPortState>>
-# 预期收益: 减少 80% 锁争用
-# 状态: 待执行（需重写 record_metric 接口）
 
 
-# TODO: 录音 sync I/O 改为 async
-# 文件: media/relay.rs
-# 问题: WavCallRecorder 使用 std::sync::Mutex + std::fs::File (sync I/O)
-#        在 RTP 热路径中阻塞 tokio worker 线程
-# 方案: 1. 录音改为 channel-based: RTP包 → mpsc → 独立task做文件I/O
-#        2. 或使用 tokio::fs::File + spawn_blocking
-# 预期收益: 消除 async runtime 阻塞
-# 状态: 待执行
 
