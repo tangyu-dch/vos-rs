@@ -10,6 +10,10 @@ pub struct InboundInviteOutcome {
     pub call_id: CallId,
     pub state: CallState,
     pub outbound_uri: sip_core::SipUri,
+    /// Caller ID rewrite mode from the selected route's gateway.
+    pub caller_id_mode: Option<String>,
+    /// Fixed virtual caller number when caller_id_mode is "virtual".
+    pub virtual_caller: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,11 +58,19 @@ impl CallManager {
         let mut call = Call::from_inbound_invite(request)?;
         let call_id = call.id.clone();
 
+        // 从 X-Call-Direction 头部读取呼叫方向（CPS 测试用）
+        if let Some(dir) = request.headers.get("x-call-direction") {
+            let dir_str = dir.as_str().trim().to_lowercase();
+            if dir_str == "inbound" || dir_str == "outbound" {
+                call.direction = dir_str;
+            }
+        }
+
         let candidates = match self
             .routes
             .read()
             .expect("routes lock poisoned")
-            .select_candidates(&call.inbound.remote_uri)
+            .select_candidates_for_direction(&call.inbound.remote_uri, &call.direction)
         {
             Ok(candidates) => candidates,
             Err(error) => {
@@ -77,6 +89,8 @@ impl CallManager {
         call.candidates = candidates;
         call.current_candidate_index = 0;
         let outbound_uri = call.candidates[0].outbound_uri.clone();
+        let caller_id_mode = call.candidates[0].target.caller_id_mode.clone();
+        let virtual_caller = call.candidates[0].target.virtual_caller.clone();
 
         call.select_route(outbound_uri.clone())?;
         let state = call.state;
@@ -86,6 +100,8 @@ impl CallManager {
             call_id,
             state,
             outbound_uri,
+            caller_id_mode,
+            virtual_caller,
         })
     }
 
@@ -97,6 +113,14 @@ impl CallManager {
         let mut call = Call::from_inbound_invite(request)?;
         let call_id = call.id.clone();
 
+        // 从 X-Call-Direction 头部读取呼叫方向（CPS 测试用）
+        if let Some(dir) = request.headers.get("x-call-direction") {
+            let dir_str = dir.as_str().trim().to_lowercase();
+            if dir_str == "inbound" || dir_str == "outbound" {
+                call.direction = dir_str;
+            }
+        }
+
         call.select_route(outbound_uri.clone())?;
         let state = call.state;
         self.calls.insert(call_id.clone(), call);
@@ -105,6 +129,8 @@ impl CallManager {
             call_id,
             state,
             outbound_uri,
+            caller_id_mode: None,
+            virtual_caller: None,
         })
     }
 
@@ -208,7 +234,7 @@ impl CallManager {
             .ok_or_else(|| CallError::UnknownCall(call_id.as_str().to_string()))?;
         call.terminate()?;
         if let Some(cdr) =
-            CallCdr::from_completed_call_with_metrics(&*call, metrics, dtmf_digits)
+            CallCdr::from_completed_call_with_metrics(&*call, metrics, dtmf_digits, None)
         {
             self.completed_cdrs
                 .lock()
@@ -223,6 +249,13 @@ impl CallManager {
 
     pub fn get(&self, call_id: &CallId) -> Option<Call> {
         self.calls.get(call_id).map(|c| c.clone())
+    }
+
+    /// 设置录音文件路径，用于 BYE 时写入 CDR。
+    pub fn set_recording_path(&self, call_id: &CallId, path: String) {
+        if let Some(mut call) = self.calls.get_mut(call_id) {
+            call.recording_path = Some(path);
+        }
     }
 
     pub fn len(&self) -> usize {

@@ -49,17 +49,20 @@ pub struct CallCdr {
     pub gateway_rtcp_rtt_ms: Option<u32>,
     pub mos: Option<f64>,
     pub dtmf_digits: Option<String>,
+    pub recording_path: Option<String>,
+    pub direction: String,
 }
 
 impl CallCdr {
     pub fn from_completed_call(call: &Call) -> Option<Self> {
-        Self::from_completed_call_with_metrics(call, None, None)
+        Self::from_completed_call_with_metrics(call, None, None, None)
     }
 
     pub fn from_completed_call_with_metrics(
         call: &Call,
         metrics: Option<CallQualityMetrics>,
         dtmf_digits: Option<String>,
+        _recording_path: Option<String>,
     ) -> Option<Self> {
         let ended_at = call.ended_at?;
         let status = match call.state {
@@ -93,6 +96,8 @@ impl CallCdr {
             gateway_rtcp_rtt_ms: m.gateway_rtt_ms,
             mos: m.mos,
             dtmf_digits,
+            recording_path: call.recording_path.clone(),
+            direction: call.direction.clone(),
         })
     }
 }

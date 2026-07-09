@@ -93,6 +93,8 @@ pub struct Call {
     pub started_at: SystemTime,
     pub answered_at: Option<SystemTime>,
     pub ended_at: Option<SystemTime>,
+    pub recording_path: Option<String>,
+    pub direction: String,
 }
 
 impl Call {
@@ -132,6 +134,8 @@ impl Call {
             started_at,
             answered_at: None,
             ended_at: None,
+            recording_path: None,
+            direction: "outbound".to_string(),
         })
     }
 
@@ -174,6 +178,12 @@ impl Call {
                 port: redirect_uri.port,
                 transport: Some("udp".to_string()),
                 max_capacity: None,
+                caller_id_mode: None,
+                virtual_caller: None,
+                prefix_rules: None,
+                direction: None,
+                max_concurrent: None,
+                current_concurrent: 0,
             },
             outbound_uri: redirect_uri.clone(),
         };

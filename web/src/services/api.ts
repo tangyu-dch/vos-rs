@@ -16,6 +16,8 @@ import type {
   ReconcileResult,
   ActiveCall,
   NumberInventory,
+  AntiFraudRule,
+  AntiFraudConfigItem,
 } from '@/types';
 
 const api = axios.create({
@@ -235,18 +237,40 @@ export const apiService = {
   async createNumber(n: {
     number: string;
     username?: string;
+    gateway_id?: string;
+    direction?: string;
+    max_concurrent?: number;
     status: string;
   }): Promise<void> {
     await api.post('/numbers', n);
   },
   async updateNumber(
     number: string,
-    body: { username?: string; status: string }
+    body: { username?: string; gateway_id?: string; direction?: string; max_concurrent?: number; status?: string }
   ): Promise<void> {
     await api.put(`/numbers/${encodeURIComponent(number)}`, body);
   },
   async deleteNumber(number: string): Promise<void> {
     await api.delete(`/numbers/${encodeURIComponent(number)}`);
+  },
+
+  // ===== 防盗打 =====
+  async getAntiFraudRules(): Promise<AntiFraudRule[]> {
+    const r = await api.get<AntiFraudRule[]>('/anti-fraud/rules');
+    return r.data;
+  },
+  async getAntiFraudConfig(): Promise<AntiFraudConfigItem[]> {
+    const r = await api.get<AntiFraudConfigItem[]>('/anti-fraud/config');
+    return r.data;
+  },
+  async createAntiFraudRule(rule: { rule_type: string; value: string; description?: string }): Promise<void> {
+    await api.post('/anti-fraud/rules', rule);
+  },
+  async updateAntiFraudRule(id: number, data: { description?: string; enabled?: boolean }): Promise<void> {
+    await api.put(`/anti-fraud/rules/${id}`, data);
+  },
+  async deleteAntiFraudRule(id: number): Promise<void> {
+    await api.delete(`/anti-fraud/rules/${id}`);
   },
 };
 

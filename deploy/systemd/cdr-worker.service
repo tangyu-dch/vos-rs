@@ -1,0 +1,24 @@
+[Unit]
+Description=VOS-RS CDR Worker (NATS Consumer)
+After=network.target postgresql.service sip-edge.service
+Wants=postgresql.service sip-edge.service
+
+[Service]
+Type=simple
+User=vos-rs
+Group=vos-rs
+EnvironmentFile=/etc/vos-rs/cdr-worker.env
+ExecStart=/opt/vos-rs/bin/cdr-worker
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+WorkingDirectory=/opt/vos-rs
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/vos-rs
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

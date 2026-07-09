@@ -18,6 +18,8 @@ export interface CdrEvent {
   gateway_rtcp_rtt_ms?: number;
   mos?: number;
   dtmf_digits?: string;
+  recording_path?: string | null;
+  direction?: 'inbound' | 'outbound';
 }
 
 export interface SipUser {
@@ -32,6 +34,18 @@ export interface SipGateway {
   port?: number;
   transport: string;
   max_capacity?: number;
+  gateway_type?: 'gateway' | 'peer' | 'extension';
+  prefix_rules?: string;
+  supports_registration?: boolean;
+  reg_auth_type?: string;
+  reg_username?: string;
+  parent_gateway_id?: string;
+  caller_id_mode?: string;
+  virtual_caller?: string;
+  current_concurrent?: number;
+  account_id?: number;
+  max_concurrent?: number;
+  enabled?: boolean;
   created_at?: string;
 }
 
@@ -98,6 +112,7 @@ export interface RecordingInfo {
   call_id: string;
   stem: string;
   size_bytes: number;
+  duration_secs: number;
   created_at_ms: number;
   has_audio: boolean;
 }
@@ -123,6 +138,11 @@ export interface ReportSummary {
   total_duration_ms: number;
   total_billable_ms: number;
   avg_mos?: number;
+  avg_ring_ms?: number;
+  avg_setup_ms?: number;
+  avg_rtt_ms?: number;
+  avg_loss_rate?: number;
+  avg_jitter_ms?: number;
   by_status: StatusBucket[];
   by_day: DayBucket[];
 }
@@ -172,6 +192,26 @@ export interface ActiveCall {
 export interface NumberInventory {
   number: string;
   username?: string;
+  gateway_id?: string;
+  direction?: string;
+  max_concurrent?: number;
+  current_concurrent?: number;
   status: string;
   created_at?: string;
+  updated_at?: string;
+}
+
+// ===== 防盗打 =====
+export interface AntiFraudRule {
+  id: number;
+  rule_type: string;
+  value: string;
+  description?: string;
+  enabled?: boolean;
+  created_at?: string;
+}
+export interface AntiFraudConfigItem {
+  key: string;
+  value: string;
+  description?: string;
 }

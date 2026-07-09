@@ -76,7 +76,86 @@
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
 | `VOS_RS_RECORDING_ENABLED` | `false` | 启用呼叫录音 |
-| `VOS_RS_RECORDING_DIR` | `target/recordings` | 录音文件存储目录 |
+| `VOS_RS_RECORDING_DIR` | `target/recordings` | 录音文件存储目录（本地后端时使用） |
+
+### 1.8.1 存储后端配置
+
+存储后端支持本地文件系统、OSS 兼容对象存储（阿里云 OSS、MinIO 等）和双写模式。
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `VOS_RS_STORAGE_BACKEND` | `local` | 存储后端类型：`local`（本地文件）、`oss`（对象存储）、`dual`（主写 OSS，回退本地） |
+| `VOS_RS_STORAGE_RULES` | `[]` | 自定义存储规则（JSON 数组），见下方说明 |
+| `VOS_RS_STORAGE_PRESIGN_TTL` | `3600` | 预签名 URL 有效期（秒） |
+| `VOS_RS_OSS_ENDPOINT` | _(空)_ | OSS endpoint（如 `https://oss-cn-hangzhou.aliyuncs.com`） |
+| `VOS_RS_OSS_BUCKET` | _(空)_ | OSS bucket 名称 |
+| `VOS_RS_OSS_ACCESS_KEY` | _(空)_ | OSS Access Key ID |
+| `VOS_RS_OSS_SECRET_KEY` | _(空)_ | OSS Access Key Secret |
+| `VOS_RS_OSS_KEY_PREFIX` | _(空)_ | OSS key 前缀（目录），如 `vos-rs/recordings/` |
+| `VOS_RS_OSS_REGION` | `cn-hangzhou` | OSS 区域 |
+
+#### 存储后端类型
+
+| 后端 | 说明 |
+|------|------|
+| `local` | 纯本地文件系统。录音写入 `VOS_RS_RECORDING_DIR` 目录 |
+| `oss` | 纯 OSS 对象存储。录音通过 REST API 上传到 OSS bucket |
+| `dual` | 双写模式。先写 OSS，失败时自动回退到本地文件。读取时先尝试 OSS，失败时读本地 |
+
+#### 自定义存储规则
+
+通过 `VOS_RS_STORAGE_RULES` 环境变量设置 JSON 数组，每条规则按文件名前缀匹配：
+
+```json
+[
+  {
+    "prefix": "wav/",
+    "primary_only": true,
+    "retention_days": 90
+  },
+  {
+    "prefix": "metadata/",
+    "primary_only": false,
+    "retention_days": 0
+  }
+]
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `prefix` | string | 匹配的 key 前缀 |
+| `primary_only` | bool | `true` = 仅写主存储（OSS），不回退本地；`false` = 写主存储失败时回退本地 |
+| `retention_days` | int | 过期天数（0 = 永不过期） |
+
+#### OSS 配置示例
+
+```bash
+# 阿里云 OSS
+VOS_RS_STORAGE_BACKEND=oss
+VOS_RS_OSS_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
+VOS_RS_OSS_BUCKET=my-vos-rs-bucket
+VOS_RS_OSS_ACCESS_KEY=LTAI5txxxxxxxxxxxx
+VOS_RS_OSS_SECRET_KEY=xxxxxxxxxxxxxxxxxx
+VOS_RS_OSS_KEY_PREFIX=vos-rs/recordings/
+VOS_RS_OSS_REGION=cn-hangzhou
+
+# MinIO
+VOS_RS_STORAGE_BACKEND=oss
+VOS_RS_OSS_ENDPOINT=http://minio.local:9000
+VOS_RS_OSS_BUCKET=vos-recordings
+VOS_RS_OSS_ACCESS_KEY=minioadmin
+VOS_RS_OSS_SECRET_KEY=minioadmin
+VOS_RS_OSS_KEY_PREFIX=recordings/
+
+# 双写模式（生产推荐：OSS 为主，本地为备份）
+VOS_RS_STORAGE_BACKEND=dual
+VOS_RS_OSS_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
+VOS_RS_OSS_BUCKET=my-vos-rs-bucket
+VOS_RS_OSS_ACCESS_KEY=LTAI5txxxxxxxxxxxx
+VOS_RS_OSS_SECRET_KEY=xxxxxxxxxxxxxxxxxx
+VOS_RS_OSS_KEY_PREFIX=vos-rs/recordings/
+VOS_RS_RECORDING_DIR=/var/lib/vos-rs/recordings
+```
 
 ### 1.9 NAT 穿越
 
@@ -255,6 +334,7 @@
 | `gateway_rtcp_loss_rate` / `gateway_rtcp_jitter_ms` / `gateway_rtcp_rtt_ms` | DOUBLE/INT | 网关侧 RTCP 质量指标 |
 | `mos` | DOUBLE | MOS 评分 |
 | `dtmf_digits` | TEXT | DTMF 按键序列 |
+| `recording_path` | TEXT | 录音文件路径（关联录音文件） |
 | `inserted_at` | TIMESTAMPTZ NOT NULL | DEFAULT now() |
 
 ### 4.6 dtmf_events — DTMF 审计

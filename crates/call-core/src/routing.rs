@@ -25,6 +25,19 @@ pub struct RouteTarget {
     /// Maximum concurrent calls allowed through this gateway.
     /// `None` means unlimited.
     pub max_capacity: Option<u32>,
+    /// Caller ID rewrite mode: "passthrough", "virtual", or "random".
+    pub caller_id_mode: Option<String>,
+    /// Fixed virtual caller number when caller_id_mode is "virtual".
+    pub virtual_caller: Option<String>,
+    /// Prefix transformation rules: "abc:def" (replace), ":def" (add), "abc:" (strip).
+    pub prefix_rules: Option<String>,
+    /// Direction filter: "inbound", "outbound", "both", or None (no filter).
+    pub direction: Option<String>,
+    /// Maximum concurrent calls for this gateway's assigned numbers.
+    /// `None` means unlimited.
+    pub max_concurrent: Option<u32>,
+    /// Current concurrent calls (for real-time limit checking).
+    pub current_concurrent: u32,
 }
 
 impl RouteTarget {
@@ -35,6 +48,12 @@ impl RouteTarget {
             port,
             transport: Some("udp".to_string()),
             max_capacity: None,
+            caller_id_mode: None,
+            virtual_caller: None,
+            prefix_rules: None,
+            direction: None,
+            max_concurrent: None,
+            current_concurrent: 0,
         }
     }
 
@@ -50,7 +69,72 @@ impl RouteTarget {
             port,
             transport: Some("udp".to_string()),
             max_capacity: Some(max_capacity),
+            caller_id_mode: None,
+            virtual_caller: None,
+            prefix_rules: None,
+            direction: None,
+            max_concurrent: None,
+            current_concurrent: 0,
         }
+    }
+
+    /// Check if this gateway has capacity for a call in the given direction.
+    pub fn has_capacity(&self, call_direction: &str) -> bool {
+        // 方向过滤
+        if let Some(ref dir) = self.direction {
+            if dir != "both" && dir != call_direction {
+                return false;
+            }
+        }
+        // 并发限制检查
+        if let Some(max) = self.max_concurrent {
+            if self.current_concurrent >= max {
+                return false;
+            }
+        }
+        // 网关级容量检查
+        if let Some(max) = self.max_capacity {
+            if self.current_concurrent >= max {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Apply prefix transformation rules to a destination number.
+    /// Rules format: "abc:def" (replace), ":def" (add prefix), "abc:" (strip prefix).
+    /// Multiple rules separated by commas. Rules are applied in order.
+    pub fn apply_prefix_rules(&self, number: &str) -> String {
+        let rules = match &self.prefix_rules {
+            Some(r) if !r.is_empty() => r,
+            _ => return number.to_string(),
+        };
+        let mut result = number.to_string();
+        for rule in rules.split(',') {
+            let rule = rule.trim();
+            if rule.is_empty() {
+                continue;
+            }
+            if let Some(colon_pos) = rule.find(':') {
+                let prefix = &rule[..colon_pos];
+                let replacement = &rule[colon_pos + 1..];
+                if prefix.is_empty() {
+                    // :def — 添加前缀
+                    result = format!("{replacement}{result}");
+                } else if replacement.is_empty() {
+                    // abc: — 剥离前缀
+                    if result.starts_with(prefix) {
+                        result = result[prefix.len()..].to_string();
+                    }
+                } else {
+                    // abc:def — 替换前缀
+                    if result.starts_with(prefix) {
+                        result = format!("{replacement}{}", &result[prefix.len()..]);
+                    }
+                }
+            }
+        }
+        result
     }
 
     pub fn outbound_uri_for(&self, inbound_uri: &SipUri) -> CallResult<SipUri> {
@@ -58,6 +142,8 @@ impl RouteTarget {
             .user
             .clone()
             .ok_or(CallError::InvalidDestinationUri)?;
+
+        let user = self.apply_prefix_rules(&user);
 
         let mut params = Vec::new();
         if let Some(transport) = &self.transport {
@@ -421,6 +507,50 @@ impl RouteTable {
         Ok(candidates)
     }
 
+    /// Select candidate routes for a specific call direction, filtering out
+    /// gateways that don't support the direction or are at capacity.
+    pub fn select_candidates_for_direction(
+        &self,
+        destination_uri: &SipUri,
+        call_direction: &str,
+    ) -> CallResult<Vec<SelectedRoute>> {
+        let destination = destination_uri
+            .user
+            .as_deref()
+            .ok_or(CallError::InvalidDestinationUri)?;
+
+        let mut matching_routes: Vec<&Route> = self
+            .routes
+            .iter()
+            .filter(|route| route.matches(destination))
+            .filter(|route| route.target.has_capacity(call_direction))
+            .collect();
+
+        if matching_routes.is_empty() {
+            return Err(CallError::NoRouteForDestination(destination.to_string()));
+        }
+
+        matching_routes.sort_by(|left, right| {
+            right
+                .prefix
+                .len()
+                .cmp(&left.prefix.len())
+                .then_with(|| right.priority.cmp(&left.priority))
+                .then_with(|| left.cost.partial_cmp(&right.cost).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        let mut candidates = Vec::with_capacity(matching_routes.len());
+        for route in matching_routes {
+            candidates.push(SelectedRoute {
+                route_id: route.id.clone(),
+                target: route.target.clone(),
+                outbound_uri: route.target.outbound_uri_for(destination_uri)?,
+            });
+        }
+
+        Ok(candidates)
+    }
+
     /// Select candidate routes, filtering out gateways that are unhealthy
     /// (circuit breaker open) or at capacity. Falls back to all candidates
     /// if every matching gateway is unhealthy (to avoid total outage).
@@ -428,8 +558,13 @@ impl RouteTable {
         &self,
         destination_uri: &SipUri,
         health: &GatewayHealthTracker,
+        call_direction: Option<&str>,
     ) -> CallResult<Vec<SelectedRoute>> {
-        let all_candidates = self.select_candidates(destination_uri)?;
+        let all_candidates = if let Some(dir) = call_direction {
+            self.select_candidates_for_direction(destination_uri, dir)?
+        } else {
+            self.select_candidates(destination_uri)?
+        };
 
         let healthy: Vec<SelectedRoute> = all_candidates
             .iter()
@@ -600,7 +735,7 @@ mod tests {
         tracker.record_failure("gw1");
 
         let healthy = table
-            .select_healthy_candidates(&make_uri("8613800138000"), &tracker)
+            .select_healthy_candidates(&make_uri("8613800138000"), &tracker, None)
             .unwrap();
         assert_eq!(healthy.len(), 1);
         assert_eq!(healthy[0].target.host, "gw2.example.com");
@@ -626,7 +761,7 @@ mod tests {
 
         // All unhealthy → fallback to all candidates
         let candidates = table
-            .select_healthy_candidates(&make_uri("8613800138000"), &tracker)
+            .select_healthy_candidates(&make_uri("8613800138000"), &tracker, None)
             .unwrap();
         assert_eq!(candidates.len(), 1);
     }

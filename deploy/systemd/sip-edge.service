@@ -1,0 +1,25 @@
+[Unit]
+Description=VOS-RS SIP Edge (B2BUA + RTP Relay)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=vos-rs
+Group=vos-rs
+EnvironmentFile=/etc/vos-rs/sip-edge.env
+ExecStart=/opt/vos-rs/bin/sip-edge
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+WorkingDirectory=/opt/vos-rs
+
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vos-rs/data/recordings /var/log/vos-rs
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

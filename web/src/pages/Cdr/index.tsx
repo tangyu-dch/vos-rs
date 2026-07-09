@@ -73,7 +73,8 @@ export default function Cdr() {
         setLoading(false);
       }
     },
-    [filters, pagination.pageSize]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filters]
   );
 
   useEffect(() => {
@@ -90,15 +91,14 @@ export default function Cdr() {
 
   const handleViewDetail = async (record: CdrEvent) => {
     setSelectedCdr(record);
-    setHasRecording(false);
+    setHasRecording(!!record.recording_path);
     setDrawerVisible(true);
     try {
-      const [cdr, recs] = await Promise.all([
-        apiService.getCdr(record.call_id),
-        apiService.getRecordings(),
-      ]);
-      if (cdr) setSelectedCdr(cdr);
-      setHasRecording(!!recs.find((r) => r.call_id === record.call_id && r.has_audio));
+      const cdr = await apiService.getCdr(record.call_id);
+      if (cdr) {
+        setSelectedCdr(cdr);
+        setHasRecording(!!cdr.recording_path);
+      }
     } catch {
       /* 使用列表中的记录 */
     }
@@ -132,6 +132,15 @@ export default function Cdr() {
       render: (s: string) => <StatusTag status={s} />,
     },
     {
+      title: '振铃',
+      width: 70,
+      render: (_: any, record: CdrEvent) => {
+        if (!record.answered_at_ms || !record.started_at_ms) return <span className="cell-dash">—</span>;
+        const ringMs = record.answered_at_ms - record.started_at_ms;
+        return <span className="cell-mono">{(ringMs / 1000).toFixed(1)}s</span>;
+      },
+    },
+    {
       title: '通话时长',
       dataIndex: 'duration_ms',
       width: 110,
@@ -146,9 +155,37 @@ export default function Cdr() {
     {
       title: 'MOS',
       dataIndex: 'mos',
-      width: 80,
+      width: 70,
       render: (m: number) =>
         m ? <span className="cell-mono">{m.toFixed(1)}</span> : <span className="cell-dash">—</span>,
+    },
+    {
+      title: 'RTT',
+      dataIndex: 'caller_rtcp_rtt_ms',
+      width: 70,
+      render: (v: number | null) => v != null ? <span className="cell-mono">{v}ms</span> : <span className="cell-dash">—</span>,
+    },
+    {
+      title: '录音',
+      dataIndex: 'recording_path',
+      width: 70,
+      align: 'center' as const,
+      render: (v: string | null) =>
+        v ? (
+          <span style={{ color: '#00b42a', fontSize: 16 }} title="有录音">●</span>
+        ) : (
+          <span style={{ color: '#c9cdd4', fontSize: 16 }} title="无录音">○</span>
+        ),
+    },
+    {
+      title: '方向',
+      dataIndex: 'direction',
+      width: 70,
+      render: (v: string) => (
+        <span style={{ color: v === 'inbound' ? '#165dff' : '#00b42a', fontWeight: 500 }}>
+          {v === 'inbound' ? '呼入' : '呼出'}
+        </span>
+      ),
     },
     {
       title: '操作',
@@ -223,6 +260,7 @@ export default function Cdr() {
 
       <Card className="app-card" bordered={false} style={{ marginTop: 16 }}>
         <Table
+          key={`${pagination.current}-${pagination.pageSize}`}
           className="app-table"
           columns={columns}
           data={cdrs}
@@ -237,7 +275,7 @@ export default function Cdr() {
             sizeOptions: [10, 20, 50, 100],
             onChange: (page, pageSize) => loadCdrs(page, pageSize),
           }}
-          scroll={{ x: 1180 }}
+          scroll={{ x: 1260 }}
           noDataElement={<Empty description="暂无呼叫记录" />}
         />
       </Card>
@@ -272,6 +310,9 @@ export default function Cdr() {
                   { label: '结束时间', value: formatDate(selectedCdr.ended_at_ms) },
                   { label: '通话时长', value: formatDuration(selectedCdr.duration_ms) },
                   { label: '计费时长', value: formatDuration(selectedCdr.billable_duration_ms) },
+                  { label: '振铃时长', value: selectedCdr.answered_at_ms ? formatDuration(selectedCdr.answered_at_ms - selectedCdr.started_at_ms) : '—' },
+                  { label: '呼叫建立', value: selectedCdr.answered_at_ms ? `${((selectedCdr.answered_at_ms - selectedCdr.started_at_ms) / 1000).toFixed(1)}s` : '—' },
+                  { label: '呼叫方向', value: selectedCdr.direction === 'inbound' ? '呼入' : '呼出' },
                 ]}
               />
             </div>
@@ -299,6 +340,7 @@ export default function Cdr() {
                 <QualityItem label="网关丢包率" value={selectedCdr.gateway_rtcp_loss_rate != null ? `${selectedCdr.gateway_rtcp_loss_rate.toFixed(3)}%` : undefined} />
                 <QualityItem label="网关抖动" value={selectedCdr.gateway_rtcp_jitter_ms != null ? `${selectedCdr.gateway_rtcp_jitter_ms.toFixed(2)}ms` : undefined} />
                 <QualityItem label="网关 RTT" value={selectedCdr.gateway_rtcp_rtt_ms != null ? `${selectedCdr.gateway_rtcp_rtt_ms}ms` : undefined} />
+                <QualityItem label="信令延迟" value={selectedCdr.caller_rtcp_rtt_ms != null ? `${selectedCdr.caller_rtcp_rtt_ms}ms` : undefined} />
               </div>
             </div>
 
@@ -318,6 +360,15 @@ export default function Cdr() {
                   src={apiService.recordingAudioUrl(selectedCdr.call_id)}
                   style={{ width: '100%' }}
                 />
+                <div style={{ marginTop: 8 }}>
+                  <a
+                    href={apiService.recordingAudioUrl(selectedCdr.call_id)}
+                    download
+                    style={{ fontSize: 13, color: '#6366f1' }}
+                  >
+                    下载录音文件
+                  </a>
+                </div>
               </div>
             )}
           </div>

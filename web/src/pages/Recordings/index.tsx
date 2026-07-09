@@ -60,6 +60,12 @@ export default function Recordings() {
       render: formatSize,
     },
     {
+      title: '时长',
+      dataIndex: 'duration_secs',
+      width: 80,
+      render: (v: number) => v > 0 ? `${v.toFixed(1)}s` : '—',
+    },
+    {
       title: '状态',
       dataIndex: 'has_audio',
       width: 90,

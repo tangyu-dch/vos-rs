@@ -7,7 +7,7 @@ members = [
     "crates/sip-core",
     "services/cdr-worker",
     "services/sip-edge",
-    "services/api-server",
+    "services/api-server", "crates/storage-core",
 ]
 resolver = "2"
 

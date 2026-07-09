@@ -19,7 +19,6 @@ import {
   IconUserGroup,
   IconUser,
   IconIdcard,
-  IconVideoCamera,
   IconCommon,
   IconDriveFile,
   IconMenuFold,
@@ -40,23 +39,22 @@ interface NavItem {
   key: string;
   icon: ReactNode;
   title: string;
-  desc: string;
   group: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { key: '/dashboard', icon: <IconDashboard />, title: '仪表盘', desc: '总览与监控', group: '监控运营' },
-  { key: '/active-calls', icon: <IconPhone />, title: '活跃呼叫', desc: '实时通话', group: '监控运营' },
-  { key: '/cdr', icon: <IconFile />, title: '呼叫记录', desc: 'CDR 明细', group: '监控运营' },
-  { key: '/recordings', icon: <IconVideoCamera />, title: '录音', desc: '试听与下载', group: '监控运营' },
-  { key: '/reports', icon: <IconCommon />, title: '报表', desc: '统计与导出', group: '监控运营' },
-  { key: '/users', icon: <IconUserGroup />, title: 'SIP 用户', desc: '账户管理', group: '号码路由' },
-  { key: '/gateways', icon: <IconStorage />, title: '网关管理', desc: '中继网关', group: '号码路由' },
-  { key: '/routes', icon: <IconBranch />, title: '路由管理', desc: '选路规则', group: '号码路由' },
-  { key: '/registrations', icon: <IconShareAlt />, title: '注册信息', desc: '在线终端', group: '号码路由' },
-  { key: '/numbers', icon: <IconIdcard />, title: '号码库存', desc: '号码分配', group: '号码路由' },
-  { key: '/rates', icon: <IconDriveFile />, title: '费率', desc: '计费费率', group: '计费' },
-  { key: '/accounts', icon: <IconUser />, title: '账户', desc: '余额与对账', group: '计费' },
+  { key: '/dashboard', icon: <IconDashboard />, title: '仪表盘', group: '监控运营' },
+  { key: '/active-calls', icon: <IconPhone />, title: '活跃呼叫', group: '监控运营' },
+  { key: '/cdr', icon: <IconFile />, title: '呼叫记录', group: '监控运营' },
+  { key: '/reports', icon: <IconCommon />, title: '报表', group: '监控运营' },
+  { key: '/users', icon: <IconUserGroup />, title: 'SIP 用户', group: '号码路由' },
+  { key: '/gateways', icon: <IconStorage />, title: '落地网关', group: '号码路由' },
+  { key: '/peer-gateways', icon: <IconShareAlt />, title: '对接网关', group: '号码路由' },
+  { key: '/routes', icon: <IconBranch />, title: '路由管理', group: '号码路由' },
+  { key: '/registrations', icon: <IconShareAlt />, title: '注册信息', group: '号码路由' },
+  { key: '/numbers', icon: <IconIdcard />, title: '号码库存', group: '号码路由' },
+  { key: '/rates', icon: <IconDriveFile />, title: '费率', group: '计费' },
+  { key: '/accounts', icon: <IconUser />, title: '账户', group: '计费' },
 ];
 
 const NAV_GROUPS = ['监控运营', '号码路由', '计费'];
@@ -134,9 +132,6 @@ export default function Layout({ children }: LayoutProps) {
                   <span className="sider-nav__icon">{item.icon}</span>
                   <span className="sider-nav__label">
                     <span className="sider-nav__title">{item.title}</span>
-                    {!collapsed && (
-                      <span className="sider-nav__desc">{item.desc}</span>
-                    )}
                   </span>
                 </div>
               ))}

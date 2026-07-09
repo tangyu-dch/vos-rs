@@ -12,13 +12,19 @@ use cdr_core::NumberInventory;
 pub struct CreateNumberBody {
     pub number: String,
     pub username: Option<String>,
+    pub gateway_id: Option<String>,
+    pub direction: Option<String>,
+    pub max_concurrent: Option<i32>,
     pub status: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateNumberBody {
     pub username: Option<String>,
-    pub status: String,
+    pub gateway_id: Option<String>,
+    pub direction: Option<String>,
+    pub max_concurrent: Option<i32>,
+    pub status: Option<String>,
 }
 
 type E = (StatusCode, String);
@@ -36,7 +42,7 @@ pub async fn create_number(
 ) -> Result<StatusCode, E> {
     state
         .store
-        .upsert_number(&b.number, b.username.as_deref(), &b.status)
+        .upsert_number(&b.number, b.username.as_deref(), b.gateway_id.as_deref(), b.direction.as_deref(), b.max_concurrent, &b.status)
         .await
         .map_err(err)?;
     Ok(StatusCode::CREATED)
@@ -49,7 +55,7 @@ pub async fn update_number(
 ) -> Result<StatusCode, E> {
     state
         .store
-        .upsert_number(&number, b.username.as_deref(), &b.status)
+        .upsert_number(&number, b.username.as_deref(), b.gateway_id.as_deref(), b.direction.as_deref(), b.max_concurrent, b.status.as_deref().unwrap_or("available"))
         .await
         .map_err(err)?;
     Ok(StatusCode::OK)

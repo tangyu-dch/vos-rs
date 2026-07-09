@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Cdr from './pages/Cdr'
 import Users from './pages/Users'
 import Gateways from './pages/Gateways'
+import PeerGateways from './pages/PeerGateways'
 import RoutesPage from './pages/Routes'
 import Registrations from './pages/Registrations'
 import ActiveCalls from './pages/ActiveCalls'
@@ -12,6 +13,7 @@ import Recordings from './pages/Recordings'
 import Reports from './pages/Reports'
 import Rates from './pages/Rates'
 import Accounts from './pages/Accounts'
+import AntiFraud from './pages/AntiFraud'
 
 function App() {
   return (
@@ -24,12 +26,14 @@ function App() {
         <Route path="/cdr" element={<Cdr />} />
         <Route path="/users" element={<Users />} />
         <Route path="/gateways" element={<Gateways />} />
+        <Route path="/peer-gateways" element={<PeerGateways />} />
         <Route path="/routes" element={<RoutesPage />} />
         <Route path="/registrations" element={<Registrations />} />
         <Route path="/recordings" element={<Recordings />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/rates" element={<Rates />} />
         <Route path="/accounts" element={<Accounts />} />
+        <Route path="/anti-fraud" element={<AntiFraud />} />
       </Routes>
     </Layout>
   )

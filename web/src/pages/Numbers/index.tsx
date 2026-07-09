@@ -7,6 +7,7 @@ import {
   Modal,
   Form,
   Input,
+  InputNumber,
   Select,
   Message,
   Popconfirm,
@@ -59,7 +60,7 @@ export default function Numbers() {
 
   const handleEdit = (n: NumberInventory) => {
     setEditing(n);
-    form.setFieldsValue({ username: n.username || '', status: n.status });
+    form.setFieldsValue({ username: n.username || '', status: n.status, gateway_id: n.gateway_id || '', direction: n.direction || 'bidirectional', max_concurrent: n.max_concurrent });
     setModalVisible(true);
   };
 
@@ -79,6 +80,9 @@ export default function Numbers() {
       if (editing) {
         await apiService.updateNumber(editing.number, {
           username: values.username || undefined,
+          gateway_id: values.gateway_id || undefined,
+          direction: values.direction || 'bidirectional',
+          max_concurrent: values.max_concurrent,
           status: values.status,
         });
         Message.success('更新成功');
@@ -86,6 +90,9 @@ export default function Numbers() {
         await apiService.createNumber({
           number: values.number,
           username: values.username || undefined,
+          gateway_id: values.gateway_id || undefined,
+          direction: values.direction || 'bidirectional',
+          max_concurrent: values.max_concurrent,
           status: values.status || 'available',
         });
         Message.success('创建成功');
@@ -98,44 +105,27 @@ export default function Numbers() {
   };
 
   const columns = [
-    {
-      title: '号码',
-      dataIndex: 'number',
-      render: (v: string) => <span className="cell-mono cell-strong">{v}</span>,
-    },
-    {
-      title: '归属用户',
-      dataIndex: 'username',
-      render: (v: string) => (v ? <span className="cell-mono">{v}</span> : '—'),
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 110,
+    { title: '号码', dataIndex: 'number', render: (v: string) => <span className="cell-mono cell-strong">{v}</span> },
+    { title: '归属用户', dataIndex: 'username', render: (v: string) => (v ? <span className="cell-mono">{v}</span> : '—') },
+    { title: '归属网关', dataIndex: 'gateway_id', width: 120, render: (v: string) => (v ? <span className="cell-mono">{v}</span> : <span className="cell-dash">—</span>) },
+    { title: '方向', dataIndex: 'direction', width: 100, render: (v: string) => {
+      const m = v === 'inbound' ? { color: 'blue', text: '呼入' } : v === 'outbound' ? { color: 'green', text: '呼出' } : { color: 'purple', text: '双向' };
+      return <Tag color={m.color}>{m.text}</Tag>;
+    }},
+    { title: '最大并发', dataIndex: 'max_concurrent', width: 90, render: (v: number) => v ? <span className="cell-mono">{v}</span> : '—' },
+    { title: '状态', dataIndex: 'status', width: 100,
       render: (s: string) => {
         const m = STATUS_MAP[s] || { color: 'gray', text: s };
         return <Tag color={m.color}>{m.text}</Tag>;
       },
     },
-    {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      render: (d: string) => (d ? new Date(d).toLocaleString('zh-CN') : '—'),
-    },
-    {
-      title: '操作',
-      dataIndex: 'actions',
-      width: 180,
-      fixed: 'right' as const,
+    { title: '创建时间', dataIndex: 'created_at', render: (d: string) => (d ? new Date(d).toLocaleString('zh-CN') : '—') },
+    { title: '操作', dataIndex: 'actions', width: 180, fixed: 'right' as const,
       render: (_: any, record: NumberInventory) => (
         <Space size={4}>
-          <Button type="text" size="small" icon={<IconEdit />} onClick={() => handleEdit(record)}>
-            编辑
-          </Button>
+          <Button type="text" size="small" icon={<IconEdit />} onClick={() => handleEdit(record)}>编辑</Button>
           <Popconfirm title="确认删除该号码？" icon={null} onOk={() => handleDelete(record.number)}>
-            <Button type="text" size="small" status="danger" icon={<IconDelete />}>
-              删除
-            </Button>
+            <Button type="text" size="small" status="danger" icon={<IconDelete />}>删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -181,17 +171,25 @@ export default function Numbers() {
         okText="保存"
         cancelText="取消"
       >
-        <Form form={form} labelCol={{ span: 5 }} wrapperCol={{ span: 19 }} initialValues={{ status: 'available' }}>
-          <FormItem
-            label="号码"
-            field="number"
-            required
-            rules={[{ required: true, message: '请输入号码' }]}
-          >
+        <Form form={form} labelCol={{ span: 5 }} wrapperCol={{ span: 19 }} initialValues={{ status: 'available', direction: 'bidirectional', max_concurrent: 10 }}>
+          <FormItem label="号码" field="number" required rules={[{ required: true, message: '请输入号码' }]}>
             <Input placeholder="如 13800138000" disabled={!!editing} />
           </FormItem>
           <FormItem label="归属用户" field="username">
             <Input placeholder="可选，如 1001" />
+          </FormItem>
+          <FormItem label="归属网关" field="gateway_id">
+            <Input placeholder="网关 ID，如 gw1" />
+          </FormItem>
+          <FormItem label="方向" field="direction">
+            <Select>
+              <Select.Option value="bidirectional">双向</Select.Option>
+              <Select.Option value="inbound">呼入</Select.Option>
+              <Select.Option value="outbound">呼出</Select.Option>
+            </Select>
+          </FormItem>
+          <FormItem label="最大并发" field="max_concurrent">
+            <InputNumber placeholder="10" min={1} style={{ width: '100%' }} />
           </FormItem>
           <FormItem label="状态" field="status" required rules={[{ required: true, message: '请选择状态' }]}>
             <Select>

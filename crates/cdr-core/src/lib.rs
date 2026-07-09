@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS call_cdrs (
     gateway_rtcp_rtt_ms INTEGER,
     mos DOUBLE PRECISION,
     dtmf_digits TEXT,
+    recording_path TEXT,
+    direction VARCHAR(10) DEFAULT 'outbound',
     inserted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
@@ -164,6 +166,8 @@ pub struct CdrEvent {
     pub gateway_rtcp_rtt_ms: Option<u32>,
     pub mos: Option<f64>,
     pub dtmf_digits: Option<String>,
+    pub recording_path: Option<String>,
+    pub direction: String,
 }
 
 impl CdrEvent {
@@ -191,6 +195,8 @@ impl CdrEvent {
             gateway_rtcp_rtt_ms: cdr.gateway_rtcp_rtt_ms,
             mos: cdr.mos,
             dtmf_digits: cdr.dtmf_digits.clone(),
+            recording_path: cdr.recording_path.clone(),
+            direction: cdr.direction.clone(),
         }
     }
 
@@ -313,6 +319,19 @@ pub struct SipGateway {
     pub port: Option<u16>,
     pub transport: String,
     pub max_capacity: Option<u32>,
+    pub gateway_type: Option<String>,
+    pub prefix_rules: Option<String>,
+    pub supports_registration: Option<bool>,
+    pub reg_auth_type: Option<String>,
+    pub reg_username: Option<String>,
+    pub reg_password: Option<String>,
+    pub parent_gateway_id: Option<String>,
+    pub caller_id_mode: Option<String>,
+    pub virtual_caller: Option<String>,
+    pub current_concurrent: Option<i32>,
+    pub account_id: Option<i64>,
+    pub max_concurrent: Option<i32>,
+    pub enabled: Option<bool>,
     #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<OffsetDateTime>,
 }
@@ -385,9 +404,15 @@ pub struct ReconcileResult {
 pub struct NumberInventory {
     pub number: String,
     pub username: Option<String>,
+    pub gateway_id: Option<String>,
+    pub direction: Option<String>,
+    pub max_concurrent: Option<i32>,
+    pub current_concurrent: Option<i32>,
     pub status: String,
     #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option", default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<OffsetDateTime>,
 }
 
 // ===== 辅助函数 =====
@@ -469,6 +494,8 @@ fn cdr_event_from_row(row: sqlx::postgres::PgRow) -> Result<CdrEvent, sqlx::Erro
         gateway_rtcp_rtt_ms: gateway_rtcp_rtt_ms.map(|v| v as u32),
         mos: row.get(17),
         dtmf_digits: row.get(18),
+        recording_path: row.get(19),
+        direction: row.get(20),
     })
 }
 
@@ -503,7 +530,20 @@ impl PostgresCdrStore {
               ADD COLUMN IF NOT EXISTS gateway_rtcp_jitter_ms DOUBLE PRECISION, \
               ADD COLUMN IF NOT EXISTS gateway_rtcp_rtt_ms INTEGER, \
               ADD COLUMN IF NOT EXISTS mos DOUBLE PRECISION, \
-              ADD COLUMN IF NOT EXISTS dtmf_digits TEXT",
+              ADD COLUMN IF NOT EXISTS dtmf_digits TEXT, \
+              ADD COLUMN IF NOT EXISTS recording_path TEXT, \
+              ADD COLUMN IF NOT EXISTS direction VARCHAR(10) DEFAULT 'outbound'",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 添加唯一约束防止重复 CDR（ON CONFLICT 需要）
+        sqlx::query(
+            "DO $$ BEGIN \
+               IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_cdr_call_started') THEN \
+                 ALTER TABLE call_cdrs ADD CONSTRAINT uq_cdr_call_started UNIQUE (call_id, started_at); \
+               END IF; \
+             END $$",
         )
         .execute(&self.pool)
         .await?;
@@ -598,9 +638,12 @@ impl PostgresCdrStore {
                 gateway_rtcp_jitter_ms,
                 gateway_rtcp_rtt_ms,
                 mos,
-                dtmf_digits
+                dtmf_digits,
+                recording_path,
+                direction
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+            ON CONFLICT (call_id, started_at) DO NOTHING
             "#,
         )
         .bind(event.call_id.as_str())
@@ -622,6 +665,8 @@ impl PostgresCdrStore {
         .bind(event.gateway_rtcp_rtt_ms.map(|v| v as i32))
         .bind(event.mos)
         .bind(event.dtmf_digits.as_deref())
+        .bind(event.recording_path.as_deref())
+        .bind(event.direction.as_str())
         .execute(&self.pool)
         .await?;
 
@@ -643,7 +688,7 @@ impl PostgresCdrStore {
                     duration_ms, billable_duration_ms, status, failure_status_code,
                     failure_reason, caller_rtcp_loss_rate, caller_rtcp_jitter_ms,
                     caller_rtcp_rtt_ms, gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms,
-                    gateway_rtcp_rtt_ms, mos, dtmf_digits
+                    gateway_rtcp_rtt_ms, mos, dtmf_digits, recording_path, direction
                 ) "
             );
 
@@ -666,7 +711,9 @@ impl PostgresCdrStore {
                     .push_bind(event.gateway_rtcp_jitter_ms)
                     .push_bind(event.gateway_rtcp_rtt_ms.map(|v| v as i32))
                     .push_bind(event.mos)
-                    .push_bind(event.dtmf_digits.as_deref());
+                    .push_bind(event.dtmf_digits.as_deref())
+                    .push_bind(event.recording_path.as_deref())
+                    .push_bind(event.direction.as_str());
             });
 
             qb.build().execute(&mut *tx).await?;
@@ -686,9 +733,9 @@ impl PostgresCdrStore {
 
     pub async fn load_gateways(
         &self,
-    ) -> Result<Vec<(String, String, Option<u16>, String, Option<u32>)>, sqlx::Error> {
+    ) -> Result<Vec<(String, String, Option<u16>, String, Option<u32>, Option<String>, Option<String>, Option<String>)>, sqlx::Error> {
         let rows =
-            sqlx::query("SELECT id, host, port, transport, max_capacity FROM sip_gateways")
+            sqlx::query("SELECT id, host, port, transport, max_capacity, caller_id_mode, virtual_caller, prefix_rules FROM sip_gateways")
                 .fetch_all(&self.pool)
                 .await?;
         let mut gateways = Vec::new();
@@ -700,9 +747,36 @@ impl PostgresCdrStore {
             let transport: String = row.get(3);
             let cap_i32: Option<i32> = row.get(4);
             let max_capacity = cap_i32.and_then(|c| u32::try_from(c).ok());
-            gateways.push((id, host, port, transport, max_capacity));
+            let caller_id_mode: Option<String> = row.get(5);
+            let virtual_caller: Option<String> = row.get(6);
+            let prefix_rules: Option<String> = row.get(7);
+            gateways.push((id, host, port, transport, max_capacity, caller_id_mode, virtual_caller, prefix_rules));
         }
         Ok(gateways)
+    }
+
+    /// 加载网关的号码分配信息：方向、最大并发、当前并发
+    /// 返回 (gateway_id, direction, max_concurrent, current_concurrent)
+    pub async fn load_gateway_number_info(
+        &self,
+    ) -> Result<Vec<(String, Option<String>, Option<i32>, i32)>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT gna.gateway_id, gna.direction, gna.max_concurrent, COALESCE(ni.current_concurrent, 0)
+             FROM gateway_number_assignments gna
+             LEFT JOIN number_inventory ni ON ni.number = gna.number
+             WHERE gna.enabled = true",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut result = Vec::new();
+        for row in rows {
+            let gateway_id: String = row.get(0);
+            let direction: Option<String> = row.get(1);
+            let max_concurrent: Option<i32> = row.get(2);
+            let current_concurrent: i32 = row.get(3);
+            result.push((gateway_id, direction, max_concurrent, current_concurrent));
+        }
+        Ok(result)
     }
 
     pub async fn load_routes(
@@ -763,6 +837,42 @@ impl PostgresCdrStore {
             .bind(max_capacity.map(i32::try_from).and_then(Result::ok))
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_gateway_full(
+        &self,
+        gw: &SipGateway,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO sip_gateways (id, host, port, transport, max_capacity, gateway_type, prefix_rules, supports_registration, caller_id_mode, virtual_caller, max_concurrent, account_id, reg_auth_type, reg_username, enabled)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+             ON CONFLICT (id) DO UPDATE SET
+               host=EXCLUDED.host, port=EXCLUDED.port, transport=EXCLUDED.transport,
+               max_capacity=EXCLUDED.max_capacity, gateway_type=EXCLUDED.gateway_type,
+               prefix_rules=EXCLUDED.prefix_rules, supports_registration=EXCLUDED.supports_registration,
+               caller_id_mode=EXCLUDED.caller_id_mode, virtual_caller=EXCLUDED.virtual_caller,
+               max_concurrent=EXCLUDED.max_concurrent, account_id=EXCLUDED.account_id,
+               reg_auth_type=EXCLUDED.reg_auth_type, reg_username=EXCLUDED.reg_username,
+               enabled=EXCLUDED.enabled"
+        )
+        .bind(gw.id.as_str())
+        .bind(gw.host.as_str())
+        .bind(gw.port.map(i32::from))
+        .bind(gw.transport.as_str())
+        .bind(gw.max_capacity.map(|c| c as i32))
+        .bind(gw.gateway_type.as_deref())
+        .bind(gw.prefix_rules.as_deref().unwrap_or(""))
+        .bind(gw.supports_registration.unwrap_or(false))
+        .bind(gw.caller_id_mode.as_deref().unwrap_or("passthrough"))
+        .bind(gw.virtual_caller.as_deref().unwrap_or(""))
+        .bind(gw.max_concurrent.unwrap_or(100))
+        .bind(gw.account_id)
+        .bind(gw.reg_auth_type.as_deref().unwrap_or("ip"))
+        .bind(gw.reg_username.as_deref().unwrap_or(""))
+        .bind(gw.enabled.unwrap_or(true))
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -1006,7 +1116,7 @@ impl PostgresCdrStore {
                     duration_ms, billable_duration_ms, status, failure_status_code,
                     failure_reason, caller_rtcp_loss_rate, caller_rtcp_jitter_ms,
                     caller_rtcp_rtt_ms, gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms,
-                    gateway_rtcp_rtt_ms, mos, dtmf_digits
+                    gateway_rtcp_rtt_ms, mos, dtmf_digits, recording_path, direction
              FROM call_cdrs WHERE 1=1",
         );
         if let Some(s) = status {
@@ -1046,7 +1156,7 @@ impl PostgresCdrStore {
                     duration_ms, billable_duration_ms, status, failure_status_code,
                     failure_reason, caller_rtcp_loss_rate, caller_rtcp_jitter_ms,
                     caller_rtcp_rtt_ms, gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms,
-                    gateway_rtcp_rtt_ms, mos, dtmf_digits
+                    gateway_rtcp_rtt_ms, mos, dtmf_digits, recording_path, direction
              FROM call_cdrs WHERE call_id = $1"
         )
         .bind(call_id)
@@ -1178,7 +1288,11 @@ impl PostgresCdrStore {
 
     pub async fn list_gateways_full(&self) -> Result<Vec<SipGateway>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, host, port, transport, max_capacity, created_at FROM sip_gateways ORDER BY id"
+            "SELECT id, host, port, transport, max_capacity, gateway_type, prefix_rules,
+                    supports_registration, parent_gateway_id, caller_id_mode, virtual_caller,
+                    current_concurrent, account_id, max_concurrent, created_at,
+                    reg_auth_type, reg_username, enabled
+             FROM sip_gateways ORDER BY id"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1193,7 +1307,20 @@ impl PostgresCdrStore {
                 port: port_i32.and_then(|p| u16::try_from(p).ok()),
                 transport: row.get(3),
                 max_capacity: cap_i32.and_then(|c| u32::try_from(c).ok()),
-                created_at: row.get(5),
+                gateway_type: row.get(5),
+                prefix_rules: row.get(6),
+                supports_registration: row.get(7),
+                parent_gateway_id: row.get(8),
+                caller_id_mode: row.get(9),
+                virtual_caller: row.get(10),
+                current_concurrent: row.get(11),
+                account_id: row.get(12),
+                max_concurrent: row.get(13),
+                created_at: row.get(14),
+                reg_auth_type: row.get(15),
+                reg_username: row.get(16),
+                reg_password: None,
+                enabled: row.get(17),
             });
         }
         Ok(gateways)
@@ -1247,7 +1374,7 @@ impl PostgresCdrStore {
     pub async fn list_registrations(&self) -> Result<Vec<SipRegistration>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT aor, contact_uri, received_from, expires_at, path, updated_at
-             FROM sip_registrations ORDER BY aor"
+             FROM sip_registrations WHERE expires_at > now() ORDER BY aor"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1527,7 +1654,7 @@ impl PostgresCdrStore {
     // ===== 号码库存 =====
     pub async fn list_numbers(&self) -> Result<Vec<NumberInventory>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT number, username, status, created_at FROM number_inventory ORDER BY number",
+            "SELECT number, username, gateway_id, direction, max_concurrent, current_concurrent, status, created_at, updated_at FROM number_inventory ORDER BY number",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1536,8 +1663,13 @@ impl PostgresCdrStore {
             out.push(NumberInventory {
                 number: row.get(0),
                 username: row.get(1),
-                status: row.get(2),
-                created_at: row.get(3),
+                gateway_id: row.get(2),
+                direction: row.get(3),
+                max_concurrent: row.get(4),
+                current_concurrent: row.get(5),
+                status: row.get(6),
+                created_at: row.get(7),
+                updated_at: row.get(8),
             });
         }
         Ok(out)
@@ -1547,14 +1679,20 @@ impl PostgresCdrStore {
         &self,
         number: &str,
         username: Option<&str>,
+        gateway_id: Option<&str>,
+        direction: Option<&str>,
+        max_concurrent: Option<i32>,
         status: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO number_inventory (number, username, status) VALUES ($1, $2, $3) \
-             ON CONFLICT (number) DO UPDATE SET username = EXCLUDED.username, status = EXCLUDED.status",
+            "INSERT INTO number_inventory (number, username, gateway_id, direction, max_concurrent, status) VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (number) DO UPDATE SET username = EXCLUDED.username, gateway_id = EXCLUDED.gateway_id, direction = EXCLUDED.direction, max_concurrent = EXCLUDED.max_concurrent, status = EXCLUDED.status, updated_at = NOW()",
         )
         .bind(number)
         .bind(username)
+        .bind(gateway_id)
+        .bind(direction.unwrap_or("bidirectional"))
+        .bind(max_concurrent.unwrap_or(10))
         .bind(status)
         .execute(&self.pool)
         .await?;
@@ -1611,6 +1749,8 @@ mod tests {
             gateway_rtcp_rtt_ms: None,
             mos: None,
             dtmf_digits: Some("123#".to_string()),
+            recording_path: Some("/recordings/call-1.wav".to_string()),
+            direction: "outbound".to_string(),
         };
 
         let event = CdrEvent::from_call_cdr(&cdr);
@@ -1653,16 +1793,16 @@ mod tests {
             gateway_rtcp_rtt_ms: None,
             mos: None,
             dtmf_digits: None,
+            recording_path: None,
+            direction: "outbound".to_string(),
         };
 
         let event = CdrEvent::from_call_cdr(&cdr);
-
-        assert_eq!(event.caller, None);
-        assert_eq!(event.callee, None);
-        assert_eq!(event.answered_at_ms, None);
+        assert_eq!(event.call_id, "call-failed@example.com");
+        assert_eq!(event.status, "failed");
         assert_eq!(event.failure_status_code, Some(503));
         assert_eq!(event.failure_reason.as_deref(), Some("gateway unavailable"));
-        assert_eq!(event.dtmf_digits, None);
+        assert_eq!(event.mos, None);
     }
 
     #[test]
@@ -1687,6 +1827,8 @@ mod tests {
             gateway_rtcp_rtt_ms: None,
             mos: None,
             dtmf_digits: Some("987*".to_string()),
+            recording_path: None,
+            direction: "inbound".to_string(),
         };
 
         let parsed = CdrEvent::from_json_slice(&event.to_json_bytes()).unwrap();

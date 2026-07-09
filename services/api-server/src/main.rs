@@ -36,7 +36,7 @@ use numbers::{create_number, delete_number, list_numbers, update_number};
 #[derive(Clone)]
 pub(crate) struct AppState {
     store: Arc<PostgresCdrStore>,
-    recording_dir: std::path::PathBuf,
+    recording_storage: Arc<dyn storage_core::StorageBackend>,
     sip_manage_base: String,
 }
 
@@ -77,6 +77,16 @@ struct CreateGatewayRequest {
     port: Option<u16>,
     transport: String,
     max_capacity: Option<u32>,
+    gateway_type: Option<String>,
+    prefix_rules: Option<String>,
+    supports_registration: Option<bool>,
+    reg_auth_type: Option<String>,
+    reg_username: Option<String>,
+    caller_id_mode: Option<String>,
+    virtual_caller: Option<String>,
+    max_concurrent: Option<i32>,
+    account_id: Option<i64>,
+    enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +95,16 @@ struct UpdateGatewayRequest {
     port: Option<u16>,
     transport: String,
     max_capacity: Option<u32>,
+    gateway_type: Option<String>,
+    prefix_rules: Option<String>,
+    supports_registration: Option<bool>,
+    reg_auth_type: Option<String>,
+    reg_username: Option<String>,
+    caller_id_mode: Option<String>,
+    virtual_caller: Option<String>,
+    max_concurrent: Option<i32>,
+    account_id: Option<i64>,
+    enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,15 +289,30 @@ async fn create_gateway(
     State(state): State<AppState>,
     Json(req): Json<CreateGatewayRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state.store.insert_gateway_with_capacity(
-        &req.id,
-        &req.host,
-        req.port,
-        &req.transport,
-        req.max_capacity,
-    )
-    .await
-    .map_err(|e| ApiError { error: e.to_string() })?;
+    let gw = SipGateway {
+        id: req.id,
+        host: req.host,
+        port: req.port,
+        transport: req.transport,
+        max_capacity: req.max_capacity,
+        gateway_type: req.gateway_type,
+        prefix_rules: req.prefix_rules,
+        supports_registration: req.supports_registration,
+        reg_auth_type: req.reg_auth_type,
+        reg_username: req.reg_username,
+        reg_password: None,
+        parent_gateway_id: None,
+        caller_id_mode: req.caller_id_mode,
+        virtual_caller: req.virtual_caller,
+        current_concurrent: Some(0),
+        account_id: req.account_id,
+        max_concurrent: req.max_concurrent,
+        enabled: req.enabled,
+        created_at: None,
+    };
+    state.store.upsert_gateway_full(&gw)
+        .await
+        .map_err(|e| ApiError { error: e.to_string() })?;
     Ok(StatusCode::CREATED)
 }
 
@@ -286,15 +321,34 @@ async fn update_gateway(
     Path(id): Path<String>,
     Json(req): Json<UpdateGatewayRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state.store.insert_gateway_with_capacity(
-        &id,
-        &req.host,
-        req.port,
-        &req.transport,
-        req.max_capacity,
-    )
-    .await
-    .map_err(|e| ApiError { error: e.to_string() })?;
+    let existing = state.store.list_gateways_full().await
+        .map_err(|e| ApiError { error: e.to_string() })?;
+    let old = existing.iter().find(|g| g.id == id)
+        .ok_or_else(|| ApiError { error: "网关不存在".into() })?;
+    let gw = SipGateway {
+        id: id.clone(),
+        host: req.host,
+        port: req.port,
+        transport: req.transport,
+        max_capacity: req.max_capacity,
+        gateway_type: req.gateway_type.or_else(|| old.gateway_type.clone()),
+        prefix_rules: req.prefix_rules.or_else(|| old.prefix_rules.clone()),
+        supports_registration: req.supports_registration.or(old.supports_registration),
+        reg_auth_type: req.reg_auth_type.or_else(|| old.reg_auth_type.clone()),
+        reg_username: req.reg_username.or_else(|| old.reg_username.clone()),
+        reg_password: None,
+        parent_gateway_id: old.parent_gateway_id.clone(),
+        caller_id_mode: req.caller_id_mode.or_else(|| old.caller_id_mode.clone()),
+        virtual_caller: req.virtual_caller.or_else(|| old.virtual_caller.clone()),
+        current_concurrent: old.current_concurrent,
+        account_id: req.account_id.or(old.account_id),
+        max_concurrent: req.max_concurrent.or(old.max_concurrent),
+        enabled: req.enabled.or(old.enabled),
+        created_at: old.created_at,
+    };
+    state.store.upsert_gateway_full(&gw)
+        .await
+        .map_err(|e| ApiError { error: e.to_string() })?;
     Ok(StatusCode::OK)
 }
 
@@ -381,6 +435,64 @@ async fn list_registrations(
         .map_err(|e| ApiError { error: e.to_string() })
 }
 
+#[derive(Serialize)]
+struct AntiFraudRule {
+    id: i32,
+    rule_type: String,
+    value: String,
+    description: String,
+    enabled: bool,
+}
+
+#[derive(Serialize)]
+struct AntiFraudConfigItem {
+    key: String,
+    value: String,
+    description: String,
+}
+
+#[derive(Deserialize)]
+struct CreateAntiFraudRuleRequest {
+    rule_type: String,
+    value: String,
+    description: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateAntiFraudRuleRequest {
+    description: Option<String>,
+    enabled: Option<bool>,
+}
+
+async fn list_anti_fraud_rules(
+) -> Result<Json<Vec<AntiFraudRule>>, ApiError> {
+    Ok(Json(Vec::new()))
+}
+
+async fn create_anti_fraud_rule(
+    Json(_req): Json<CreateAntiFraudRuleRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+async fn update_anti_fraud_rule(
+    Path(_id): Path<i32>,
+    Json(_req): Json<UpdateAntiFraudRuleRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+async fn delete_anti_fraud_rule(
+    Path(_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+async fn list_anti_fraud_config(
+) -> Result<Json<Vec<AntiFraudConfigItem>>, ApiError> {
+    Ok(Json(Vec::new()))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -394,16 +506,16 @@ async fn main() -> anyhow::Result<()> {
     let database_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://localhost/vos_rs".to_string());
 
-    let recording_dir = std::path::PathBuf::from(
-        env::var("VOS_RS_RECORDING_DIR").unwrap_or_else(|_| "target/recordings".to_string()),
-    );
+    let store = PostgresCdrStore::connect(&database_url).await?;
+    let storage_config = storage_core::StorageConfig::from_env();
+    let recording_storage: Arc<dyn storage_core::StorageBackend> =
+        Arc::new(storage_core::local::LocalStorage::new(&storage_config.local_dir)?);
     let sip_manage_base = env::var("VOS_RS_MANAGE_BASE")
         .unwrap_or_else(|_| "http://127.0.0.1:8082".to_string());
 
-    let store = PostgresCdrStore::connect(&database_url).await?;
     let state = AppState {
         store: Arc::new(store),
-        recording_dir,
+        recording_storage,
         sip_manage_base,
     };
 
@@ -441,6 +553,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/route-preview", get(route_preview))
         .route("/api/numbers", get(list_numbers).post(create_number))
         .route("/api/numbers/:number", put(update_number).delete(delete_number))
+        .route("/api/anti-fraud/rules", get(list_anti_fraud_rules).post(create_anti_fraud_rule))
+        .route("/api/anti-fraud/rules/:id", put(update_anti_fraud_rule).delete(delete_anti_fraud_rule))
+        .route("/api/anti-fraud/config", get(list_anti_fraud_config))
         .with_state(state)
         .layer(cors)
         .layer(TraceLayer::new_for_http());

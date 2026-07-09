@@ -5,8 +5,6 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -14,11 +12,11 @@ pub struct RecordingInfo {
     pub call_id: String,
     pub stem: String,
     pub size_bytes: u64,
+    pub duration_secs: f64,
     pub created_at_ms: i64,
     pub has_audio: bool,
 }
 
-/// 录音元数据 JSON（仅读取需要的字段）。
 #[derive(Deserialize)]
 struct RecordingMetadata {
     call_id: String,
@@ -43,43 +41,55 @@ fn sanitize_call_id(call_id: &str) -> String {
 pub async fn list_recordings(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RecordingInfo>>, (StatusCode, String)> {
-    let dir = state.recording_dir.clone();
+    let storage = &state.recording_storage;
+    let prefix = "";
+
+    let files = storage
+        .list(prefix)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let mut out = Vec::new();
-
-    let mut entries = tokio::fs::read_dir(&dir)
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, format!("recording dir error: {e}")))?;
-
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".json") {
+    for file in files {
+        if !file.key.ends_with(".json") {
             continue;
         }
-        let path = entry.path();
-        let content = match tokio::fs::read_to_string(&path).await {
+        let content = match storage.get(&file.key).await {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let meta: RecordingMetadata = match serde_json::from_str(&content) {
+        let meta: RecordingMetadata = match serde_json::from_slice(&content) {
             Ok(m) => m,
             Err(_) => continue,
         };
-        let stem = name.trim_end_matches(".json").to_string();
-        let wav_path = path.with_file_name(format!("{stem}.wav"));
-        let size = tokio::fs::metadata(&wav_path)
+        let stem = file.key.trim_end_matches(".json").to_string();
+        let wav_key = format!("{stem}.wav");
+        let has_audio = storage
+            .exists(&wav_key)
             .await
-            .map(|m| m.len())
-            .unwrap_or(0);
+            .unwrap_or(false);
+        let size = if has_audio {
+            storage
+                .get(&wav_key)
+                .await
+                .map(|b| b.len() as u64)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        // WAV: 8kHz stereo 16-bit = 32000 bytes/sec, minus 44 byte header
+        let duration_secs = if size > 44 {
+            ((size - 44) as f64) / 32000.0
+        } else {
+            0.0
+        };
         out.push(RecordingInfo {
             call_id: meta.call_id,
             stem,
             size_bytes: size,
+            duration_secs,
             created_at_ms: meta.created_at_unix_ms,
-            has_audio: size > 0,
+            has_audio,
         });
     }
 
@@ -92,28 +102,22 @@ pub async fn get_recording_audio(
     State(state): State<AppState>,
     Path(call_id): Path<String>,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
+    let storage = &state.recording_storage;
     let prefix = sanitize_call_id(&call_id);
-    let dir = state.recording_dir.clone();
 
-    let mut entries = tokio::fs::read_dir(&dir)
+    let files = storage
+        .list("")
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, format!("recording dir error: {e}")))?;
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
-    let mut wav_path: Option<PathBuf> = None;
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with(&prefix) && name.ends_with(".wav") {
-            wav_path = Some(entry.path());
-            break;
-        }
-    }
+    let wav_key = files
+        .iter()
+        .find(|f| f.key.starts_with(&prefix) && f.key.ends_with(".wav"))
+        .map(|f| f.key.clone())
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "未找到该通话的录音".into()))?;
 
-    let path = wav_path.ok_or((StatusCode::NOT_FOUND, "no recording for call_id".into()))?;
-    let bytes = tokio::fs::read(&path)
+    let bytes = storage
+        .get(&wav_key)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
