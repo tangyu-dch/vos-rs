@@ -12,8 +12,10 @@ pub(crate) mod timers;
 // Re-export for backward compatibility with inline module references
 pub(crate) use edge_state::*;
 pub(crate) use net::stun_client;
+#[allow(unused_imports)]
 pub(crate) use net::transport;
 pub(crate) use net::upnp;
+#[allow(unused_imports)]
 pub(crate) use sip::auth;
 pub(crate) use security::sbc;
 pub(crate) use sip::dialog;
