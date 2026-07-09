@@ -143,108 +143,6 @@
   box-shadow: 0 0 8px var(--accent);
 }
 
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 56px;
-  padding: 0 var(--space-lg);
-  border-bottom: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
-
-.sidebar--collapsed .sidebar-brand {
-  justify-content: center;
-  padding: 0;
-}
-
-.sidebar-brand__logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.sidebar-brand__text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-  overflow: hidden;
-}
-
-.sidebar-brand__name {
-  font-family: var(--font-display);
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: 0.5px;
-}
-
-.sidebar-brand__sub {
-  font-size: var(--fs-micro);
-  color: var(--text-muted);
-  margin-top: 2px;
-}
-
-/* Nav */
-.sidebar-nav {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 8px 12px 12px;
-}
-
-.sidebar-nav::-webkit-scrollbar {
-  width: 4px;
-}
-
-.sidebar-nav__group-title {
-  font-size: var(--fs-micro);
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 14px 12px 6px;
-  line-height: 1;
-}
-
-.sidebar-nav__item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  height: 44px;
-  padding: 0 12px;
-  margin-bottom: 4px;
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all var(--dur-fast);
-  position: relative;
-}
-
-.sidebar-nav__item:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.sidebar-nav__item.is-active {
-  background: var(--accent-dim);
-  color: var(--accent);
-  font-weight: 500;
-}
-
-.sidebar-nav__item.is-active::before {
-  content: '';
-  position: absolute;
-  left: -12px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 20px;
-  border-radius: 0 3px 3px 0;
-  background: var(--accent);
-}
-
 .sidebar-nav__icon {
   display: inline-flex;
   align-items: center;
@@ -261,13 +159,15 @@
 
 .sidebar-nav__badge {
   margin-left: auto;
-  font-size: var(--fs-micro);
+  font-size: 10px;
   font-family: var(--font-mono);
-  background: var(--status-busy);
+  background: var(--color-danger);
   color: #fff;
-  padding: 1px 6px;
+  padding: 2px 7px;
   border-radius: var(--radius-full);
-  font-weight: 500;
+  font-weight: 600;
+  min-width: 18px;
+  text-align: center;
 }
 
 /* Collapsed state */
@@ -601,7 +501,7 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--status-busy);
+  background: var(--color-danger);
   color: #fff;
   font-size: 9px;
   font-weight: 700;

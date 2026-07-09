@@ -35,19 +35,14 @@ fn try_discover(local_ip: &str) -> Option<UpnpGateway> {
     sock.send_to(SSDP_MSEARCH.as_bytes(), SSDP_ADDR).ok()?;
 
     let mut buf = [0u8; 2048];
-    loop {
-        match sock.recv_from(&mut buf) {
-            Ok((n, _)) => {
-                let resp = String::from_utf8_lossy(&buf[..n]);
-                if resp.contains("HTTP/1.1 200 OK") {
-                    if let Some(location) = parse_header(&resp, "LOCATION") {
-                        if let Some(gw) = parse_igd_description(&location, &local_ip) {
-                            return Some(gw);
-                        }
-                    }
+    while let Ok((n, _)) = sock.recv_from(&mut buf) {
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        if resp.contains("HTTP/1.1 200 OK") {
+            if let Some(location) = parse_header(&resp, "LOCATION") {
+                if let Some(gw) = parse_igd_description(&location, local_ip) {
+                    return Some(gw);
                 }
             }
-            Err(_) => break,
         }
     }
     None
@@ -224,7 +219,7 @@ pub fn get_external_ip(gw: &UpnpGateway) -> Option<String> {
     let sock = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(3)).ok()?;
 
     let soap_action =
-        format!("\"urn:schemas-upnp-org:service:WANIPConnection:1#GetExternalIPAddress\"");
+        "\"urn:schemas-upnp-org:service:WANIPConnection:1#GetExternalIPAddress\"".to_string();
     let request = format!(
         "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: text/xml; charset=\"utf-8\"\r\nSOAPAction: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         url_parts.2, url_parts.0, url_parts.1, soap_action, body.len(), body

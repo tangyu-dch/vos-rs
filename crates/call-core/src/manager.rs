@@ -194,7 +194,7 @@ impl CallManager {
         }
 
         if failover_uri.is_none() {
-            if let Some(cdr) = CallCdr::from_completed_call(&*call) {
+            if let Some(cdr) = CallCdr::from_completed_call(&call) {
                 self.completed_cdrs
                     .lock()
                     .expect("cdr lock poisoned")
@@ -231,7 +231,7 @@ impl CallManager {
             .ok_or_else(|| CallError::UnknownCall(call_id.as_str().to_string()))?;
         call.terminate()?;
         if let Some(cdr) =
-            CallCdr::from_completed_call_with_metrics(&*call, metrics, dtmf_digits, None)
+            CallCdr::from_completed_call_with_metrics(&call, metrics, dtmf_digits, None)
         {
             self.completed_cdrs
                 .lock()
@@ -325,7 +325,7 @@ impl CallManager {
         let cid = crate::CallId::new(call_id.to_string());
         if let Some(mut call) = self.calls.get_mut(&cid) {
             let _ = call.fail(None, "Session-Expires timeout".to_string());
-            if let Some(cdr) = crate::cdr::CallCdr::from_completed_call(&*call) {
+            if let Some(cdr) = crate::cdr::CallCdr::from_completed_call(&call) {
                 self.completed_cdrs
                     .lock()
                     .expect("cdr lock poisoned")

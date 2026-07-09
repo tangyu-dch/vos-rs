@@ -1115,7 +1115,7 @@ fn try_fast_rewrite_inner(input: &str, endpoint: &RtpEndpoint) -> Option<(Vec<u8
                     }
                     result.extend_from_slice(b"m=audio ");
                     result.extend_from_slice(endpoint.port.to_string().as_bytes());
-                    result.extend_from_slice(rest[space2..].as_bytes());
+                    result.extend_from_slice(&rest.as_bytes()[space2..]);
                     result.extend_from_slice(b"\r\n");
                     continue;
                 }
@@ -1193,19 +1193,14 @@ fn try_fast_parse_endpoint(input: &str) -> Option<RtpEndpoint> {
     for line in input.lines() {
         let trimmed = line.trim_end_matches('\r');
 
-        if trimmed.starts_with("m=audio ") {
-            let rest = &trimmed[8..];
+        if let Some(rest) = trimmed.strip_prefix("m=audio ") {
             let port_str = rest.split_whitespace().next()?;
             audio_port = Some(port_str.parse().ok()?);
             in_audio_section = true;
         } else if trimmed.starts_with("m=") {
             in_audio_section = false;
-        } else if trimmed.starts_with("c=IN IP") && in_audio_section {
-            let rest = &trimmed[7..];
-            connection_addr = rest.split_whitespace().nth(1);
         } else if trimmed.starts_with("c=IN IP")
-            && audio_port.is_none()
-            && connection_addr.is_none()
+            && (in_audio_section || (audio_port.is_none() && connection_addr.is_none()))
         {
             let rest = &trimmed[7..];
             connection_addr = rest.split_whitespace().nth(1);

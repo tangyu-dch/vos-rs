@@ -475,7 +475,7 @@ fn extract_sip_user(value: &str) -> Option<&str> {
     let idx = value.find("sip:")?;
     let rest = &value[idx + 4..];
     let end = rest
-        .find(|c: char| c == '@' || c == ';' || c == '>')
+        .find(['@', ';', '>'])
         .unwrap_or(rest.len());
     if end == 0 {
         None
@@ -952,6 +952,7 @@ impl PostgresCdrStore {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_route_with_cost(
         &self,
         id: &str,
@@ -1136,6 +1137,7 @@ impl PostgresCdrStore {
     // ===== API 查询方法 - 简化版本 =====
 
     /// 获取 CDR 列表（带分页与筛选）。
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_cdrs(
         &self,
         page: i64,

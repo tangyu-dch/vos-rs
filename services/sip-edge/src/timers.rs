@@ -98,8 +98,8 @@ pub(crate) fn spawn_client_transaction_retransmission(
                 let _ = handle_datagram(
                     local_503.as_bytes(),
                     target_addr,
-                    &*edge_state,
-                    &*edge_config,
+                    &edge_state,
+                    &edge_config,
                 )
                 .await;
             }
@@ -262,7 +262,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                     .send_sip_datagram(
                         PendingDatagram::new(target_addr, bytes),
                         &socket,
-                        &*edge_config,
+                        &edge_config,
                     )
                     .await;
             }
@@ -316,7 +316,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                     .send_sip_datagram(
                         PendingDatagram::new(caller_peer, caller_bye.into_bytes()),
                         &socket,
-                        &*edge_config,
+                        &edge_config,
                     )
                     .await;
 
@@ -341,7 +341,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                             gw_bye.into_bytes(),
                         ),
                         &socket,
-                        &*edge_config,
+                        &edge_config,
                     )
                     .await;
 
