@@ -14,11 +14,11 @@ pub(crate) use edge_state::*;
 pub(crate) use net::stun_client;
 pub(crate) use net::transport;
 pub(crate) use net::upnp;
-pub(crate) use security::sbc;
 pub(crate) use sip::auth;
+pub(crate) use security::sbc;
 pub(crate) use sip::dialog;
 pub(crate) use sip::outbound;
-pub(crate) use sip::registrar::{self, RegisterOutcome};
+pub(crate) use sip::registrar::RegisterOutcome;
 pub(crate) use sip::response;
 pub(crate) use sip::transaction;
 
@@ -63,6 +63,7 @@ use tracing_subscriber::EnvFilter;
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
 fn current_hhmm() -> Option<String> {
+    #[allow(deprecated)]
     let fmt = time::format_description::parse("[hour]:[minute]").ok()?;
     time::OffsetDateTime::now_utc().format(&fmt).ok()
 }

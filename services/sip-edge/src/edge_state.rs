@@ -8,7 +8,7 @@ use crate::{
     media::{MediaConfig, MediaRelayState},
     net::{handle_stream_connection, SipStream, Transport},
     sip::{
-        dialog, transaction, AuthConfig, ClientTransactionKey, DialogValidationError,
+        dialog, transaction, ClientTransactionKey, DialogValidationError,
         RequestTransactionKey,
     },
 };
