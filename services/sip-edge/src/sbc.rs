@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,35 +85,46 @@ impl TokenBucket {
 
 #[derive(Debug)]
 pub struct RateLimiter {
-    buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
+    buckets: DashMap<IpAddr, TokenBucket>,
     capacity: f64,
     fill_rate: f64,
     max_entries: usize,
+    insert_count: AtomicUsize,
 }
 
 impl RateLimiter {
     pub fn new(capacity: f64, fill_rate: f64) -> Self {
         Self {
-            buckets: Mutex::new(HashMap::new()),
+            buckets: DashMap::new(),
             capacity,
             fill_rate,
             max_entries: 10_000,
+            insert_count: AtomicUsize::new(0),
         }
     }
 
     pub fn check_rate(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
-        let mut buckets = self.buckets.lock().unwrap();
 
-        // Evict stale entries when map is too large
-        if buckets.len() > self.max_entries {
-            buckets.retain(|_, b| now.duration_since(b.last_update).as_secs() < 300);
+        let result = {
+            let mut bucket = self
+                .buckets
+                .entry(ip)
+                .or_insert_with(|| TokenBucket::new(self.capacity));
+            bucket.take(self.capacity, self.fill_rate, now)
+        };
+
+        let count = self.insert_count.fetch_add(1, Ordering::Relaxed);
+        if count % 1000 == 0 && self.buckets.len() > self.max_entries {
+            self.evict_stale(now);
         }
 
-        let bucket = buckets
-            .entry(ip)
-            .or_insert_with(|| TokenBucket::new(self.capacity));
-        bucket.take(self.capacity, self.fill_rate, now)
+        result
+    }
+
+    fn evict_stale(&self, now: Instant) {
+        self.buckets
+            .retain(|_, b| now.duration_since(b.last_update).as_secs() < 300);
     }
 }
 
