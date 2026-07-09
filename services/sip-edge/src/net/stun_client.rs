@@ -80,19 +80,12 @@ impl StunClient {
             .ok()?;
 
         let mut msg = Message::new();
-        msg.build(&[
-            Box::<TransactionId>::default(),
-            Box::new(BINDING_REQUEST),
-        ])
-        .ok()?;
-
-        client
-            .send(&msg, Some(Arc::new(handler_tx)))
-            .await
+        msg.build(&[Box::<TransactionId>::default(), Box::new(BINDING_REQUEST)])
             .ok()?;
 
-        let result =
-            tokio::time::timeout(Duration::from_secs(3), handler_rx.recv()).await;
+        client.send(&msg, Some(Arc::new(handler_tx))).await.ok()?;
+
+        let result = tokio::time::timeout(Duration::from_secs(3), handler_rx.recv()).await;
 
         client.close().await.ok();
 
@@ -113,7 +106,11 @@ pub async fn discover_stun_addr(stun_servers: Option<&str>, fallback_addr: &str)
         return fallback_addr.to_string();
     };
 
-    let servers: Vec<&str> = servers_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let servers: Vec<&str> = servers_str
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
 
     for server in &servers {
         if let Some(client) = StunClient::new(server) {

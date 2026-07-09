@@ -3,8 +3,8 @@ use sdp_core::RtpEndpoint;
 use sip_core::{HeaderMap, SipRequest};
 use tracing::warn;
 
-use crate::sip::dialog::DialogValidationError;
 use super::relay::{self, MediaConfig, MediaRelayState};
+use crate::sip::dialog::DialogValidationError;
 use crate::sip::response;
 
 pub fn call_error_for_unknown_request(request: &SipRequest) -> CallError {

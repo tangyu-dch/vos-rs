@@ -1,8 +1,8 @@
 use cdr_core::PostgresCdrStore;
 use dashmap::DashMap;
 use sip_core::SipRequest;
-use std::{collections::HashMap, env};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::{collections::HashMap, env};
 
 const AUTH_USERS_ENV: &str = "VOS_RS_SIP_AUTH_USERS";
 const AUTH_REALM_ENV: &str = "VOS_RS_SIP_AUTH_REALM";
@@ -10,7 +10,6 @@ const AUTH_NONCE_ENV: &str = "VOS_RS_SIP_AUTH_NONCE";
 const DEFAULT_REALM: &str = "vos-rs";
 const DEFAULT_NONCE: &str = "vos-rs-dev-nonce";
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthConfig {

@@ -25,10 +25,7 @@ pub struct OutboundInvitePlan {
     pub target_override_addr: Option<String>,
 }
 
-pub fn response_for_request(
-    request: &SipRequest,
-    call_manager: &CallManager,
-) -> RequestHandling {
+pub fn response_for_request(request: &SipRequest, call_manager: &CallManager) -> RequestHandling {
     match &request.method {
         Method::Options => build_response(
             request,

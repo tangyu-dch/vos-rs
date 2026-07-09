@@ -496,7 +496,10 @@ impl MediaRelayState {
     }
 
     pub fn metrics_for_port(&self, relay_port: u16) -> MediaRelayMetrics {
-        self.metrics.get(&relay_port).map(|v| *v).unwrap_or_default()
+        self.metrics
+            .get(&relay_port)
+            .map(|v| *v)
+            .unwrap_or_default()
     }
 
     #[cfg(test)]
@@ -507,10 +510,9 @@ impl MediaRelayState {
     }
 
     pub fn metrics_totals(&self) -> MediaRelayMetrics {
-        self.metrics
-            .iter()
-            .map(|entry| *entry.value())
-            .fold(MediaRelayMetrics::default(), |mut totals, metrics| {
+        self.metrics.iter().map(|entry| *entry.value()).fold(
+            MediaRelayMetrics::default(),
+            |mut totals, metrics| {
                 totals.received_packets += metrics.received_packets;
                 totals.forwarded_packets += metrics.forwarded_packets;
                 totals.dropped_invalid_packets += metrics.dropped_invalid_packets;
@@ -522,7 +524,8 @@ impl MediaRelayState {
                 totals.recording_errors += metrics.recording_errors;
                 totals.dtmf_events += metrics.dtmf_events;
                 totals
-            })
+            },
+        )
     }
 
     pub fn start_call_recording(
@@ -664,13 +667,8 @@ impl MediaRelayState {
             let mut inner = self.state.lock().expect("media relay lock poisoned");
             let acc = inner.dtmf_accumulators.entry(call_id.clone()).or_default();
             acc.push(digit);
-            let record = DtmfEventRecord::from_rtp(
-                &call_id,
-                digit,
-                timestamp,
-                event.duration,
-                event.volume,
-            );
+            let record =
+                DtmfEventRecord::from_rtp(&call_id, digit, timestamp, event.duration, event.volume);
             inner
                 .dtmf_event_log
                 .entry(call_id.clone())
@@ -766,7 +764,8 @@ impl WavCallRecorder {
 
         let base_offset = WAV_HEADER_LEN + start_frame * u64::from(RECORDING_CHANNELS) * 2;
         let sample_offset = channel.sample_offset();
-        self.file.seek(SeekFrom::Start(base_offset + sample_offset as u64))?;
+        self.file
+            .seek(SeekFrom::Start(base_offset + sample_offset as u64))?;
 
         // Decode and write samples inline (no Vec allocation)
         for &payload_byte in &packet.payload {
@@ -1088,10 +1087,7 @@ fn try_fast_rewrite_and_extract(
 }
 
 /// Core fast path: rewrite c= and m= lines + extract original endpoint.
-fn try_fast_rewrite_inner(
-    input: &str,
-    endpoint: &RtpEndpoint,
-) -> Option<(Vec<u8>, RtpEndpoint)> {
+fn try_fast_rewrite_inner(input: &str, endpoint: &RtpEndpoint) -> Option<(Vec<u8>, RtpEndpoint)> {
     // Check if this SDP has compatible audio codecs (PCMU or PCMA)
     if !input.contains("PCMU") && !input.contains("PCMA") {
         return None;
@@ -1207,7 +1203,9 @@ fn try_fast_parse_endpoint(input: &str) -> Option<RtpEndpoint> {
         } else if trimmed.starts_with("c=IN IP") && in_audio_section {
             let rest = &trimmed[7..];
             connection_addr = rest.split_whitespace().nth(1);
-        } else if trimmed.starts_with("c=IN IP") && audio_port.is_none() && connection_addr.is_none()
+        } else if trimmed.starts_with("c=IN IP")
+            && audio_port.is_none()
+            && connection_addr.is_none()
         {
             let rest = &trimmed[7..];
             connection_addr = rest.split_whitespace().nth(1);
@@ -1215,9 +1213,7 @@ fn try_fast_parse_endpoint(input: &str) -> Option<RtpEndpoint> {
     }
 
     let port = audio_port?;
-    let address = connection_addr
-        .unwrap_or("0.0.0.0")
-        .to_string();
+    let address = connection_addr.unwrap_or("0.0.0.0").to_string();
 
     Some(RtpEndpoint { address, port })
 }
@@ -1548,9 +1544,7 @@ fn compatible_audio_payloads(session: &SessionDescription) -> Result<Vec<String>
 
     for format in &formats {
         let is_voice = match (format.encoding_name.as_deref(), format.clock_rate) {
-            (Some(name), Some(rate)) => {
-                AudioCodec::from_rtpmap(name, rate).is_some()
-            }
+            (Some(name), Some(rate)) => AudioCodec::from_rtpmap(name, rate).is_some(),
             _ => format
                 .payload_type
                 .parse::<u8>()
@@ -2253,7 +2247,3 @@ mod tests {
         }
     }
 }
-
-
-
-

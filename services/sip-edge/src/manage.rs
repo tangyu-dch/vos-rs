@@ -20,7 +20,12 @@ pub async fn serve(addr: String, state: Arc<EdgeState>) {
         .route("/manage/calls/:call_id/terminate", post(terminate))
         .route("/manage/route-preview", get(route_preview))
         .with_state(state)
-        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any));
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        );
 
     match tokio::net::TcpListener::bind(&addr).await {
         Ok(listener) => {
@@ -39,10 +44,7 @@ async fn active_calls(State(state): State<Arc<EdgeState>>) -> Json<Vec<ActiveCal
     Json(state.call_manager.active_calls())
 }
 
-async fn terminate(
-    State(state): State<Arc<EdgeState>>,
-    Path(call_id): Path<String>,
-) -> StatusCode {
+async fn terminate(State(state): State<Arc<EdgeState>>, Path(call_id): Path<String>) -> StatusCode {
     state.call_manager.terminate_call(&call_id);
     StatusCode::OK
 }

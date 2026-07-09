@@ -1,16 +1,24 @@
+use crate::sip::transaction::ClientTransactionKey;
 use crate::{
-    config::EdgeConfig, extract_uri_from_contact, parse_target_addr_from_route, sip_uri_from_peer,
-    EdgeState, PendingDatagram,
+    config::EdgeConfig,
+    edge_state::{
+        extract_uri_from_contact, parse_target_addr_from_route, sip_uri_from_peer, EdgeState,
+        PendingDatagram,
+    },
 };
 use call_core::{CallQualityMetrics, GatewayHealthTracker};
-use crate::sip::transaction::ClientTransactionKey;
-use std::{net::SocketAddr, str::FromStr, sync::Arc, time::{Duration, Instant, SystemTime}};
+use std::{
+    net::SocketAddr,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime},
+};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
 use crate::handle_datagram;
-use crate::sip::outbound;
 use crate::media;
+use crate::sip::outbound;
 
 pub(crate) fn spawn_client_transaction_retransmission(
     edge_state: Arc<EdgeState>,
@@ -24,9 +32,7 @@ pub(crate) fn spawn_client_transaction_retransmission(
 
     let key_clone = key.clone();
     tokio::spawn(async move {
-        edge_state
-            .client_transactions
-            .insert(key_clone, cancel_tx);
+        edge_state.client_transactions.insert(key_clone, cancel_tx);
 
         let is_invite = key.method == "INVITE";
         // To make unit tests faster, we can scale down the initial T1 timer in tests.
@@ -93,9 +99,13 @@ pub(crate) fn spawn_client_transaction_retransmission(
                 let target_addr: SocketAddr = target
                     .parse()
                     .unwrap_or_else(|_| "127.0.0.1:5060".parse().unwrap());
-                let _ =
-                    handle_datagram(local_503.as_bytes(), target_addr, &*edge_state, &*edge_config)
-                        .await;
+                let _ = handle_datagram(
+                    local_503.as_bytes(),
+                    target_addr,
+                    &*edge_state,
+                    &*edge_config,
+                )
+                .await;
             }
         }
     });
@@ -263,7 +273,9 @@ pub(crate) fn spawn_session_timer_watchdog(
 
             // 2. Collect expired calls without holding the lock during async I/O
             let expired: Vec<(String, String, String)> = {
-                edge_state.inbound_transactions.iter()
+                edge_state
+                    .inbound_transactions
+                    .iter()
                     .filter_map(|entry| {
                         let call_id = entry.key().clone();
                         let tx = entry.value();
@@ -338,11 +350,8 @@ pub(crate) fn spawn_session_timer_watchdog(
                     .await;
 
                 // Clean up the transaction and call state
-                edge_state
-                    .inbound_transactions
-                    .remove(&call_id);
-                edge_state.call_manager
-                    .terminate_call(&call_id);
+                edge_state.inbound_transactions.remove(&call_id);
+                edge_state.call_manager.terminate_call(&call_id);
                 info!(call_id, "session-expired call terminated by watchdog");
             }
         }

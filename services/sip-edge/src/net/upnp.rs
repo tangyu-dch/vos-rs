@@ -70,13 +70,11 @@ fn parse_igd_description(location: &str, local_ip: &str) -> Option<UpnpGateway> 
     let path = url_parts.2;
 
     let addr = format!("{host}:{port}");
-    let sock = std::net::TcpStream::connect_timeout(
-        &addr.parse().ok()?,
-        Duration::from_secs(3),
-    )
-    .ok()?;
+    let sock =
+        std::net::TcpStream::connect_timeout(&addr.parse().ok()?, Duration::from_secs(3)).ok()?;
 
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
     use std::io::Write;
     let mut stream = std::io::BufWriter::new(&sock);
     stream.write_all(request.as_bytes()).ok()?;
@@ -178,8 +176,13 @@ pub fn add_port_mapping(
     </u:AddPortMapping>
   </s:Body>
 </s:Envelope>"#,
-        gw.service_type, external_port, protocol, internal_port,
-        gw.local_ip, description, lease_secs,
+        gw.service_type,
+        external_port,
+        protocol,
+        internal_port,
+        gw.local_ip,
+        description,
+        lease_secs,
     );
 
     soap_request(gw, "AddPortMapping", &body)
@@ -220,9 +223,8 @@ pub fn get_external_ip(gw: &UpnpGateway) -> Option<String> {
     let addr: SocketAddr = format!("{}:{}", url_parts.0, url_parts.1).parse().ok()?;
     let sock = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(3)).ok()?;
 
-    let soap_action = format!(
-        "\"urn:schemas-upnp-org:service:WANIPConnection:1#GetExternalIPAddress\""
-    );
+    let soap_action =
+        format!("\"urn:schemas-upnp-org:service:WANIPConnection:1#GetExternalIPAddress\"");
     let request = format!(
         "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: text/xml; charset=\"utf-8\"\r\nSOAPAction: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         url_parts.2, url_parts.0, url_parts.1, soap_action, body.len(), body
@@ -310,7 +312,11 @@ fn soap_request(gw: &UpnpGateway, action: &str, body: &str) -> bool {
             warn!(action = action, fault = %rest[..end], "UPnP: SOAP fault");
         }
     } else {
-        warn!(action = action, response_len = response.len(), "UPnP: SOAP request failed");
+        warn!(
+            action = action,
+            response_len = response.len(),
+            "UPnP: SOAP request failed"
+        );
     }
     ok
 }
