@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Spin, Alert, Empty } from '@arco-design/web-react';
 import {
   IconRefresh,
@@ -15,14 +16,21 @@ import {
 } from '@arco-design/web-react/icon';
 import * as echarts from 'echarts';
 import { apiService } from '@/services/api';
-import type { DashboardStats, HourlyTrend } from '@/types';
+import type { DashboardStats, HourlyTrend, ActiveCall } from '@/types';
 import './Dashboard.css';
 
 // ─── Helpers ───
-function formatTime(durationSec: number): string {
-  const m = String(Math.floor(durationSec / 60)).padStart(2, '0');
-  const s = String(durationSec % 60).padStart(2, '0');
+function formatTime(durationMs: number): string {
+  const seconds = Math.max(0, Math.floor(durationMs / 1000));
+  const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const s = String(seconds % 60).padStart(2, '0');
   return `${m}:${s}`;
+}
+
+function extractSipUser(uri?: string): string {
+  if (!uri) return '--';
+  const match = uri.match(/sip:([^@]+)/);
+  return match ? match[1] : uri;
 }
 
 function getThemeColors() {
@@ -34,49 +42,18 @@ function getThemeColors() {
     border: s.getPropertyValue('--border-subtle').trim() || 'rgba(255,255,255,0.06)',
     panel1: s.getPropertyValue('--bg-panel-1').trim() || '#0f1117',
     panel2: s.getPropertyValue('--bg-panel-2').trim() || '#161821',
-    accent: s.getPropertyValue('--accent').trim() || '#3ee8c8',
-    danger: s.getPropertyValue('--color-danger').trim() || '#f25c78',
-    warning: s.getPropertyValue('--status-break').trim() || '#f5a623',
   };
 }
 
-// ─── Mock Agent Data (will be replaced with real API) ───
-interface AgentStatus {
-  id: string;
-  name: string;
-  agentId: string;
-  skillGroup: string;
-  state: 'talking' | 'idle' | 'ringing' | 'wrapup' | 'offline';
-  currentCallDuration: number;
-  todayAnswered: number;
-  todayOutbound: number;
-  utilization: number;
-  satisfaction: number;
-}
-
-const MOCK_AGENTS: AgentStatus[] = [
-  { id: '1', name: '李明辉', agentId: '10086', skillGroup: '售前咨询', state: 'talking', currentCallDuration: 204, todayAnswered: 38, todayOutbound: 12, utilization: 87, satisfaction: 4 },
-  { id: '2', name: '王思琪', agentId: '10023', skillGroup: '售后服务', state: 'idle', currentCallDuration: 0, todayAnswered: 45, todayOutbound: 8, utilization: 92, satisfaction: 5 },
-  { id: '3', name: '张伟', agentId: '10051', skillGroup: '技术支持', state: 'ringing', currentCallDuration: 8, todayAnswered: 29, todayOutbound: 15, utilization: 73, satisfaction: 3 },
-  { id: '4', name: '陈小红', agentId: '10007', skillGroup: '售前咨询', state: 'wrapup', currentCallDuration: 22, todayAnswered: 51, todayOutbound: 3, utilization: 95, satisfaction: 5 },
-  { id: '5', name: '赵刚', agentId: '10099', skillGroup: '技术支持', state: 'offline', currentCallDuration: 0, todayAnswered: 0, todayOutbound: 0, utilization: 0, satisfaction: 0 },
-];
-
+// ─── State Config ───
 const STATE_CONFIG: Record<string, { color: string; text: string; dot: string }> = {
-  talking: { color: 'var(--status-online)', text: '通话中', dot: 'var(--status-online)' },
-  idle: { color: 'var(--accent)', text: '空闲就绪', dot: 'var(--accent)' },
-  ringing: { color: 'var(--status-break)', text: '振铃中', dot: 'var(--status-break)' },
-  wrapup: { color: 'var(--color-info)', text: '话后处理', dot: 'var(--color-info)' },
-  offline: { color: 'var(--text-muted)', text: '未上线', dot: 'var(--text-muted)' },
+  Routing: { color: 'var(--status-break)', text: '路由中', dot: 'var(--status-break)' },
+  Ringing: { color: 'var(--status-break)', text: '振铃中', dot: 'var(--status-break)' },
+  Established: { color: 'var(--status-online)', text: '通话中', dot: 'var(--status-online)' },
+  Terminated: { color: 'var(--text-muted)', text: '已结束', dot: 'var(--text-muted)' },
 };
 
-const SKILL_COLORS: Record<string, string> = {
-  '售前咨询': 'var(--status-online)',
-  '售后服务': 'var(--accent)',
-  '技术支持': 'var(--status-break)',
-};
-
-type AgentFilter = 'all' | 'talking' | 'idle' | 'wrapup' | 'offline';
+type CallFilter = 'all' | 'Established' | 'Ringing' | 'Routing';
 
 // ─── KPI Card ───
 interface KpiCardProps {
@@ -122,29 +99,30 @@ interface SidebarItem {
 
 const SIDEBAR_ITEMS: SidebarItem[] = [
   { key: '/dashboard', icon: <IconDashboard />, title: '全局概览', group: '实时监控' },
-  { key: '/agent-monitor', icon: <IconUserGroup />, title: '坐席监控', group: '实时监控', badge: 3 },
-  { key: '/queue-monitor', icon: <IconPhone />, title: '排队监控', group: '实时监控' },
-  { key: '/realtime-traffic', icon: <IconCommon />, title: '实时话务', group: '实时监控' },
-  { key: '/queue-manage', icon: <IconPhone />, title: '队列管理', group: '运营管理' },
-  { key: '/agent-manage', icon: <IconUserGroup />, title: '坐席管理', group: '运营管理' },
-  { key: '/schedule', icon: <IconFile />, title: '排班管理', group: '运营管理' },
-  { key: '/reports', icon: <IconStorage />, title: '报表中心', group: '数据分析' },
-  { key: '/quality', icon: <IconShareAlt />, title: '质检管理', group: '数据分析' },
+  { key: '/active-calls', icon: <IconPhone />, title: '活跃呼叫', group: '实时监控' },
+  { key: '/users', icon: <IconUserGroup />, title: 'SIP 用户', group: '号码路由' },
+  { key: '/gateways', icon: <IconStorage />, title: '落地网关', group: '号码路由' },
+  { key: '/peer-gateways', icon: <IconShareAlt />, title: '对接网关', group: '号码路由' },
+  { key: '/routes', icon: <IconFile />, title: '路由管理', group: '号码路由' },
+  { key: '/registrations', icon: <IconCommon />, title: '注册信息', group: '号码路由' },
+  { key: '/cdr', icon: <IconFile />, title: '呼叫记录', group: '数据分析' },
+  { key: '/reports', icon: <IconCommon />, title: '报表分析', group: '数据分析' },
   { key: '/settings', icon: <IconSettings />, title: '系统设置', group: '系统' },
 ];
 
-const SIDEBAR_GROUPS = ['实时监控', '运营管理', '数据分析', '系统'];
+const SIDEBAR_GROUPS = ['实时监控', '号码路由', '数据分析', '系统'];
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [trend, setTrend] = useState<HourlyTrend[]>([]);
+  const [activeCalls, setActiveCalls] = useState<ActiveCall[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [agentFilter, setAgentFilter] = useState<AgentFilter>('all');
+  const [callFilter, setCallFilter] = useState<CallFilter>('all');
   const [trendPeriod, setTrendPeriod] = useState<'today' | 'week' | 'month'>('today');
-  const [queueFilter, setQueueFilter] = useState<'all' | 'skill'>('all');
-  const [sidebarCollapsed] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [now, setNow] = useState(Date.now());
 
   const trendRef = useRef<HTMLDivElement>(null);
   const trendChart = useRef<echarts.ECharts | null>(null);
@@ -154,7 +132,8 @@ export default function Dashboard() {
   // ─── Clock ───
   useEffect(() => {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(t);
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => { clearInterval(t); clearInterval(tick); };
   }, []);
 
   // ─── Load Data ───
@@ -162,12 +141,14 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [s, t] = await Promise.all([
+      const [s, t, c] = await Promise.all([
         apiService.getDashboardStats(),
         apiService.getHourlyTrend(),
+        apiService.getActiveCalls(),
       ]);
       setStats(s);
       setTrend(t);
+      setActiveCalls(c);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载数据失败');
     } finally {
@@ -177,6 +158,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
+    const refreshInterval = setInterval(loadData, 5000);
+    return () => clearInterval(refreshInterval);
   }, [loadData]);
 
   // ─── Trend Chart ───
@@ -246,18 +229,18 @@ export default function Dashboard() {
 
   // ─── Donut Chart ───
   useEffect(() => {
-    if (!donutRef.current || !stats) return;
+    if (!donutRef.current) return;
     if (!donutChart.current) {
       donutChart.current = echarts.init(donutRef.current);
     }
-    const talking = stats.active_calls || 52;
-    const idle = 24;
-    const wrapup = 10;
-    const breakaway = 14;
-    const offline = 20;
-    const total = talking + idle + wrapup + breakaway + offline;
-
     const tc = getThemeColors();
+
+    const stateCounts: Record<string, number> = { Established: 0, Ringing: 0, Routing: 0 };
+    activeCalls.forEach((c) => {
+      stateCounts[c.state] = (stateCounts[c.state] || 0) + 1;
+    });
+    const total = activeCalls.length || 1;
+
     donutChart.current.setOption({
       tooltip: { trigger: 'item', backgroundColor: tc.panel2, borderColor: tc.border, textStyle: { color: tc.text } },
       legend: {
@@ -270,11 +253,9 @@ export default function Dashboard() {
         textStyle: { color: tc.textSec, fontSize: 12 },
         formatter: (name: string) => {
           const map: Record<string, { count: number; percent: string }> = {
-            '通话中': { count: talking, percent: `${((talking / total) * 100).toFixed(0)}%` },
-            '空闲就绪': { count: idle, percent: `${((idle / total) * 100).toFixed(0)}%` },
-            '后处理': { count: wrapup, percent: `${((wrapup / total) * 100).toFixed(0)}%` },
-            '小休/离席': { count: breakaway, percent: `${((breakaway / total) * 100).toFixed(0)}%` },
-            '未上线': { count: offline, percent: `${((offline / total) * 100).toFixed(0)}%` },
+            '通话中': { count: stateCounts.Established, percent: `${((stateCounts.Established / total) * 100).toFixed(0)}%` },
+            '振铃中': { count: stateCounts.Ringing, percent: `${((stateCounts.Ringing / total) * 100).toFixed(0)}%` },
+            '路由中': { count: stateCounts.Routing, percent: `${((stateCounts.Routing / total) * 100).toFixed(0)}%` },
           };
           const info = map[name];
           return info ? `${name} ${info.count} (${info.percent})` : name;
@@ -290,11 +271,9 @@ export default function Dashboard() {
           label: { show: false },
           emphasis: { scaleSize: 4 },
           data: [
-            { value: talking, name: '通话中', itemStyle: { color: '#60a5fa' } },
-            { value: idle, name: '空闲就绪', itemStyle: { color: '#34d399' } },
-            { value: wrapup, name: '后处理', itemStyle: { color: '#fbbf24' } },
-            { value: breakaway, name: '小休/离席', itemStyle: { color: '#f87171' } },
-            { value: offline, name: '未上线', itemStyle: { color: '#6b7280' } },
+            { value: stateCounts.Established, name: '通话中', itemStyle: { color: '#60a5fa' } },
+            { value: stateCounts.Ringing, name: '振铃中', itemStyle: { color: '#fbbf24' } },
+            { value: stateCounts.Routing, name: '路由中', itemStyle: { color: '#34d399' } },
           ],
         },
       ],
@@ -304,7 +283,7 @@ export default function Dashboard() {
           left: '28%',
           top: '42%',
           style: {
-            text: String(total),
+            text: String(activeCalls.length),
             fontSize: 28,
             fontWeight: 700,
             fill: tc.text,
@@ -317,7 +296,7 @@ export default function Dashboard() {
           left: '28.5%',
           top: '54%',
           style: {
-            text: '总坐席',
+            text: '活跃呼叫',
             fontSize: 12,
             fill: tc.muted,
             textAlign: 'center',
@@ -325,7 +304,7 @@ export default function Dashboard() {
         },
       ],
     });
-  }, [stats]);
+  }, [activeCalls]);
 
   // ─── Resize ───
   useEffect(() => {
@@ -341,16 +320,16 @@ export default function Dashboard() {
     };
   }, []);
 
-  // ─── Agent Filter ───
-  const filteredAgents = MOCK_AGENTS.filter((a) => agentFilter === 'all' || a.state === agentFilter);
+  // ─── Call Filter ───
+  const filteredCalls = activeCalls.filter((c) => callFilter === 'all' || c.state === callFilter);
 
   // ─── Derived KPI Values ───
-  const totalCalls = stats?.today_total_calls ?? 3842;
-  const answeredCalls = stats?.today_answered_calls ?? 2516;
-  const failedCalls = stats?.today_failed_calls ?? 1326;
-  const activeCalls = stats?.active_calls ?? 52;
-  const answerRate = stats?.answer_rate ?? 89.4;
-  const registeredUsers = stats?.registered_users ?? 120;
+  const totalCalls = stats?.today_total_calls ?? 0;
+  const answeredCalls = stats?.today_answered_calls ?? 0;
+  const failedCalls = stats?.today_failed_calls ?? 0;
+  const activeCallsCount = stats?.active_calls ?? activeCalls.length;
+  const answerRate = stats?.answer_rate ?? 0;
+  const registeredUsers = stats?.registered_users ?? 0;
 
   const timestamp = `${currentTime.getFullYear()}-${String(currentTime.getMonth() + 1).padStart(2, '0')}-${String(currentTime.getDate()).padStart(2, '0')} ${String(currentTime.getHours()).padStart(2, '0')}:${String(currentTime.getMinutes()).padStart(2, '0')}:${String(currentTime.getSeconds()).padStart(2, '0')}`;
 
@@ -366,7 +345,7 @@ export default function Dashboard() {
   return (
     <div className="callcenter-layout">
       {/* ─── Sidebar ─── */}
-      <aside className={`cc-sidebar ${sidebarCollapsed ? 'cc-sidebar--collapsed' : ''}`}>
+      <aside className="cc-sidebar">
         <div className="cc-sidebar__brand">
           <div className="cc-sidebar__logo">
             <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
@@ -377,27 +356,25 @@ export default function Dashboard() {
               <defs><linearGradient id="sb-grad" x1="0" y1="0" x2="32" y2="32"><stop stopColor="#4080FF" /><stop offset="1" stopColor="#0FC6C2" /></linearGradient></defs>
             </svg>
           </div>
-          {!sidebarCollapsed && (
-            <div className="cc-sidebar__brand-text">
-              <span className="cc-sidebar__brand-name">呼叫中心</span>
-              <span className="cc-sidebar__brand-sub">管理控制台</span>
-            </div>
-          )}
+          <div className="cc-sidebar__brand-text">
+            <span className="cc-sidebar__brand-name">VOS-RS</span>
+            <span className="cc-sidebar__brand-sub">VoIP 运营平台</span>
+          </div>
         </div>
 
         <nav className="cc-sidebar__nav">
           {SIDEBAR_GROUPS.map((g) => (
             <div className="cc-sidebar__group" key={g}>
-              {!sidebarCollapsed && <div className="cc-sidebar__group-title">{g}</div>}
+              <div className="cc-sidebar__group-title">{g}</div>
               {SIDEBAR_ITEMS.filter((it) => it.group === g).map((item) => (
                 <div
                   key={item.key}
                   className={`cc-sidebar__item ${item.key === '/dashboard' ? 'is-active' : ''}`}
-                  onClick={() => {/* navigate */}}
+                  onClick={() => navigate(item.key)}
                 >
                   <span className="cc-sidebar__icon">{item.icon}</span>
-                  {!sidebarCollapsed && <span className="cc-sidebar__title">{item.title}</span>}
-                  {!sidebarCollapsed && item.badge && <span className="cc-sidebar__badge">{item.badge}</span>}
+                  <span className="cc-sidebar__title">{item.title}</span>
+                  {item.badge && <span className="cc-sidebar__badge">{item.badge}</span>}
                 </div>
               ))}
             </div>
@@ -406,13 +383,11 @@ export default function Dashboard() {
 
         <div className="cc-sidebar__footer">
           <div className="cc-sidebar__user">
-            <div className="cc-sidebar__user-avatar">管</div>
-            {!sidebarCollapsed && (
-              <div className="cc-sidebar__user-info">
-                <span className="cc-sidebar__user-name">张管理</span>
-                <span className="cc-sidebar__user-role">超级管理员</span>
-              </div>
-            )}
+            <div className="cc-sidebar__user-avatar">A</div>
+            <div className="cc-sidebar__user-info">
+              <span className="cc-sidebar__user-name">Admin</span>
+              <span className="cc-sidebar__user-role">超级管理员</span>
+            </div>
           </div>
         </div>
       </aside>
@@ -436,14 +411,19 @@ export default function Dashboard() {
             <button className="cc-header__btn" title="全屏">
               <IconFullscreen />
             </button>
-            <button className="cc-header__btn cc-header__btn--danger" title="紧急放音">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M11 5L6 9H2v6h4l5 4V5z" />
-                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-              </svg>
-              紧急放音
-            </button>
+            <div className="theme-toggle" onClick={() => {
+              const html = document.documentElement;
+              const current = html.getAttribute('data-theme');
+              const next = current === 'dark' ? 'light' : 'dark';
+              html.setAttribute('data-theme', next);
+              document.querySelector('.app')?.setAttribute('data-theme', next);
+              localStorage.setItem('vos-theme', next);
+            }} title="切换主题">
+              <span className="theme-toggle__knob">
+                <span>{document.documentElement.getAttribute('data-theme') === 'dark' ? '🌙' : '☀️'}</span>
+              </span>
+            </div>
+            <div className="topbar-avatar">A</div>
           </div>
         </header>
 
@@ -454,52 +434,34 @@ export default function Dashboard() {
           {/* KPI Cards */}
           <div className="cc-kpi-grid">
             <KpiCard
-              label="当前在线坐席"
-              value={registeredUsers}
-              trend={{ value: '12%', direction: 'up' }}
-              sub={`总数 ${registeredUsers} · 空闲 24 · 通话 ${activeCalls} · 后处理 10`}
+              label="当前活跃呼叫"
+              value={activeCallsCount}
+              trend={{ value: `${activeCalls.length} 通实时`, direction: 'up' }}
+              sub={`已接通 ${answeredCalls} · 失败 ${failedCalls}`}
               barColor="var(--accent)"
-              barPercent={72}
-            />
-            <KpiCard
-              label="当前排队人数"
-              value={17}
-              trend={{ value: '8%', direction: 'down' }}
-              sub="最长等待 02:34 · 平均等待 00:48"
-              barColor="var(--status-break)"
-              barPercent={34}
-            />
-            <KpiCard
-              label="服务水平 (SL)"
-              value={`${answerRate.toFixed(1)}%`}
-              trend={{ value: '3.2%', direction: 'up' }}
-              sub="目标 ≥ 85% · 20s内接听"
-              barColor="var(--status-online)"
-              barPercent={answerRate}
+              barPercent={Math.min(100, activeCallsCount * 2)}
             />
             <KpiCard
               label="今日总话务量"
               value={totalCalls.toLocaleString()}
-              trend={{ value: '18%', direction: 'up' }}
+              trend={{ value: `${answerRate.toFixed(1)}% 接通率`, direction: answerRate >= 80 ? 'up' : 'down' }}
               sub={`呼入 ${answeredCalls.toLocaleString()} · 呼出 ${failedCalls.toLocaleString()}`}
-              barColor="#3b82f6"
-              barPercent={65}
+              barColor="#60a5fa"
+              barPercent={Math.min(100, totalCalls / 100)}
             />
             <KpiCard
-              label="平均处理时长"
-              value="4:32"
-              trend={{ value: '0%', direction: 'flat' }}
-              sub="平均通话 3:48 · 后处理 0:44"
-              barColor="var(--color-info)"
-              barPercent={55}
+              label="注册终端"
+              value={registeredUsers}
+              sub={`${stats?.active_gateways || 0} 个网关在线`}
+              barColor="var(--status-online)"
+              barPercent={Math.min(100, registeredUsers)}
             />
             <KpiCard
-              label="放弃率"
-              value="3.8%"
-              trend={{ value: '1.2%', direction: 'down' }}
-              sub="目标 ≤ 5% · 放弃 96 通"
-              barColor="var(--color-danger)"
-              barPercent={38}
+              label="平均 MOS"
+              value={stats?.avg_mos ? stats.avg_mos.toFixed(2) : '--'}
+              sub={stats?.avg_mos ? (stats.avg_mos >= 4 ? '语音质量优秀' : '语音质量良好') : '暂无数据'}
+              barColor={stats?.avg_mos && stats.avg_mos >= 4 ? 'var(--status-online)' : 'var(--status-break)'}
+              barPercent={stats?.avg_mos ? (stats.avg_mos / 5) * 100 : 0}
             />
           </div>
 
@@ -529,29 +491,30 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Queue Distribution */}
+            {/* Call State Distribution */}
             <div className="cc-chart-card cc-chart-card--donut">
               <div className="cc-chart-card__header">
-                <h3 className="cc-chart-card__title">队列状态分布</h3>
-                <div className="cc-chart-card__tabs">
-                  <button className={`cc-tab-btn ${queueFilter === 'all' ? 'cc-tab-btn--active' : ''}`} onClick={() => setQueueFilter('all')}>全部</button>
-                  <button className={`cc-tab-btn ${queueFilter === 'skill' ? 'cc-tab-btn--active' : ''}`} onClick={() => setQueueFilter('skill')}>按技能组</button>
-                </div>
+                <h3 className="cc-chart-card__title">呼叫状态分布</h3>
               </div>
               <div ref={donutRef} className="cc-chart cc-chart--donut" />
+              {activeCalls.length === 0 && (
+                <div className="cc-chart-empty">
+                  <Empty description="当前无活跃呼叫" />
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Agent Status Table */}
+          {/* Active Calls Table */}
           <div className="cc-table-card">
             <div className="cc-table-card__header">
-              <h3 className="cc-table-card__title">坐席实时状态</h3>
+              <h3 className="cc-table-card__title">活跃呼叫实时状态</h3>
               <div className="cc-table-card__filters">
-                {(['all', 'talking', 'idle', 'wrapup', 'offline'] as const).map((f) => (
+                {(['all', 'Established', 'Ringing', 'Routing'] as const).map((f) => (
                   <button
                     key={f}
-                    className={`cc-filter-btn ${agentFilter === f ? 'cc-filter-btn--active' : ''}`}
-                    onClick={() => setAgentFilter(f)}
+                    className={`cc-filter-btn ${callFilter === f ? 'cc-filter-btn--active' : ''}`}
+                    onClick={() => setCallFilter(f)}
                   >
                     {f === 'all' ? '全部' : STATE_CONFIG[f]?.text || f}
                   </button>
@@ -563,37 +526,27 @@ export default function Dashboard() {
               <table className="cc-table">
                 <thead>
                   <tr>
-                    <th>坐席</th>
-                    <th>技能组</th>
+                    <th>呼叫 ID</th>
+                    <th>主叫</th>
+                    <th>被叫</th>
                     <th>状态</th>
-                    <th>当前通话</th>
-                    <th>今日接听</th>
-                    <th>今日呼出</th>
-                    <th>利用率</th>
-                    <th>满意度</th>
-                    <th>操作</th>
+                    <th>通话时长</th>
+                    <th>网关</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredAgents.map((agent) => {
-                    const stateCfg = STATE_CONFIG[agent.state];
+                  {filteredCalls.map((call) => {
+                    const stateCfg = STATE_CONFIG[call.state] || { color: 'var(--text-muted)', text: call.state, dot: 'var(--text-muted)' };
                     return (
-                      <tr key={agent.id}>
+                      <tr key={call.call_id}>
                         <td>
-                          <div className="cc-agent-cell">
-                            <div className="cc-agent-avatar" style={{ background: SKILL_COLORS[agent.skillGroup] || 'var(--accent)' }}>
-                              {agent.name[0]}
-                            </div>
-                            <div className="cc-agent-info">
-                              <span className="cc-agent-name">{agent.name}</span>
-                              <span className="cc-agent-id">ID: {agent.agentId}</span>
-                            </div>
-                          </div>
+                          <span className="cc-agent-id">{call.call_id.substring(0, 16)}...</span>
                         </td>
                         <td>
-                          <span className="cc-skill-tag" style={{ color: SKILL_COLORS[agent.skillGroup], borderColor: SKILL_COLORS[agent.skillGroup] }}>
-                            {agent.skillGroup}
-                          </span>
+                          <span className="mono">{extractSipUser(call.caller)}</span>
+                        </td>
+                        <td>
+                          <span className="mono">{extractSipUser(call.callee)}</span>
                         </td>
                         <td>
                           <span className="cc-state-tag" style={{ color: stateCfg.color }}>
@@ -602,56 +555,21 @@ export default function Dashboard() {
                           </span>
                         </td>
                         <td>
-                          <span className="cc-duration mono" style={{ color: agent.state === 'talking' ? 'var(--status-online)' : agent.state === 'ringing' || agent.state === 'wrapup' ? 'var(--status-break)' : 'var(--text-muted)' }}>
-                            {agent.currentCallDuration > 0 ? formatTime(agent.currentCallDuration) : '--'}
+                          <span className="cc-duration mono" style={{ color: call.state === 'Established' ? 'var(--status-online)' : 'var(--text-muted)' }}>
+                            {call.started_at_ms ? formatTime(now - call.started_at_ms) : '--'}
                           </span>
                         </td>
-                        <td className="mono">{agent.todayAnswered}</td>
-                        <td className="mono">{agent.todayOutbound}</td>
                         <td>
-                          <div className="cc-utilization">
-                            <div className="cc-utilization__bar">
-                              <div
-                                className="cc-utilization__fill"
-                                style={{
-                                  width: `${agent.utilization}%`,
-                                  background: agent.utilization >= 80 ? 'var(--status-online)' : agent.utilization >= 50 ? 'var(--status-break)' : 'var(--text-muted)',
-                                }}
-                              />
-                            </div>
-                            <span className="cc-utilization__text mono" style={{ color: agent.utilization >= 80 ? 'var(--status-online)' : 'var(--text-muted)' }}>
-                              {agent.utilization}%
-                            </span>
-                          </div>
-                        </td>
-                        <td>
-                          <div className="cc-stars">
-                            {[1, 2, 3, 4, 5].map((s) => (
-                              <span key={s} className={`cc-star ${s <= agent.satisfaction ? 'cc-star--filled' : ''}`}>●</span>
-                            ))}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="cc-actions">
-                            <button className="cc-action-btn" title="监听">
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
-                            </button>
-                            <button className="cc-action-btn" title="强插">
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
-                            </button>
-                            <button className="cc-action-btn cc-action-btn--danger" title="强拆">
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.56 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
-                            </button>
-                          </div>
+                          <span className="mono">{call.gateway || '--'}</span>
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-              {filteredAgents.length === 0 && (
+              {filteredCalls.length === 0 && (
                 <div className="cc-table-empty">
-                  <Empty description="无匹配坐席" />
+                  <Empty description="当前无活跃呼叫" />
                 </div>
               )}
             </div>

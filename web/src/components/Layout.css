@@ -344,13 +344,15 @@
   border-radius: var(--radius-md);
   display: grid;
   place-items: center;
-  transition: background var(--dur-fast);
+  transition: all var(--dur-fast);
   position: relative;
   font-size: 16px;
+  color: var(--text-secondary);
 }
 
 .topbar-btn:hover {
   background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .topbar-btn__badge {
@@ -360,7 +362,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--status-busy);
+  background: var(--color-danger);
 }
 
 /* Theme Toggle */
@@ -373,6 +375,10 @@
   position: relative;
   cursor: pointer;
   transition: background var(--dur-normal);
+}
+
+.theme-toggle:hover {
+  border-color: var(--border-strong);
 }
 
 .theme-toggle__knob {
@@ -408,6 +414,11 @@
   color: var(--text-inverted);
   flex-shrink: 0;
   cursor: pointer;
+  transition: box-shadow var(--dur-fast);
+}
+
+.topbar-avatar:hover {
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 /* Menu Button (tablet/mobile) */

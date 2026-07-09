@@ -1,12 +1,52 @@
+# Build artifacts
 /target/
+**/target/
+
+# Dependencies
+**/node_modules/
+
+# Environment files
+.env
+.env.production
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
 *.log
-*.aiff
+logs/
+
+# Python
+*.pyc
+__pycache__/
+*.pyo
+
+# Test artifacts
 /test_recordings/
 /test_recordings/**/
-/tools/sipp/test_speech.wav
-/tools/sipp/speech_raw.aiff
-/tools/sipp/*.log
-.DS_Store
-.env
-.idea/
-target/
+**/test-recordings/
+tools/sipp/test_speech.wav
+tools/sipp/speech_raw.aiff
+tools/sipp/*.log
+
+# Audio files
+*.aiff
+*.wav
+
+# Build output
+web/dist/
+
+# MiMoCode
+.mimocode/
+
+# Cargo
+Cargo.lock

@@ -1,9 +1,0 @@
-{
-  "call_id": "call/with:unsafe@example.com",
-  "wav_path": "target/test-recordings/records_pcmu_and_pcma_rtp_to_stereo_wav-56406/call_with_unsafe_example.com-1783077289965.wav",
-  "sample_rate": 8000,
-  "channels": 2,
-  "caller_relay_port": 40000,
-  "gateway_relay_port": 40002,
-  "created_at_unix_ms": 1783077289966
-}
