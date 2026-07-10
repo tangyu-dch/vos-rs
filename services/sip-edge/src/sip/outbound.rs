@@ -25,6 +25,34 @@ pub fn target_addr_for_str(raw_uri: &str) -> String {
     }
 }
 
+/// Builds an out-of-dialog OPTIONS request used for gateway health probing.
+pub fn build_gateway_options(
+    target_uri: &SipUri,
+    advertised_addr: &str,
+    call_id: &str,
+    cseq: u32,
+) -> Vec<u8> {
+    let branch = format!("z9hG4bK-health-{cseq}");
+    format!(
+        "OPTIONS {target_uri} SIP/2.0\r\n\
+         Via: SIP/2.0/UDP {advertised_addr};branch={branch}\r\n\
+         Max-Forwards: 70\r\n\
+         From: <sip:health-check@{advertised_addr}>;tag=health-{cseq}\r\n\
+         To: <{target_uri}>\r\n\
+         Call-ID: {call_id}\r\n\
+         CSeq: {cseq} OPTIONS\r\n\
+         Contact: <sip:health-check@{advertised_addr}>\r\n\
+         Accept: application/sdp\r\n\
+         Content-Length: 0\r\n\r\n",
+        target_uri = target_uri,
+        advertised_addr = advertised_addr,
+        branch = branch,
+        call_id = call_id,
+        cseq = cseq,
+    )
+    .into_bytes()
+}
+
 #[allow(dead_code)]
 pub fn build_outbound_invite_with_body(
     inbound: &SipRequest,
@@ -442,8 +470,8 @@ fn append_single_header(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_notify_sipfrag, build_outbound_in_dialog_request, build_outbound_invite_with_body,
-        target_addr_for,
+        build_gateway_options, build_notify_sipfrag, build_outbound_in_dialog_request,
+        build_outbound_invite_with_body, target_addr_for,
     };
     use sip_core::{parse_message, SipMessage, SipUri};
     use std::str::FromStr;
@@ -469,6 +497,23 @@ mod tests {
         assert!(outbound.contains("Contact: <sip:vosrs@edge.example.com:5060>\r\n"));
         assert!(outbound.contains("Content-Type: application/sdp\r\n"));
         assert!(outbound.ends_with("v=0\r\n"));
+    }
+
+    #[test]
+    fn builds_gateway_options_probe() {
+        let target = SipUri::from_str("sip:health-check@gw1.example.com:5060").unwrap();
+        let options = String::from_utf8(build_gateway_options(
+            &target,
+            "edge.example.com:5060",
+            "health-probe-gw1-1",
+            1,
+        ))
+        .unwrap();
+
+        assert!(options.starts_with("OPTIONS sip:health-check@gw1.example.com:5060 SIP/2.0\r\n"));
+        assert!(options.contains("CSeq: 1 OPTIONS\r\n"));
+        assert!(options.contains("Call-ID: health-probe-gw1-1\r\n"));
+        assert!(options.contains("Content-Length: 0\r\n\r\n"));
     }
 
     #[test]

@@ -238,7 +238,7 @@ pub(crate) struct EdgeState {
     pub(crate) gateway_health: std::sync::Mutex<GatewayHealthTracker>,
     pub(crate) inbound_transactions: dashmap::DashMap<String, InboundTransaction>,
     pub(crate) media_relay: MediaRelayState,
-    pub(crate) registrar: tokio::sync::Mutex<RegistrationStore>,
+    pub(crate) registrar: tokio::sync::RwLock<RegistrationStore>,
     pub(crate) db_store: Option<PostgresCdrStore>,
     pub(crate) client_transactions:
         dashmap::DashMap<ClientTransactionKey, tokio::sync::oneshot::Sender<()>>,
@@ -257,6 +257,11 @@ pub(crate) struct EdgeState {
     pub(crate) external_to_internal_call_ids: dashmap::DashMap<String, String>,
     pub(crate) internal_to_external_call_ids: dashmap::DashMap<String, String>,
     pub(crate) gateway_cache: std::sync::RwLock<HashMap<String, (bool, std::time::Instant)>>,
+    /// 按用户名跟踪活跃并发通话数，O(1) 替代 O(n) iter 扫描
+    pub(crate) user_concurrency: dashmap::DashMap<String, u32>,
+    pub(crate) anti_fraud_rules: std::sync::RwLock<Vec<cdr_core::AntiFraudRule>>,
+    /// Active gateway OPTIONS probes keyed by their SIP Call-ID.
+    pub(crate) gateway_probes: dashmap::DashMap<String, String>,
     #[cfg(test)]
     pub(crate) test_gateways: std::sync::Mutex<Vec<String>>,
 }
@@ -294,7 +299,7 @@ impl EdgeState {
             gateway_health: std::sync::Mutex::new(GatewayHealthTracker::default()),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay,
-            registrar: tokio::sync::Mutex::new(RegistrationStore::new()),
+            registrar: tokio::sync::RwLock::new(RegistrationStore::new()),
             db_store,
             client_transactions: dashmap::DashMap::new(),
             draining: std::sync::atomic::AtomicBool::new(false),
@@ -309,6 +314,9 @@ impl EdgeState {
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
+            user_concurrency: dashmap::DashMap::new(),
+            anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
+            gateway_probes: dashmap::DashMap::new(),
             #[cfg(test)]
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
@@ -337,7 +345,7 @@ impl EdgeState {
             gateway_health: std::sync::Mutex::new(GatewayHealthTracker::default()),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay: MediaRelayState::new(),
-            registrar: tokio::sync::Mutex::new(RegistrationStore::new()),
+            registrar: tokio::sync::RwLock::new(RegistrationStore::new()),
             db_store: None,
             client_transactions: dashmap::DashMap::new(),
             draining: std::sync::atomic::AtomicBool::new(false),
@@ -352,6 +360,9 @@ impl EdgeState {
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
+            user_concurrency: dashmap::DashMap::new(),
+            anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
+            gateway_probes: dashmap::DashMap::new(),
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -377,6 +388,35 @@ impl EdgeState {
 
     pub(crate) fn set_socket(&self, socket: Arc<UdpSocket>) {
         let _ = self.socket.set(socket);
+    }
+
+    /// 获取指定用户当前活跃并发通话数（O(1)）
+    pub(crate) fn user_concurrent_count(&self, username: &str) -> u32 {
+        self.user_concurrency.get(username).map_or(0, |c| *c)
+    }
+
+    /// INVITE 成功写入 inbound_transactions 后，递增该用户的并发计数
+    pub(crate) fn increment_user_concurrency(&self, username: &str) {
+        self.user_concurrency
+            .entry(username.to_string())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+    }
+
+    /// BYE/CANCEL/超时清理时递减用户并发计数（防止下溢）
+    pub(crate) fn decrement_user_concurrency(&self, username: &str) {
+        if let Some(mut entry) = self.user_concurrency.get_mut(username) {
+            *entry = entry.saturating_sub(1);
+        }
+    }
+
+    /// 从 SIP 请求的 From 头中提取用户名
+    pub(crate) fn username_from_request(request: &SipRequest) -> Option<String> {
+        let from = request.headers.get("from")?;
+        let s = from.as_str();
+        let start = s.find("sip:").map(|i| i + 4)?;
+        let end = s[start..].find('@')?;
+        Some(s[start..start + end].to_string())
     }
 
     pub(crate) fn get_socket(&self) -> Option<Arc<UdpSocket>> {
@@ -606,7 +646,12 @@ impl EdgeState {
 
         #[cfg(test)]
         {
-            if self.test_gateways.lock().unwrap().contains(&peer_ip) {
+            if self
+                .test_gateways
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&peer_ip)
+            {
                 return true;
             }
         }
@@ -727,6 +772,11 @@ impl EdgeState {
                 callee_behind_nat,
             },
         );
+
+        // 记录该用户新增一路活跃并发通话
+        if let Some(username) = Self::username_from_request(request) {
+            self.increment_user_concurrency(&username);
+        }
     }
 
     pub(crate) fn remember_gateway_media(

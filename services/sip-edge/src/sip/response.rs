@@ -1,4 +1,4 @@
-use call_core::{CallError, CallManager};
+use call_core::{CallError, CallManager, GatewayHealthTracker};
 use sip_core::{HeaderMap, Method, SipRequest, SipResponse, SipUri};
 
 const SERVER_HEADER: &str = "VOS-RS sip-edge/0.1";
@@ -23,9 +23,14 @@ impl RequestHandling {
 pub struct OutboundInvitePlan {
     pub outbound_uri: SipUri,
     pub target_override_addr: Option<String>,
+    pub gateway_id: String,
 }
 
-pub fn response_for_request(request: &SipRequest, call_manager: &CallManager) -> RequestHandling {
+pub fn response_for_request_with_health(
+    request: &SipRequest,
+    call_manager: &CallManager,
+    health: Option<&mut GatewayHealthTracker>,
+) -> RequestHandling {
     match &request.method {
         Method::Options => build_response(
             request,
@@ -35,20 +40,30 @@ pub fn response_for_request(request: &SipRequest, call_manager: &CallManager) ->
             "",
         )
         .into(),
-        Method::Invite => response_for_invite(request, call_manager),
+        Method::Invite => response_for_invite(request, call_manager, health),
         _ => build_response(request, 501, "Not Implemented", &[], "").into(),
     }
 }
 
-fn response_for_invite(request: &SipRequest, call_manager: &CallManager) -> RequestHandling {
-    match call_manager.handle_inbound_invite(request) {
-        Ok(outcome) => RequestHandling {
-            response: build_response(request, 100, "Trying", &[], ""),
-            outbound_invite: Some(OutboundInvitePlan {
-                outbound_uri: outcome.outbound_uri,
-                target_override_addr: None,
-            }),
-        },
+fn response_for_invite(
+    request: &SipRequest,
+    call_manager: &CallManager,
+    health: Option<&mut GatewayHealthTracker>,
+) -> RequestHandling {
+    match call_manager.handle_inbound_invite_with_health(request, health) {
+        Ok(outcome) => {
+            let gateway_id = call_manager
+                .current_gateway_id(outcome.call_id.as_str())
+                .unwrap_or_default();
+            RequestHandling {
+                response: build_response(request, 100, "Trying", &[], ""),
+                outbound_invite: Some(OutboundInvitePlan {
+                    outbound_uri: outcome.outbound_uri,
+                    target_override_addr: None,
+                    gateway_id,
+                }),
+            }
+        }
         Err(error) => {
             let (status_code, reason_phrase) = invite_error_status(&error);
             let error_header = error.to_string();
@@ -75,6 +90,7 @@ pub fn response_for_invite_to_uri(
             outbound_invite: Some(OutboundInvitePlan {
                 outbound_uri: outcome.outbound_uri,
                 target_override_addr: None,
+                gateway_id: String::new(),
             }),
         },
         Err(error) => {
@@ -144,6 +160,7 @@ fn invite_error_status(error: &CallError) -> (u16, &'static str) {
             (400, "Bad Request")
         }
         CallError::NoRouteForDestination(_) => (404, "Not Found"),
+        CallError::GatewayUnavailable(_) => (503, "Service Unavailable"),
         CallError::UnknownCall(_) => (481, "Call/Transaction Does Not Exist"),
         CallError::InvalidTransition { .. }
         | CallError::OutboundLegAlreadyExists
@@ -340,7 +357,7 @@ fn append_to_header(response: &mut String, headers: &HeaderMap) {
 
 #[cfg(test)]
 mod tests {
-    use super::{accepted_202_for_request, response_for_request};
+    use super::{accepted_202_for_request, response_for_request_with_health};
     use call_core::{CallManager, RouteTable};
     use sip_core::{parse_message, SipMessage};
 
@@ -361,8 +378,9 @@ mod tests {
             panic!("expected request");
         };
 
-        let call_manager = CallManager::new(RouteTable::default());
-        let handling = response_for_request(&request, &call_manager);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let call_manager = CallManager::new(RouteTable::default(), tx);
+        let handling = response_for_request_with_health(&request, &call_manager, None);
         let response = String::from_utf8(handling.response).unwrap();
 
         assert!(response.starts_with("SIP/2.0 501 Not Implemented\r\n"));

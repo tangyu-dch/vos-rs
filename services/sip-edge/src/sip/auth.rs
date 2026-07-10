@@ -185,16 +185,6 @@ impl AuthConfig {
                 .unwrap()
                 .as_secs();
 
-            // Evict expired entries
-            cache.retain(|_, &mut exp| exp > now);
-
-            // Evict oldest entries if cache grows too large
-            const MAX_NONCE_CACHE: usize = 100_000;
-            if cache.len() > MAX_NONCE_CACHE {
-                let cutoff = now + 250;
-                cache.retain(|_, exp| *exp > cutoff);
-            }
-
             let Some(cnonce) = params.get("cnonce") else {
                 return AuthDecision::Challenge;
             };
@@ -279,10 +269,16 @@ impl DigestExpectation<'_> {
             return false;
         }
 
-        let ha1 = md5_hex(&format!(
-            "{}:{}:{}",
-            self.username, self.realm, self.password
-        ));
+        let is_ha1 =
+            self.password.len() == 32 && self.password.chars().all(|c| c.is_ascii_hexdigit());
+        let ha1 = if is_ha1 {
+            self.password.to_string()
+        } else {
+            md5_hex(&format!(
+                "{}:{}:{}",
+                self.username, self.realm, self.password
+            ))
+        };
         let ha2 = md5_hex(&format!("{}:{}", self.method, uri));
         let expected = match params.get("qop") {
             Some(qop) => {

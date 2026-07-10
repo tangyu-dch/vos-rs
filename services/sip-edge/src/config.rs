@@ -63,15 +63,15 @@ impl EdgeConfig {
         let sbc_rate_limit_capacity = env::var("VOS_RS_SBC_LIMIT_CAPACITY")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(100.0);
+            .unwrap_or(2000.0);
         let sbc_rate_limit_fill_rate = env::var("VOS_RS_SBC_LIMIT_FILL_RATE")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(10.0);
+            .unwrap_or(500.0);
         let sbc_max_concurrency = env::var("VOS_RS_SBC_MAX_CONCURRENCY")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(10);
+            .unwrap_or(2000);
 
         Self {
             advertised_addr: env::var(ADVERTISED_ADDR_ENV)

@@ -14,6 +14,30 @@ use sip_core::SipUri;
 use crate::media::relay::MediaRelayMetrics;
 use crate::EdgeState;
 
+async fn internal_auth(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    let secret = match std::env::var("VOS_RS_INTERNAL_SECRET") {
+        Ok(val) => val,
+        Err(_) => {
+            tracing::error!("VOS_RS_INTERNAL_SECRET 未配置，管理接口拒绝所有请求");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    };
+
+    let token = req
+        .headers()
+        .get("X-VOS-Token")
+        .and_then(|h| h.to_str().ok());
+    if let Some(t) = token {
+        if t == secret {
+            return Ok(next.run(req).await);
+        }
+    }
+    Err(StatusCode::UNAUTHORIZED)
+}
+
 /// 启动管理 API（活跃呼叫查询 / 强制拆线）。
 pub async fn serve(addr: String, state: Arc<EdgeState>) {
     let app = Router::new()
@@ -21,6 +45,7 @@ pub async fn serve(addr: String, state: Arc<EdgeState>) {
         .route("/manage/calls/:call_id/terminate", post(terminate))
         .route("/manage/route-preview", get(route_preview))
         .route("/manage/media-metrics", get(media_metrics))
+        .route_layer(axum::middleware::from_fn(internal_auth))
         .with_state(state)
         .layer(
             CorsLayer::new()
@@ -52,7 +77,54 @@ async fn media_metrics(State(state): State<Arc<EdgeState>>) -> Json<MediaRelayMe
 }
 
 async fn terminate(State(state): State<Arc<EdgeState>>, Path(call_id): Path<String>) -> StatusCode {
+    // 强制挂断：同步清理并发计数和事务记录
+    let username = state.inbound_transactions.get(&call_id).and_then(|tx| {
+        tx.original_request
+            .as_ref()
+            .and_then(|req| crate::edge_state::EdgeState::username_from_request(req))
+    });
+    if let Some(ref uname) = username {
+        state.decrement_user_concurrency(uname);
+    }
+    // Decrement active call count for the gateway before terminating.
+    if let Some(gw_id) = state.call_manager.current_gateway_id(&call_id) {
+        state
+            .gateway_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .decrement_active(&gw_id);
+    }
+    state.inbound_transactions.remove(&call_id);
     state.call_manager.terminate_call(&call_id);
+
+    // Real-time billing: settle the call on force terminate.
+    if let Some(ref db) = state.db_store {
+        if let Some(call) = state.call_manager.get(&call_core::CallId::new(call_id.clone())) {
+            let caller_user = call.caller.as_deref().and_then(|s| {
+                let idx = s.find("sip:")?;
+                let rest = &s[idx + 4..];
+                let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
+                if end == 0 { None } else { Some(&rest[..end]) }
+            });
+            let callee = call.inbound.remote_uri.user.as_deref().unwrap_or("");
+            let duration_ms = call.ended_at
+                .and_then(|e| e.duration_since(call.started_at).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            if let Some(user) = caller_user {
+                let db = db.clone();
+                let user = user.to_string();
+                let callee = callee.to_string();
+                let cid = call_id.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = db.settle_call(&cid, &user, &callee, duration_ms).await {
+                        tracing::warn!(call_id = %cid, error = %e, "force-terminate settlement failed");
+                    }
+                });
+            }
+        }
+    }
+
     StatusCode::OK
 }
 

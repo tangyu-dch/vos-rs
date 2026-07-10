@@ -374,6 +374,7 @@ mod tests {
 pub(crate) enum ServerTransactionEvent {
     Request(SipRequest),
     Response(Vec<u8>),
+    UpdateLastProvisional(Vec<u8>),
     Ack(SipRequest),
 }
 
@@ -426,6 +427,9 @@ pub(crate) fn spawn_non_invite_server_transaction(
                                 }
                                 break;
                             }
+                        }
+                        ServerTransactionEvent::UpdateLastProvisional(resp_bytes) => {
+                            last_provisional = Some(resp_bytes);
                         }
                         ServerTransactionEvent::Ack(_) => {}
                     }
@@ -528,6 +532,9 @@ pub(crate) fn spawn_invite_server_transaction(
                                     break;
                                 }
                             }
+                        }
+                        ServerTransactionEvent::UpdateLastProvisional(resp_bytes) => {
+                            last_provisional = Some(resp_bytes);
                         }
                         ServerTransactionEvent::Ack(_) => {}
                     }

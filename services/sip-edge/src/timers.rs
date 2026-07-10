@@ -4,6 +4,7 @@ use crate::{
     edge_state::{parse_target_addr_from_route, sip_uri_from_peer, EdgeState, PendingDatagram},
 };
 use call_core::CallQualityMetrics;
+use sip_core::SipUri;
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -341,10 +342,77 @@ pub(crate) fn spawn_session_timer_watchdog(
                     )
                     .await;
 
+                // 清理事务前先递减用户并发计数
+                let username = edge_state
+                    .inbound_transactions
+                    .get(&call_id)
+                    .and_then(|tx| {
+                        tx.original_request.as_ref().and_then(|req| {
+                            crate::edge_state::EdgeState::username_from_request(req)
+                        })
+                    });
+                if let Some(ref uname) = username {
+                    edge_state.decrement_user_concurrency(uname);
+                }
                 // Clean up the transaction and call state
                 edge_state.inbound_transactions.remove(&call_id);
+                // Decrement active call count for the gateway before terminating.
+                if let Some(gw_id) = edge_state.call_manager.current_gateway_id(&call_id) {
+                    edge_state
+                        .gateway_health
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .decrement_active(&gw_id);
+                }
                 edge_state.call_manager.terminate_call(&call_id);
+
+                // Real-time billing: settle the call on timeout.
+                if let Some(ref db) = edge_state.db_store {
+                    if let Some(call) = edge_state.call_manager.get(&call_core::CallId::new(call_id.clone())) {
+                        let caller_user = call.caller.as_deref().and_then(|s| {
+                            let idx = s.find("sip:")?;
+                            let rest = &s[idx + 4..];
+                            let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
+                            if end == 0 { None } else { Some(&rest[..end]) }
+                        });
+                        let callee = call.inbound.remote_uri.user.as_deref().unwrap_or("");
+                        let duration_ms = call.ended_at
+                            .and_then(|e| e.duration_since(call.started_at).ok())
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        if let Some(user) = caller_user {
+                            let db = db.clone();
+                            let user = user.to_string();
+                            let callee = callee.to_string();
+                            let cid = call_id.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = db.settle_call(&cid, &user, &callee, duration_ms).await {
+                                    tracing::warn!(call_id = %cid, error = %e, "timeout settlement failed");
+                                }
+                            });
+                        }
+                    }
+                }
+
                 info!(call_id, "session-expired call terminated by watchdog");
+            }
+
+            // 2. 异步后台清理过期的 nonce 防重放记录，避免影响鉴权热路径性能
+            {
+                let now_epoch = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                edge_state
+                    .nonce_replay_cache
+                    .retain(|_, &mut exp| exp > now_epoch);
+
+                // 如果防重放缓存过大，强制阶段性驱逐
+                const MAX_NONCE_CACHE: usize = 100_000;
+                if edge_state.nonce_replay_cache.len() > MAX_NONCE_CACHE {
+                    let cutoff = now_epoch + 250;
+                    edge_state.nonce_replay_cache.retain(|_, exp| *exp > cutoff);
+                }
             }
         }
     });
@@ -365,7 +433,7 @@ pub(crate) fn spawn_nat_keepalive_loop(edge_state: Arc<EdgeState>, socket: Arc<U
             interval.tick().await;
 
             let addrs = {
-                let registrar = edge_state.registrar.lock().await;
+                let registrar = edge_state.registrar.read().await;
                 registrar
                     .get_all_active_received_from(SystemTime::now(), edge_state.db_store.as_ref())
                     .await
@@ -374,6 +442,174 @@ pub(crate) fn spawn_nat_keepalive_loop(edge_state: Arc<EdgeState>, socket: Arc<U
             for addr in addrs {
                 edge_state.send_keepalive_probe(&addr, &socket).await;
             }
+        }
+    });
+}
+
+/// Periodically probes configured gateways with SIP OPTIONS.
+pub(crate) fn spawn_gateway_health_probe_loop(
+    edge_state: Arc<EdgeState>,
+    socket: Arc<UdpSocket>,
+    edge_config: Arc<EdgeConfig>,
+) {
+    let interval_duration = if cfg!(test) {
+        Duration::from_millis(100)
+    } else {
+        Duration::from_secs(10)
+    };
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(interval_duration);
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+            let Some(db) = edge_state.db_store.clone() else {
+                continue;
+            };
+
+            let gateways = match db.load_gateways().await {
+                Ok(gateways) => gateways,
+                Err(error) => {
+                    warn!(%error, "failed to load gateways for OPTIONS health probing");
+                    continue;
+                }
+            };
+
+            for (
+                gateway_id,
+                host,
+                port,
+                _transport,
+                _capacity,
+                _caller_mode,
+                _virtual_caller,
+                _prefix_rules,
+            ) in gateways
+            {
+                if edge_state
+                    .gateway_probes
+                    .iter()
+                    .any(|entry| entry.value() == &gateway_id)
+                {
+                    continue;
+                }
+
+                let can_probe = edge_state
+                    .gateway_health
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .try_acquire_probe(&gateway_id);
+                if !can_probe {
+                    continue;
+                }
+
+                let uri = SipUri {
+                    secure: false,
+                    user: Some("health-check".to_string()),
+                    host,
+                    port,
+                    params: Vec::new(),
+                };
+                let target = outbound::target_addr_for(&uri);
+                let call_id = format!("health-probe-{gateway_id}-{}", chrono_like_epoch_millis());
+                let bytes = outbound::build_gateway_options(
+                    &uri,
+                    &edge_config.advertised_addr,
+                    &call_id,
+                    1,
+                );
+
+                edge_state
+                    .gateway_probes
+                    .insert(call_id.clone(), gateway_id.clone());
+                if let Err(error) = socket.send_to(&bytes, &target).await {
+                    edge_state.gateway_probes.remove(&call_id);
+                    record_probe_failure(&edge_state, &gateway_id, error.to_string());
+                    continue;
+                }
+
+                let state = Arc::clone(&edge_state);
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    if state.gateway_probes.remove(&call_id).is_some() {
+                        record_probe_failure(
+                            &state,
+                            &gateway_id,
+                            "OPTIONS probe timeout".to_string(),
+                        );
+                    }
+                });
+            }
+        }
+    });
+}
+
+fn chrono_like_epoch_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis())
+}
+
+pub(crate) fn record_probe_failure(edge_state: &EdgeState, gateway_id: &str, reason: String) {
+    let mut health = edge_state
+        .gateway_health
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    health.record_failure(gateway_id);
+    let status = health.get_gateway_status(gateway_id);
+    drop(health);
+    warn!(gateway = gateway_id, %reason, "gateway OPTIONS health probe failed");
+    persist_gateway_health(edge_state, gateway_id.to_string(), status);
+}
+
+pub(crate) fn record_probe_success(edge_state: &EdgeState, gateway_id: &str) {
+    let mut health = edge_state
+        .gateway_health
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    health.record_success(gateway_id);
+    let status = health.get_gateway_status(gateway_id);
+    drop(health);
+    info!(
+        gateway = gateway_id,
+        "gateway OPTIONS health probe succeeded"
+    );
+    persist_gateway_health(edge_state, gateway_id.to_string(), status);
+}
+
+fn persist_gateway_health(
+    edge_state: &EdgeState,
+    gateway_id: String,
+    status: Option<(bool, i32, String, Option<std::time::SystemTime>, i32)>,
+) {
+    let Some((circuit_open, failures, state_str, last_failure_sys, half_open_successes)) = status else {
+        return;
+    };
+    let Some(db) = edge_state.db_store.clone() else {
+        return;
+    };
+    let last_failure_at = last_failure_sys.map(|st| {
+        let secs = st
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
+    });
+    tokio::spawn(async move {
+        if let Err(error) = db
+            .save_gateway_health(
+                &gateway_id,
+                circuit_open,
+                failures,
+                &state_str,
+                last_failure_at,
+                half_open_successes,
+                None,
+            )
+            .await
+        {
+            warn!(gateway = %gateway_id, %error, "failed to persist gateway probe health");
         }
     });
 }
