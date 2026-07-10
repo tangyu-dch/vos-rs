@@ -559,6 +559,79 @@ fn parse_crypto_attribute(line: &str) -> Option<SrtpCryptoAttribute> {
     })
 }
 
+fn parse_ice_attribute(line: &str, parameters: &mut IceParameters) {
+    if let Some(value) = line.strip_prefix("a=ice-ufrag:") {
+        let value = value.trim();
+        if !value.is_empty() {
+            parameters.username_fragment = Some(value.to_string());
+        }
+    } else if let Some(value) = line.strip_prefix("a=ice-pwd:") {
+        let value = value.trim();
+        if !value.is_empty() {
+            parameters.password = Some(value.to_string());
+        }
+    } else if let Some(value) = line.strip_prefix("a=ice-options:") {
+        parameters.options = value.split_whitespace().map(str::to_string).collect();
+    } else if line == "a=end-of-candidates" {
+        parameters.end_of_candidates = true;
+    } else if let Some(candidate) = parse_candidate_attribute(line) {
+        parameters.candidates.push(candidate);
+    }
+}
+
+fn parse_candidate_attribute(line: &str) -> Option<IceCandidate> {
+    let value = line.strip_prefix("a=candidate:")?;
+    let parts = value.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 8 || parts[6] != "typ" {
+        return None;
+    }
+
+    let mut candidate = IceCandidate {
+        foundation: parts[0].to_string(),
+        component: parts[1].parse().ok()?,
+        transport: parts[2].to_ascii_lowercase(),
+        priority: parts[3].parse().ok()?,
+        address: parts[4].to_string(),
+        port: parts[5].parse().ok()?,
+        candidate_type: parts[7].to_ascii_lowercase(),
+        related_address: None,
+        related_port: None,
+        tcp_type: None,
+    };
+
+    let mut index = 8;
+    while index < parts.len() {
+        match parts[index] {
+            "raddr" => {
+                candidate.related_address = parts.get(index + 1).map(|value| (*value).to_string())
+            }
+            "rport" => {
+                candidate.related_port = parts.get(index + 1).and_then(|value| value.parse().ok())
+            }
+            "tcptype" => {
+                candidate.tcp_type = parts.get(index + 1).map(|value| (*value).to_string())
+            }
+            _ => {}
+        }
+        index += 2;
+    }
+    Some(candidate)
+}
+
+fn parse_dtls_attribute(line: &str, parameters: &mut DtlsParameters) {
+    if let Some(value) = line.strip_prefix("a=fingerprint:") {
+        let mut parts = value.split_whitespace();
+        if let (Some(algorithm), Some(fingerprint)) = (parts.next(), parts.next()) {
+            parameters.fingerprint = Some(DtlsFingerprint {
+                algorithm: algorithm.to_ascii_lowercase(),
+                value: fingerprint.to_ascii_uppercase(),
+            });
+        }
+    } else if let Some(value) = line.strip_prefix("a=setup:") {
+        parameters.setup = Some(value.trim().to_ascii_lowercase());
+    }
+}
+
 fn static_audio_format(payload_type: &str) -> (Option<String>, Option<u32>) {
     match payload_type {
         "0" => (Some("PCMU".to_string()), Some(8_000)),

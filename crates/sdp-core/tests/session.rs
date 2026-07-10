@@ -1,4 +1,7 @@
-use sdp_core::{AudioFormat, RtpEndpoint, SdpError, SessionDescription, SrtpCryptoAttribute};
+use sdp_core::{
+    AudioFormat, DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, RtpEndpoint,
+    SdpError, SessionDescription, SrtpCryptoAttribute,
+};
 
 #[test]
 fn parses_first_audio_rtp_endpoint_from_session_connection() {
@@ -162,6 +165,70 @@ fn parses_audio_sdes_srtp_crypto_attributes() {
             key_params: "inline:dGVzdA==|2^31|1:32".to_string(),
             session_params: None,
         }]
+    );
+}
+
+#[test]
+fn parses_audio_ice_and_dtls_parameters() {
+    let session = SessionDescription::parse(concat!(
+        "v=0\r\n",
+        "c=IN IP4 192.0.2.10\r\n",
+        "m=audio 49170 RTP/AVP 0\r\n",
+        "a=ice-ufrag:offer-ufrag\r\n",
+        "a=ice-pwd:offer-password\r\n",
+        "a=ice-options:trickle renomination\r\n",
+        "a=candidate:1 1 UDP 2130706431 192.0.2.10 49170 typ host\r\n",
+        "a=candidate:2 1 UDP 1694498815 198.51.100.10 62000 typ srflx raddr 192.0.2.10 rport 49170\r\n",
+        "a=end-of-candidates\r\n",
+        "a=fingerprint:sha-256 aa:bb:cc\r\n",
+        "a=setup:actpass\r\n"
+    ))
+    .unwrap();
+
+    assert_eq!(
+        session.first_audio_ice_parameters().unwrap(),
+        IceParameters {
+            username_fragment: Some("offer-ufrag".to_string()),
+            password: Some("offer-password".to_string()),
+            options: vec!["trickle".to_string(), "renomination".to_string()],
+            candidates: vec![
+                IceCandidate {
+                    foundation: "1".to_string(),
+                    component: 1,
+                    transport: "udp".to_string(),
+                    priority: 2_130_706_431,
+                    address: "192.0.2.10".to_string(),
+                    port: 49170,
+                    candidate_type: "host".to_string(),
+                    related_address: None,
+                    related_port: None,
+                    tcp_type: None,
+                },
+                IceCandidate {
+                    foundation: "2".to_string(),
+                    component: 1,
+                    transport: "udp".to_string(),
+                    priority: 1_694_498_815,
+                    address: "198.51.100.10".to_string(),
+                    port: 62000,
+                    candidate_type: "srflx".to_string(),
+                    related_address: Some("192.0.2.10".to_string()),
+                    related_port: Some(49170),
+                    tcp_type: None,
+                },
+            ],
+            end_of_candidates: true,
+        }
+    );
+    assert_eq!(
+        session.first_audio_dtls_parameters().unwrap(),
+        DtlsParameters {
+            fingerprint: Some(DtlsFingerprint {
+                algorithm: "sha-256".to_string(),
+                value: "AA:BB:CC".to_string(),
+            }),
+            setup: Some("actpass".to_string()),
+        }
     );
 }
 

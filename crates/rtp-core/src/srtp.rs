@@ -159,12 +159,9 @@ impl SrtpContext {
 
         match self.config.profile {
             SrtpProfile::Aes128CmHmacSha1_80 | SrtpProfile::Aes128CmHmacSha1_32 => {
-                // 加密负载
+                // 就地加密负载（零分配，直接在原 Vec 上做 AES-CTR keystream XOR）
                 let mut cipher = self.create_cipher(self.packet_index);
-                let mut plaintext = packet[header_len..].to_vec();
-                cipher.apply_keystream(&mut plaintext);
-                packet.truncate(header_len);
-                packet.extend_from_slice(&plaintext);
+                cipher.apply_keystream(&mut packet[header_len..]);
 
                 // 计算 HMAC-SHA1 认证标签
                 let auth_tag = self.compute_auth_tag(packet)?;
@@ -205,14 +202,10 @@ impl SrtpContext {
 
         match self.config.profile {
             SrtpProfile::Aes128CmHmacSha1_80 | SrtpProfile::Aes128CmHmacSha1_32 => {
-                // 解密负载
+                // 就地解密负载（零分配，CTR 模式解密 = 直接 XOR keystream）
                 let header_len = Self::rtp_header_length(&packet[..packet_len]);
-                let cipher = self.create_cipher(self.packet_index);
-                let mut ciphertext = packet[header_len..packet_len].to_vec();
-                // CTR 模式解密 = 加密
-                let mut cipher_clone = cipher;
-                cipher_clone.apply_keystream(&mut ciphertext);
-                packet[header_len..packet_len].copy_from_slice(&ciphertext);
+                let mut cipher = self.create_cipher(self.packet_index);
+                cipher.apply_keystream(&mut packet[header_len..packet_len]);
             }
             SrtpProfile::NullHmacSha1_80 => {
                 // 不解密
