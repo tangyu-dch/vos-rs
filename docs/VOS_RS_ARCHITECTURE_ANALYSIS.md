@@ -225,26 +225,31 @@ loop {
 
 ## 4. 路由与网关管理
 
-### 4.1 路由算法 (LCR - Lowest Cost Routing)
+### 4.1 路由算法 (LCR + Weighted Load Balancing)
 
-**源文件**: `crates/call-core/src/routing.rs:383-422`
+**源文件**: `crates/call-core/src/routing.rs`
 
 ```rust
 // 路由选择优先级:
-1. 最长前缀匹配 (Longest Prefix Match)
-2. 更高优先级值 (Higher Priority = More Preferred)
-3. 更低成本 (Lower Cost = LCR)
+1. 最长前缀匹配 (Longest Prefix Match) — prefix length DESC
+2. 更高优先级值 (Higher Priority = More Preferred) — priority DESC
+3. 更低成本 (Lower Cost = LCR) — cost ASC
+4. 同等条件下加权随机 (Weighted Random) — weight DESC/random
+5. 健康状态过滤 (Circuit Breaker)
+6. 容量检查 (max_capacity / max_concurrent)
+7. 方向过滤 (inbound/outbound/both)
 ```
 
 **示例**:
 ```
 目标: 8613800138000
 路由表:
-  r1: prefix="86", priority=100, cost=0.50 → gw1
-  r2: prefix="8613", priority=200, cost=0.30 → gw2
-  r3: prefix="8613", priority=100, cost=0.40 → gw3
+  r1: prefix="86",   priority=100, cost=0.50, weight=100 → gw1
+  r2: prefix="8613", priority=200, cost=0.30, weight=200 → gw2
+  r3: prefix="8613", priority=200, cost=0.30, weight=100 → gw3
+  r4: prefix="8613", priority=100, cost=0.40, weight=100 → gw4
 
-选择顺序: r2 (最长前缀8613 + 最高优先级200) → r3 → r1
+选择顺序: r2/r3 (最长前缀8613 + 最高优先级200 + 同成本，按 weight 加权随机) → r4 → r1
 ```
 
 ### 4.2 网关健康追踪 (Circuit Breaker)

@@ -48,7 +48,7 @@
 - 支持的方法识别：REGISTER、INVITE、ACK、BYE、CANCEL、OPTIONS、INFO、UPDATE、REFER、SUBSCRIBE、NOTIFY、MESSAGE、PRACK 以及自定义扩展方法。
 - 具有内存缓存与 PostgreSQL 数据库持久化的 REGISTER 注册机，支持 Contact 绑定、Expires 过期处理、通配符注销及可选 Digest 认证。
 - 通过 PostgreSQL 数据库驱动的多网关自动故障转移（Gateway Failover）与最长前缀+优先级匹配的动态路由选择。
-- 数据库驱动路由策略增强：路由表新增 `cost` 字段支持最低成本路由（LCR，按 `prefix 长度 desc → priority desc → cost asc` 排序），网关表新增 `max_capacity` 字段用于按网关活跃呼叫并发上限的容量控制。
+- 数据库驱动路由策略增强：路由表新增 `cost` 字段支持最低成本路由（LCR，按 `prefix 长度 desc → priority desc → cost asc` 排序），新增 `weight` 字段支持同等条件下的加权随机负载均衡，网关表新增 `max_capacity` 字段用于按网关活跃呼叫并发上限的容量控制。
 - 网关健康度熔断器（Circuit Breaker）：`GatewayHealthTracker` 跟踪每网关成功/失败计数、连续失败数与活跃呼叫数，连续失败超阈值或采样成功率低于阈值时熔断，`recovery_interval` 后半开探测恢复；路由候选自动过滤不可用/超容量网关，全部不可用时回退到完整候选集。
 - 针对振铃、接通、失败、取消、终止状态的 B2BUA 呼叫状态迁移，以及 CDR 的生成。
 - 对话内 ACK、BYE、CANCEL 和 INFO 消息的转发。
@@ -94,6 +94,7 @@
 - 支持从会话级（session-level）或媒体级（media-level）连接行解析首个音频 RTP 端点。
 - 将首个音频 RTP 的 `c=` 和 `m=` 行重写为中继端点。
 - SDP 负载修剪，保留兼容的 PCMU/PCMA 负载和 `telephone-event/8000` DTMF 动态负载，并移除不支持的负载特定属性。
+- `sdp-core` 已结构化解析 ICE username fragment/password、host/srflx candidate、`end-of-candidates`、DTLS fingerprint 和 setup role；SIP Edge 在转发 SDP 前校验这些属性的成对关系与基本格式。
 - 可通过 `VOS_RS_RTP_ADVERTISED_ADDR`、`VOS_RS_RTP_PORT_MIN` 和 `VOS_RS_RTP_PORT_MAX` 配置 RTP 通告地址和偶数 RTP 端口范围。
 - RTP 端口租用分配，自动跳过活动中继端口，在配置的端口范围耗尽时返回 SIP 503，并在呼叫拆线或出局呼叫失败时释放租期。
 - 绑定在所配偶数端口上的 UDP RTP 监听器，以及绑定在相邻奇数端口上的 RTCP 监听器。
@@ -108,7 +109,7 @@
 未完成：
 
 - SRTP/DTLS-SRTP：SDES `a=crypto` 已接入 SIP Edge 的 Offer/Answer 端口绑定、首包 SSRC 学习和 RTP Relay 加解密路径；端到端 SIPp 加密媒体回归场景已加入。DTLS-SRTP 握手和稳定网关环境下的完整压测仍未完成。
-- ICE/STUN/TURN 支持（注：基础 STUN 发现已实现，用于公网地址发现）。
+- ICE connectivity checks、候选优选/切换、TURN allocation/refresh 以及 DTLS-SRTP 握手与密钥导出仍未完成；当前仅有 STUN 公网发现、SDP 参数解析和转发前校验。
 - 更完整的 DTMF 实时事件流、按租户策略控制以及失败/异常事件告警（注：DTMF 事件审计明细表已落库至 `dtmf_events`，媒体聚合指标已可通过管理 API 与 Prometheus `/metrics` 查询）。
 - 转码、编解码器首选策略、ptime/maxptime 协商、舒适噪音、静音抑制以及当前 PCMU/PCMA 路径之外的动态负载映射。
 - 多个 `m=` 媒体部分、视频、T.38、RTP Bundle 及高级 Offer/Answer 行为。

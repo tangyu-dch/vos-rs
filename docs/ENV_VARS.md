@@ -322,11 +322,12 @@ VOS_RS_RECORDING_DIR=/var/lib/vos-rs/recordings
 | `priority` | INTEGER | NOT NULL, DEFAULT 100 |
 | `gateway_id` | TEXT | NOT NULL, FK → sip_gateways.id ON DELETE CASCADE |
 | `cost` | DOUBLE | NOT NULL, DEFAULT 0.0（支持最低成本路由） |
+| `weight` | INTEGER | NOT NULL, DEFAULT 100（同等条件下的加权随机负载均衡） |
 | `created_at` | TIMESTAMPTZ | NOT NULL, DEFAULT now() |
 | `time_start` | TEXT | nullable（HH:MM UTC 格式，时间窗口起点，ALTER TABLE 迁移添加） |
 | `time_end` | TEXT | nullable（时间窗口终点，ALTER TABLE 迁移添加） |
 
-**匹配逻辑**：最长前缀匹配 → 同前缀按优先级排序 → 同优先级按 cost 升序（LCR）→ 检查时间窗口 → 检查网关健康状态。
+**匹配逻辑**：最长前缀匹配（prefix DESC）→ 同前缀按优先级排序（priority DESC）→ 同优先级按 cost 升序（LCR）→ 同等条件下按 weight 加权随机 → 检查时间窗口 → 检查网关健康状态 → 检查容量。
 
 ### 4.4 sip_registrations — 注册绑定
 
