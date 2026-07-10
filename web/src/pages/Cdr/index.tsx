@@ -73,13 +73,11 @@ export default function Cdr() {
         setLoading(false);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [filters]
   );
 
   useEffect(() => {
     loadCdrs(1, 20);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSearch = () => loadCdrs(1, pagination.pageSize);

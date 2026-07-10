@@ -22,6 +22,7 @@ PERF_TIMEOUT ?= 60
 
 .PHONY: help env fmt fmt-check check lint test test-unit test-integration test-bench \
         clippy build build-release build-debug quick verify smoke full-flow \
+        web-lint web-test web-build web-verify \
         perf perf-media perf-quick perf-all perf-report bench doc \
         run-sip-edge run-cdr-worker logs clean test-stun
 
@@ -36,6 +37,7 @@ help:
 	@printf '    make lint            clippy + fmt-check\n'
 	@printf '    make quick           fmt-check + test\n'
 	@printf '    make verify          quick + smoke + full-flow\n'
+	@printf '    make web-verify      前端 lint + test + build\n'
 	@printf '  测试:\n'
 	@printf '    make test            运行所有测试\n'
 	@printf '    make test-unit       仅单元测试（快速）\n'
@@ -66,12 +68,16 @@ env:
 	@printf '  %-38s %s\n' 'VOS_RS_SIP_UDP_BIND'          "$${VOS_RS_SIP_UDP_BIND:-0.0.0.0:5060}"
 	@printf '  %-38s %s\n' 'VOS_RS_SIP_ADVERTISED_ADDR'   "$${VOS_RS_SIP_ADVERTISED_ADDR:-127.0.0.1:5060}"
 	@printf '  %-38s %s\n' 'VOS_RS_SIP_DEFAULT_GATEWAY'   "$${VOS_RS_SIP_DEFAULT_GATEWAY:-<未设置>}"
+	@printf '  %-38s %s\n' 'VOS_RS_SIP_UDP_RECEIVE_BUFFER' "$${VOS_RS_SIP_UDP_RECEIVE_BUFFER:-4194304}"
+	@printf '  %-38s %s\n' 'VOS_RS_SIP_UDP_SEND_BUFFER'    "$${VOS_RS_SIP_UDP_SEND_BUFFER:-4194304}"
 	@printf '  %-38s %s\n' 'VOS_RS_SIP_AUTH_USERS'        "$${VOS_RS_SIP_AUTH_USERS:-<未设置>}"
 	@printf '  %-38s %s\n' 'VOS_RS_RTP_ADVERTISED_ADDR'   "$${VOS_RS_RTP_ADVERTISED_ADDR:-127.0.0.1}"
 	@printf '  %-38s %s\n' 'VOS_RS_RTP_PORT_MIN'          "$${VOS_RS_RTP_PORT_MIN:-40000}"
 	@printf '  %-38s %s\n' 'VOS_RS_RTP_PORT_MAX'          "$${VOS_RS_RTP_PORT_MAX:-40100}"
 	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_ENABLED'     "$${VOS_RS_RECORDING_ENABLED:-false}"
 	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_DIR'         "$${VOS_RS_RECORDING_DIR:-target/recordings}"
+	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_WORKERS'     "$${VOS_RS_RECORDING_WORKERS:-4}"
+	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_QUEUE_CAPACITY' "$${VOS_RS_RECORDING_QUEUE_CAPACITY:-4096}"
 	@printf '  %-38s %s\n' 'VOS_RS_DATABASE_URL'          "$${VOS_RS_DATABASE_URL:-<未设置>}"
 	@printf '  %-38s %s\n' 'VOS_RS_NATS_URL'              "$${VOS_RS_NATS_URL:-<未设置>}"
 	@printf '  %-38s %s\n' 'VOS_RS_STUN_SERVER'           "$${VOS_RS_STUN_SERVER:-<未设置>}"
@@ -122,6 +128,19 @@ bench:
 
 quick: fmt-check test
 
+# ─── 前端验证 ──────────────────────────────────────────
+
+web-lint:
+	@cd web && npm run lint
+
+web-test:
+	@cd web && npm test
+
+web-build:
+	@cd web && npm run build
+
+web-verify: web-lint web-test web-build
+
 # ─── 构建 ──────────────────────────────────────────────
 
 build: build-debug
@@ -144,6 +163,8 @@ smoke:
 	VOS_RS_SIP_DEFAULT_GATEWAY="127.0.0.1:5170" \
 	VOS_RS_SIP_ADVERTISED_ADDR="127.0.0.1:5160" \
 	VOS_RS_RTP_PORT_MIN=40000 VOS_RS_RTP_PORT_MAX=60010 \
+	VOS_RS_SIP_UDP_RECEIVE_BUFFER="$${VOS_RS_SIP_UDP_RECEIVE_BUFFER:-4194304}" \
+	VOS_RS_SIP_UDP_SEND_BUFFER="$${VOS_RS_SIP_UDP_SEND_BUFFER:-4194304}" \
 	VOS_RS_SBC_ALLOW=127.0.0.1 \
 	target/release/sip-edge >"$(SMOKE_LOG_DIR)/edge.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 2; \
@@ -155,7 +176,7 @@ smoke:
 		> "$(SMOKE_LOG_DIR)/caller.log" 2>&1; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(SMOKE_LOG_DIR)/caller.log"); \
 	FAIL=$$(awk -F'|' '/Failed call/{gsub(/ /,"",$$3); print $$3}' "$(SMOKE_LOG_DIR)/caller.log"); \
-	kill $$EDGE_PID 2>/dev/null; pkill -9 -f sipp 2>/dev/null; \
+	kill $$EDGE_PID 2>/dev/null; wait $$EDGE_PID 2>/dev/null || true; pkill -9 -f sipp 2>/dev/null; \
 	if [ "$$SUCC" = "1" ] && [ "$$FAIL" = "0" ]; then \
 		printf 'SMOKE PASS: %s succeeded, %s failed\n' "$$SUCC" "$$FAIL"; \
 	else \
@@ -167,13 +188,17 @@ full-flow:
 	@printf 'Full-flow test: SIP signaling + RTP media + recording...\n'
 	@$(CARGO) build --release -p sip-edge 2>/dev/null
 	@mkdir -p "$(FULL_FLOW_LOG_DIR)" target/test_recordings
+	@rm -f target/test_recordings/*.wav
 	@VOS_RS_SIP_UDP_BIND="127.0.0.1:5160" \
 	VOS_RS_SIP_DEFAULT_GATEWAY="127.0.0.1:5170" \
 	VOS_RS_SIP_ADVERTISED_ADDR="127.0.0.1:5160" \
 	VOS_RS_RTP_PORT_MIN=40000 VOS_RS_RTP_PORT_MAX=60010 \
+	VOS_RS_SIP_UDP_RECEIVE_BUFFER="$${VOS_RS_SIP_UDP_RECEIVE_BUFFER:-4194304}" \
+	VOS_RS_SIP_UDP_SEND_BUFFER="$${VOS_RS_SIP_UDP_SEND_BUFFER:-4194304}" \
 	VOS_RS_SBC_ALLOW=127.0.0.1 VOS_RS_SBC_LIMIT_CAPACITY=1000000 \
 	VOS_RS_SBC_LIMIT_FILL_RATE=100000 VOS_RS_SBC_MAX_CONCURRENCY=10000 \
 	VOS_RS_RECORDING_ENABLED=true VOS_RS_RECORDING_DIR=$$(pwd)/target/test_recordings \
+	VOS_RS_RECORDING_WORKERS="$${VOS_RS_RECORDING_WORKERS:-4}" VOS_RS_RECORDING_QUEUE_CAPACITY="$${VOS_RS_RECORDING_QUEUE_CAPACITY:-4096}" \
 	RUST_LOG=info \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/edge.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 3; \
@@ -189,7 +214,7 @@ full-flow:
 	sleep 8; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(FULL_FLOW_LOG_DIR)/caller.log"); \
 	WAV_COUNT=$$(ls target/test_recordings/*.wav 2>/dev/null | wc -l); \
-	kill $$EDGE_PID 2>/dev/null; pkill -9 -f sipp 2>/dev/null; pkill -9 -f wav_rtp_sender 2>/dev/null; \
+	kill $$EDGE_PID 2>/dev/null; wait $$EDGE_PID 2>/dev/null || true; pkill -9 -f sipp 2>/dev/null; pkill -9 -f wav_rtp_sender 2>/dev/null; \
 	if [ "$$SUCC" = "1" ] && [ "$$WAV_COUNT" -ge "1" ]; then \
 		printf 'FULL-FLOW PASS: %s call succeeded, %s WAV files\n' "$$SUCC" "$$WAV_COUNT"; \
 	else \

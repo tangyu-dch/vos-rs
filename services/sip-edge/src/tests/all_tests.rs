@@ -11,6 +11,7 @@
     }
 
     use super::media::MediaConfig;
+    use super::config;
 
     #[tokio::test]
     async fn replies_to_options() {
@@ -497,6 +498,8 @@
             tls_server_name: None,
             udp_workers: 1,
             udp_workers_auto: false,
+            udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+            udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         };
         let body = concat!(
             "v=0\r\n",
@@ -577,6 +580,8 @@
             tls_server_name: None,
             udp_workers: 1,
             udp_workers_auto: false,
+            udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+            udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         };
         let body = concat!(
             "v=0\r\n",
@@ -1584,6 +1589,8 @@
             tls_server_name: None,
             udp_workers: 1,
             udp_workers_auto: false,
+            udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+            udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         }
     }
 
@@ -1612,6 +1619,8 @@
             tls_server_name: None,
             udp_workers: 1,
             udp_workers_auto: false,
+            udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+            udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         }
     }
 
@@ -2617,7 +2626,9 @@
         assert_eq!(d1.len(), 1);
         let resp = datagram_text(&d1[0]);
         assert!(resp.starts_with("SIP/2.0 200 OK\r\n"));
-        assert!(resp.contains("Service-Route: <sip:127.0.0.1:5060;lr>\r\n"));
+        let expected_service_route =
+            format!("Service-Route: <sip:{};lr>\r\n", config.advertised_addr);
+        assert!(resp.contains(&expected_service_route));
 
         let call_id = "path-invite-01";
         let body = sdp_body();

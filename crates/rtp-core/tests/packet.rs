@@ -1,4 +1,4 @@
-use rtp_core::{RtpError, RtpHeaderExtension, RtpPacket};
+use rtp_core::{RtpError, RtpHeaderExtension, RtpPacket, RtpPacketView};
 
 #[test]
 fn parses_minimal_rtp_packet() {
@@ -28,6 +28,26 @@ fn encodes_and_parses_packet_with_extension_csrcs_and_padding() {
     let parsed = RtpPacket::parse(&encoded).expect("encoded RTP should parse");
 
     assert_eq!(parsed, packet);
+}
+
+#[test]
+fn parses_borrowed_packet_view_without_copying_payload() {
+    let mut packet = RtpPacket::new(96, 7, 160, 0x01020304, vec![0xaa, 0xbb]).unwrap();
+    packet.marker = true;
+    packet.csrcs = vec![0x11111111];
+    packet.extension = Some(RtpHeaderExtension::new(0x1000, vec![1, 2, 3, 4]).unwrap());
+    let encoded = packet.encode().expect("RTP should encode");
+
+    let view = RtpPacketView::parse(&encoded).expect("encoded RTP should parse as view");
+
+    assert!(view.marker);
+    assert_eq!(view.payload_type, 96);
+    assert_eq!(view.sequence_number, 7);
+    assert_eq!(view.timestamp, 160);
+    assert_eq!(view.ssrc, 0x01020304);
+    assert_eq!(view.csrcs, &[0x11, 0x11, 0x11, 0x11]);
+    assert_eq!(view.extension.unwrap().data, &[1, 2, 3, 4]);
+    assert_eq!(view.payload, &[0xaa, 0xbb]);
 }
 
 #[test]

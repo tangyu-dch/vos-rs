@@ -70,6 +70,9 @@
 | `VOS_RS_RTP_PORT_MIN` | `40000` | RTP 中继端口范围最小值 |
 | `VOS_RS_RTP_PORT_MAX` | `40100` | RTP 中继端口范围最大值 |
 | `VOS_RS_RTP_SYMMETRIC_LEARNING` | `true` | 启用对称 RTP 学习（从首包学习真实远端地址） |
+| `VOS_RS_SIP_UDP_RECEIVE_BUFFER` | `4194304` | SIP UDP 接收缓冲区字节数；受操作系统 `rmem_max` 限制 |
+| `VOS_RS_SIP_UDP_SEND_BUFFER` | `4194304` | SIP UDP 发送缓冲区字节数；受操作系统 `wmem_max` 限制 |
+| `VOS_RS_MEDIA_METRICS_LOG` | `false` | 压测/诊断时将通话清理阶段的 RTP relay 指标提升到 info 日志；生产默认关闭 |
 
 ### 1.8 录制
 
@@ -77,6 +80,8 @@
 |---------|--------|------|
 | `VOS_RS_RECORDING_ENABLED` | `false` | 启用呼叫录音 |
 | `VOS_RS_RECORDING_DIR` | `target/recordings` | 录音文件存储目录（本地后端时使用） |
+| `VOS_RS_RECORDING_WORKERS` | `min(cpu, 4)` | 录音 worker pool 大小；同一通话固定路由到同一个 worker，避免每通创建线程。媒体压力较高时可显式设为 `8`，不建议盲目超过信令 CPU 余量 |
+| `VOS_RS_RECORDING_QUEUE_CAPACITY` | `4096` | 每个录音 worker 的有界队列容量；队列满时 RTP 录音包会被计入 `recording_dropped_packets` |
 
 ### 1.8.1 存储后端配置
 
@@ -177,7 +182,16 @@ VOS_RS_RECORDING_DIR=/var/lib/vos-rs/recordings
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `VOS_RS_MANAGE_BIND` | `127.0.0.1:8082` | 管理 API 监听地址（查询活跃呼叫、强制拆线） |
+| `VOS_RS_MANAGE_BIND` | `127.0.0.1:8082` | 管理 API 监听地址（查询活跃呼叫、强制拆线、媒体指标） |
+
+**管理 API 端点**：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/manage/active-calls` | 当前活跃呼叫 |
+| POST | `/manage/calls/:call_id/terminate` | 强制结束呼叫 |
+| GET | `/manage/route-preview` | 选路试算 |
+| GET | `/manage/media-metrics` | RTP/RTCP/录音聚合指标，包含 `recording_dropped_packets`、`recording_queue_depth` 与 `recording_errors` |
 
 ### 1.12 日志
 
@@ -202,6 +216,7 @@ VOS_RS_RECORDING_DIR=/var/lib/vos-rs/recordings
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health` | 健康检查 |
+| GET | `/metrics` | Prometheus 指标，包含从 sip-edge 拉取的 RTP/RTCP/录音聚合指标 |
 | **CDR** | | |
 | GET | `/api/cdrs` | 分页查询 CDR（支持 status/caller/callee/时间范围过滤） |
 | GET | `/api/cdrs/:call_id` | 单条 CDR 详情 |
@@ -240,6 +255,8 @@ VOS_RS_RECORDING_DIR=/var/lib/vos-rs/recordings
 | **呼叫控制** | | |
 | GET | `/api/calls/active` | 列出活跃呼叫 |
 | POST | `/api/calls/:call_id/terminate` | 强制结束呼叫 |
+| **媒体指标** | | |
+| GET | `/api/media/metrics` | 代理 sip-edge 的 RTP/RTCP/录音聚合指标 |
 
 ---
 

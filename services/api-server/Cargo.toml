@@ -24,3 +24,4 @@ anyhow = "1"
 time = { version = "0.3", features = ["parsing"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 storage-core = { path = "../../crates/storage-core" }
+prometheus-client = "0.23"

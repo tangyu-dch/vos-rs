@@ -361,8 +361,8 @@ mod tests {
             panic!("expected request");
         };
 
-        let mut call_manager = CallManager::new(RouteTable::default());
-        let handling = response_for_request(&request, &mut call_manager);
+        let call_manager = CallManager::new(RouteTable::default());
+        let handling = response_for_request(&request, &call_manager);
         let response = String::from_utf8(handling.response).unwrap();
 
         assert!(response.starts_with("SIP/2.0 501 Not Implemented\r\n"));

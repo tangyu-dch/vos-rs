@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Spin, Alert, Empty } from '@arco-design/web-react';
 import { IconRefresh } from '@arco-design/web-react/icon';
-import * as echarts from 'echarts';
 import { apiService } from '@/services/api';
 import type { DashboardStats, HourlyTrend, ActiveCall } from '@/types';
+import { graphic, init, type ECharts } from '@/utils/charts';
 import './Dashboard.css';
 
 // ─── Helpers ───
@@ -85,9 +85,9 @@ export default function Dashboard() {
   const [now, setNow] = useState(Date.now());
 
   const trendRef = useRef<HTMLDivElement>(null);
-  const trendChart = useRef<echarts.ECharts | null>(null);
+  const trendChart = useRef<ECharts | null>(null);
   const donutRef = useRef<HTMLDivElement>(null);
-  const donutChart = useRef<echarts.ECharts | null>(null);
+  const donutChart = useRef<ECharts | null>(null);
 
   // ─── Clock ───
   useEffect(() => {
@@ -125,7 +125,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!trendRef.current || trend.length === 0) return;
     if (!trendChart.current) {
-      trendChart.current = echarts.init(trendRef.current);
+      trendChart.current = init(trendRef.current);
     }
     const tc = getThemeColors();
     const hours = trend.map((t) => `${String(t.hour).padStart(2, '0')}:00`);
@@ -160,7 +160,7 @@ export default function Dashboard() {
           lineStyle: { color: '#60a5fa', width: 2.5 },
           itemStyle: { color: '#60a5fa' },
           areaStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            color: new graphic.LinearGradient(0, 0, 0, 1, [
               { offset: 0, color: 'rgba(96,165,250,0.25)' },
               { offset: 1, color: 'rgba(96,165,250,0.01)' },
             ]),
@@ -176,7 +176,7 @@ export default function Dashboard() {
           lineStyle: { color: '#34d399', width: 2.5 },
           itemStyle: { color: '#34d399' },
           areaStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            color: new graphic.LinearGradient(0, 0, 0, 1, [
               { offset: 0, color: 'rgba(52,211,153,0.22)' },
               { offset: 1, color: 'rgba(52,211,153,0.01)' },
             ]),
@@ -190,7 +190,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!donutRef.current) return;
     if (!donutChart.current) {
-      donutChart.current = echarts.init(donutRef.current);
+      donutChart.current = init(donutRef.current);
     }
     const tc = getThemeColors();
 

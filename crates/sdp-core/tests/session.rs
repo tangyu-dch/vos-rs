@@ -1,4 +1,4 @@
-use sdp_core::{AudioFormat, RtpEndpoint, SdpError, SessionDescription};
+use sdp_core::{AudioFormat, RtpEndpoint, SdpError, SessionDescription, SrtpCryptoAttribute};
 
 #[test]
 fn parses_first_audio_rtp_endpoint_from_session_connection() {
@@ -139,6 +139,29 @@ fn lists_audio_formats_from_static_payloads_and_rtpmap() {
                 clock_rate: Some(8_000),
             },
         ]
+    );
+}
+
+#[test]
+fn parses_audio_sdes_srtp_crypto_attributes() {
+    let session = SessionDescription::parse(concat!(
+        "v=0\r\n",
+        "c=IN IP4 192.0.2.10\r\n",
+        "m=audio 49170 RTP/SAVP 0\r\n",
+        "a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:dGVzdA==|2^31|1:32\r\n",
+        "m=video 49172 RTP/AVP 99\r\n",
+        "a=crypto:2 AES_CM_128_HMAC_SHA1_80 inline:dmlkZW8=\r\n"
+    ))
+    .unwrap();
+
+    assert_eq!(
+        session.first_audio_srtp_crypto().unwrap(),
+        vec![SrtpCryptoAttribute {
+            tag: 1,
+            suite: "AES_CM_128_HMAC_SHA1_80".to_string(),
+            key_params: "inline:dGVzdA==|2^31|1:32".to_string(),
+            session_params: None,
+        }]
     );
 }
 

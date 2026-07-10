@@ -95,13 +95,9 @@ pub(crate) fn spawn_client_transaction_retransmission(
                 let target_addr: SocketAddr = target
                     .parse()
                     .unwrap_or_else(|_| "127.0.0.1:5060".parse().unwrap());
-                let _ = handle_datagram(
-                    local_503.as_bytes(),
-                    target_addr,
-                    &edge_state,
-                    &edge_config,
-                )
-                .await;
+                let _ =
+                    handle_datagram(local_503.as_bytes(), target_addr, &edge_state, &edge_config)
+                        .await;
             }
         }
     });

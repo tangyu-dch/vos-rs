@@ -1,5 +1,6 @@
 use aes::cipher::{KeyIvInit, StreamCipher};
 use aes::Aes128;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ctr::Ctr128BE;
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
@@ -26,6 +27,50 @@ impl std::fmt::Debug for SrtpConfig {
         f.debug_struct("SrtpConfig")
             .field("profile", &self.profile)
             .finish()
+    }
+}
+
+impl SrtpConfig {
+    /// Builds an SRTP configuration from an SDES `inline:` key parameter.
+    ///
+    /// The lifetime and rollover fields after the first `|` are accepted and
+    /// retained by the SDP layer, but this context starts at packet index 0.
+    pub fn from_sdes_key_params(suite: &str, key_params: &str) -> Result<Self, SrtpError> {
+        let profile = match suite.trim().to_ascii_uppercase().as_str() {
+            "AES_CM_128_HMAC_SHA1_80" => SrtpProfile::Aes128CmHmacSha1_80,
+            "AES_CM_128_HMAC_SHA1_32" => SrtpProfile::Aes128CmHmacSha1_32,
+            "NULL_HMAC_SHA1_80" => SrtpProfile::NullHmacSha1_80,
+            _ => return Err(SrtpError::UnsupportedProfile),
+        };
+
+        let encoded = key_params
+            .trim()
+            .strip_prefix("inline:")
+            .ok_or(SrtpError::InvalidKey)?
+            .split('|')
+            .next()
+            .filter(|value| !value.is_empty())
+            .ok_or(SrtpError::InvalidKey)?;
+        let decoded = STANDARD
+            .decode(encoded)
+            .map_err(|_| SrtpError::InvalidKey)?;
+        let required_len = profile.key_length() + profile.salt_length();
+        if decoded.len() < required_len {
+            return Err(SrtpError::InvalidKey);
+        }
+
+        let mut master_key = [0u8; 16];
+        let mut master_salt = [0u8; 14];
+        if profile.key_length() > 0 {
+            master_key.copy_from_slice(&decoded[..16]);
+            master_salt.copy_from_slice(&decoded[16..30]);
+        }
+
+        Ok(Self {
+            master_key,
+            master_salt,
+            profile,
+        })
     }
 }
 
@@ -190,8 +235,8 @@ impl SrtpContext {
     }
 
     fn compute_auth_tag(&self, packet: &[u8]) -> Result<[u8; 20], SrtpError> {
-        let mut mac = HmacSha1::new_from_slice(&self.config.master_key)
-            .map_err(|_| SrtpError::InvalidKey)?;
+        let mut mac =
+            HmacSha1::new_from_slice(&self.config.master_key).map_err(|_| SrtpError::InvalidKey)?;
         mac.update(packet);
         let result = mac.finalize().into_bytes();
         let mut tag = [0u8; 20];
@@ -362,8 +407,8 @@ mod tests {
         let mut ctx = SrtpContext::new(config, 12345);
 
         let mut packet = vec![
-            0x80, 0x00, 0x30, 0x39, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x30, 0x39, 0x01, 0x02, 0x03, 0x04,
+            0x80, 0x00, 0x30, 0x39, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x39, 0x01, 0x02,
+            0x03, 0x04,
         ];
 
         ctx.encrypt_rtp(&mut packet).unwrap();
@@ -399,5 +444,31 @@ mod tests {
         let dtls_key = vec![0u8; 30];
         let config = extract_srtp_config_from_dtls(&dtls_key, SrtpProfile::Aes128CmHmacSha1_80);
         assert!(config.is_ok());
+    }
+
+    #[test]
+    fn test_sdes_key_params_create_config() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode([7u8; 30]);
+        let config = SrtpConfig::from_sdes_key_params(
+            "AES_CM_128_HMAC_SHA1_80",
+            &format!("inline:{encoded}|2^31|1:32"),
+        )
+        .unwrap();
+
+        assert_eq!(config.master_key, [7u8; 16]);
+        assert_eq!(config.master_salt, [7u8; 14]);
+        assert_eq!(config.profile, SrtpProfile::Aes128CmHmacSha1_80);
+    }
+
+    #[test]
+    fn test_sdes_key_params_reject_invalid_input() {
+        assert!(matches!(
+            SrtpConfig::from_sdes_key_params("AES_CM_128_HMAC_SHA1_80", "inline:not-base64"),
+            Err(SrtpError::InvalidKey)
+        ));
+        assert!(matches!(
+            SrtpConfig::from_sdes_key_params("UNKNOWN", "inline:dGVzdA=="),
+            Err(SrtpError::UnsupportedProfile)
+        ));
     }
 }

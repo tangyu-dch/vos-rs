@@ -1,6 +1,5 @@
 pub(crate) mod config;
 pub(crate) mod edge_state;
-pub(crate) mod handlers;
 mod manage;
 pub(crate) mod media;
 pub(crate) mod nats_cdr;
@@ -15,9 +14,9 @@ pub(crate) use net::stun_client;
 #[allow(unused_imports)]
 pub(crate) use net::transport;
 pub(crate) use net::upnp;
+pub(crate) use security::sbc;
 #[allow(unused_imports)]
 pub(crate) use sip::auth;
-pub(crate) use security::sbc;
 pub(crate) use sip::dialog;
 pub(crate) use sip::outbound;
 pub(crate) use sip::registrar::RegisterOutcome;
@@ -26,8 +25,8 @@ pub(crate) use sip::transaction;
 
 // Constants re-exported for tests
 pub(crate) use config::{
-    DATABASE_URL_ENV, DEFAULT_GATEWAY_ENV, NATS_CDR_STREAM_ENV, NATS_CDR_SUBJECT_ENV,
-    NATS_URL_ENV, TLS_BIND_ENV, TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
+    DATABASE_URL_ENV, DEFAULT_GATEWAY_ENV, NATS_CDR_STREAM_ENV, NATS_CDR_SUBJECT_ENV, NATS_URL_ENV,
+    TLS_BIND_ENV, TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
 };
 pub(crate) use timers::{
     calculate_mos_for_legs, spawn_client_transaction_retransmission, spawn_nat_keepalive_loop,
@@ -61,7 +60,6 @@ use tokio::net::UdpSocket;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
 fn current_hhmm() -> Option<String> {
@@ -74,13 +72,10 @@ fn current_hhmm() -> Option<String> {
 async fn main() -> Result<(), AnyError> {
     init_tracing();
 
-    let bind_addr =
-        env::var("VOS_RS_SIP_UDP_BIND").unwrap_or_else(|_| "0.0.0.0:5060".to_string());
+    let bind_addr = env::var("VOS_RS_SIP_UDP_BIND").unwrap_or_else(|_| "0.0.0.0:5060".to_string());
     let route_table = route_table_from_env()?;
     if route_table.is_empty() {
-        warn!(
-            "no outbound route configured; INVITE requests will receive 404"
-        );
+        warn!("no outbound route configured; INVITE requests will receive 404");
     }
     let mut edge_config = EdgeConfig::from_env();
 
@@ -317,18 +312,26 @@ async fn main() -> Result<(), AnyError> {
 
     let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(&bind_addr).await?);
 
-    // Increase UDP receive buffer for high CPS (default ~786KB, set to 4MB)
+    // Increase UDP buffers for high CPS; the kernel may cap them via rmem_max/wmem_max.
     #[cfg(unix)]
     {
         use std::os::unix::io::AsRawFd;
         let fd = socket.as_raw_fd();
-        let buf_size: i32 = 4 * 1024 * 1024; // 4MB
+        let receive_buffer = edge_config.udp_receive_buffer_bytes.min(i32::MAX as usize) as i32;
+        let send_buffer = edge_config.udp_send_buffer_bytes.min(i32::MAX as usize) as i32;
         unsafe {
             libc::setsockopt(
                 fd,
                 libc::SOL_SOCKET,
                 libc::SO_RCVBUF,
-                &buf_size as *const i32 as *const libc::c_void,
+                &receive_buffer as *const i32 as *const libc::c_void,
+                std::mem::size_of::<i32>() as libc::socklen_t,
+            );
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &send_buffer as *const i32 as *const libc::c_void,
                 std::mem::size_of::<i32>() as libc::socklen_t,
             );
         }
@@ -690,7 +693,6 @@ fn env_non_empty(name: &str) -> Option<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
-
 
 async fn cdr_sinks_from_env() -> Result<CdrSinks, AnyError> {
     let nats = match env::var(NATS_URL_ENV) {
@@ -2143,7 +2145,9 @@ async fn handle_register_request(
             .handle_register(&request, peer, SystemTime::now(), db_store.as_ref())
             .await
         {
-            Ok(outcome) => response_for_register_outcome(&request, &outcome),
+            Ok(outcome) => {
+                response_for_register_outcome(&request, &outcome, &edge_config.advertised_addr)
+            }
             Err(error) => response::build_response_with_owned_headers(
                 &request,
                 400,
@@ -2181,7 +2185,11 @@ fn proxy_unauthorized_for_request(request: &SipRequest, auth_config: &AuthConfig
     )
 }
 
-fn response_for_register_outcome(request: &SipRequest, outcome: &RegisterOutcome) -> Vec<u8> {
+fn response_for_register_outcome(
+    request: &SipRequest,
+    outcome: &RegisterOutcome,
+    advertised_addr: &str,
+) -> Vec<u8> {
     let mut headers = Vec::with_capacity(outcome.contacts.len() + 1);
     headers.push(("X-VOS-RS-AOR".to_string(), outcome.aor.clone()));
     headers.extend(outcome.contacts.iter().map(|contact| {
@@ -2191,10 +2199,9 @@ fn response_for_register_outcome(request: &SipRequest, outcome: &RegisterOutcome
         )
     }));
 
-    let advertised = EdgeConfig::from_env().advertised_addr;
     headers.push((
         "Service-Route".to_string(),
-        format!("<sip:{};lr>", advertised),
+        format!("<sip:{};lr>", advertised_addr),
     ));
 
     response::build_response_with_owned_headers(request, 200, "OK", &headers, "")

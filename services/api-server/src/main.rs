@@ -1,12 +1,13 @@
 mod billing;
 mod calls;
+mod metrics;
 mod numbers;
 mod recording;
 mod report;
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{get, post, put},
     Json, Router,
@@ -23,11 +24,12 @@ use billing::{
     create_rate, credit_account, delete_rate, list_accounts, list_ledger, list_rates,
     reconcile as billing_reconcile, update_rate,
 };
-use calls::{list_active, route_preview, terminate_call as calls_terminate};
+use calls::{list_active, media_metrics, route_preview, terminate_call as calls_terminate};
 use cdr_core::{
     CdrEvent, DashboardStats, DtmfEventRecord, HourlyTrend, PostgresCdrStore, SipGateway,
     SipRegistration, SipRoute, SipUser,
 };
+use metrics::{MediaMetricsSnapshot, Metrics};
 use numbers::{create_number, delete_number, list_numbers, update_number};
 use recording::{get_recording_audio, list_recordings};
 use report::{export_cdrs_csv, get_report_summary};
@@ -559,6 +561,24 @@ async fn list_anti_fraud_config() -> Result<Json<Vec<AntiFraudConfigItem>>, ApiE
     Ok(Json(Vec::new()))
 }
 
+async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let url = format!("{}/manage/media-metrics", state.sip_manage_base);
+    match reqwest::get(&url).await {
+        Ok(response) => match response.json::<MediaMetricsSnapshot>().await {
+            Ok(snapshot) => Metrics::update_media_metrics(&snapshot),
+            Err(error) => tracing::debug!(%error, "failed to decode sip-edge media metrics"),
+        },
+        Err(error) => tracing::debug!(%error, "failed to fetch sip-edge media metrics"),
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+    );
+    (headers, Metrics::encode_metrics())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -593,6 +613,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(prometheus_metrics))
         .route("/api/dashboard/stats", get(get_dashboard_stats))
         .route("/api/dashboard/trend", get(get_dashboard_trend))
         .route("/api/cdrs", get(list_cdrs))
@@ -621,6 +642,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/calls/active", get(list_active))
         .route("/api/calls/:call_id/terminate", post(calls_terminate))
         .route("/api/route-preview", get(route_preview))
+        .route("/api/media/metrics", get(media_metrics))
         .route("/api/numbers", get(list_numbers).post(create_number))
         .route(
             "/api/numbers/:number",

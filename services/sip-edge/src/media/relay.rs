@@ -1,6 +1,9 @@
 use cdr_core::DtmfEventRecord;
 use dashmap::DashMap;
-use rtp_core::{AudioCodec, RtcpPacket, RtcpReportBlock, RtpPacket, TelephoneEvent};
+use rtp_core::{
+    AudioCodec, RtcpPacket, RtcpReportBlock, RtpPacketView, SrtpConfig, SrtpContext, SrtpError,
+    TelephoneEvent,
+};
 use sdp_core::{RtpEndpoint, SdpError, SessionDescription};
 use sip_core::HeaderMap;
 use std::{
@@ -10,11 +13,14 @@ use std::{
     fmt, fs,
     fs::File,
     io,
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Seek, SeekFrom, Write},
     net::{SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     str,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        mpsc, Arc, Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{net::UdpSocket, task::JoinHandle};
@@ -36,7 +42,12 @@ const MAX_RTP_DATAGRAM_SIZE: usize = 65_535;
 const RECORDING_SAMPLE_RATE: u32 = 8_000;
 const RECORDING_CHANNELS: u16 = 2;
 const RECORDING_BITS_PER_SAMPLE: u16 = 16;
-const WAV_HEADER_LEN: u64 = 44;
+const DEFAULT_RECORDING_QUEUE_CAPACITY: usize = 4096;
+const RECORDING_QUEUE_CAPACITY_ENV: &str = "VOS_RS_RECORDING_QUEUE_CAPACITY";
+const RECORDING_WORKERS_ENV: &str = "VOS_RS_RECORDING_WORKERS";
+const DEFAULT_RECORDING_WORKERS: usize = 4;
+const RECORDING_WORKER_DRAIN_LIMIT: usize = 256;
+static NEXT_RECORDING_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaConfig {
@@ -122,6 +133,7 @@ pub struct MediaRelayState {
     peer_ports: Arc<DashMap<u16, u16>>,
     metrics: Arc<DashMap<u16, MediaRelayMetrics>>,
     recordings: Arc<DashMap<u16, RecordingLeg>>,
+    recording_pool: Arc<RecordingPool>,
     dtmf_states: Arc<DashMap<u16, DtmfState>>,
     active_loops: Arc<DashMap<u16, Vec<tokio::sync::oneshot::Sender<()>>>>,
     state: Arc<Mutex<MediaRelayStateInner>>,
@@ -134,6 +146,7 @@ impl Clone for MediaRelayState {
             peer_ports: Arc::clone(&self.peer_ports),
             metrics: Arc::clone(&self.metrics),
             recordings: Arc::clone(&self.recordings),
+            recording_pool: Arc::clone(&self.recording_pool),
             dtmf_states: Arc::clone(&self.dtmf_states),
             active_loops: Arc::clone(&self.active_loops),
             state: Arc::clone(&self.state),
@@ -148,6 +161,7 @@ impl std::fmt::Debug for MediaRelayState {
             .field("peer_ports_len", &self.peer_ports.len())
             .field("metrics_len", &self.metrics.len())
             .field("recordings_len", &self.recordings.len())
+            .field("recording_workers", &self.recording_pool.worker_count())
             .finish()
     }
 }
@@ -156,11 +170,12 @@ impl std::fmt::Debug for MediaRelayState {
 struct MediaRelayStateInner {
     next_port: u16,
     leased_rtp_ports: HashSet<u16>,
+    recording_dirs: HashSet<PathBuf>,
     dtmf_accumulators: HashMap<String, String>,
     dtmf_event_log: HashMap<String, Vec<DtmfEventRecord>>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct MediaRelayMetrics {
     pub received_packets: u64,
     pub forwarded_packets: u64,
@@ -170,11 +185,15 @@ pub struct MediaRelayMetrics {
     pub learned_source_updates: u64,
     pub rtcp_quality: RtcpQualitySnapshot,
     pub recorded_packets: u64,
+    pub recording_dropped_packets: u64,
     pub recording_errors: u64,
+    pub recording_queue_depth: u64,
+    pub recording_queue_capacity: u64,
+    pub recording_workers: u64,
     pub dtmf_events: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct RtcpQualitySnapshot {
     pub reports: u64,
     pub sender_reports: u64,
@@ -268,6 +287,31 @@ struct DtmfState {
     last_timestamp: Option<u32>,
 }
 
+/// SRTP state for one RTP direction and SSRC.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct MediaCryptoSession {
+    context: SrtpContext,
+}
+
+#[allow(dead_code)]
+impl MediaCryptoSession {
+    fn from_sdes(suite: &str, key_params: &str, ssrc: u32) -> Result<Self, SrtpError> {
+        let config = SrtpConfig::from_sdes_key_params(suite, key_params)?;
+        Ok(Self {
+            context: SrtpContext::new(config, ssrc),
+        })
+    }
+
+    fn encrypt(&mut self, packet: &mut Vec<u8>) -> Result<usize, SrtpError> {
+        self.context.encrypt_rtp(packet)
+    }
+
+    fn decrypt(&mut self, packet: &mut [u8]) -> Result<usize, SrtpError> {
+        self.context.decrypt_srtp(packet)
+    }
+}
+
 impl MediaRelayState {
     pub fn new() -> Self {
         Self {
@@ -275,11 +319,16 @@ impl MediaRelayState {
             peer_ports: Arc::new(DashMap::new()),
             metrics: Arc::new(DashMap::new()),
             recordings: Arc::new(DashMap::new()),
+            recording_pool: Arc::new(RecordingPool::new(
+                recording_worker_count(),
+                recording_queue_capacity(),
+            )),
             dtmf_states: Arc::new(DashMap::new()),
             active_loops: Arc::new(DashMap::new()),
             state: Arc::new(Mutex::new(MediaRelayStateInner {
                 next_port: DEFAULT_RTP_PORT_MIN,
                 leased_rtp_ports: HashSet::new(),
+                recording_dirs: HashSet::new(),
                 dtmf_accumulators: HashMap::new(),
                 dtmf_event_log: HashMap::new(),
             })),
@@ -341,6 +390,7 @@ impl MediaRelayState {
                     peer_ports: Arc::clone(&self.peer_ports),
                     metrics: Arc::clone(&self.metrics),
                     recordings: Arc::clone(&self.recordings),
+                    recording_pool: Arc::clone(&self.recording_pool),
                     dtmf_states: Arc::clone(&self.dtmf_states),
                     active_loops: Arc::clone(&self.active_loops),
                     state: Arc::clone(&self.state),
@@ -360,6 +410,7 @@ impl MediaRelayState {
                     peer_ports: Arc::clone(&self.peer_ports),
                     metrics: Arc::clone(&self.metrics),
                     recordings: Arc::clone(&self.recordings),
+                    recording_pool: Arc::clone(&self.recording_pool),
                     dtmf_states: Arc::clone(&self.dtmf_states),
                     active_loops: Arc::clone(&self.active_loops),
                     state: Arc::clone(&self.state),
@@ -510,7 +561,7 @@ impl MediaRelayState {
     }
 
     pub fn metrics_totals(&self) -> MediaRelayMetrics {
-        self.metrics.iter().map(|entry| *entry.value()).fold(
+        let mut totals = self.metrics.iter().map(|entry| *entry.value()).fold(
             MediaRelayMetrics::default(),
             |mut totals, metrics| {
                 totals.received_packets += metrics.received_packets;
@@ -521,11 +572,16 @@ impl MediaRelayState {
                 totals.learned_source_updates += metrics.learned_source_updates;
                 totals.rtcp_quality.merge(metrics.rtcp_quality);
                 totals.recorded_packets += metrics.recorded_packets;
+                totals.recording_dropped_packets += metrics.recording_dropped_packets;
                 totals.recording_errors += metrics.recording_errors;
                 totals.dtmf_events += metrics.dtmf_events;
                 totals
             },
-        )
+        );
+        totals.recording_queue_depth = self.recording_pool.queued_commands() as u64;
+        totals.recording_queue_capacity = self.recording_pool.total_capacity() as u64;
+        totals.recording_workers = self.recording_pool.worker_count() as u64;
+        totals
     }
 
     pub fn start_call_recording(
@@ -541,39 +597,61 @@ impl MediaRelayState {
 
         let caller_relay_port = rtp_port_for(caller_relay_port).unwrap_or(caller_relay_port);
         let gateway_relay_port = rtp_port_for(gateway_relay_port).unwrap_or(gateway_relay_port);
-        fs::create_dir_all(&config.recording_dir).map_err(recording_error)?;
+        self.ensure_recording_dir(&config.recording_dir)
+            .map_err(recording_error)?;
 
         let stem = recording_file_stem(call_id);
         let wav_path = config.recording_dir.join(format!("{stem}.wav"));
         let metadata_path = config.recording_dir.join(format!("{stem}.json"));
-        let recorder = Arc::new(Mutex::new(
-            WavCallRecorder::create(wav_path.clone()).map_err(recording_error)?,
-        ));
-        write_recording_metadata(
-            &metadata_path,
+        let session = Arc::new(RecordingSession::new(
             call_id,
-            &wav_path,
+            wav_path.clone(),
+            metadata_path,
             caller_relay_port,
             gateway_relay_port,
-        )
-        .map_err(recording_error)?;
+            Arc::clone(&self.recording_pool),
+        ));
 
         self.recordings.insert(
             caller_relay_port,
             RecordingLeg {
-                recorder: recorder.clone(),
+                session: session.clone(),
                 channel: RecordingChannel::Caller,
             },
         );
         self.recordings.insert(
             gateway_relay_port,
             RecordingLeg {
-                recorder,
+                session,
                 channel: RecordingChannel::Gateway,
             },
         );
 
         Ok(Some(wav_path))
+    }
+
+    fn ensure_recording_dir(&self, dir: &Path) -> io::Result<()> {
+        let should_create = {
+            let mut inner = self
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("media relay lock poisoned"))?;
+            inner.recording_dirs.insert(dir.to_path_buf())
+        };
+        if !should_create {
+            return Ok(());
+        }
+
+        if let Err(error) = fs::create_dir_all(dir) {
+            let mut inner = self
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("media relay lock poisoned"))?;
+            inner.recording_dirs.remove(dir);
+            return Err(error);
+        }
+
+        Ok(())
     }
 
     pub fn pair_ports(&self, first_port: u16, second_port: u16) {
@@ -629,19 +707,33 @@ impl MediaRelayState {
         });
     }
 
-    fn record_rtp_packet(&self, relay_port: u16, packet: &RtpPacket) -> Result<bool, MediaError> {
+    fn record_rtp_packet(
+        &self,
+        relay_port: u16,
+        packet: RtpPacketView<'_>,
+    ) -> Result<bool, MediaError> {
         let recording = self.recordings.get(&relay_port).map(|v| v.clone());
         let Some(recording) = recording else {
             return Ok(false);
         };
 
-        let mut recorder = recording.recorder.lock().expect("recording lock poisoned");
-        recorder
-            .record(recording.channel, packet)
+        recording
+            .session
+            .try_record(recording.channel, packet)
             .map_err(recording_error)
     }
 
-    fn process_dtmf_packet(&self, local_port: u16, packet: &RtpPacket) {
+    #[cfg(test)]
+    fn flush_recording_for_test(&self, relay_port: u16) -> Result<(), MediaError> {
+        let recording = self.recordings.get(&relay_port).map(|v| v.clone());
+        let Some(recording) = recording else {
+            return Ok(());
+        };
+
+        recording.session.flush().map_err(recording_error)
+    }
+
+    fn process_dtmf_packet(&self, local_port: u16, packet: RtpPacketView<'_>) {
         let (call_id, last_timestamp) = {
             let Some(state) = self.dtmf_states.get(&local_port) else {
                 return;
@@ -652,7 +744,7 @@ impl MediaRelayState {
             (state.call_id.clone(), state.last_timestamp)
         };
 
-        let Ok(event) = TelephoneEvent::parse(&packet.payload) else {
+        let Ok(event) = TelephoneEvent::parse(packet.payload) else {
             return;
         };
         let Some(digit) = event.digit() else {
@@ -699,7 +791,7 @@ struct SymmetricSourceUpdate {
 
 #[derive(Debug, Clone)]
 struct RecordingLeg {
-    recorder: Arc<Mutex<WavCallRecorder>>,
+    session: Arc<RecordingSession>,
     channel: RecordingChannel,
 }
 
@@ -716,21 +808,328 @@ impl RecordingChannel {
             Self::Gateway => 1,
         }
     }
+}
 
-    fn sample_offset(self) -> usize {
-        self.index() * 2
+#[derive(Debug)]
+struct RecordingSession {
+    info: Arc<RecordingSessionInfo>,
+    pool: Arc<RecordingPool>,
+}
+
+impl RecordingSession {
+    fn new(
+        call_id: &str,
+        wav_path: PathBuf,
+        metadata_path: PathBuf,
+        caller_relay_port: u16,
+        gateway_relay_port: u16,
+        pool: Arc<RecordingPool>,
+    ) -> Self {
+        Self {
+            info: Arc::new(RecordingSessionInfo {
+                id: NEXT_RECORDING_SESSION_ID.fetch_add(1, Ordering::Relaxed),
+                call_id: call_id.to_string(),
+                wav_path,
+                metadata_path,
+                caller_relay_port,
+                gateway_relay_port,
+            }),
+            pool,
+        }
     }
+
+    fn try_record(&self, channel: RecordingChannel, packet: RtpPacketView<'_>) -> io::Result<bool> {
+        if AudioCodec::from_static_payload_type(packet.payload_type).is_none()
+            || packet.payload.is_empty()
+        {
+            return Ok(false);
+        }
+
+        self.pool.try_record(
+            Arc::clone(&self.info),
+            RecordedRtpPacket {
+                channel,
+                payload_type: packet.payload_type,
+                timestamp: packet.timestamp,
+                payload: packet.payload.to_vec(),
+            },
+        )
+    }
+
+    #[cfg(test)]
+    fn flush(&self) -> io::Result<()> {
+        self.pool.flush(Arc::clone(&self.info))
+    }
+}
+
+impl Drop for RecordingSession {
+    fn drop(&mut self) {
+        self.pool.finish(self.info.id);
+    }
+}
+
+#[derive(Debug)]
+struct RecordingSessionInfo {
+    id: u64,
+    call_id: String,
+    wav_path: PathBuf,
+    metadata_path: PathBuf,
+    caller_relay_port: u16,
+    gateway_relay_port: u16,
+}
+
+#[derive(Debug)]
+struct RecordingPool {
+    workers: Vec<RecordingWorkerHandle>,
+    queue_capacity: usize,
+}
+
+#[derive(Debug)]
+struct RecordingWorkerHandle {
+    sender: mpsc::SyncSender<RecordingCommand>,
+    pending_commands: Arc<AtomicUsize>,
+}
+
+impl RecordingPool {
+    fn new(worker_count: usize, queue_capacity: usize) -> Self {
+        let worker_count = worker_count.max(1);
+        let queue_capacity = queue_capacity.max(1);
+        let mut workers = Vec::with_capacity(worker_count);
+        for worker_index in 0..worker_count {
+            let (sender, receiver) = mpsc::sync_channel(queue_capacity);
+            let pending_commands = Arc::new(AtomicUsize::new(0));
+            match spawn_recording_worker(worker_index, receiver, Arc::clone(&pending_commands)) {
+                Ok(()) => workers.push(RecordingWorkerHandle {
+                    sender,
+                    pending_commands,
+                }),
+                Err(error) => warn!(%error, worker_index, "failed to spawn recording worker"),
+            }
+        }
+        Self {
+            workers,
+            queue_capacity,
+        }
+    }
+
+    fn worker_count(&self) -> usize {
+        self.workers.len()
+    }
+
+    fn queued_commands(&self) -> usize {
+        self.workers
+            .iter()
+            .map(|worker| worker.pending_commands.load(Ordering::Relaxed))
+            .sum()
+    }
+
+    fn total_capacity(&self) -> usize {
+        self.workers.len() * self.queue_capacity
+    }
+
+    fn try_record(
+        &self,
+        session: Arc<RecordingSessionInfo>,
+        packet: RecordedRtpPacket,
+    ) -> io::Result<bool> {
+        self.try_send(session.id, RecordingCommand::Packet { session, packet })?;
+        Ok(true)
+    }
+
+    #[cfg(test)]
+    fn flush(&self, session: Arc<RecordingSessionInfo>) -> io::Result<()> {
+        let (sender, receiver) = mpsc::channel();
+        self.send(
+            session.id,
+            RecordingCommand::Flush {
+                session,
+                reply: sender,
+            },
+        )?;
+        receiver
+            .recv()
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "recording worker is stopped"))?
+    }
+
+    fn finish(&self, session_id: u64) {
+        let _ = self.try_send(session_id, RecordingCommand::Finish { session_id });
+    }
+
+    fn try_send(&self, session_id: u64, command: RecordingCommand) -> io::Result<()> {
+        let worker = self.worker(session_id)?;
+        match worker.sender.try_send(command) {
+            Ok(()) => {
+                worker.pending_commands.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(mpsc::TrySendError::Full(_)) => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "recording queue is full",
+            )),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "recording worker is stopped",
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    fn send(&self, session_id: u64, command: RecordingCommand) -> io::Result<()> {
+        let worker = self.worker(session_id)?;
+        worker.sender.send(command).map_err(|_| {
+            io::Error::new(io::ErrorKind::BrokenPipe, "recording worker is stopped")
+        })?;
+        worker.pending_commands.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn worker(&self, session_id: u64) -> io::Result<&RecordingWorkerHandle> {
+        if self.workers.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "recording worker pool is unavailable",
+            ));
+        }
+        let index = session_id as usize % self.workers.len();
+        Ok(&self.workers[index])
+    }
+}
+
+fn spawn_recording_worker(
+    worker_index: usize,
+    receiver: mpsc::Receiver<RecordingCommand>,
+    pending_commands: Arc<AtomicUsize>,
+) -> io::Result<()> {
+    std::thread::Builder::new()
+        .name(format!("vos-rs-recording-{worker_index}"))
+        .spawn(move || run_recording_worker(worker_index, receiver, pending_commands))
+        .map(|_| ())
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("failed to spawn recording worker: {error}"),
+            )
+        })
+}
+
+fn run_recording_worker(
+    worker_index: usize,
+    receiver: mpsc::Receiver<RecordingCommand>,
+    pending_commands: Arc<AtomicUsize>,
+) {
+    let mut recorders = HashMap::<u64, WavCallRecorder>::new();
+    while let Ok(command) = receiver.recv() {
+        pending_commands.fetch_sub(1, Ordering::Relaxed);
+        handle_recording_command(command, &mut recorders);
+
+        for _ in 0..RECORDING_WORKER_DRAIN_LIMIT {
+            let Ok(command) = receiver.try_recv() else {
+                break;
+            };
+            pending_commands.fetch_sub(1, Ordering::Relaxed);
+            handle_recording_command(command, &mut recorders);
+        }
+    }
+
+    for (session_id, mut recorder) in recorders {
+        if let Err(error) = recorder.flush_recording() {
+            warn!(%error, session_id, worker_index, "failed to finalize call recording");
+        }
+    }
+}
+
+fn handle_recording_command(
+    command: RecordingCommand,
+    recorders: &mut HashMap<u64, WavCallRecorder>,
+) {
+    match command {
+        RecordingCommand::Packet { session, packet } => {
+            let recorder = match recorder_for_session(recorders, &session) {
+                Ok(recorder) => recorder,
+                Err(error) => {
+                    warn!(%error, session_id = session.id, "failed to open call recording");
+                    return;
+                }
+            };
+            if let Err(error) = recorder.record(
+                packet.channel,
+                packet.payload_type,
+                packet.timestamp,
+                &packet.payload,
+            ) {
+                warn!(%error, session_id = session.id, "failed to write RTP packet to recording");
+            }
+        }
+        #[cfg(test)]
+        RecordingCommand::Flush { session, reply } => {
+            let result = recorder_for_session(recorders, &session)
+                .and_then(WavCallRecorder::flush_recording);
+            let _ = reply.send(result);
+        }
+        RecordingCommand::Finish { session_id } => {
+            if let Some(mut recorder) = recorders.remove(&session_id) {
+                if let Err(error) = recorder.flush_recording() {
+                    warn!(%error, session_id, "failed to finalize call recording");
+                }
+            }
+        }
+    }
+}
+
+fn recorder_for_session<'a>(
+    recorders: &'a mut HashMap<u64, WavCallRecorder>,
+    session: &RecordingSessionInfo,
+) -> io::Result<&'a mut WavCallRecorder> {
+    if let std::collections::hash_map::Entry::Vacant(entry) = recorders.entry(session.id) {
+        write_recording_metadata(
+            &session.metadata_path,
+            &session.call_id,
+            &session.wav_path,
+            session.caller_relay_port,
+            session.gateway_relay_port,
+        )?;
+        let recorder = WavCallRecorder::create(session.wav_path.clone())?;
+        entry.insert(recorder);
+    }
+    recorders
+        .get_mut(&session.id)
+        .ok_or_else(|| io::Error::other("recording session was not initialized"))
+}
+
+struct RecordedRtpPacket {
+    channel: RecordingChannel,
+    payload_type: u8,
+    timestamp: u32,
+    payload: Vec<u8>,
+}
+
+enum RecordingCommand {
+    Packet {
+        session: Arc<RecordingSessionInfo>,
+        packet: RecordedRtpPacket,
+    },
+    #[cfg(test)]
+    Flush {
+        session: Arc<RecordingSessionInfo>,
+        reply: mpsc::Sender<io::Result<()>>,
+    },
+    Finish {
+        session_id: u64,
+    },
 }
 
 #[derive(Debug)]
 struct WavCallRecorder {
     file: File,
     frames_written: u64,
+    flushed_frames: u64,
     base_timestamps: [Option<u32>; 2],
     frames_since_flush: u64,
+    interleaved_samples: Vec<i16>,
+    write_buffer: Vec<u8>,
 }
 
-const FLUSH_INTERVAL: u64 = 100; // flush every 100 frames (2s at 50fps)
+const RECORDING_FLUSH_INTERVAL_FRAMES: u64 = RECORDING_SAMPLE_RATE as u64 * 2;
 
 impl WavCallRecorder {
     fn create(path: PathBuf) -> io::Result<Self> {
@@ -744,53 +1143,49 @@ impl WavCallRecorder {
         Ok(Self {
             file,
             frames_written: 0,
+            flushed_frames: 0,
             base_timestamps: [None, None],
             frames_since_flush: 0,
+            interleaved_samples: Vec::new(),
+            write_buffer: Vec::new(),
         })
     }
 
-    fn record(&mut self, channel: RecordingChannel, packet: &RtpPacket) -> io::Result<bool> {
-        let codec = match AudioCodec::from_static_payload_type(packet.payload_type) {
+    fn record(
+        &mut self,
+        channel: RecordingChannel,
+        payload_type: u8,
+        timestamp: u32,
+        payload: &[u8],
+    ) -> io::Result<bool> {
+        let codec = match AudioCodec::from_static_payload_type(payload_type) {
             Some(c) => c,
             None => return Ok(false),
         };
-        if packet.payload.is_empty() {
+        if payload.is_empty() {
             return Ok(false);
         }
 
-        let num_samples = packet.payload.len();
-        let start_frame = self.start_frame(channel, packet.timestamp);
+        let num_samples = payload.len();
+        let start_frame = self.start_frame(channel, timestamp);
         self.ensure_frames(start_frame + num_samples as u64)?;
+        if start_frame < self.flushed_frames {
+            return Ok(true);
+        }
 
-        let base_offset = WAV_HEADER_LEN + start_frame * u64::from(RECORDING_CHANNELS) * 2;
-        let sample_offset = channel.sample_offset();
-        self.file
-            .seek(SeekFrom::Start(base_offset + sample_offset as u64))?;
-
-        // Decode and write samples inline (no Vec allocation)
-        for &payload_byte in &packet.payload {
+        for (sample_index, &payload_byte) in payload.iter().enumerate() {
             let sample = match codec {
                 AudioCodec::Pcmu => decode_pcmu(payload_byte),
                 AudioCodec::Pcma => decode_pcma(payload_byte),
             };
-            let bytes = sample.to_le_bytes();
-            self.file.write_all(&bytes)?;
-            if RECORDING_CHANNELS > 1 {
-                let skip = 2_usize * (RECORDING_CHANNELS as usize - 1);
-                let mut skip_buf = [0_u8; 8];
-                self.file.read_exact(&mut skip_buf[..skip])?;
-                self.file.seek(SeekFrom::Current(-(skip as i64)))?;
-            }
+            let frame = start_frame + sample_index as u64;
+            self.set_sample(frame, channel, sample);
         }
 
         self.frames_since_flush += num_samples as u64;
-        if self.frames_since_flush >= FLUSH_INTERVAL {
-            self.refresh_header()?;
-            self.flush()?;
+        if self.frames_since_flush >= RECORDING_FLUSH_INTERVAL_FRAMES {
+            self.flush_ready_frames(false)?;
             self.frames_since_flush = 0;
-        } else {
-            // Update header but don't flush yet
-            self.update_header_only()?;
         }
         Ok(true)
     }
@@ -801,29 +1196,61 @@ impl WavCallRecorder {
     }
 
     fn ensure_frames(&mut self, target_frames: u64) -> io::Result<()> {
-        if self.frames_written >= target_frames {
+        if self.frames_written >= target_frames || target_frames <= self.flushed_frames {
             return Ok(());
         }
 
-        self.file.seek(SeekFrom::End(0))?;
-        let missing_frames = target_frames - self.frames_written;
-        let silence = [0_u8; 4];
-        // Batch write silence in chunks instead of byte-by-byte
-        const SILENCE_CHUNK: usize = 640; // 10ms at 8kHz stereo
-        let mut remaining = missing_frames as usize;
-        while remaining > 0 {
-            let chunk = remaining.min(SILENCE_CHUNK);
-            for _ in 0..chunk {
-                self.file.write_all(&silence)?;
-            }
-            remaining -= chunk;
-        }
+        let buffered_frames = target_frames - self.flushed_frames;
+        let samples = buffered_frames as usize * usize::from(RECORDING_CHANNELS);
+        self.interleaved_samples.resize(samples, 0);
         self.frames_written = target_frames;
         Ok(())
     }
 
+    fn set_sample(&mut self, frame: u64, channel: RecordingChannel, sample: i16) {
+        let relative_frame = frame - self.flushed_frames;
+        let offset = relative_frame as usize * usize::from(RECORDING_CHANNELS) + channel.index();
+        if let Some(slot) = self.interleaved_samples.get_mut(offset) {
+            *slot = sample;
+        }
+    }
+
+    fn flush_ready_frames(&mut self, final_flush: bool) -> io::Result<()> {
+        let buffered_frames = self.frames_written.saturating_sub(self.flushed_frames);
+        if buffered_frames == 0 {
+            if final_flush {
+                self.refresh_header()?;
+                self.flush()?;
+            }
+            return Ok(());
+        }
+
+        let frames_to_write = if final_flush {
+            buffered_frames
+        } else {
+            buffered_frames.saturating_sub(RECORDING_FLUSH_INTERVAL_FRAMES)
+        };
+        if frames_to_write == 0 {
+            return Ok(());
+        }
+
+        let sample_count = frames_to_write as usize * usize::from(RECORDING_CHANNELS);
+        self.write_buffer.clear();
+        self.write_buffer.reserve(sample_count * 2);
+        for sample in self.interleaved_samples.iter().take(sample_count) {
+            self.write_buffer.extend_from_slice(&sample.to_le_bytes());
+        }
+
+        self.file.seek(SeekFrom::End(0))?;
+        self.file.write_all(&self.write_buffer)?;
+        self.interleaved_samples.drain(..sample_count);
+        self.flushed_frames += frames_to_write;
+        self.refresh_header()?;
+        self.flush()
+    }
+
     fn refresh_header(&mut self) -> io::Result<()> {
-        let data_bytes = u32::try_from(self.frames_written * u64::from(RECORDING_CHANNELS) * 2)
+        let data_bytes = u32::try_from(self.flushed_frames * u64::from(RECORDING_CHANNELS) * 2)
             .map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidData, "WAV recording is too large")
             })?;
@@ -833,12 +1260,12 @@ impl WavCallRecorder {
         Ok(())
     }
 
-    fn update_header_only(&mut self) -> io::Result<()> {
-        self.refresh_header()
-    }
-
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()
+    }
+
+    fn flush_recording(&mut self) -> io::Result<()> {
+        self.flush_ready_frames(true)
     }
 }
 
@@ -964,7 +1391,11 @@ fn json_escape(value: &str) -> String {
 }
 
 fn recording_error(error: io::Error) -> MediaError {
-    MediaError::Recording(error.to_string())
+    if error.kind() == io::ErrorKind::WouldBlock {
+        MediaError::RecordingQueueFull
+    } else {
+        MediaError::Recording(error.to_string())
+    }
 }
 
 impl Default for MediaRelayState {
@@ -979,6 +1410,7 @@ pub enum MediaError {
     InvalidEndpoint(String),
     PortRangeExhausted { port_min: u16, port_max: u16 },
     Recording(String),
+    RecordingQueueFull,
     Sdp(SdpError),
     Io(String),
 }
@@ -992,6 +1424,7 @@ impl fmt::Display for MediaError {
                 write!(f, "RTP port range exhausted: {port_min}-{port_max}")
             }
             Self::Recording(error) => write!(f, "recording error: {error}"),
+            Self::RecordingQueueFull => write!(f, "recording queue is full"),
             Self::Sdp(error) => write!(f, "{error}"),
             Self::Io(error) => write!(f, "media IO error: {error}"),
         }
@@ -1255,6 +1688,7 @@ pub async fn spawn_rtp_relay_listeners(
             peer_ports: Arc::clone(&relay.peer_ports),
             metrics: Arc::clone(&relay.metrics),
             recordings: Arc::clone(&relay.recordings),
+            recording_pool: Arc::clone(&relay.recording_pool),
             dtmf_states: Arc::clone(&relay.dtmf_states),
             active_loops: Arc::clone(&relay.active_loops),
             state: Arc::clone(&relay.state),
@@ -1290,9 +1724,9 @@ impl MediaPacketKind {
         }
     }
 
-    fn inspect(self, packet: &[u8]) -> Result<MediaPacketSummary, rtp_core::RtpError> {
+    fn inspect<'a>(self, packet: &'a [u8]) -> Result<MediaPacketSummary<'a>, rtp_core::RtpError> {
         match self {
-            Self::Rtp => RtpPacket::parse(packet).map(|rtp_packet| MediaPacketSummary {
+            Self::Rtp => RtpPacketView::parse(packet).map(|rtp_packet| MediaPacketSummary {
                 rtp_packet: Some(rtp_packet),
                 ..MediaPacketSummary::default()
             }),
@@ -1305,12 +1739,12 @@ impl MediaPacketKind {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct MediaPacketSummary {
-    rtp_packet: Option<RtpPacket>,
+struct MediaPacketSummary<'a> {
+    rtp_packet: Option<RtpPacketView<'a>>,
     rtcp_quality: RtcpQualitySnapshot,
 }
 
-fn rtcp_summary(packets: &[RtcpPacket]) -> Result<MediaPacketSummary, rtp_core::RtpError> {
+fn rtcp_summary(packets: &[RtcpPacket]) -> Result<MediaPacketSummary<'static>, rtp_core::RtpError> {
     let mut rtcp_quality = RtcpQualitySnapshot::default();
     let arrival_ntp_middle_32 = compact_ntp_middle_32_now();
 
@@ -1444,12 +1878,17 @@ async fn relay_media_port(
 
         if let Some(s) = &summary {
             if let Some(rtp_packet) = s.rtp_packet.as_ref() {
-                relay.process_dtmf_packet(local_port, rtp_packet);
-                match relay.record_rtp_packet(local_port, rtp_packet) {
+                relay.process_dtmf_packet(local_port, *rtp_packet);
+                match relay.record_rtp_packet(local_port, *rtp_packet) {
                     Ok(true) => {
                         relay.record_metric(local_port, |metrics| metrics.recorded_packets += 1);
                     }
                     Ok(false) => {}
+                    Err(MediaError::RecordingQueueFull) => {
+                        relay.record_metric(local_port, |metrics| {
+                            metrics.recording_dropped_packets += 1
+                        });
+                    }
                     Err(error) => {
                         relay.record_metric(local_port, |metrics| metrics.recording_errors += 1);
                         warn!(%error, %source, local_port, "failed to record RTP packet");
@@ -1498,6 +1937,28 @@ fn env_bool(name: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
+}
+
+fn env_usize(name: &str) -> Option<usize> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+}
+
+fn recording_worker_count() -> usize {
+    env_usize(RECORDING_WORKERS_ENV)
+        .filter(|workers| *workers > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|parallelism| parallelism.get().clamp(1, DEFAULT_RECORDING_WORKERS))
+                .unwrap_or(DEFAULT_RECORDING_WORKERS)
+        })
+}
+
+fn recording_queue_capacity() -> usize {
+    env_usize(RECORDING_QUEUE_CAPACITY_ENV)
+        .filter(|capacity| *capacity > 0)
+        .unwrap_or(DEFAULT_RECORDING_QUEUE_CAPACITY)
 }
 
 fn even_port_at_or_above(port: u16) -> Option<u16> {
@@ -1569,13 +2030,49 @@ fn compatible_audio_payloads(session: &SessionDescription) -> Result<Vec<String>
 mod tests {
     use super::{
         is_sdp_body, parse_sdp_rtp_endpoint, rewrite_sdp_body, spawn_rtp_relay_listeners,
-        MediaConfig, MediaError, MediaRelayMetrics, MediaRelayState,
+        MediaConfig, MediaCryptoSession, MediaError, MediaRelayMetrics, MediaRelayState,
+        RtpPacketView,
     };
+    use rtp_core::{SrtpConfig, SrtpContext};
     use sdp_core::RtpEndpoint;
     use sip_core::{HeaderMap, HeaderName, HeaderValue};
     use std::{fs, net::SocketAddr, path::PathBuf};
     use tokio::net::UdpSocket;
     use tokio::time::{sleep, timeout, Duration};
+
+    #[test]
+    fn recording_pool_reports_capacity_and_queue_depth() {
+        let pool = super::RecordingPool::new(2, 3);
+
+        assert_eq!(pool.worker_count(), 2);
+        assert_eq!(pool.total_capacity(), 6);
+        assert_eq!(pool.queued_commands(), 0);
+    }
+
+    #[test]
+    fn media_crypto_session_round_trips_rtp_payload() {
+        let config = SrtpConfig {
+            master_key: [7u8; 16],
+            master_salt: [9u8; 14],
+            profile: rtp_core::SrtpProfile::Aes128CmHmacSha1_80,
+        };
+        let mut sender = MediaCryptoSession {
+            context: SrtpContext::new(config.clone(), 0x0102_0304),
+        };
+        let mut receiver = MediaCryptoSession {
+            context: SrtpContext::new(config, 0x0102_0304),
+        };
+        let mut packet = vec![
+            0x80, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x01, 0x02, 0x03, 0x04, 1, 2, 3, 4,
+        ];
+
+        let original = packet.clone();
+        sender.encrypt(&mut packet).unwrap();
+        assert_ne!(packet, original);
+        let decrypted_len = receiver.decrypt(&mut packet).unwrap();
+        packet.truncate(decrypted_len);
+        assert_eq!(packet, original);
+    }
 
     #[test]
     fn detects_application_sdp_with_parameters() {
@@ -1655,15 +2152,16 @@ mod tests {
             .unwrap()
             .encode()
             .unwrap();
-        let caller_packet = rtp_core::RtpPacket::parse(&caller_packet).unwrap();
-        assert!(relay.record_rtp_packet(40_000, &caller_packet).unwrap());
+        let caller_packet = RtpPacketView::parse(&caller_packet).unwrap();
+        assert!(relay.record_rtp_packet(40_000, caller_packet).unwrap());
 
         let gateway_packet = rtp_core::RtpPacket::new(8, 1, 0, 24, vec![0xd5, 0xd5])
             .unwrap()
             .encode()
             .unwrap();
-        let gateway_packet = rtp_core::RtpPacket::parse(&gateway_packet).unwrap();
-        assert!(relay.record_rtp_packet(40_002, &gateway_packet).unwrap());
+        let gateway_packet = RtpPacketView::parse(&gateway_packet).unwrap();
+        assert!(relay.record_rtp_packet(40_002, gateway_packet).unwrap());
+        relay.flush_recording_for_test(40_000).unwrap();
 
         let bytes = fs::read(&wav_path).unwrap();
         assert_eq!(&bytes[0..4], b"RIFF");
@@ -1680,6 +2178,8 @@ mod tests {
         assert_eq!(bytes.len(), 52);
         assert_eq!(i16::from_le_bytes([bytes[44], bytes[45]]), 0);
         assert_eq!(i16::from_le_bytes([bytes[46], bytes[47]]), 8);
+        assert_eq!(i16::from_le_bytes([bytes[48], bytes[49]]), 0);
+        assert_eq!(i16::from_le_bytes([bytes[50], bytes[51]]), 8);
 
         let metadata_path = wav_path.with_extension("json");
         let metadata = fs::read_to_string(metadata_path).unwrap();
@@ -1840,7 +2340,11 @@ mod tests {
         assert_eq!(metrics.dropped_invalid_packets, 0);
         assert_eq!(metrics.dropped_no_target_packets, 0);
         assert_eq!(metrics.send_errors, 0);
-        assert_eq!(relay.metrics_totals(), metrics);
+        let totals = relay.metrics_totals();
+        assert_eq!(totals.received_packets, metrics.received_packets);
+        assert_eq!(totals.forwarded_packets, metrics.forwarded_packets);
+        assert!(totals.recording_workers > 0);
+        assert!(totals.recording_queue_capacity >= totals.recording_workers);
 
         for handle in handles {
             handle.abort();
@@ -2159,18 +2663,18 @@ mod tests {
         // 2. Simulate sending DTMF digit '5' (Event=5) with timestamp 1000
         // Payload: event=5, flags=0 (E=0), duration=80
         let payload1 = vec![5, 0, 0, 80];
-        let packet1 = rtp_core::RtpPacket::new(pt, 1, 1000, 42, payload1).unwrap();
-        relay.process_dtmf_packet(local_port, &packet1);
+        let packet1 = encoded_rtp_packet(pt, 1, 1000, payload1);
+        relay.process_dtmf_packet(local_port, RtpPacketView::parse(&packet1).unwrap());
 
         // Send a duplicate packet of '5' (same timestamp)
         let payload2 = vec![5, 0x80, 0, 240]; // E=1
-        let packet2 = rtp_core::RtpPacket::new(pt, 2, 1000, 42, payload2).unwrap();
-        relay.process_dtmf_packet(local_port, &packet2);
+        let packet2 = encoded_rtp_packet(pt, 2, 1000, payload2);
+        relay.process_dtmf_packet(local_port, RtpPacketView::parse(&packet2).unwrap());
 
         // 3. Simulate sending DTMF digit '#' (Event=11) with timestamp 2000
         let payload3 = vec![11, 0, 0, 80];
-        let packet3 = rtp_core::RtpPacket::new(pt, 3, 2000, 42, payload3).unwrap();
-        relay.process_dtmf_packet(local_port, &packet3);
+        let packet3 = encoded_rtp_packet(pt, 3, 2000, payload3);
+        relay.process_dtmf_packet(local_port, RtpPacketView::parse(&packet3).unwrap());
 
         // 4. Verify reconstructed digits
         let digits = relay.get_dtmf_digits(call_id).unwrap();
@@ -2180,6 +2684,18 @@ mod tests {
         // 5. Clear digits and verify
         relay.clear_dtmf_digits(call_id);
         assert!(relay.get_dtmf_digits(call_id).is_none());
+    }
+
+    fn encoded_rtp_packet(
+        payload_type: u8,
+        sequence: u16,
+        timestamp: u32,
+        payload: Vec<u8>,
+    ) -> Vec<u8> {
+        rtp_core::RtpPacket::new(payload_type, sequence, timestamp, 42, payload)
+            .unwrap()
+            .encode()
+            .unwrap()
     }
 
     #[tokio::test]

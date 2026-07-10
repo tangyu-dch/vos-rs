@@ -11,9 +11,9 @@ import {
   Tag,
 } from '@arco-design/web-react';
 import { IconSearch, IconDownload } from '@arco-design/web-react/icon';
-import * as echarts from 'echarts';
 import { apiService } from '@/services/api';
 import type { ReportSummary } from '@/types';
+import { graphic, init, type ECharts } from '@/utils/charts';
 
 const { Row, Col } = Grid;
 
@@ -68,13 +68,13 @@ export default function Reports() {
   const [activeRange, setActiveRange] = useState('最近 7 天');
 
   const trendRef = useRef<HTMLDivElement>(null);
-  const trendChart = useRef<echarts.ECharts | null>(null);
+  const trendChart = useRef<ECharts | null>(null);
   const pieRef = useRef<HTMLDivElement>(null);
-  const pieChart = useRef<echarts.ECharts | null>(null);
+  const pieChart = useRef<ECharts | null>(null);
   const durationRef = useRef<HTMLDivElement>(null);
-  const durationChart = useRef<echarts.ECharts | null>(null);
+  const durationChart = useRef<ECharts | null>(null);
   const mosRef = useRef<HTMLDivElement>(null);
-  const mosChart = useRef<echarts.ECharts | null>(null);
+  const mosChart = useRef<ECharts | null>(null);
 
   const load = async (opts?: { start?: string; end?: string }) => {
     setLoading(true);
@@ -119,7 +119,7 @@ export default function Reports() {
     const answeredData = fullDays.map(d => dayMap.get(d)?.answered ?? 0);
 
     if (trendRef.current) {
-      trendChart.current ||= echarts.init(trendRef.current);
+      trendChart.current ||= init(trendRef.current);
     const tc = getThemeColors();
     trendChart.current.setOption({
       tooltip: { trigger: 'axis', backgroundColor: tc.cardBg, borderColor: tc.borderSubtle, textStyle: { color: tc.textPrimary } },
@@ -130,7 +130,7 @@ export default function Reports() {
       series: [
         {
           name: '总呼叫', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
-          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          areaStyle: { color: new graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: 'rgba(129,140,248,0.25)' }, { offset: 1, color: 'rgba(129,140,248,0.01)' },
           ]) },
           lineStyle: { color: '#818cf8', width: 2 },
@@ -139,7 +139,7 @@ export default function Reports() {
         },
         {
           name: '已接通', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
-          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          areaStyle: { color: new graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: 'rgba(34,211,238,0.25)' }, { offset: 1, color: 'rgba(34,211,238,0.01)' },
           ]) },
           lineStyle: { color: '#22d3ee', width: 2 },
@@ -152,7 +152,7 @@ export default function Reports() {
 
     if (pieRef.current) {
       const tc = getThemeColors();
-      pieChart.current ||= echarts.init(pieRef.current);
+      pieChart.current ||= init(pieRef.current);
       pieChart.current.setOption({
         tooltip: { trigger: 'item', backgroundColor: tc.cardBg, borderColor: tc.borderSubtle, textStyle: { color: tc.textPrimary } },
         legend: { bottom: 0, icon: 'circle', textStyle: { color: tc.textSecondary } },
@@ -171,7 +171,7 @@ export default function Reports() {
 
     if (durationRef.current) {
       const tc = getThemeColors();
-      durationChart.current ||= echarts.init(durationRef.current);
+      durationChart.current ||= init(durationRef.current);
       durationChart.current.setOption({
         tooltip: { trigger: 'axis', backgroundColor: tc.cardBg, borderColor: tc.borderSubtle, textStyle: { color: tc.textPrimary }, formatter: (p: any) => `${p[0]?.name}<br/>${p[0]?.marker} 平均通话: ${p[0]?.value} 秒` },
         grid: { left: 80, right: 16, top: 16, bottom: 40 },
@@ -186,7 +186,7 @@ export default function Reports() {
         },
         series: [{
           type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
-          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          areaStyle: { color: new graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: 'rgba(129,140,248,0.3)' },
             { offset: 1, color: 'rgba(129,140,248,0.02)' },
           ]) },
@@ -203,7 +203,7 @@ export default function Reports() {
 
     if (mosRef.current && summary.avg_mos) {
       const tc = getThemeColors();
-      mosChart.current ||= echarts.init(mosRef.current);
+      mosChart.current ||= init(mosRef.current);
       mosChart.current.setOption({
         series: [{
           type: 'gauge',

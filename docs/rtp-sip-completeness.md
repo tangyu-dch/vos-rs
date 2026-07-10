@@ -6,7 +6,35 @@
 
 - SIP 控制面覆盖度：足以在 UDP 上运行基本的 B2BUA 呼叫流程。
 - RTP 媒体面覆盖度：足以通过 G.711 PCMU 和 PCMA 进行普通 RTP 中继。
+- SDP 音频媒体段 SDES-SRTP `a=crypto` 属性解析已加入 `sdp-core`，可提取 crypto tag、suite、key parameters 和 session parameters；`rtp-core` 已支持将 `inline:` key parameters 解码为 `SrtpConfig`。
 - 最主要的遗留差距：完整的 SIP 服务端事务/高级对话行为、高级 NAT 穿透、高级 RTCP 通话质量报告、SRTP、生产环境路由策略、集群状态以及运维可观测性。
+
+## 当前本机性能基线
+
+最近一次本机 SIPp + RTP 压测日期：2026-07-09。测试环境为本地 loopback，`sip-edge` release 构建，PostgreSQL/NATS 关闭，RTP 端口范围 `40000-65000`，媒体由 `tools/sipp/rtp_range_sender.py` 生成。
+
+| 场景 | 条件 | 当前结果 |
+|------|------|----------|
+| SIP + RTP relay，录音关闭 | 20k RTP pps，2048 个 relay RTP 端口扫发 | 400 target CPS / 2200 calls / 0 failed 通过；450 target CPS / 2400 calls 出现失败 |
+| SIP + RTP relay + 录音开启 | 1000 RTP pps，1024 个 relay RTP 端口扫发，`VOS_RS_RECORDING_WORKERS=4` | 300 target CPS / 1800 calls / 0 failed 通过 |
+| SIP + RTP relay + 录音开启 | 5k RTP pps，512 个 relay RTP 端口扫发，`VOS_RS_RECORDING_WORKERS=4` | 80 target CPS / 500 calls / 0 failed 通过；100 target CPS / 600 calls 出现 5 failed |
+| SIP + RTP relay + 录音开启 | 5k RTP pps，512 个 relay RTP 端口扫发，`VOS_RS_RECORDING_WORKERS=8` | 100 target CPS / 600 calls / 0 failed；录音丢包 207 |
+| SIP + RTP relay + 录音开启 | 5k RTP pps，512 个 relay RTP 端口扫发，`VOS_RS_RECORDING_WORKERS=16` | 100 target CPS / 600 calls / 5 failed；录音丢包 1，不建议无 CPU 余量时继续增加 worker |
+
+已做的相关优化：
+
+- `tools/sipp/run_bench_media.sh` 现在使用长通话 SIPp 场景、SIPp timeout、真实 RTP 发送器和 edge 侧媒体计数器，避免旧脚本把“无媒体呼叫”误当成媒体 CPS。
+- `tools/sipp/rtp_range_sender.py` 会按配置的 RTP 端口范围发送 PCMU RTP，并在收到 TERM/INT 时输出最终发包统计。
+- 录音启动改为懒加载：接通路径只登记录音 session，首次收到 RTP 时才创建 WAV、写 JSON 元数据并启动录音 worker。
+- 录音从“每通一个 OS thread”改为固定 worker pool，同一通话固定分配到同一 worker，避免高 CPS 下线程爆炸。
+- WAV 录音不再每个 RTP 包随机 seek/read/write 和刷新 header，改为内存双声道混音缓冲、周期性顺序写入，并在录音结束时最终刷新 header。
+- sip-edge 管理 API 新增 `/manage/media-metrics`，api-server 新增 `/api/media/metrics`，并将媒体聚合指标接入 `/metrics` Prometheus 文本输出，可直接观察录音队列深度、队列容量、worker 数、录音队列丢包与录音错误计数。
+
+仍需优化的性能风险：
+
+- 当前录音已经使用固定 worker pool，但仍和 `sip-edge` 同进程竞争 CPU/磁盘；生产目标建议拆成专用媒体录音进程或独立媒体节点。
+- WAV 混音已改为内存缓冲和顺序写，录音队列容量可通过 `VOS_RS_RECORDING_QUEUE_CAPACITY` 调整，但高 pps 下仍受本地磁盘、worker 数、channel backpressure 和 SIPp 本机 UDP buffer 影响。
+- 高 CPS 失败档会出现 INVITE/BYE client transaction timeout，需继续优化 SIP 事务调度、UDP socket buffer、SIPp 多实例压测方式和本机内核 UDP buffer。
 
 ## SIP 协议覆盖范围
 
@@ -75,14 +103,14 @@
 未完成：
 
 - 基于转发生成的 RTCP 报告生成、长窗口丢包统计、抖动趋势跟踪以及 MOS/R-factor 通话质量报告。
-- SRTP、DTLS-SRTP、SDES 密钥处理以及媒体加密策略。
+- SRTP/DTLS-SRTP 在 `rtp-core` 已有上下文和加解密基础；SDES `a=crypto` 已可解析，但尚未接入 SIP Edge 的 Offer/Answer 选择、RTP Relay 加解密和端到端媒体测试。
 - 高级对称 RTP 策略、源绑定、基于超时的重新学习和反欺骗（anti-spoofing）。
 - ICE/STUN/TURN 支持（注：基础 STUN 发现已实现，用于公网地址发现）。
-- 更完整的 DTMF 实时事件流、Prometheus 指标导出、按租户策略控制以及失败/异常事件告警（注：DTMF 事件审计明细表已落库至 `dtmf_events`）。
+- 更完整的 DTMF 实时事件流、按租户策略控制以及失败/异常事件告警（注：DTMF 事件审计明细表已落库至 `dtmf_events`，媒体聚合指标已可通过管理 API 与 Prometheus `/metrics` 查询）。
 - 转码、编解码器首选策略、ptime/maxptime 协商、舒适噪音、静音抑制以及当前 PCMU/PCMA 路径之外的动态负载映射。
 - 多个 `m=` 媒体部分、视频、T.38、RTP Bundle 及高级 Offer/Answer 行为。
 - 更稳健的单呼叫媒体销毁保障及分布式媒体中继协同。
-- 录音文件轮转、保留策略、外部对象存储上传、合法拦截（lawful intercept）接口、QoS/DSCP 标记以及 Prometheus 指标导出。
+- 录音文件轮转、保留策略、合法拦截（lawful intercept）接口、QoS/DSCP 标记以及更细粒度的按租户/按网关 Prometheus 指标导出。
 
 ## 推荐的后续步骤与演进路线图
 

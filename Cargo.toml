@@ -5,9 +5,10 @@ members = [
     "crates/rtp-core",
     "crates/sdp-core",
     "crates/sip-core",
+    "crates/storage-core",
+    "services/api-server",
     "services/cdr-worker",
     "services/sip-edge",
-    "services/api-server", "crates/storage-core",
 ]
 resolver = "2"
 

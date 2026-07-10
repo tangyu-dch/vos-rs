@@ -18,6 +18,32 @@ pub struct RtpPacket {
     pub padding_len: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A zero-copy view over an RTP datagram.
+///
+/// The view borrows the input datagram, so its fields remain valid only while
+/// the original byte buffer is alive. Use [`RtpPacket::parse`] when an owned
+/// packet is required.
+pub struct RtpPacketView<'a> {
+    pub marker: bool,
+    pub payload_type: u8,
+    pub sequence_number: u16,
+    pub timestamp: u32,
+    pub ssrc: u32,
+    pub csrcs: &'a [u8],
+    pub extension: Option<RtpHeaderExtensionView<'a>>,
+    pub payload: &'a [u8],
+    pub padding_len: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A zero-copy view over an RTP header extension.
+pub struct RtpHeaderExtensionView<'a> {
+    pub profile: u16,
+    pub length_words: u16,
+    pub data: &'a [u8],
+}
+
 impl RtpPacket {
     pub fn new(
         payload_type: u8,
@@ -41,79 +67,28 @@ impl RtpPacket {
     }
 
     pub fn parse(raw: &[u8]) -> RtpResult<Self> {
-        if raw.len() < FIXED_HEADER_LEN {
-            return Err(RtpError::PacketTooShort);
-        }
+        let view = RtpPacketView::parse(raw)?;
+        let csrcs = view
+            .csrcs
+            .chunks_exact(4)
+            .map(|chunk| u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+        let extension = view.extension.map(|extension| RtpHeaderExtension {
+            profile: extension.profile,
+            length_words: extension.length_words,
+            data: extension.data.to_vec(),
+        });
 
-        let version = raw[0] >> 6;
-        if version != RTP_VERSION {
-            return Err(RtpError::UnsupportedVersion(version));
-        }
-
-        let has_padding = raw[0] & 0x20 != 0;
-        let has_extension = raw[0] & 0x10 != 0;
-        let csrc_count = usize::from(raw[0] & 0x0f);
-        let marker = raw[1] & 0x80 != 0;
-        let payload_type = raw[1] & 0x7f;
-
-        let mut offset = FIXED_HEADER_LEN;
-        let csrc_end = offset + csrc_count * 4;
-        if raw.len() < csrc_end {
-            return Err(RtpError::InvalidCsrcCount);
-        }
-
-        let mut csrcs = Vec::with_capacity(csrc_count);
-        while offset < csrc_end {
-            csrcs.push(read_u32(raw, offset)?);
-            offset += 4;
-        }
-
-        let extension = if has_extension {
-            if raw.len() < offset + 4 {
-                return Err(RtpError::InvalidExtensionLength);
-            }
-
-            let profile = read_u16(raw, offset)?;
-            let length_words = read_u16(raw, offset + 2)?;
-            offset += 4;
-
-            let extension_len = usize::from(length_words) * 4;
-            if raw.len() < offset + extension_len {
-                return Err(RtpError::InvalidExtensionLength);
-            }
-
-            let data = raw[offset..offset + extension_len].to_vec();
-            offset += extension_len;
-            Some(RtpHeaderExtension {
-                profile,
-                length_words,
-                data,
-            })
-        } else {
-            None
-        };
-
-        let padding_len = if has_padding {
-            let padding_len = *raw.last().ok_or(RtpError::InvalidPadding)?;
-            if padding_len == 0 || usize::from(padding_len) > raw.len().saturating_sub(offset) {
-                return Err(RtpError::InvalidPadding);
-            }
-            padding_len
-        } else {
-            0
-        };
-
-        let payload_end = raw.len() - usize::from(padding_len);
         Ok(Self {
-            marker,
-            payload_type,
-            sequence_number: read_u16(raw, 2)?,
-            timestamp: read_u32(raw, 4)?,
-            ssrc: read_u32(raw, 8)?,
+            marker: view.marker,
+            payload_type: view.payload_type,
+            sequence_number: view.sequence_number,
+            timestamp: view.timestamp,
+            ssrc: view.ssrc,
             csrcs,
             extension,
-            payload: raw[offset..payload_end].to_vec(),
-            padding_len,
+            payload: view.payload.to_vec(),
+            padding_len: view.padding_len,
         })
     }
 
@@ -178,6 +153,82 @@ impl RtpPacket {
         }
 
         Ok(bytes)
+    }
+}
+
+impl<'a> RtpPacketView<'a> {
+    /// Parses an RTP datagram without allocating for CSRCs, extensions, or payload.
+    pub fn parse(raw: &'a [u8]) -> RtpResult<Self> {
+        if raw.len() < FIXED_HEADER_LEN {
+            return Err(RtpError::PacketTooShort);
+        }
+
+        let version = raw[0] >> 6;
+        if version != RTP_VERSION {
+            return Err(RtpError::UnsupportedVersion(version));
+        }
+
+        let has_padding = raw[0] & 0x20 != 0;
+        let has_extension = raw[0] & 0x10 != 0;
+        let csrc_count = usize::from(raw[0] & 0x0f);
+        let marker = raw[1] & 0x80 != 0;
+        let payload_type = raw[1] & 0x7f;
+
+        let mut offset = FIXED_HEADER_LEN;
+        let csrc_end = offset + csrc_count * 4;
+        if raw.len() < csrc_end {
+            return Err(RtpError::InvalidCsrcCount);
+        }
+        let csrcs = &raw[offset..csrc_end];
+        offset = csrc_end;
+
+        let extension = if has_extension {
+            if raw.len() < offset + 4 {
+                return Err(RtpError::InvalidExtensionLength);
+            }
+
+            let profile = read_u16(raw, offset)?;
+            let length_words = read_u16(raw, offset + 2)?;
+            offset += 4;
+
+            let extension_len = usize::from(length_words) * 4;
+            if raw.len() < offset + extension_len {
+                return Err(RtpError::InvalidExtensionLength);
+            }
+
+            let data = &raw[offset..offset + extension_len];
+            offset += extension_len;
+            Some(RtpHeaderExtensionView {
+                profile,
+                length_words,
+                data,
+            })
+        } else {
+            None
+        };
+
+        let padding_len = if has_padding {
+            let padding_len = *raw.last().ok_or(RtpError::InvalidPadding)?;
+            if padding_len == 0 || usize::from(padding_len) > raw.len().saturating_sub(offset) {
+                return Err(RtpError::InvalidPadding);
+            }
+            padding_len
+        } else {
+            0
+        };
+
+        let payload_end = raw.len() - usize::from(padding_len);
+        Ok(Self {
+            marker,
+            payload_type,
+            sequence_number: read_u16(raw, 2)?,
+            timestamp: read_u32(raw, 4)?,
+            ssrc: read_u32(raw, 8)?,
+            csrcs,
+            extension,
+            payload: &raw[offset..payload_end],
+            padding_len,
+        })
     }
 }
 

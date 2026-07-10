@@ -1,4 +1,5 @@
 use crate::handle_datagram;
+use crate::media::relay::MediaRelayMetrics;
 use crate::nats_cdr::NatsCdrPublisher;
 use crate::net::create_tls_connector;
 use crate::sbc;
@@ -8,8 +9,7 @@ use crate::{
     media::{MediaConfig, MediaRelayState},
     net::{handle_stream_connection, SipStream, Transport},
     sip::{
-        dialog, transaction, ClientTransactionKey, DialogValidationError,
-        RequestTransactionKey,
+        dialog, transaction, ClientTransactionKey, DialogValidationError, RequestTransactionKey,
     },
 };
 use call_core::{CallManager, GatewayHealthTracker};
@@ -20,7 +20,9 @@ use sdp_core::RtpEndpoint;
 use sip_core::{parse_message, Method, SipRequest, SipUri};
 use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc, time::Instant};
 use tokio::net::{TcpStream, UdpSocket};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
+
+const MEDIA_METRICS_LOG_ENV: &str = "VOS_RS_MEDIA_METRICS_LOG";
 
 #[derive(Debug, Clone)]
 pub(crate) struct PendingDatagram {
@@ -791,40 +793,15 @@ impl EdgeState {
     }
 
     pub(crate) fn clear_media_targets(&self, transaction: &InboundTransaction) {
+        let metrics_log_enabled = media_metrics_log_enabled();
         if let Some(endpoint) = &transaction.gateway_relay_rtp {
             let metrics = self.media_relay.metrics_for_port(endpoint.port);
-            debug!(
-                port = endpoint.port,
-                received_packets = metrics.received_packets,
-                forwarded_packets = metrics.forwarded_packets,
-                dropped_invalid_packets = metrics.dropped_invalid_packets,
-                dropped_no_target_packets = metrics.dropped_no_target_packets,
-                send_errors = metrics.send_errors,
-                learned_source_updates = metrics.learned_source_updates,
-                rtcp_quality = ?metrics.rtcp_quality,
-                recorded_packets = metrics.recorded_packets,
-                recording_errors = metrics.recording_errors,
-                dtmf_events = metrics.dtmf_events,
-                "clearing gateway RTP relay target"
-            );
+            log_media_target_metrics("gateway", endpoint.port, metrics, metrics_log_enabled);
             self.media_relay.clear_target(endpoint.port);
         }
         if let Some(endpoint) = &transaction.caller_relay_rtp {
             let metrics = self.media_relay.metrics_for_port(endpoint.port);
-            debug!(
-                port = endpoint.port,
-                received_packets = metrics.received_packets,
-                forwarded_packets = metrics.forwarded_packets,
-                dropped_invalid_packets = metrics.dropped_invalid_packets,
-                dropped_no_target_packets = metrics.dropped_no_target_packets,
-                send_errors = metrics.send_errors,
-                learned_source_updates = metrics.learned_source_updates,
-                rtcp_quality = ?metrics.rtcp_quality,
-                recorded_packets = metrics.recorded_packets,
-                recording_errors = metrics.recording_errors,
-                dtmf_events = metrics.dtmf_events,
-                "clearing caller RTP relay target"
-            );
+            log_media_target_metrics("caller", endpoint.port, metrics, metrics_log_enabled);
             self.media_relay.clear_target(endpoint.port);
         }
         let totals = self.media_relay.metrics_totals();
@@ -837,9 +814,64 @@ impl EdgeState {
             learned_source_updates = totals.learned_source_updates,
             rtcp_quality = ?totals.rtcp_quality,
             recorded_packets = totals.recorded_packets,
+            recording_dropped_packets = totals.recording_dropped_packets,
             recording_errors = totals.recording_errors,
             dtmf_events = totals.dtmf_events,
             "RTP relay metrics totals"
+        );
+    }
+}
+
+fn media_metrics_log_enabled() -> bool {
+    std::env::var(MEDIA_METRICS_LOG_ENV)
+        .map(|value| {
+            matches!(
+                value.trim(),
+                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn log_media_target_metrics(
+    leg: &'static str,
+    port: u16,
+    metrics: MediaRelayMetrics,
+    info_enabled: bool,
+) {
+    if info_enabled {
+        info!(
+            leg,
+            port,
+            received_packets = metrics.received_packets,
+            forwarded_packets = metrics.forwarded_packets,
+            dropped_invalid_packets = metrics.dropped_invalid_packets,
+            dropped_no_target_packets = metrics.dropped_no_target_packets,
+            send_errors = metrics.send_errors,
+            learned_source_updates = metrics.learned_source_updates,
+            rtcp_quality = ?metrics.rtcp_quality,
+            recorded_packets = metrics.recorded_packets,
+            recording_dropped_packets = metrics.recording_dropped_packets,
+            recording_errors = metrics.recording_errors,
+            dtmf_events = metrics.dtmf_events,
+            "clearing RTP relay target"
+        );
+    } else {
+        debug!(
+            leg,
+            port,
+            received_packets = metrics.received_packets,
+            forwarded_packets = metrics.forwarded_packets,
+            dropped_invalid_packets = metrics.dropped_invalid_packets,
+            dropped_no_target_packets = metrics.dropped_no_target_packets,
+            send_errors = metrics.send_errors,
+            learned_source_updates = metrics.learned_source_updates,
+            rtcp_quality = ?metrics.rtcp_quality,
+            recorded_packets = metrics.recorded_packets,
+            recording_dropped_packets = metrics.recording_dropped_packets,
+            recording_errors = metrics.recording_errors,
+            dtmf_events = metrics.dtmf_events,
+            "clearing RTP relay target"
         );
     }
 }

@@ -474,9 +474,7 @@ fn offset_from_millis(value: i64) -> OffsetDateTime {
 fn extract_sip_user(value: &str) -> Option<&str> {
     let idx = value.find("sip:")?;
     let rest = &value[idx + 4..];
-    let end = rest
-        .find(['@', ';', '>'])
-        .unwrap_or(rest.len());
+    let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
     if end == 0 {
         None
     } else {

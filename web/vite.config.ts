@@ -4,6 +4,19 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          arco: ['@arco-design/web-react', '@arco-design/web-react/icon'],
+          charts: ['echarts/core', 'echarts/charts', 'echarts/components', 'echarts/renderers'],
+          http: ['axios'],
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src')

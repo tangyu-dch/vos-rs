@@ -25,6 +25,18 @@ pub async fn list_active(State(state): State<AppState>) -> Result<Json<Value>, E
     Ok(Json(v))
 }
 
+/// RTP/录音聚合指标（转发到 sip-edge 管理 API）。
+pub async fn media_metrics(State(state): State<AppState>) -> Result<Json<Value>, E> {
+    let url = format!("{}/manage/media-metrics", state.sip_manage_base);
+    let v: Value = reqwest::get(&url)
+        .await
+        .map_err(err)?
+        .json()
+        .await
+        .map_err(err)?;
+    Ok(Json(v))
+}
+
 /// 强制拆线（转发到 sip-edge 管理 API）。
 pub async fn terminate_call(
     State(state): State<AppState>,

@@ -11,6 +11,7 @@ use call_core::ActiveCall;
 use serde::Deserialize;
 use sip_core::SipUri;
 
+use crate::media::relay::MediaRelayMetrics;
 use crate::EdgeState;
 
 /// 启动管理 API（活跃呼叫查询 / 强制拆线）。
@@ -19,6 +20,7 @@ pub async fn serve(addr: String, state: Arc<EdgeState>) {
         .route("/manage/active-calls", get(active_calls))
         .route("/manage/calls/:call_id/terminate", post(terminate))
         .route("/manage/route-preview", get(route_preview))
+        .route("/manage/media-metrics", get(media_metrics))
         .with_state(state)
         .layer(
             CorsLayer::new()
@@ -42,6 +44,11 @@ pub async fn serve(addr: String, state: Arc<EdgeState>) {
 
 async fn active_calls(State(state): State<Arc<EdgeState>>) -> Json<Vec<ActiveCall>> {
     Json(state.call_manager.active_calls())
+}
+
+/// RTP/录音聚合指标，供 API Server、压测脚本和运维面板读取。
+async fn media_metrics(State(state): State<Arc<EdgeState>>) -> Json<MediaRelayMetrics> {
+    Json(state.media_relay.metrics_totals())
 }
 
 async fn terminate(State(state): State<Arc<EdgeState>>, Path(call_id): Path<String>) -> StatusCode {

@@ -17,7 +17,9 @@ pub const TLS_CA_PATH_ENV: &str = "VOS_RS_SIP_TLS_CA_PATH";
 pub const TLS_ALLOW_TEST_CERT_ENV: &str = "VOS_RS_SIP_TLS_ALLOW_TEST_CERT";
 pub const TLS_INSECURE_SKIP_VERIFY_ENV: &str = "VOS_RS_SIP_TLS_INSECURE_SKIP_VERIFY";
 pub const TLS_SERVER_NAME_ENV: &str = "VOS_RS_SIP_TLS_SERVER_NAME";
-
+pub const UDP_RECEIVE_BUFFER_ENV: &str = "VOS_RS_SIP_UDP_RECEIVE_BUFFER";
+pub const UDP_SEND_BUFFER_ENV: &str = "VOS_RS_SIP_UDP_SEND_BUFFER";
+pub const DEFAULT_UDP_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeConfig {
@@ -39,6 +41,8 @@ pub struct EdgeConfig {
     pub tls_server_name: Option<String>,
     pub udp_workers: usize,
     pub udp_workers_auto: bool,
+    pub udp_receive_buffer_bytes: usize,
+    pub udp_send_buffer_bytes: usize,
 }
 
 impl EdgeConfig {
@@ -97,6 +101,14 @@ impl EdgeConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(|| num_cpus::get().max(1)),
             udp_workers_auto: env_bool("VOS_RS_UDP_WORKERS_AUTO").unwrap_or(false),
+            udp_receive_buffer_bytes: env_usize_or_default(
+                UDP_RECEIVE_BUFFER_ENV,
+                DEFAULT_UDP_BUFFER_BYTES,
+            ),
+            udp_send_buffer_bytes: env_usize_or_default(
+                UDP_SEND_BUFFER_ENV,
+                DEFAULT_UDP_BUFFER_BYTES,
+            ),
         }
     }
 }
@@ -115,4 +127,12 @@ pub fn env_bool(name: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
+}
+
+fn env_usize_or_default(name: &str, default: usize) -> usize {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }

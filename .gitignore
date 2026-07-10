@@ -32,6 +32,8 @@ __pycache__/
 
 # Test artifacts
 /test_recordings/
+recording/
+recordings/
 /test_recordings/**/
 **/test-recordings/
 tools/sipp/test_speech.wav
@@ -47,6 +49,3 @@ web/dist/
 
 # MiMoCode
 .mimocode/
-
-# Cargo
-Cargo.lock

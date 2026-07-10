@@ -78,7 +78,7 @@ export default function Users() {
       }
       setModalVisible(false);
       loadUsers();
-    } catch (err) {
+    } catch {
       /* 校验失败 */
     }
   };

@@ -1,7 +1,6 @@
 use call_core::{CallManager, Route, RouteTable, RouteTarget};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use sip_core::{parse_message, SipMessage, SipUri};
-use std::str::FromStr;
+use sip_core::{parse_message, SipMessage};
 use std::sync::Arc;
 
 fn test_routes() -> RouteTable {
@@ -167,7 +166,7 @@ fn bench_full_call_lifecycle(c: &mut Criterion) {
                             handles.push(tokio::spawn(async move {
                                 let req =
                                     invite_request(&format!("lifecycle-{i}@bench"), "13800138000");
-                                let out = m.handle_inbound_invite(&req).unwrap();
+                                m.handle_inbound_invite(&req).unwrap();
                                 // Mark ringing
                                 let resp180 = outbound_response(
                                     180,

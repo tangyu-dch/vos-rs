@@ -34,6 +34,19 @@ pub struct AudioFormat {
     pub clock_rate: Option<u32>,
 }
 
+/// An SDES-SRTP `a=crypto` attribute from an audio media section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SrtpCryptoAttribute {
+    /// Numeric tag used to select this crypto suite.
+    pub tag: u32,
+    /// Crypto suite name, for example `AES_CM_128_HMAC_SHA1_80`.
+    pub suite: String,
+    /// Key parameters, retained as encoded SDP text for the media layer.
+    pub key_params: String,
+    /// Optional session parameters following the key parameters.
+    pub session_params: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionDescription {
     lines: Vec<String>,
@@ -91,6 +104,22 @@ impl SessionDescription {
                     clock_rate,
                 }
             })
+            .collect())
+    }
+
+    /// Returns SDES-SRTP crypto attributes declared on the first audio RTP media section.
+    pub fn first_audio_srtp_crypto(&self) -> SdpResult<Vec<SrtpCryptoAttribute>> {
+        let media_index = self.first_audio_rtp_media_index()?;
+        let start = self.media[media_index].media_line_index + 1;
+        let end = self
+            .media
+            .get(media_index + 1)
+            .map(|media| media.media_line_index)
+            .unwrap_or(self.lines.len());
+
+        Ok(self.lines[start..end]
+            .iter()
+            .filter_map(|line| parse_crypto_attribute(line))
             .collect())
     }
 
@@ -442,6 +471,22 @@ fn parse_rtpmap(line: &str) -> Option<RtpMap> {
         payload_type: payload_type.trim().to_string(),
         encoding_name: encoding_name.to_string(),
         clock_rate,
+    })
+}
+
+fn parse_crypto_attribute(line: &str) -> Option<SrtpCryptoAttribute> {
+    let value = line.strip_prefix("a=crypto:")?.trim();
+    let mut parts = value.split_whitespace();
+    let tag = parts.next()?.parse::<u32>().ok()?;
+    let suite = parts.next()?.to_string();
+    let key_params = parts.next()?.to_string();
+    let session_params = parts.collect::<Vec<_>>().join(" ");
+
+    Some(SrtpCryptoAttribute {
+        tag,
+        suite,
+        key_params,
+        session_params: (!session_params.is_empty()).then_some(session_params),
     })
 }
 
