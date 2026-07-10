@@ -422,6 +422,7 @@ impl GatewayHealthTracker {
         consecutive_failures: i32,
         last_failure_at: Option<std::time::SystemTime>,
         half_open_successes: i32,
+        active_calls: i32,
     ) {
         let health = self.states.entry(gateway_id.to_string()).or_default();
         health.state = if circuit_open {
@@ -431,6 +432,7 @@ impl GatewayHealthTracker {
         };
         health.consecutive_failures = consecutive_failures.max(0) as u32;
         health.half_open_successes = half_open_successes.max(0) as u32;
+        health.active_calls = active_calls.max(0) as u32;
         health.half_open_probe_in_flight = false;
         // Restore last_failure from persisted wall-clock time so that the
         // recovery interval check works correctly after a restart.
@@ -480,7 +482,7 @@ impl GatewayHealthTracker {
     pub fn get_gateway_status(
         &self,
         gateway_id: &str,
-    ) -> Option<(bool, i32, String, Option<std::time::SystemTime>, i32)> {
+    ) -> Option<(bool, i32, String, Option<std::time::SystemTime>, i32, i32)> {
         self.states.get(gateway_id).map(|h| {
             let state_str = match h.state {
                 CircuitState::Closed => "closed",
@@ -491,7 +493,7 @@ impl GatewayHealthTracker {
                 let elapsed = inst.elapsed();
                 std::time::SystemTime::now()
                     .checked_sub(elapsed)
-                    .unwrap_or(std::time::UNIX_EPOCH)
+                    .unwrap_or(std::time::SystemTime::now())
             });
             (
                 h.state == CircuitState::Open,
@@ -499,6 +501,7 @@ impl GatewayHealthTracker {
                 state_str.to_string(),
                 last_failure_sys,
                 h.half_open_successes as i32,
+                h.active_calls as i32,
             )
         })
     }
@@ -1160,7 +1163,7 @@ mod tests {
 
         // Simulate a recent failure (1ms ago)
         let last_failure = SystemTime::now() - Duration::from_millis(1);
-        tracker.restore_state("gw1", true, 3, Some(last_failure), 0);
+        tracker.restore_state("gw1", true, 3, Some(last_failure), 0, 0);
 
         // Circuit is open but recovery interval hasn't elapsed
         assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::Open));
