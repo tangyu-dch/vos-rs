@@ -578,12 +578,12 @@ pub(crate) fn record_probe_success(edge_state: &EdgeState, gateway_id: &str) {
     persist_gateway_health(edge_state, gateway_id.to_string(), status);
 }
 
-fn persist_gateway_health(
+pub(crate) fn persist_gateway_health(
     edge_state: &EdgeState,
     gateway_id: String,
-    status: Option<(bool, i32, String, Option<std::time::SystemTime>, i32)>,
+    status: Option<(bool, i32, String, Option<std::time::SystemTime>, i32, i32)>,
 ) {
-    let Some((circuit_open, failures, state_str, last_failure_sys, half_open_successes)) = status else {
+    let Some((circuit_open, failures, state_str, last_failure_sys, half_open_successes, active_calls)) = status else {
         return;
     };
     let Some(db) = edge_state.db_store.clone() else {
@@ -606,6 +606,7 @@ fn persist_gateway_health(
                 last_failure_at,
                 half_open_successes,
                 None,
+                active_calls,
             )
             .await
         {

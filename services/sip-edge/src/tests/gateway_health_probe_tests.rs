@@ -40,7 +40,7 @@ async fn gateway_options_response_updates_probe_health() {
     let health = edge_state.gateway_health.lock().unwrap();
     let status = health.get_gateway_status("gw1");
     assert!(status.is_some());
-    let (open, failures, _, _, _) = status.unwrap();
+    let (open, failures, _, _, _, _) = status.unwrap();
     assert!(!open);
     assert_eq!(failures, 0);
 }

@@ -389,11 +389,15 @@ pub(crate) async fn handle_request(
 
         // Increment active call count for the selected gateway.
         if !outbound_invite.gateway_id.is_empty() {
-            edge_state
-                .gateway_health
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .increment_active(&outbound_invite.gateway_id);
+            let status = {
+                let mut health = edge_state
+                    .gateway_health
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                health.increment_active(&outbound_invite.gateway_id);
+                health.get_gateway_status(&outbound_invite.gateway_id)
+            };
+            crate::timers::persist_gateway_health(edge_state, outbound_invite.gateway_id.clone(), status);
         }
 
         return datagrams;
@@ -829,11 +833,15 @@ pub(crate) async fn handle_in_dialog_request(
                         .map(|v| v.as_str())
                         .unwrap_or("");
                     if let Some(gw_id) = edge_state.call_manager.current_gateway_id(call_id_str) {
-                        edge_state
-                            .gateway_health
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .decrement_active(&gw_id);
+                        let status = {
+                            let mut health = edge_state
+                                .gateway_health
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            health.decrement_active(&gw_id);
+                            health.get_gateway_status(&gw_id)
+                        };
+                        crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
                     }
 
                     // Real-time billing: settle the call.

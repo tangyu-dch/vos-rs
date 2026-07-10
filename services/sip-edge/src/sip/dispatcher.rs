@@ -628,7 +628,7 @@ pub(crate) async fn handle_datagram(
                         health.record_failure(&gateway_id);
                     }
 
-                    if let (Some(db), Some((open, failures, state_str, last_failure_at, half_open_successes))) = (
+                    if let (Some(db), Some((open, failures, state_str, last_failure_at, half_open_successes, active_calls))) = (
                         edge_state.db_store.clone(),
                         health.get_gateway_status(&gateway_id),
                     ) {
@@ -651,6 +651,7 @@ pub(crate) async fn handle_datagram(
                                     last_failure_at,
                                     half_open_successes,
                                     None,
+                                    active_calls,
                                 )
                                 .await
                             {
