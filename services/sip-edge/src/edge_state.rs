@@ -98,6 +98,8 @@ pub(crate) struct InboundTransaction {
     pub(crate) transferee_is_caller: bool,
     pub(crate) callee_behind_nat: bool,
     pub(crate) active_forks: Vec<(String, String)>,
+    pub(crate) max_duration_secs: Option<u32>,
+    pub(crate) established_at: Option<std::time::Instant>,
 }
 
 impl InboundTransaction {
@@ -694,6 +696,7 @@ impl EdgeState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn remember_inbound_invite(
         &self,
         request: &SipRequest,
@@ -702,6 +705,7 @@ impl EdgeState {
         caller_rtp: Option<RtpEndpoint>,
         gateway_relay_rtp: Option<RtpEndpoint>,
         callee_behind_nat: bool,
+        max_duration_secs: Option<u32>,
     ) {
         let Some(call_id) = request.headers.get("call-id") else {
             return;
@@ -772,6 +776,8 @@ impl EdgeState {
                 transferee_is_caller: false,
                 callee_behind_nat,
                 active_forks: Vec::new(),
+                max_duration_secs,
+                established_at: None,
             },
         );
 

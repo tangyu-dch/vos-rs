@@ -264,6 +264,11 @@ pub(crate) async fn handle_request(
         }
     }
 
+    let mut calculated_max_duration: Option<u32> = request
+        .headers
+        .get("x-test-max-duration")
+        .and_then(|v| v.as_str().trim().parse::<u32>().ok());
+
     // Pre-call balance check: reject if caller has no balance.
     if let Some(ref _plan) = outbound_invite {
         if let Some(ref db) = edge_state.db_store {
@@ -282,6 +287,9 @@ pub(crate) async fn handle_request(
                                     &call_core::CallError::GatewayUnavailable("余额不足".to_string()),
                                 ),
                             )];
+                        }
+                        if rate > 0.0 {
+                            calculated_max_duration = Some(((balance / rate) * 60.0) as u32);
                         }
                     }
                     Err(e) => {
@@ -340,6 +348,7 @@ pub(crate) async fn handle_request(
                 .and_then(|sdp| sdp.original_endpoint.clone()),
             rewritten_sdp.as_ref().map(|sdp| sdp.relay_endpoint.clone()),
             outbound_invite.target_override_addr.is_some(),
+            calculated_max_duration,
         );
 
         let mut datagrams = vec![PendingDatagram::new(peer.to_string(), response)];
@@ -583,6 +592,8 @@ async fn handle_out_of_dialog_message(
                 transferee_is_caller: false,
                 callee_behind_nat: target_contact.is_some(),
                 active_forks: Vec::new(),
+                max_duration_secs: None,
+                established_at: None,
             },
         );
     }

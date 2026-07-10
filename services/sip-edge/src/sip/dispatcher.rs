@@ -641,6 +641,11 @@ pub(crate) async fn handle_datagram(
             // Parse Session-Expires from 200 OK and store on the transaction
             if sip_response.status_code >= 200 && sip_response.status_code < 300 {
                 if let Some(cid) = call_id.as_deref() {
+                    if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
+                        if t_mut.established_at.is_none() {
+                            t_mut.established_at = Some(std::time::Instant::now());
+                        }
+                    }
                     let se_header = sip_response
                         .headers
                         .get("session-expires")

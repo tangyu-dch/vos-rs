@@ -272,24 +272,42 @@ pub(crate) fn spawn_session_timer_watchdog(
                     .filter_map(|entry| {
                         let call_id = entry.key().clone();
                         let tx = entry.value();
-                        let expires = tx.session_expires?;
-                        let last_refresh = tx.last_session_refresh?;
-                        let elapsed = last_refresh.elapsed().as_secs();
-                        if elapsed >= u64::from(expires) {
-                            warn!(
-                                call_id,
-                                elapsed,
-                                session_expires = expires,
-                                "session timer expired — sending BYE to both legs"
-                            );
-                            Some((
-                                call_id.clone(),
-                                tx.peer.clone(),
-                                tx.outbound_uri.to_string(),
-                            ))
-                        } else {
-                            None
+
+                        // Check 1: Balance exhaustion
+                        if let (Some(est), Some(max_dur)) = (tx.established_at, tx.max_duration_secs) {
+                            if est.elapsed().as_secs() >= u64::from(max_dur) {
+                                warn!(
+                                    call_id,
+                                    max_duration = max_dur,
+                                    "real-time balance exhausted — sending BYE to both legs"
+                                );
+                                return Some((
+                                    call_id.clone(),
+                                    tx.peer.clone(),
+                                    tx.outbound_uri.to_string(),
+                                ));
+                            }
                         }
+
+                        // Check 2: Session Timer expiration
+                        if let (Some(expires), Some(last_refresh)) = (tx.session_expires, tx.last_session_refresh) {
+                            let elapsed = last_refresh.elapsed().as_secs();
+                            if elapsed >= u64::from(expires) {
+                                warn!(
+                                    call_id,
+                                    elapsed,
+                                    session_expires = expires,
+                                    "session timer expired — sending BYE to both legs"
+                                );
+                                return Some((
+                                    call_id.clone(),
+                                    tx.peer.clone(),
+                                    tx.outbound_uri.to_string(),
+                                ));
+                            }
+                        }
+
+                        None
                     })
                     .collect()
             };
