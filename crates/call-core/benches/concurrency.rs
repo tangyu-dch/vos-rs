@@ -73,7 +73,8 @@ fn bench_handle_inbound_invite(c: &mut Criterion) {
                     .enable_all()
                     .build()
                     .unwrap();
-                let manager = Arc::new(CallManager::new(test_routes()));
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                let manager = Arc::new(CallManager::new(test_routes(), tx));
                 b.iter_custom(|iters| {
                     let manager = Arc::clone(&manager);
                     let start = std::time::Instant::now();
@@ -110,7 +111,8 @@ fn bench_handle_outbound_response(c: &mut Criterion) {
                     .enable_all()
                     .build()
                     .unwrap();
-                let manager = Arc::new(CallManager::new(test_routes()));
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                let manager = Arc::new(CallManager::new(test_routes(), tx));
                 b.iter_custom(|iters| {
                     let manager = Arc::clone(&manager);
                     let start = std::time::Instant::now();
@@ -155,7 +157,8 @@ fn bench_full_call_lifecycle(c: &mut Criterion) {
                     .enable_all()
                     .build()
                     .unwrap();
-                let manager = Arc::new(CallManager::new(test_routes()));
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                let manager = Arc::new(CallManager::new(test_routes(), tx));
                 b.iter_custom(|iters| {
                     let manager = Arc::clone(&manager);
                     let start = std::time::Instant::now();

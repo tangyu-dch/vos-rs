@@ -1,7 +1,8 @@
 use crate::{Call, CallId, CallState, FailureCause};
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CdrStatus {
     Answered,
     Canceled,
@@ -29,7 +30,7 @@ pub struct CallQualityMetrics {
     pub mos: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CallCdr {
     pub call_id: CallId,
     pub caller: Option<String>,

@@ -34,7 +34,8 @@ fn route_table_selects_longest_prefix() {
 
 #[test]
 fn call_manager_accepts_invite_and_stores_routed_call() {
-    let manager = CallManager::new(test_routes());
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = CallManager::new(test_routes(), tx);
     let request = invite_request("call-1@example.com", "13800138000");
 
     let outcome = manager
@@ -57,7 +58,8 @@ fn call_manager_accepts_invite_and_stores_routed_call() {
 
 #[test]
 fn call_manager_accepts_preselected_outbound_uri() {
-    let manager = CallManager::new(RouteTable::default());
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = CallManager::new(RouteTable::default(), tx);
     let request = invite_request("call-direct@example.com", "1002");
     let outbound_uri = SipUri::from_str("sip:1002@192.0.2.20:5062;transport=udp").unwrap();
 
@@ -83,7 +85,8 @@ fn call_manager_accepts_preselected_outbound_uri() {
 
 #[test]
 fn call_manager_fails_invite_when_no_route_matches() {
-    let manager = CallManager::new(RouteTable::default());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = CallManager::new(RouteTable::default(), tx);
     let request = invite_request("call-2@example.com", "13900139000");
 
     let error = manager
@@ -101,8 +104,7 @@ fn call_manager_fails_invite_when_no_route_matches() {
     assert_eq!(call.state, CallState::Failed);
     assert!(call.failure_cause.is_some());
 
-    let cdrs = manager.completed_cdrs();
-    let cdr = cdrs.first().expect("CDR should exist");
+    let cdr = rx.try_recv().expect("CDR should exist");
     assert_eq!(cdr.call_id.as_str(), "call-2@example.com");
     assert_eq!(cdr.status, CdrStatus::Failed);
     assert_eq!(cdr.callee.as_deref(), Some("13900139000"));
@@ -111,7 +113,8 @@ fn call_manager_fails_invite_when_no_route_matches() {
 
 #[test]
 fn outbound_ringing_response_moves_call_to_ringing() {
-    let manager = routed_manager_with_call("call-3@example.com");
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = routed_manager_with_call("call-3@example.com", tx);
     let response = outbound_response(180, "Ringing", "call-3@example.com");
 
     let outcome = manager
@@ -130,7 +133,8 @@ fn outbound_ringing_response_moves_call_to_ringing() {
 
 #[test]
 fn outbound_success_response_establishes_call() {
-    let manager = routed_manager_with_call("call-4@example.com");
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = routed_manager_with_call("call-4@example.com", tx);
     let response = outbound_response(200, "OK", "call-4@example.com");
 
     let outcome = manager
@@ -149,7 +153,8 @@ fn outbound_success_response_establishes_call() {
 
 #[test]
 fn outbound_failure_response_fails_call() {
-    let manager = routed_manager_with_call("call-5@example.com");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = routed_manager_with_call("call-5@example.com", tx);
     let response = outbound_response(486, "Busy Here", "call-5@example.com");
 
     let outcome = manager
@@ -161,15 +166,15 @@ fn outbound_failure_response_fails_call() {
     assert_eq!(call.state, CallState::Failed);
     assert_eq!(call.failure_cause.as_ref().unwrap().status_code, Some(486));
 
-    let cdrs = manager.completed_cdrs();
-    let cdr = cdrs.first().expect("CDR should exist");
+    let cdr = rx.try_recv().expect("CDR should exist");
     assert_eq!(cdr.status, CdrStatus::Failed);
     assert_eq!(cdr.failure_cause.as_ref().unwrap().status_code, Some(486));
 }
 
 #[test]
 fn inbound_termination_request_terminates_call() {
-    let manager = routed_manager_with_call("call-6@example.com");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = routed_manager_with_call("call-6@example.com", tx);
     let response = outbound_response(200, "OK", "call-6@example.com");
     manager.handle_outbound_response(&response).unwrap();
     let bye = bye_request("call-6@example.com");
@@ -187,8 +192,7 @@ fn inbound_termination_request_terminates_call() {
         CallState::Terminated
     );
 
-    let cdrs = manager.completed_cdrs();
-    let cdr = cdrs.first().expect("CDR should exist");
+    let cdr = rx.try_recv().expect("CDR should exist");
     assert_eq!(cdr.status, CdrStatus::Answered);
     assert!(cdr.answered_at.is_some());
     assert!(cdr.duration >= cdr.billable_duration);
@@ -196,7 +200,8 @@ fn inbound_termination_request_terminates_call() {
 
 #[test]
 fn inbound_cancel_before_answer_generates_canceled_cdr() {
-    let manager = routed_manager_with_call("call-7@example.com");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = routed_manager_with_call("call-7@example.com", tx);
     let cancel = cancel_request("call-7@example.com");
 
     let outcome = manager
@@ -204,8 +209,7 @@ fn inbound_cancel_before_answer_generates_canceled_cdr() {
         .expect("CANCEL should terminate call");
 
     assert_eq!(outcome.state, CallState::Terminated);
-    let cdrs = manager.completed_cdrs();
-    let cdr = cdrs.first().expect("CDR should exist");
+    let cdr = rx.try_recv().expect("CDR should exist");
     assert_eq!(cdr.status, CdrStatus::Canceled);
     assert!(cdr.answered_at.is_none());
     assert!(cdr.billable_duration.is_zero());
@@ -220,8 +224,11 @@ fn test_routes() -> RouteTable {
     )])
 }
 
-fn routed_manager_with_call(call_id: &str) -> CallManager {
-    let manager = CallManager::new(test_routes());
+fn routed_manager_with_call(
+    call_id: &str,
+    tx: tokio::sync::mpsc::UnboundedSender<call_core::CallCdr>,
+) -> CallManager {
+    let manager = CallManager::new(test_routes(), tx);
     let request = invite_request(call_id, "13800138000");
     manager.handle_inbound_invite(&request).unwrap();
     manager

@@ -1,7 +1,10 @@
 use crate::{CallError, CallResult};
 use sip_core::SipUri;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+
+const HALF_OPEN_SAMPLE_RATE: f64 = 0.10;
+const HALF_OPEN_SUCCESS_THRESHOLD: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GatewayId(String);
@@ -169,6 +172,7 @@ pub struct Route {
     /// Lower cost is preferred when prefix length and priority are equal.
     /// Defaults to `0.0` (no cost).
     pub cost: f64,
+    pub weight: u32,
     pub target: RouteTarget,
 }
 
@@ -184,6 +188,7 @@ impl Route {
             prefix: prefix.into(),
             priority,
             cost: 0.0,
+            weight: 100, // 默认权重为 100
             target,
         }
     }
@@ -200,6 +205,25 @@ impl Route {
             prefix: prefix.into(),
             priority,
             cost,
+            weight: 100, // 默认权重为 100
+            target,
+        }
+    }
+
+    pub fn with_cost_and_weight(
+        id: impl Into<String>,
+        prefix: impl Into<String>,
+        priority: u16,
+        cost: f64,
+        weight: u32,
+        target: RouteTarget,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            prefix: prefix.into(),
+            priority,
+            cost,
+            weight,
             target,
         }
     }
@@ -220,6 +244,17 @@ pub struct SelectedRoute {
 // Gateway health tracking
 // ---------------------------------------------------------------------------
 
+/// Circuit breaker state for a gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitState {
+    /// Gateway is serving normal traffic.
+    Closed,
+    /// Gateway is not receiving normal traffic.
+    Open,
+    /// Gateway is receiving a small recovery sample.
+    HalfOpen,
+}
+
 /// Health state for a single gateway, used for circuit-breaking.
 #[derive(Debug, Clone)]
 pub struct GatewayHealth {
@@ -236,7 +271,11 @@ pub struct GatewayHealth {
     /// Current active call count through this gateway.
     active_calls: u32,
     /// Circuit breaker state.
-    circuit_open: bool,
+    state: CircuitState,
+    /// Consecutive successful calls during half-open recovery.
+    half_open_successes: u32,
+    /// Whether a half-open call is currently in flight.
+    half_open_probe_in_flight: bool,
 }
 
 impl Default for GatewayHealth {
@@ -254,16 +293,31 @@ impl GatewayHealth {
             last_success: None,
             last_failure: None,
             active_calls: 0,
-            circuit_open: false,
+            state: CircuitState::Closed,
+            half_open_successes: 0,
+            half_open_probe_in_flight: false,
         }
     }
 
     /// Record a successful call through this gateway.
     pub fn record_success(&mut self) {
         self.success_count += 1;
-        self.consecutive_failures = 0;
         self.last_success = Some(Instant::now());
-        self.circuit_open = false;
+        match self.state {
+            CircuitState::HalfOpen => {
+                self.half_open_probe_in_flight = false;
+                self.half_open_successes += 1;
+                if self.half_open_successes >= HALF_OPEN_SUCCESS_THRESHOLD {
+                    self.state = CircuitState::Closed;
+                    self.consecutive_failures = 0;
+                    self.half_open_successes = 0;
+                }
+            }
+            CircuitState::Closed => {
+                self.consecutive_failures = 0;
+            }
+            CircuitState::Open => {}
+        }
     }
 
     /// Record a failed call through this gateway.
@@ -271,6 +325,11 @@ impl GatewayHealth {
         self.failure_count += 1;
         self.consecutive_failures += 1;
         self.last_failure = Some(Instant::now());
+        self.half_open_probe_in_flight = false;
+        self.half_open_successes = 0;
+        if self.state == CircuitState::HalfOpen {
+            self.state = CircuitState::Open;
+        }
     }
 
     /// Increment active call counter.
@@ -302,7 +361,12 @@ impl GatewayHealth {
 
     /// Whether the circuit breaker is currently tripped (open).
     pub fn is_circuit_open(&self) -> bool {
-        self.circuit_open
+        self.state == CircuitState::Open
+    }
+
+    /// Returns the current circuit state.
+    pub fn state(&self) -> CircuitState {
+        self.state
     }
 }
 
@@ -351,6 +415,32 @@ impl GatewayHealthTracker {
         }
     }
 
+    pub fn restore_state(
+        &mut self,
+        gateway_id: &str,
+        circuit_open: bool,
+        consecutive_failures: i32,
+        last_failure_at: Option<std::time::SystemTime>,
+        half_open_successes: i32,
+    ) {
+        let health = self.states.entry(gateway_id.to_string()).or_default();
+        health.state = if circuit_open {
+            CircuitState::Open
+        } else {
+            CircuitState::Closed
+        };
+        health.consecutive_failures = consecutive_failures.max(0) as u32;
+        health.half_open_successes = half_open_successes.max(0) as u32;
+        health.half_open_probe_in_flight = false;
+        // Restore last_failure from persisted wall-clock time so that the
+        // recovery interval check works correctly after a restart.
+        if let Some(sys_time) = last_failure_at {
+            let now_sys = SystemTime::now();
+            let elapsed = now_sys.duration_since(sys_time).unwrap_or_default();
+            health.last_failure = Some(Instant::now() - elapsed);
+        }
+    }
+
     /// Record a successful call outcome for the given gateway.
     pub fn record_success(&mut self, gateway_id: &str) {
         self.states
@@ -365,7 +455,7 @@ impl GatewayHealthTracker {
         let health = self.states.entry(gateway_id.to_string()).or_default();
         health.record_failure();
         if health.consecutive_failures >= self.thresholds.failure_threshold {
-            health.circuit_open = true;
+            health.state = CircuitState::Open;
         }
     }
 
@@ -384,6 +474,35 @@ impl GatewayHealthTracker {
         }
     }
 
+    /// Returns (circuit_open, consecutive_failures, state_str, last_failure_system_time, half_open_successes)
+    /// for persistence. `last_failure_system_time` is derived from the monotonic `Instant` by
+    /// computing how long ago the failure occurred and subtracting from current wall-clock time.
+    pub fn get_gateway_status(
+        &self,
+        gateway_id: &str,
+    ) -> Option<(bool, i32, String, Option<std::time::SystemTime>, i32)> {
+        self.states.get(gateway_id).map(|h| {
+            let state_str = match h.state {
+                CircuitState::Closed => "closed",
+                CircuitState::Open => "open",
+                CircuitState::HalfOpen => "half_open",
+            };
+            let last_failure_sys = h.last_failure.map(|inst| {
+                let elapsed = inst.elapsed();
+                std::time::SystemTime::now()
+                    .checked_sub(elapsed)
+                    .unwrap_or(std::time::UNIX_EPOCH)
+            });
+            (
+                h.state == CircuitState::Open,
+                h.consecutive_failures as i32,
+                state_str.to_string(),
+                last_failure_sys,
+                h.half_open_successes as i32,
+            )
+        })
+    }
+
     /// Check whether the gateway should be considered available for new calls.
     /// Returns `false` if the circuit is open and the recovery interval has not elapsed.
     pub fn is_available(&self, gateway_id: &str) -> bool {
@@ -392,8 +511,7 @@ impl GatewayHealthTracker {
             return true;
         };
 
-        if health.circuit_open {
-            // Half-open: allow one trial call after the recovery interval.
+        if health.state == CircuitState::Open {
             if let Some(last_fail) = health.last_failure {
                 if last_fail.elapsed() >= self.thresholds.recovery_interval {
                     return true;
@@ -411,6 +529,83 @@ impl GatewayHealthTracker {
         }
 
         true
+    }
+
+    /// Attempts to reserve traffic for a gateway.
+    ///
+    /// Closed gateways are available subject to the success-rate guard. Open
+    /// gateways enter HalfOpen after the recovery interval. HalfOpen gateways
+    /// admit approximately 10% of attempts and only one probe at a time.
+    pub fn try_acquire(&mut self, gateway_id: &str) -> bool {
+        use rand::Rng;
+
+        self.try_acquire_with_sample(gateway_id, rand::thread_rng().gen::<f64>())
+    }
+
+    /// Reserves an explicit active health probe.
+    ///
+    /// Active probes bypass the 10% user-traffic sample, but still respect the
+    /// recovery interval and the single in-flight probe rule for HalfOpen.
+    pub fn try_acquire_probe(&mut self, gateway_id: &str) -> bool {
+        let Some(health) = self.states.get_mut(gateway_id) else {
+            return true;
+        };
+
+        if health.state == CircuitState::Open {
+            let recovered = health.last_failure.is_some_and(|last_failure| {
+                last_failure.elapsed() >= self.thresholds.recovery_interval
+            });
+            if !recovered {
+                return false;
+            }
+            health.state = CircuitState::HalfOpen;
+            health.half_open_successes = 0;
+            health.half_open_probe_in_flight = false;
+        }
+
+        if health.state == CircuitState::HalfOpen {
+            if health.half_open_probe_in_flight {
+                return false;
+            }
+            health.half_open_probe_in_flight = true;
+        }
+        true
+    }
+
+    /// Deterministic variant used by integration tests and simulations.
+    pub fn try_acquire_with_sample(&mut self, gateway_id: &str, sample: f64) -> bool {
+        let Some(health) = self.states.get_mut(gateway_id) else {
+            return true;
+        };
+
+        if health.state == CircuitState::Open {
+            let recovered = health.last_failure.is_some_and(|last_failure| {
+                last_failure.elapsed() >= self.thresholds.recovery_interval
+            });
+            if !recovered {
+                return false;
+            }
+            health.state = CircuitState::HalfOpen;
+            health.half_open_successes = 0;
+            health.half_open_probe_in_flight = false;
+        }
+
+        if health.state == CircuitState::HalfOpen {
+            if health.half_open_probe_in_flight || sample >= HALF_OPEN_SAMPLE_RATE {
+                return false;
+            }
+            health.half_open_probe_in_flight = true;
+            return true;
+        }
+
+        let total = health.success_count + health.failure_count;
+        total < self.thresholds.min_samples
+            || health.success_rate() >= self.thresholds.min_success_rate
+    }
+
+    /// Returns the current state of a gateway, if it has been observed.
+    pub fn circuit_state(&self, gateway_id: &str) -> Option<CircuitState> {
+        self.states.get(gateway_id).map(GatewayHealth::state)
     }
 
     /// Check whether the gateway has reached its capacity limit.
@@ -437,6 +632,14 @@ impl GatewayHealthTracker {
     pub fn all_health(&self) -> &HashMap<String, GatewayHealth> {
         &self.states
     }
+
+    /// Release a previously acquired gateway reservation (e.g. when call
+    /// creation fails after `select_healthy_candidates` succeeded).
+    pub fn release_acquire(&mut self, gateway_id: &str) {
+        if let Some(health) = self.states.get_mut(gateway_id) {
+            health.half_open_probe_in_flight = false;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -446,6 +649,32 @@ impl GatewayHealthTracker {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RouteTable {
     routes: Vec<Route>,
+}
+
+fn weighted_shuffle(mut items: Vec<&Route>) -> Vec<&Route> {
+    use rand::Rng;
+    let mut result = Vec::with_capacity(items.len());
+    let mut rng = rand::thread_rng();
+
+    while !items.is_empty() {
+        let total_weight: u32 = items.iter().map(|item| item.weight.max(1)).sum();
+        if total_weight == 0 {
+            result.extend(items);
+            break;
+        }
+        let mut target = rng.gen_range(0..total_weight);
+        let mut chosen_idx = 0;
+        for (idx, item) in items.iter().enumerate() {
+            let w = item.weight.max(1);
+            if target < w {
+                chosen_idx = idx;
+                break;
+            }
+            target -= w;
+        }
+        result.push(items.remove(chosen_idx));
+    }
+    result
 }
 
 impl RouteTable {
@@ -470,6 +699,7 @@ impl RouteTable {
     /// 1. Longest prefix match (most specific first)
     /// 2. Higher priority value (higher = more preferred)
     /// 3. Lower cost (LCR — Lowest Cost Routing)
+    /// 4. Weight-based random shuffle for equivalent routes
     pub fn select_candidates(&self, destination_uri: &SipUri) -> CallResult<Vec<SelectedRoute>> {
         let destination = destination_uri
             .user
@@ -499,8 +729,34 @@ impl RouteTable {
                 })
         });
 
-        let mut candidates = Vec::with_capacity(matching_routes.len());
+        // 相同条件（前缀长度、优先级、成本）下的加权随机负载洗牌
+        let mut grouped_routes = Vec::new();
+        let mut current_group = Vec::new();
+
         for route in matching_routes {
+            if current_group.is_empty() {
+                current_group.push(route);
+            } else {
+                let first = current_group[0];
+                let is_equivalent = first.prefix.len() == route.prefix.len()
+                    && first.priority == route.priority
+                    && (first.cost - route.cost).abs() < 1e-9;
+                if is_equivalent {
+                    current_group.push(route);
+                } else {
+                    grouped_routes.push(weighted_shuffle(current_group));
+                    current_group = vec![route];
+                }
+            }
+        }
+        if !current_group.is_empty() {
+            grouped_routes.push(weighted_shuffle(current_group));
+        }
+
+        let final_routes: Vec<&Route> = grouped_routes.into_iter().flatten().collect();
+
+        let mut candidates = Vec::with_capacity(final_routes.len());
+        for route in final_routes {
             candidates.push(SelectedRoute {
                 route_id: route.id.clone(),
                 target: route.target.clone(),
@@ -547,8 +803,34 @@ impl RouteTable {
                 })
         });
 
-        let mut candidates = Vec::with_capacity(matching_routes.len());
+        // 相同条件（前缀长度、优先级、成本）下的加权随机负载洗牌
+        let mut grouped_routes = Vec::new();
+        let mut current_group = Vec::new();
+
         for route in matching_routes {
+            if current_group.is_empty() {
+                current_group.push(route);
+            } else {
+                let first = current_group[0];
+                let is_equivalent = first.prefix.len() == route.prefix.len()
+                    && first.priority == route.priority
+                    && (first.cost - route.cost).abs() < 1e-9;
+                if is_equivalent {
+                    current_group.push(route);
+                } else {
+                    grouped_routes.push(weighted_shuffle(current_group));
+                    current_group = vec![route];
+                }
+            }
+        }
+        if !current_group.is_empty() {
+            grouped_routes.push(weighted_shuffle(current_group));
+        }
+
+        let final_routes: Vec<&Route> = grouped_routes.into_iter().flatten().collect();
+
+        let mut candidates = Vec::with_capacity(final_routes.len());
+        for route in final_routes {
             candidates.push(SelectedRoute {
                 route_id: route.id.clone(),
                 target: route.target.clone(),
@@ -562,10 +844,13 @@ impl RouteTable {
     /// Select candidate routes, filtering out gateways that are unhealthy
     /// (circuit breaker open) or at capacity. Falls back to all candidates
     /// if every matching gateway is unhealthy (to avoid total outage).
+    ///
+    /// Only the first (best) candidate has `try_acquire` called, so that
+    /// HalfOpen probe-in-flight flags are not leaked for unused candidates.
     pub fn select_healthy_candidates(
         &self,
         destination_uri: &SipUri,
-        health: &GatewayHealthTracker,
+        health: &mut GatewayHealthTracker,
         call_direction: Option<&str>,
     ) -> CallResult<Vec<SelectedRoute>> {
         let all_candidates = if let Some(dir) = call_direction {
@@ -574,23 +859,48 @@ impl RouteTable {
             self.select_candidates(destination_uri)?
         };
 
-        let healthy: Vec<SelectedRoute> = all_candidates
+        // First pass: filter by capacity and availability (no acquire).
+        let available: Vec<SelectedRoute> = all_candidates
             .iter()
             .filter(|c| {
                 let gid = c.target.gateway_id.as_str();
-                health.is_available(gid) && health.has_capacity(gid, c.target.max_capacity)
+                health.has_capacity(gid, c.target.max_capacity) && health.is_available(gid)
             })
             .cloned()
             .collect();
 
-        if healthy.is_empty() {
-            // All gateways are unhealthy — fall back to all candidates to avoid
-            // a total service outage. The caller can still attempt the call.
+        if available.is_empty() {
             warn_all_gateways_unhealthy(&all_candidates);
-            Ok(all_candidates)
-        } else {
-            Ok(healthy)
+            return Err(CallError::GatewayUnavailable(
+                destination_uri.user.clone().unwrap_or_default(),
+            ));
         }
+
+        // Second pass: acquire only on the first (selected) candidate.
+        let first_gid = available[0].target.gateway_id.as_str();
+        if !health.try_acquire(first_gid) {
+            // First candidate not acquirable (e.g. HalfOpen probe already in flight).
+            // Try subsequent candidates.
+            for c in available.iter().skip(1) {
+                let gid = c.target.gateway_id.as_str();
+                if health.try_acquire(gid) {
+                    // Reorder: put the acquired candidate first.
+                    let mut result: Vec<SelectedRoute> = Vec::with_capacity(available.len());
+                    result.push(c.clone());
+                    for other in available.iter() {
+                        if other.target.gateway_id.as_str() != gid {
+                            result.push(other.clone());
+                        }
+                    }
+                    return Ok(result);
+                }
+            }
+            return Err(CallError::GatewayUnavailable(
+                destination_uri.user.clone().unwrap_or_default(),
+            ));
+        }
+
+        Ok(available)
     }
 
     pub fn routes(&self) -> &[Route] {
@@ -612,6 +922,7 @@ fn warn_all_gateways_unhealthy(candidates: &[SelectedRoute]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
 
     fn make_target(host: &str) -> RouteTarget {
         // Derive a stable gateway_id from the host so each test target is a distinct gateway.
@@ -681,13 +992,20 @@ mod tests {
         tracker.record_failure("gw1");
         assert!(!tracker.is_available("gw1")); // circuit open
 
-        // After recovery interval, half-open allows a trial
+        // After recovery interval, the circuit enters half-open.
         std::thread::sleep(Duration::from_millis(2));
         assert!(tracker.is_available("gw1"));
+        assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::Open));
 
-        // Success closes the circuit
+        // A sampled request enters half-open, and five consecutive successes close it.
+        assert!(tracker.try_acquire_with_sample("gw1", 0.01));
+        assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::HalfOpen));
+        for _ in 0..4 {
+            tracker.record_success("gw1");
+            assert!(tracker.try_acquire_with_sample("gw1", 0.01));
+        }
         tracker.record_success("gw1");
-        assert!(tracker.is_available("gw1"));
+        assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::Closed));
     }
 
     #[test]
@@ -725,14 +1043,14 @@ mod tests {
         tracker.record_failure("gw1");
 
         let healthy = table
-            .select_healthy_candidates(&make_uri("8613800138000"), &tracker, None)
+            .select_healthy_candidates(&make_uri("8613800138000"), &mut tracker, None)
             .unwrap();
         assert_eq!(healthy.len(), 1);
         assert_eq!(healthy[0].target.host, "gw2.example.com");
     }
 
     #[test]
-    fn test_select_healthy_candidates_fallback_when_all_unhealthy() {
+    fn test_select_healthy_candidates_rejects_when_all_unhealthy() {
         let routes = vec![Route::new("r1", "86", 100, make_target("gw1.example.com"))];
         let table = RouteTable::new(routes);
         let mut tracker = GatewayHealthTracker::new(HealthThresholds {
@@ -744,10 +1062,178 @@ mod tests {
 
         tracker.record_failure("gw1");
 
-        // All unhealthy → fallback to all candidates
-        let candidates = table
-            .select_healthy_candidates(&make_uri("8613800138000"), &tracker, None)
-            .unwrap();
-        assert_eq!(candidates.len(), 1);
+        let result =
+            table.select_healthy_candidates(&make_uri("8613800138000"), &mut tracker, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_weighted_load_balancing() {
+        let routes = vec![
+            Route::with_cost_and_weight("r1", "86", 100, 0.5, 200, make_target("gw1.example.com")),
+            Route::with_cost_and_weight("r2", "86", 100, 0.5, 100, make_target("gw2.example.com")),
+            Route::with_cost_and_weight("r3", "86", 100, 0.5, 100, make_target("gw3.example.com")),
+        ];
+        let table = RouteTable::new(routes);
+
+        let mut gw1_count = 0;
+        let mut gw2_count = 0;
+        let mut gw3_count = 0;
+
+        for _ in 0..1000 {
+            let candidates = table.select_candidates(&make_uri("8613800138000")).unwrap();
+            assert_eq!(candidates.len(), 3);
+            match candidates[0].target.host.as_str() {
+                "gw1.example.com" => gw1_count += 1,
+                "gw2.example.com" => gw2_count += 1,
+                "gw3.example.com" => gw3_count += 1,
+                _ => {}
+            }
+        }
+
+        println!(
+            "WEIGHT_TEST: gw1 = {}, gw2 = {}, gw3 = {}",
+            gw1_count, gw2_count, gw3_count
+        );
+        assert!(gw1_count > gw2_count);
+        assert!(gw1_count > gw3_count);
+        assert!(gw2_count > 100);
+        assert!(gw3_count > 100);
+    }
+
+    #[test]
+    fn test_half_open_failure_reopens_circuit() {
+        let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+            failure_threshold: 2,
+            recovery_interval: Duration::from_millis(1),
+            min_success_rate: 0.0,
+            min_samples: 100,
+        });
+
+        // Open the circuit
+        tracker.record_failure("gw1");
+        tracker.record_failure("gw1");
+        assert!(!tracker.is_available("gw1"));
+
+        // Wait for recovery, enter half-open
+        std::thread::sleep(Duration::from_millis(2));
+        assert!(tracker.try_acquire_with_sample("gw1", 0.01));
+        assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::HalfOpen));
+
+        // Failure in half-open re-opens circuit
+        tracker.record_failure("gw1");
+        assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::Open));
+        assert!(!tracker.is_available("gw1"));
+    }
+
+    #[test]
+    fn test_half_open_probe_in_flight_blocks_acquire() {
+        let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+            failure_threshold: 1,
+            recovery_interval: Duration::from_millis(1),
+            min_success_rate: 0.0,
+            min_samples: 100,
+        });
+
+        // Open circuit
+        tracker.record_failure("gw1");
+        std::thread::sleep(Duration::from_millis(2));
+
+        // First acquire succeeds (enters half-open, marks probe in flight)
+        assert!(tracker.try_acquire_with_sample("gw1", 0.01));
+        // Second acquire fails (probe already in flight)
+        assert!(!tracker.try_acquire_with_sample("gw1", 0.01));
+
+        // After success, probe is released
+        tracker.record_success("gw1");
+        assert!(tracker.try_acquire_with_sample("gw1", 0.01));
+    }
+
+    #[test]
+    fn test_restore_state_with_last_failure() {
+        let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+            failure_threshold: 1,
+            recovery_interval: Duration::from_millis(10),
+            min_success_rate: 0.0,
+            min_samples: 100,
+        });
+
+        // Simulate a recent failure (1ms ago)
+        let last_failure = SystemTime::now() - Duration::from_millis(1);
+        tracker.restore_state("gw1", true, 3, Some(last_failure), 0);
+
+        // Circuit is open but recovery interval hasn't elapsed
+        assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::Open));
+        assert!(!tracker.is_available("gw1"));
+
+        // After waiting, recovery interval elapsed
+        std::thread::sleep(Duration::from_millis(15));
+        assert!(tracker.is_available("gw1"));
+    }
+
+    #[test]
+    fn test_release_acquire_resets_probe_flag() {
+        let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+            failure_threshold: 1,
+            recovery_interval: Duration::from_millis(1),
+            min_success_rate: 0.0,
+            min_samples: 100,
+        });
+
+        // Open circuit and enter half-open
+        tracker.record_failure("gw1");
+        std::thread::sleep(Duration::from_millis(2));
+        assert!(tracker.try_acquire_with_sample("gw1", 0.01));
+
+        // Probe is in flight, can't acquire again
+        assert!(!tracker.try_acquire_with_sample("gw1", 0.01));
+
+        // Release the acquire
+        tracker.release_acquire("gw1");
+
+        // Now can acquire again
+        assert!(tracker.try_acquire_with_sample("gw1", 0.01));
+    }
+
+    #[test]
+    fn test_success_rate_filter() {
+        let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+            failure_threshold: 100,
+            recovery_interval: Duration::from_secs(60),
+            min_success_rate: 0.5,
+            min_samples: 5,
+        });
+
+        // Record enough samples to trigger success rate check
+        for _ in 0..3 {
+            tracker.record_success("gw1");
+        }
+        for _ in 0..7 {
+            tracker.record_failure("gw1");
+        }
+
+        // Success rate is 30% < 50% threshold
+        assert!(!tracker.is_available("gw1"));
+    }
+
+    #[test]
+    fn test_get_gateway_status_full() {
+        let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+            failure_threshold: 3,
+            recovery_interval: Duration::from_millis(1),
+            min_success_rate: 0.0,
+            min_samples: 100,
+        });
+
+        tracker.record_failure("gw1");
+        tracker.record_failure("gw1");
+        tracker.record_failure("gw1");
+
+        let status = tracker.get_gateway_status("gw1").unwrap();
+        assert!(status.0); // circuit_open
+        assert_eq!(status.1, 3); // consecutive_failures
+        assert_eq!(status.2, "open"); // state_str
+        assert!(status.3.is_some()); // last_failure_at
+        assert_eq!(status.4, 0); // half_open_successes
     }
 }

@@ -9,8 +9,8 @@ pub use cdr::{CallCdr, CallQualityMetrics, CdrStatus};
 pub use error::{CallError, CallResult};
 pub use manager::{CallManager, InboundInviteOutcome, OutboundResponseOutcome, TerminationOutcome};
 pub use routing::{
-    GatewayHealth, GatewayHealthTracker, GatewayId, HealthThresholds, Route, RouteTable,
-    RouteTarget, SelectedRoute,
+    CircuitState, GatewayHealth, GatewayHealthTracker, GatewayId, HealthThresholds, Route,
+    RouteTable, RouteTarget, SelectedRoute,
 };
 
 /// 活跃呼叫摘要（供管理 API 暴露）。

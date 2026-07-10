@@ -11,6 +11,7 @@ pub enum CallError {
         event: &'static str,
     },
     NoRouteForDestination(String),
+    GatewayUnavailable(String),
     UnknownCall(String),
     OutboundLegAlreadyExists,
     MissingOutboundLeg,
@@ -28,6 +29,9 @@ impl fmt::Display for CallError {
             }
             Self::NoRouteForDestination(destination) => {
                 write!(f, "no route for destination: {destination}")
+            }
+            Self::GatewayUnavailable(destination) => {
+                write!(f, "all gateways unavailable for destination: {destination}")
             }
             Self::UnknownCall(call_id) => write!(f, "unknown call: {call_id}"),
             Self::OutboundLegAlreadyExists => write!(f, "outbound leg already exists"),

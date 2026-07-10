@@ -1,9 +1,10 @@
 use crate::{
-    Call, CallCdr, CallError, CallId, CallQualityMetrics, CallResult, CallState, RouteTable,
+    Call, CallCdr, CallError, CallId, CallQualityMetrics, CallResult, CallState,
+    GatewayHealthTracker, RouteTable,
 };
 use dashmap::DashMap;
 use sip_core::{SipRequest, SipResponse};
-use std::sync::{Mutex, RwLock};
+use std::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundInviteOutcome {
@@ -21,6 +22,7 @@ pub struct OutboundResponseOutcome {
     pub call_id: CallId,
     pub state: CallState,
     pub failover_uri: Option<sip_core::SipUri>,
+    pub gateway_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,20 +33,27 @@ pub struct TerminationOutcome {
 
 /// 并发安全的呼叫管理器：calls 用 DashMap（分片无锁），routes 用 RwLock（读多写少），
 /// completed_cdrs 用 Mutex。所有方法 `&self`，可被多个 worker 并行调用。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CallManager {
     calls: DashMap<CallId, Call>,
     routes: RwLock<RouteTable>,
-    completed_cdrs: Mutex<Vec<CallCdr>>,
+    cdr_sender: tokio::sync::mpsc::UnboundedSender<CallCdr>,
 }
 
 impl CallManager {
-    pub fn new(routes: RouteTable) -> Self {
+    pub fn new(
+        routes: RouteTable,
+        cdr_sender: tokio::sync::mpsc::UnboundedSender<CallCdr>,
+    ) -> Self {
         Self {
             calls: DashMap::new(),
             routes: RwLock::new(routes),
-            completed_cdrs: Mutex::new(Vec::new()),
+            cdr_sender,
         }
+    }
+
+    fn push_cdr(&self, cdr: CallCdr) {
+        let _ = self.cdr_sender.send(cdr);
     }
 
     pub fn update_routes(&self, routes: RouteTable) {
@@ -52,6 +61,15 @@ impl CallManager {
     }
 
     pub fn handle_inbound_invite(&self, request: &SipRequest) -> CallResult<InboundInviteOutcome> {
+        self.handle_inbound_invite_with_health(request, None)
+    }
+
+    /// Handles an INVITE while applying the gateway circuit breaker.
+    pub fn handle_inbound_invite_with_health(
+        &self,
+        request: &SipRequest,
+        health: Option<&mut GatewayHealthTracker>,
+    ) -> CallResult<InboundInviteOutcome> {
         let mut call = Call::from_inbound_invite(request)?;
         let call_id = call.id.clone();
 
@@ -63,20 +81,24 @@ impl CallManager {
             }
         }
 
-        let candidates = match self
-            .routes
-            .read()
-            .expect("routes lock poisoned")
-            .select_candidates_for_direction(&call.inbound.remote_uri, &call.direction)
-        {
+        let candidates = {
+            let routes = self.routes.read().expect("routes lock poisoned");
+            match health {
+                Some(health) => routes.select_healthy_candidates(
+                    &call.inbound.remote_uri,
+                    health,
+                    Some(&call.direction),
+                ),
+                None => routes
+                    .select_candidates_for_direction(&call.inbound.remote_uri, &call.direction),
+            }
+        };
+        let candidates = match candidates {
             Ok(candidates) => candidates,
             Err(error) => {
                 let _ = call.fail(None, error.to_string());
                 if let Some(cdr) = CallCdr::from_completed_call(&call) {
-                    self.completed_cdrs
-                        .lock()
-                        .expect("cdr lock poisoned")
-                        .push(cdr);
+                    self.push_cdr(cdr);
                 }
                 self.calls.insert(call_id, call);
                 return Err(error);
@@ -195,10 +217,7 @@ impl CallManager {
 
         if failover_uri.is_none() {
             if let Some(cdr) = CallCdr::from_completed_call(&call) {
-                self.completed_cdrs
-                    .lock()
-                    .expect("cdr lock poisoned")
-                    .push(cdr);
+                self.push_cdr(cdr);
             }
         }
 
@@ -208,6 +227,11 @@ impl CallManager {
             call_id,
             state,
             failover_uri,
+            gateway_id: call
+                .candidates
+                .get(call.current_candidate_index)
+                .map(|candidate| candidate.target.gateway_id.as_str().to_string())
+                .unwrap_or_default(),
         })
     }
 
@@ -233,10 +257,7 @@ impl CallManager {
         if let Some(cdr) =
             CallCdr::from_completed_call_with_metrics(&call, metrics, dtmf_digits, None)
         {
-            self.completed_cdrs
-                .lock()
-                .expect("cdr lock poisoned")
-                .push(cdr);
+            self.push_cdr(cdr);
         }
 
         let state = call.state;
@@ -265,17 +286,6 @@ impl CallManager {
 
     pub fn routes(&self) -> RouteTable {
         self.routes.read().expect("routes lock poisoned").clone()
-    }
-
-    pub fn completed_cdrs(&self) -> Vec<CallCdr> {
-        self.completed_cdrs
-            .lock()
-            .expect("cdr lock poisoned")
-            .clone()
-    }
-
-    pub fn take_completed_cdrs(&self) -> Vec<CallCdr> {
-        std::mem::take(&mut *self.completed_cdrs.lock().expect("cdr lock poisoned"))
     }
 
     pub fn active_calls_count(&self) -> usize {
@@ -326,12 +336,19 @@ impl CallManager {
         if let Some(mut call) = self.calls.get_mut(&cid) {
             let _ = call.fail(None, "Session-Expires timeout".to_string());
             if let Some(cdr) = crate::cdr::CallCdr::from_completed_call(&call) {
-                self.completed_cdrs
-                    .lock()
-                    .expect("cdr lock poisoned")
-                    .push(cdr);
+                self.push_cdr(cdr);
             }
         }
+    }
+
+    /// Returns the gateway_id of the currently selected route for a call, if any.
+    pub fn current_gateway_id(&self, call_id: &str) -> Option<String> {
+        let cid = crate::CallId::new(call_id.to_string());
+        self.calls.get(&cid).and_then(|call| {
+            call.candidates
+                .get(call.current_candidate_index)
+                .map(|c| c.target.gateway_id.as_str().to_string())
+        })
     }
 }
 

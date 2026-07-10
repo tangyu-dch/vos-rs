@@ -2,7 +2,7 @@ use crate::{CallError, CallResult, GatewayId, RouteTarget, SelectedRoute};
 use sip_core::{SipRequest, SipUri};
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CallId(String);
 
 impl CallId {
@@ -65,7 +65,9 @@ impl CallState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureCause {
     pub status_code: Option<u16>,
     pub reason: String,

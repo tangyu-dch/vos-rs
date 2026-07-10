@@ -9,6 +9,8 @@ rust-version.workspace = true
 sip-core = { path = "../sip-core" }
 serde = { version = "1", features = ["derive"] }
 dashmap = "6"
+tokio = { version = "1", features = ["sync"] }
+rand = "0.8"
 
 [[bench]]
 name = "concurrency"
