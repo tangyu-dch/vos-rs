@@ -1,3 +1,23 @@
+//! # SDP 重写
+//!
+//! 本模块实现了 SIP 代理的 SDP 重写功能，包括：
+//!
+//! - **地址改写**：将 SDP 中的 RTP 地址改写为代理地址
+//! - **端口改写**：将 SDP 中的 RTP 端口改写为代理端口
+//! - **端点提取**：从 SDP 中提取原始 RTP 端点信息
+//! - **ICE/DTLS 验证**：验证 ICE 和 DTLS-SRTP 属性
+//!
+//! ## 重写流程
+//!
+//! ```text
+//! 入站 INVITE SDP → 提取原始端点 → 分配代理端口 → 重写 SDP → 转发到网关
+//! ```
+//!
+//! ## 快速路径
+//!
+//! 当 SDP 包含兼容的音频编解码器时，使用字节级快速重写，
+//! 避免完整的解析-修改-序列化流程。
+
 use std::str;
 use sip_core::HeaderMap;
 use sdp_core::{RtpEndpoint, SessionDescription};
@@ -30,7 +50,13 @@ pub fn is_sdp_body(headers: &HeaderMap, body: &[u8]) -> bool {
 
 pub fn validate_media_negotiation(body: &[u8]) -> Result<(), MediaError> {
     let input = str::from_utf8(body).map_err(|_| MediaError::InvalidUtf8)?;
-    if !input.contains("PCMU") && !input.contains("PCMA") {
+    let upper = input.to_ascii_uppercase();
+    if !upper.contains("PCMU")
+        && !upper.contains("PCMA")
+        && !upper.contains("OPUS")
+        && !upper.contains("G722")
+        && !upper.contains("G729")
+    {
         return Err(MediaError::Sdp(sdp_core::SdpError::MissingCompatibleAudioCodec));
     }
     Ok(())
@@ -82,7 +108,13 @@ fn try_fast_rewrite_and_extract(
 }
 
 fn try_fast_rewrite_inner(input: &str, endpoint: &RtpEndpoint) -> Option<(Vec<u8>, RtpEndpoint)> {
-    if !input.contains("PCMU") && !input.contains("PCMA") {
+    let upper = input.to_ascii_uppercase();
+    if !upper.contains("PCMU")
+        && !upper.contains("PCMA")
+        && !upper.contains("OPUS")
+        && !upper.contains("G722")
+        && !upper.contains("G729")
+    {
         return None;
     }
 

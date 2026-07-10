@@ -501,6 +501,7 @@ impl WavCallRecorder {
             let sample = match codec {
                 AudioCodec::Pcmu => decode_pcmu(payload_byte),
                 AudioCodec::Pcma => decode_pcma(payload_byte),
+                _ => continue, // G722, G729, Opus not supported for recording
             };
             let frame = start_frame + sample_index as u64;
             self.set_sample(frame, channel, sample);
