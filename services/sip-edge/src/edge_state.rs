@@ -12,7 +12,7 @@ use crate::{
         dialog, transaction, ClientTransactionKey, DialogValidationError, RequestTransactionKey,
     },
 };
-use call_core::{CallManager, GatewayHealthTracker};
+use call_core::{CallId, CallManager, GatewayHealthTracker};
 use cdr_core::PostgresCdrStore;
 use dashmap::DashMap;
 use rustls_pki_types::ServerName;
@@ -752,6 +752,10 @@ impl EdgeState {
                     media_config,
                 ) {
                     Ok(Some(path)) => {
+                        self.call_manager.set_recording_path(
+                            &CallId::new(call_id),
+                            format!("local:{}", path.display()),
+                        );
                         debug!(call_id, path = %path.display(), "started call recording");
                     }
                     Ok(None) => {}

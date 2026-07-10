@@ -47,6 +47,45 @@ pub struct SrtpCryptoAttribute {
     pub session_params: Option<String>,
 }
 
+/// ICE candidate advertised by an SDP media section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IceCandidate {
+    pub foundation: String,
+    pub component: u16,
+    pub transport: String,
+    pub priority: u32,
+    pub address: String,
+    pub port: u16,
+    pub candidate_type: String,
+    pub related_address: Option<String>,
+    pub related_port: Option<u16>,
+    pub tcp_type: Option<String>,
+}
+
+/// ICE credentials and candidates for one SDP media section.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IceParameters {
+    pub username_fragment: Option<String>,
+    pub password: Option<String>,
+    pub options: Vec<String>,
+    pub candidates: Vec<IceCandidate>,
+    pub end_of_candidates: bool,
+}
+
+/// DTLS fingerprint advertised by an SDP media section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DtlsFingerprint {
+    pub algorithm: String,
+    pub value: String,
+}
+
+/// DTLS-SRTP negotiation parameters for one SDP media section.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DtlsParameters {
+    pub fingerprint: Option<DtlsFingerprint>,
+    pub setup: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionDescription {
     lines: Vec<String>,
@@ -121,6 +160,26 @@ impl SessionDescription {
             .iter()
             .filter_map(|line| parse_crypto_attribute(line))
             .collect())
+    }
+
+    /// Returns ICE credentials and candidates declared on the first audio RTP media section.
+    pub fn first_audio_ice_parameters(&self) -> SdpResult<IceParameters> {
+        let media_index = self.first_audio_rtp_media_index()?;
+        let mut parameters = IceParameters::default();
+        for line in self.attribute_lines(media_index) {
+            parse_ice_attribute(line, &mut parameters);
+        }
+        Ok(parameters)
+    }
+
+    /// Returns DTLS fingerprint and setup attributes for the first audio RTP media section.
+    pub fn first_audio_dtls_parameters(&self) -> SdpResult<DtlsParameters> {
+        let media_index = self.first_audio_rtp_media_index()?;
+        let mut parameters = DtlsParameters::default();
+        for line in self.attribute_lines(media_index) {
+            parse_dtls_attribute(line, &mut parameters);
+        }
+        Ok(parameters)
     }
 
     pub fn retain_first_audio_rtp_payloads(&mut self, payloads: &[String]) -> SdpResult<()> {
@@ -234,6 +293,16 @@ impl SessionDescription {
             .iter()
             .filter_map(|line| parse_rtpmap(line))
             .find(|rtpmap| rtpmap.payload_type == payload_type)
+    }
+
+    fn attribute_lines(&self, media_index: usize) -> impl Iterator<Item = &str> {
+        let start = self.media[media_index].media_line_index + 1;
+        let end = self
+            .media
+            .get(media_index + 1)
+            .map(|media| media.media_line_index)
+            .unwrap_or(self.lines.len());
+        self.lines[start..end].iter().map(String::as_str)
     }
 
     fn rewrite_media_line(&mut self, media_index: usize, port: u16) {

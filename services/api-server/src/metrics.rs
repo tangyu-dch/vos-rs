@@ -27,6 +27,7 @@ pub struct Metrics {
     pub media_received_packets: Gauge,
     pub media_forwarded_packets: Gauge,
     pub media_dropped_invalid_packets: Gauge,
+    pub media_dropped_spoofed_packets: Gauge,
     pub media_dropped_no_target_packets: Gauge,
     pub media_send_errors: Gauge,
     pub media_recorded_packets: Gauge,
@@ -39,15 +40,25 @@ pub struct Metrics {
     pub media_rtcp_reports: Gauge,
     pub media_rtcp_max_jitter: Gauge,
     pub media_rtcp_max_rtt_ms: Gauge,
+    pub media_rtcp_window_reports: Gauge,
+    pub media_rtcp_window_average_loss_rate: Gauge,
+    pub media_rtcp_window_average_jitter_ms: Gauge,
+    pub media_rtcp_window_average_rtt_ms: Gauge,
+    pub media_rtcp_window_r_factor: Gauge,
+    pub media_rtcp_window_mos: Gauge,
+    pub media_rtcp_quality_alerts: Gauge,
 }
 
 static METRICS: OnceLock<Metrics> = OnceLock::new();
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct MediaMetricsSnapshot {
     received_packets: u64,
     forwarded_packets: u64,
     dropped_invalid_packets: u64,
+    #[serde(default)]
+    dropped_spoofed_packets: u64,
     dropped_no_target_packets: u64,
     send_errors: u64,
     recorded_packets: u64,
@@ -58,6 +69,10 @@ pub struct MediaMetricsSnapshot {
     recording_workers: u64,
     dtmf_events: u64,
     rtcp_quality: RtcpQualitySnapshot,
+    #[serde(default)]
+    rtcp_window: RtcpQualityWindow,
+    #[serde(default)]
+    rtcp_quality_alerts: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +80,18 @@ struct RtcpQualitySnapshot {
     reports: u64,
     max_jitter: Option<u32>,
     max_rtt_ms: Option<u32>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Default, Deserialize)]
+struct RtcpQualityWindow {
+    reports: u64,
+    samples: u64,
+    average_fraction_lost: Option<u8>,
+    average_jitter: Option<u32>,
+    average_rtt_ms: Option<u32>,
+    r_factor_x100: Option<u16>,
+    mos_x100: Option<u16>,
 }
 
 impl Metrics {
@@ -178,6 +205,12 @@ impl Metrics {
             "Invalid media packets dropped by sip-edge media relay",
             media_dropped_invalid_packets.clone(),
         );
+        let media_dropped_spoofed_packets = Gauge::default();
+        registry.register(
+            "media_dropped_spoofed_packets",
+            "Media packets dropped because the RTP source was not bound",
+            media_dropped_spoofed_packets.clone(),
+        );
 
         let media_dropped_no_target_packets = Gauge::default();
         registry.register(
@@ -263,6 +296,49 @@ impl Metrics {
             media_rtcp_max_rtt_ms.clone(),
         );
 
+        let media_rtcp_window_reports = Gauge::default();
+        registry.register(
+            "media_rtcp_window_reports",
+            "RTCP reports in the current quality window",
+            media_rtcp_window_reports.clone(),
+        );
+        let media_rtcp_window_average_loss_rate = Gauge::default();
+        registry.register(
+            "media_rtcp_window_average_loss_rate_x10000",
+            "Average RTCP fraction lost multiplied by 10000 in the current quality window",
+            media_rtcp_window_average_loss_rate.clone(),
+        );
+        let media_rtcp_window_average_jitter_ms = Gauge::default();
+        registry.register(
+            "media_rtcp_window_average_jitter_ms_x100",
+            "Average RTCP jitter in milliseconds multiplied by 100 in the current quality window",
+            media_rtcp_window_average_jitter_ms.clone(),
+        );
+        let media_rtcp_window_average_rtt_ms = Gauge::default();
+        registry.register(
+            "media_rtcp_window_average_rtt_ms_x100",
+            "Average RTCP RTT in milliseconds multiplied by 100 in the current quality window",
+            media_rtcp_window_average_rtt_ms.clone(),
+        );
+        let media_rtcp_window_r_factor = Gauge::default();
+        registry.register(
+            "media_rtcp_window_r_factor_x100",
+            "Estimated R-factor multiplied by 100 in the current quality window",
+            media_rtcp_window_r_factor.clone(),
+        );
+        let media_rtcp_window_mos = Gauge::default();
+        registry.register(
+            "media_rtcp_window_mos_x100",
+            "Estimated MOS multiplied by 100 in the current quality window",
+            media_rtcp_window_mos.clone(),
+        );
+        let media_rtcp_quality_alerts = Gauge::default();
+        registry.register(
+            "media_rtcp_quality_alerts",
+            "RTCP quality degradation transitions observed by media relay",
+            media_rtcp_quality_alerts.clone(),
+        );
+
         Self {
             registry,
             http_requests_total,
@@ -281,6 +357,7 @@ impl Metrics {
             media_received_packets,
             media_forwarded_packets,
             media_dropped_invalid_packets,
+            media_dropped_spoofed_packets,
             media_dropped_no_target_packets,
             media_send_errors,
             media_recorded_packets,
@@ -293,6 +370,13 @@ impl Metrics {
             media_rtcp_reports,
             media_rtcp_max_jitter,
             media_rtcp_max_rtt_ms,
+            media_rtcp_window_reports,
+            media_rtcp_window_average_loss_rate,
+            media_rtcp_window_average_jitter_ms,
+            media_rtcp_window_average_rtt_ms,
+            media_rtcp_window_r_factor,
+            media_rtcp_window_mos,
+            media_rtcp_quality_alerts,
         }
     }
 
@@ -307,6 +391,9 @@ impl Metrics {
         metrics
             .media_dropped_invalid_packets
             .set(saturating_i64(snapshot.dropped_invalid_packets));
+        metrics
+            .media_dropped_spoofed_packets
+            .set(saturating_i64(snapshot.dropped_spoofed_packets));
         metrics
             .media_dropped_no_target_packets
             .set(saturating_i64(snapshot.dropped_no_target_packets));
@@ -343,6 +430,33 @@ impl Metrics {
         metrics.media_rtcp_max_rtt_ms.set(i64::from(
             snapshot.rtcp_quality.max_rtt_ms.unwrap_or_default(),
         ));
+        metrics
+            .media_rtcp_window_reports
+            .set(saturating_i64(snapshot.rtcp_window.reports));
+        metrics.media_rtcp_window_average_loss_rate.set(
+            i64::from(
+                snapshot
+                    .rtcp_window
+                    .average_fraction_lost
+                    .unwrap_or_default(),
+            ) * 10_000
+                / 255,
+        );
+        metrics
+            .media_rtcp_window_average_jitter_ms
+            .set(i64::from(snapshot.rtcp_window.average_jitter.unwrap_or_default()) * 100 / 8);
+        metrics.media_rtcp_window_average_rtt_ms.set(i64::from(
+            snapshot.rtcp_window.average_rtt_ms.unwrap_or_default() * 100,
+        ));
+        metrics.media_rtcp_window_r_factor.set(i64::from(
+            snapshot.rtcp_window.r_factor_x100.unwrap_or_default(),
+        ));
+        metrics
+            .media_rtcp_window_mos
+            .set(i64::from(snapshot.rtcp_window.mos_x100.unwrap_or_default()));
+        metrics
+            .media_rtcp_quality_alerts
+            .set(saturating_i64(snapshot.rtcp_quality_alerts));
     }
 
     pub fn encode_metrics() -> String {
@@ -369,6 +483,7 @@ mod tests {
             received_packets: 10,
             forwarded_packets: 9,
             dropped_invalid_packets: 1,
+            dropped_spoofed_packets: 0,
             dropped_no_target_packets: 2,
             send_errors: 3,
             recorded_packets: 8,
@@ -383,6 +498,8 @@ mod tests {
                 max_jitter: Some(11),
                 max_rtt_ms: Some(22),
             },
+            rtcp_window: RtcpQualityWindow::default(),
+            rtcp_quality_alerts: 0,
         });
 
         let output = Metrics::encode_metrics();

@@ -10,10 +10,12 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     error::Error,
+    ffi::CString,
     fmt, fs,
     fs::File,
     io,
     io::{Seek, SeekFrom, Write},
+    mem::MaybeUninit,
     net::{SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     str,
@@ -30,14 +32,26 @@ pub const RTP_ADVERTISED_ADDR_ENV: &str = "VOS_RS_RTP_ADVERTISED_ADDR";
 pub const RTP_PORT_MIN_ENV: &str = "VOS_RS_RTP_PORT_MIN";
 pub const RTP_PORT_MAX_ENV: &str = "VOS_RS_RTP_PORT_MAX";
 pub const RTP_SYMMETRIC_LEARNING_ENV: &str = "VOS_RS_RTP_SYMMETRIC_LEARNING";
+pub const RTP_ANTI_SPOOFING_ENV: &str = "VOS_RS_RTP_ANTI_SPOOFING";
+pub const RTP_SOURCE_RELEARN_SECS_ENV: &str = "VOS_RS_RTP_SOURCE_RELEARN_SECS";
 pub const RECORDING_ENABLED_ENV: &str = "VOS_RS_RECORDING_ENABLED";
 pub const RECORDING_DIR_ENV: &str = "VOS_RS_RECORDING_DIR";
+pub const RECORDING_RETENTION_SECS_ENV: &str = "VOS_RS_RECORDING_RETENTION_SECS";
+pub const RECORDING_MIN_FREE_BYTES_ENV: &str = "VOS_RS_RECORDING_MIN_FREE_BYTES";
+pub const RECORDING_MAX_FILE_BYTES_ENV: &str = "VOS_RS_RECORDING_MAX_FILE_BYTES";
+pub const RECORDING_MAX_DURATION_SECS_ENV: &str = "VOS_RS_RECORDING_MAX_DURATION_SECS";
 pub const DEFAULT_RTP_ADVERTISED_ADDR: &str = "127.0.0.1";
 pub const DEFAULT_RTP_PORT_MIN: u16 = 40_000;
 pub const DEFAULT_RTP_PORT_MAX: u16 = 40_100;
 pub const DEFAULT_RTP_SYMMETRIC_LEARNING: bool = true;
+pub const DEFAULT_RTP_ANTI_SPOOFING: bool = true;
+pub const DEFAULT_RTP_SOURCE_RELEARN_SECS: u64 = 30;
 pub const DEFAULT_RECORDING_ENABLED: bool = false;
 pub const DEFAULT_RECORDING_DIR: &str = "target/recordings";
+pub const DEFAULT_RECORDING_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
+pub const DEFAULT_RECORDING_MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_RECORDING_MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
+pub const DEFAULT_RECORDING_MAX_DURATION_SECS: u64 = 60 * 60;
 const MAX_RTP_DATAGRAM_SIZE: usize = 65_535;
 const RECORDING_SAMPLE_RATE: u32 = 8_000;
 const RECORDING_CHANNELS: u16 = 2;
@@ -46,6 +60,7 @@ const DEFAULT_RECORDING_QUEUE_CAPACITY: usize = 4096;
 const RECORDING_QUEUE_CAPACITY_ENV: &str = "VOS_RS_RECORDING_QUEUE_CAPACITY";
 const RECORDING_WORKERS_ENV: &str = "VOS_RS_RECORDING_WORKERS";
 const DEFAULT_RECORDING_WORKERS: usize = 4;
+const RTCP_QUALITY_WINDOW_MS: u128 = 60_000;
 const RECORDING_WORKER_DRAIN_LIMIT: usize = 256;
 static NEXT_RECORDING_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -55,8 +70,14 @@ pub struct MediaConfig {
     pub port_min: u16,
     pub port_max: u16,
     pub symmetric_rtp_learning: bool,
+    pub anti_spoofing: bool,
+    pub source_relearn_after_secs: u64,
     pub recording_enabled: bool,
     pub recording_dir: PathBuf,
+    pub recording_retention_secs: u64,
+    pub recording_min_free_bytes: u64,
+    pub recording_max_file_bytes: u64,
+    pub recording_max_duration_secs: u64,
 }
 
 impl MediaConfig {
@@ -89,8 +110,14 @@ impl MediaConfig {
             port_min,
             port_max,
             symmetric_rtp_learning,
+            anti_spoofing: DEFAULT_RTP_ANTI_SPOOFING,
+            source_relearn_after_secs: DEFAULT_RTP_SOURCE_RELEARN_SECS,
             recording_enabled: DEFAULT_RECORDING_ENABLED,
             recording_dir: PathBuf::from(DEFAULT_RECORDING_DIR),
+            recording_retention_secs: DEFAULT_RECORDING_RETENTION_SECS,
+            recording_min_free_bytes: DEFAULT_RECORDING_MIN_FREE_BYTES,
+            recording_max_file_bytes: DEFAULT_RECORDING_MAX_FILE_BYTES,
+            recording_max_duration_secs: DEFAULT_RECORDING_MAX_DURATION_SECS,
         }
     }
 
@@ -101,10 +128,23 @@ impl MediaConfig {
         let port_max = env_port(RTP_PORT_MAX_ENV).unwrap_or(DEFAULT_RTP_PORT_MAX);
         let symmetric_rtp_learning =
             env_bool(RTP_SYMMETRIC_LEARNING_ENV).unwrap_or(DEFAULT_RTP_SYMMETRIC_LEARNING);
+        let anti_spoofing = env_bool(RTP_ANTI_SPOOFING_ENV).unwrap_or(DEFAULT_RTP_ANTI_SPOOFING);
+        let source_relearn_after_secs = env::var(RTP_SOURCE_RELEARN_SECS_ENV)
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_RTP_SOURCE_RELEARN_SECS);
         let recording_enabled =
             env_bool(RECORDING_ENABLED_ENV).unwrap_or(DEFAULT_RECORDING_ENABLED);
         let recording_dir =
             env::var(RECORDING_DIR_ENV).unwrap_or_else(|_| DEFAULT_RECORDING_DIR.to_string());
+        let recording_retention_secs =
+            env_u64(RECORDING_RETENTION_SECS_ENV).unwrap_or(DEFAULT_RECORDING_RETENTION_SECS);
+        let recording_min_free_bytes =
+            env_u64(RECORDING_MIN_FREE_BYTES_ENV).unwrap_or(DEFAULT_RECORDING_MIN_FREE_BYTES);
+        let recording_max_file_bytes =
+            env_u64(RECORDING_MAX_FILE_BYTES_ENV).unwrap_or(DEFAULT_RECORDING_MAX_FILE_BYTES);
+        let recording_max_duration_secs =
+            env_u64(RECORDING_MAX_DURATION_SECS_ENV).unwrap_or(DEFAULT_RECORDING_MAX_DURATION_SECS);
         let mut config = Self::new_with_symmetric_learning(
             advertised_addr,
             port_min,
@@ -112,7 +152,13 @@ impl MediaConfig {
             symmetric_rtp_learning,
         );
         config.recording_enabled = recording_enabled;
+        config.anti_spoofing = anti_spoofing;
+        config.source_relearn_after_secs = source_relearn_after_secs;
         config.recording_dir = PathBuf::from(recording_dir);
+        config.recording_retention_secs = recording_retention_secs;
+        config.recording_min_free_bytes = recording_min_free_bytes;
+        config.recording_max_file_bytes = recording_max_file_bytes;
+        config.recording_max_duration_secs = recording_max_duration_secs;
         config
     }
 
@@ -120,6 +166,10 @@ impl MediaConfig {
     pub fn with_recording(mut self, enabled: bool, dir: impl Into<PathBuf>) -> Self {
         self.recording_enabled = enabled;
         self.recording_dir = dir.into();
+        self.recording_retention_secs = 0;
+        self.recording_min_free_bytes = 0;
+        self.recording_max_file_bytes = 0;
+        self.recording_max_duration_secs = 0;
         self
     }
 
@@ -138,6 +188,8 @@ pub struct MediaRelayState {
     active_loops: Arc<DashMap<u16, Vec<tokio::sync::oneshot::Sender<()>>>>,
     crypto_sessions: Arc<DashMap<u16, Arc<tokio::sync::Mutex<MediaCryptoSession>>>>,
     pending_srtp: Arc<DashMap<u16, PendingSrtpConfig>>,
+    rtp_stats: Arc<DashMap<u16, RtpReceiveStats>>,
+    source_bindings: Arc<DashMap<u16, SourceBinding>>,
     state: Arc<Mutex<MediaRelayStateInner>>,
 }
 
@@ -153,6 +205,8 @@ impl Clone for MediaRelayState {
             active_loops: Arc::clone(&self.active_loops),
             crypto_sessions: Arc::clone(&self.crypto_sessions),
             pending_srtp: Arc::clone(&self.pending_srtp),
+            rtp_stats: Arc::clone(&self.rtp_stats),
+            source_bindings: Arc::clone(&self.source_bindings),
             state: Arc::clone(&self.state),
         }
     }
@@ -187,7 +241,11 @@ pub struct MediaRelayMetrics {
     pub dropped_no_target_packets: u64,
     pub send_errors: u64,
     pub learned_source_updates: u64,
+    pub dropped_spoofed_packets: u64,
     pub rtcp_quality: RtcpQualitySnapshot,
+    pub rtcp_window: RtcpQualityWindow,
+    pub rtcp_quality_alerts: u64,
+    pub rtcp_quality_degraded: bool,
     pub recorded_packets: u64,
     pub recording_dropped_packets: u64,
     pub recording_errors: u64,
@@ -195,6 +253,107 @@ pub struct MediaRelayMetrics {
     pub recording_queue_capacity: u64,
     pub recording_workers: u64,
     pub dtmf_events: u64,
+}
+
+/// Rolling RTCP quality aggregates for the current 60-second window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RtcpQualityWindow {
+    pub started_at_unix_ms: u128,
+    pub reports: u64,
+    pub samples: u64,
+    pub average_fraction_lost: Option<u8>,
+    pub average_jitter: Option<u32>,
+    pub average_rtt_ms: Option<u32>,
+    pub r_factor_x100: Option<u16>,
+    pub mos_x100: Option<u16>,
+    total_fraction_lost: u64,
+    total_jitter: u64,
+    total_rtt_ms: u64,
+    rtt_samples: u64,
+}
+
+impl RtcpQualityWindow {
+    fn is_degraded(&self) -> bool {
+        self.average_fraction_lost
+            .map(|value| u32::from(value) * 10_000 / 255 > 1_000)
+            .unwrap_or(false)
+            || self
+                .average_jitter
+                .map(|value| value > 100 * 8)
+                .unwrap_or(false)
+            || self
+                .average_rtt_ms
+                .map(|value| value > 300)
+                .unwrap_or(false)
+            || self.mos_x100.map(|value| value < 350).unwrap_or(false)
+    }
+
+    fn observe(&mut self, snapshot: RtcpQualitySnapshot) {
+        let now = unix_timestamp_millis();
+        if self.started_at_unix_ms == 0
+            || now.saturating_sub(self.started_at_unix_ms) >= RTCP_QUALITY_WINDOW_MS
+        {
+            *self = Self {
+                started_at_unix_ms: now,
+                ..Self::default()
+            };
+        }
+
+        self.reports += snapshot.reports;
+        let samples = snapshot.report_blocks;
+        self.samples += samples;
+        if let Some(value) = snapshot.last_fraction_lost {
+            self.total_fraction_lost += u64::from(value) * samples.max(1);
+        }
+        if let Some(value) = snapshot.last_jitter {
+            self.total_jitter += u64::from(value) * samples.max(1);
+        }
+        if let Some(value) = snapshot.last_rtt_ms {
+            self.total_rtt_ms += u64::from(value);
+            self.rtt_samples += 1;
+        }
+        self.recalculate();
+    }
+
+    fn merge(&mut self, other: Self) {
+        if other.started_at_unix_ms == 0 {
+            return;
+        }
+        if self.started_at_unix_ms == 0 {
+            *self = other;
+            return;
+        }
+        self.started_at_unix_ms = self.started_at_unix_ms.min(other.started_at_unix_ms);
+        self.reports += other.reports;
+        self.samples += other.samples;
+        self.total_fraction_lost += other.total_fraction_lost;
+        self.total_jitter += other.total_jitter;
+        self.total_rtt_ms += other.total_rtt_ms;
+        self.rtt_samples += other.rtt_samples;
+        self.recalculate();
+    }
+
+    fn recalculate(&mut self) {
+        if self.samples == 0 {
+            return;
+        }
+        self.average_fraction_lost = Some((self.total_fraction_lost / self.samples) as u8);
+        self.average_jitter = Some((self.total_jitter / self.samples) as u32);
+        self.average_rtt_ms =
+            (self.rtt_samples > 0).then_some((self.total_rtt_ms / self.rtt_samples) as u32);
+
+        let loss_percent =
+            f64::from(self.average_fraction_lost.unwrap_or_default()) * 100.0 / 255.0;
+        let jitter_ms = f64::from(self.average_jitter.unwrap_or_default()) / 8.0;
+        let rtt_ms = f64::from(self.average_rtt_ms.unwrap_or_default());
+        let r_factor =
+            (93.2 - 0.024 * rtt_ms - 0.11 * loss_percent - 0.01 * jitter_ms).clamp(0.0, 100.0);
+        let mos =
+            (1.0 + 0.035 * r_factor + 0.000007 * r_factor * (r_factor - 60.0) * (100.0 - r_factor))
+                .clamp(1.0, 4.5);
+        self.r_factor_x100 = Some((r_factor * 100.0).round() as u16);
+        self.mos_x100 = Some((mos * 100.0).round() as u16);
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
@@ -297,6 +456,83 @@ struct PendingSrtpConfig {
     key_params: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SourceBinding {
+    address: SocketAddr,
+    last_seen_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct RtpReceiveStats {
+    ssrc: u32,
+    base_sequence: u16,
+    highest_sequence: u16,
+    received: u32,
+    jitter: u32,
+    last_transit: Option<i64>,
+    last_report_unix_ms: u128,
+}
+
+impl RtpReceiveStats {
+    fn observe(&mut self, packet: RtpPacketView<'_>) {
+        if self.received == 0 {
+            self.ssrc = packet.ssrc;
+            self.base_sequence = packet.sequence_number;
+            self.highest_sequence = packet.sequence_number;
+        } else if packet.sequence_number.wrapping_sub(self.highest_sequence) < 0x8000 {
+            self.highest_sequence = packet.sequence_number;
+        }
+        self.received = self.received.saturating_add(1);
+
+        let arrival_units = (unix_timestamp_millis() as i64).saturating_mul(8);
+        let transit = arrival_units.saturating_sub(i64::from(packet.timestamp));
+        if let Some(previous) = self.last_transit {
+            let delta = (transit - previous).unsigned_abs();
+            let jitter = u64::from(self.jitter);
+            self.jitter =
+                ((jitter.saturating_mul(15) + delta) / 16).min(u64::from(u32::MAX)) as u32;
+        }
+        self.last_transit = Some(transit);
+    }
+
+    fn receiver_report(&mut self) -> Option<Vec<u8>> {
+        let now = unix_timestamp_millis();
+        if self.received == 0 {
+            return None;
+        }
+        if self.last_report_unix_ms == 0 {
+            self.last_report_unix_ms = now;
+            return None;
+        }
+        if now.saturating_sub(self.last_report_unix_ms) < 5_000 {
+            return None;
+        }
+        self.last_report_unix_ms = now;
+        let expected = u32::from(self.highest_sequence.wrapping_sub(self.base_sequence)) + 1;
+        let lost = expected.saturating_sub(self.received);
+        let fraction_lost = if expected == 0 {
+            0
+        } else {
+            ((u64::from(lost) * 256) / u64::from(expected)).min(255) as u8
+        };
+        let mut payload = Vec::with_capacity(28);
+        payload.extend_from_slice(&self.ssrc.wrapping_add(1).to_be_bytes());
+        payload.extend_from_slice(&self.ssrc.to_be_bytes());
+        payload.push(fraction_lost);
+        let cumulative_lost = i32::try_from(lost).unwrap_or(i32::MAX).clamp(0, 0x7f_ffff);
+        let lost_bytes = cumulative_lost.to_be_bytes();
+        payload.extend_from_slice(&lost_bytes[1..]);
+        payload.extend_from_slice(&u32::from(self.highest_sequence).to_be_bytes());
+        payload.extend_from_slice(&self.jitter.to_be_bytes());
+        payload.extend_from_slice(&0_u32.to_be_bytes());
+        payload.extend_from_slice(&0_u32.to_be_bytes());
+        RtcpPacket::new(1, rtp_core::RtcpPacketType::ReceiverReport, payload)
+            .ok()?
+            .encode()
+            .ok()
+    }
+}
+
 /// SRTP state for one RTP direction and SSRC.
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -337,6 +573,8 @@ impl MediaRelayState {
             active_loops: Arc::new(DashMap::new()),
             crypto_sessions: Arc::new(DashMap::new()),
             pending_srtp: Arc::new(DashMap::new()),
+            rtp_stats: Arc::new(DashMap::new()),
+            source_bindings: Arc::new(DashMap::new()),
             state: Arc::new(Mutex::new(MediaRelayStateInner {
                 next_port: DEFAULT_RTP_PORT_MIN,
                 leased_rtp_ports: HashSet::new(),
@@ -407,6 +645,8 @@ impl MediaRelayState {
                     active_loops: Arc::clone(&self.active_loops),
                     crypto_sessions: Arc::clone(&self.crypto_sessions),
                     pending_srtp: Arc::clone(&self.pending_srtp),
+                    rtp_stats: Arc::clone(&self.rtp_stats),
+                    source_bindings: Arc::clone(&self.source_bindings),
                     state: Arc::clone(&self.state),
                 };
                 let rtp_learning = config.symmetric_rtp_learning;
@@ -415,6 +655,8 @@ impl MediaRelayState {
                     port,
                     relay_clone1,
                     rtp_learning,
+                    config.anti_spoofing,
+                    config.source_relearn_after_secs,
                     MediaPacketKind::Rtp,
                     rtp_rx,
                 ));
@@ -429,6 +671,8 @@ impl MediaRelayState {
                     active_loops: Arc::clone(&self.active_loops),
                     crypto_sessions: Arc::clone(&self.crypto_sessions),
                     pending_srtp: Arc::clone(&self.pending_srtp),
+                    rtp_stats: Arc::clone(&self.rtp_stats),
+                    source_bindings: Arc::clone(&self.source_bindings),
                     state: Arc::clone(&self.state),
                 };
                 tokio::spawn(relay_media_port(
@@ -436,6 +680,8 @@ impl MediaRelayState {
                     rtcp_port,
                     relay_clone2,
                     rtp_learning,
+                    config.anti_spoofing,
+                    config.source_relearn_after_secs,
                     MediaPacketKind::Rtcp,
                     rtcp_rx,
                 ));
@@ -515,6 +761,8 @@ impl MediaRelayState {
         let peer_port = self.peer_ports.get(&rtp_port).map(|v| *v);
         self.targets.remove(&rtp_port);
         self.metrics.remove(&rtp_port);
+        self.rtp_stats.remove(&rtp_port);
+        self.source_bindings.remove(&rtp_port);
         self.peer_ports.remove(&rtp_port);
         self.recordings.remove(&rtp_port);
         self.clear_srtp_session(rtp_port);
@@ -526,6 +774,8 @@ impl MediaRelayState {
         if let Some(peer_port) = peer_port {
             self.targets.remove(&peer_port);
             self.metrics.remove(&peer_port);
+            self.rtp_stats.remove(&peer_port);
+            self.source_bindings.remove(&peer_port);
             self.peer_ports.remove(&peer_port);
             self.recordings.remove(&peer_port);
             self.dtmf_states.remove(&peer_port);
@@ -621,7 +871,11 @@ impl MediaRelayState {
                 totals.dropped_no_target_packets += metrics.dropped_no_target_packets;
                 totals.send_errors += metrics.send_errors;
                 totals.learned_source_updates += metrics.learned_source_updates;
+                totals.dropped_spoofed_packets += metrics.dropped_spoofed_packets;
                 totals.rtcp_quality.merge(metrics.rtcp_quality);
+                totals.rtcp_window.merge(metrics.rtcp_window);
+                totals.rtcp_quality_alerts += metrics.rtcp_quality_alerts;
+                totals.rtcp_quality_degraded |= metrics.rtcp_quality_degraded;
                 totals.recorded_packets += metrics.recorded_packets;
                 totals.recording_dropped_packets += metrics.recording_dropped_packets;
                 totals.recording_errors += metrics.recording_errors;
@@ -650,16 +904,20 @@ impl MediaRelayState {
         let gateway_relay_port = rtp_port_for(gateway_relay_port).unwrap_or(gateway_relay_port);
         self.ensure_recording_dir(&config.recording_dir)
             .map_err(recording_error)?;
+        self.enforce_recording_storage_policy(
+            &config.recording_dir,
+            config.recording_retention_secs,
+            config.recording_min_free_bytes,
+        )
+        .map_err(recording_error)?;
 
         let stem = recording_file_stem(call_id);
         let wav_path = config.recording_dir.join(format!("{stem}.wav"));
-        let metadata_path = config.recording_dir.join(format!("{stem}.json"));
         let session = Arc::new(RecordingSession::new(
-            call_id,
             wav_path.clone(),
-            metadata_path,
-            caller_relay_port,
-            gateway_relay_port,
+            config.recording_min_free_bytes,
+            config.recording_max_file_bytes,
+            config.recording_max_duration_secs,
             Arc::clone(&self.recording_pool),
         ));
 
@@ -705,6 +963,38 @@ impl MediaRelayState {
         Ok(())
     }
 
+    fn enforce_recording_storage_policy(
+        &self,
+        dir: &Path,
+        retention_secs: u64,
+        min_free_bytes: u64,
+    ) -> io::Result<()> {
+        let protected_paths = self.active_recording_paths();
+        cleanup_expired_recordings(dir, retention_secs, &protected_paths)?;
+
+        if min_free_bytes == 0 {
+            return Ok(());
+        }
+
+        let available = available_disk_bytes(dir)?;
+        if available < min_free_bytes {
+            return Err(io::Error::other(format!(
+                "recording disk free space {available} bytes is below configured minimum {min_free_bytes} bytes"
+            )));
+        }
+        Ok(())
+    }
+
+    fn active_recording_paths(&self) -> HashSet<PathBuf> {
+        self.recordings
+            .iter()
+            .flat_map(|entry| {
+                let info = &entry.value().session.info;
+                [info.wav_path.clone()]
+            })
+            .collect()
+    }
+
     pub fn pair_ports(&self, first_port: u16, second_port: u16) {
         self.peer_ports.insert(first_port, second_port);
         self.peer_ports.insert(second_port, first_port);
@@ -744,6 +1034,41 @@ impl MediaRelayState {
         })
     }
 
+    fn accept_rtp_source(
+        &self,
+        relay_port: u16,
+        source: SocketAddr,
+        anti_spoofing: bool,
+        relearn_after_secs: u64,
+    ) -> bool {
+        if !anti_spoofing {
+            return true;
+        }
+
+        let now = unix_timestamp_millis();
+        let mut binding = self
+            .source_bindings
+            .entry(relay_port)
+            .or_insert(SourceBinding {
+                address: source,
+                last_seen_unix_ms: now,
+            });
+        if binding.address == source {
+            binding.last_seen_unix_ms = now;
+            return true;
+        }
+
+        let elapsed = now.saturating_sub(binding.last_seen_unix_ms);
+        if elapsed >= u128::from(relearn_after_secs) * 1_000 {
+            binding.address = source;
+            binding.last_seen_unix_ms = now;
+            return true;
+        }
+
+        self.record_metric(relay_port, |metrics| metrics.dropped_spoofed_packets += 1);
+        false
+    }
+
     fn record_metric(&self, relay_port: u16, update: impl FnOnce(&mut MediaRelayMetrics)) {
         update(self.metrics.entry(relay_port).or_default().value_mut());
     }
@@ -755,6 +1080,22 @@ impl MediaRelayState {
 
         self.record_metric(relay_port, |metrics| {
             metrics.rtcp_quality.merge(summary.rtcp_quality);
+            metrics.rtcp_window.observe(summary.rtcp_quality);
+            let degraded = metrics.rtcp_window.is_degraded();
+            if degraded && !metrics.rtcp_quality_degraded {
+                metrics.rtcp_quality_alerts += 1;
+                warn!(
+                    relay_port,
+                    mos_x100 = ?metrics.rtcp_window.mos_x100,
+                    r_factor_x100 = ?metrics.rtcp_window.r_factor_x100,
+                    average_loss_x10000 = ?metrics
+                        .rtcp_window
+                        .average_fraction_lost
+                        .map(|value| u32::from(value) * 10_000 / 255),
+                    "RTCP quality degraded"
+                );
+            }
+            metrics.rtcp_quality_degraded = degraded;
         });
     }
 
@@ -868,22 +1209,22 @@ struct RecordingSession {
 }
 
 impl RecordingSession {
+    #[allow(clippy::too_many_arguments)]
     fn new(
-        call_id: &str,
         wav_path: PathBuf,
-        metadata_path: PathBuf,
-        caller_relay_port: u16,
-        gateway_relay_port: u16,
+        min_free_bytes: u64,
+        max_file_bytes: u64,
+        max_duration_secs: u64,
         pool: Arc<RecordingPool>,
     ) -> Self {
         Self {
             info: Arc::new(RecordingSessionInfo {
                 id: NEXT_RECORDING_SESSION_ID.fetch_add(1, Ordering::Relaxed),
-                call_id: call_id.to_string(),
                 wav_path,
-                metadata_path,
-                caller_relay_port,
-                gateway_relay_port,
+                min_free_bytes,
+                max_file_bytes,
+                max_duration_secs,
+                last_disk_check_ms: AtomicU64::new(0),
             }),
             pool,
         }
@@ -922,11 +1263,57 @@ impl Drop for RecordingSession {
 #[derive(Debug)]
 struct RecordingSessionInfo {
     id: u64,
-    call_id: String,
     wav_path: PathBuf,
-    metadata_path: PathBuf,
-    caller_relay_port: u16,
-    gateway_relay_port: u16,
+    min_free_bytes: u64,
+    max_file_bytes: u64,
+    max_duration_secs: u64,
+    last_disk_check_ms: AtomicU64,
+}
+
+impl RecordingSessionInfo {
+    fn max_file_frames(&self) -> Option<u64> {
+        let duration_frames = (self.max_duration_secs > 0).then(|| {
+            self.max_duration_secs
+                .saturating_mul(u64::from(RECORDING_SAMPLE_RATE))
+        });
+        let size_frames = (self.max_file_bytes > 44)
+            .then(|| (self.max_file_bytes - 44) / u64::from(RECORDING_CHANNELS * 2));
+        match (duration_frames, size_frames) {
+            (Some(duration), Some(size)) => Some(duration.min(size)),
+            (Some(duration), None) => Some(duration),
+            (None, Some(size)) => Some(size),
+            (None, None) => None,
+        }
+    }
+
+    fn ensure_disk_space(&self) -> io::Result<()> {
+        if self.min_free_bytes == 0 {
+            return Ok(());
+        }
+
+        let now = unix_timestamp_millis() as u64;
+        let last_check = self.last_disk_check_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(last_check) < 1_000 {
+            return Ok(());
+        }
+        if self
+            .last_disk_check_ms
+            .compare_exchange(last_check, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let directory = self.wav_path.parent().unwrap_or_else(|| Path::new("."));
+        let available = available_disk_bytes(directory)?;
+        if available < self.min_free_bytes {
+            return Err(io::Error::other(format!(
+                "recording disk free space {available} bytes is below configured minimum {} bytes",
+                self.min_free_bytes
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -1068,7 +1455,7 @@ fn run_recording_worker(
     receiver: mpsc::Receiver<RecordingCommand>,
     pending_commands: Arc<AtomicUsize>,
 ) {
-    let mut recorders = HashMap::<u64, WavCallRecorder>::new();
+    let mut recorders = HashMap::<u64, RecordingFile>::new();
     while let Ok(command) = receiver.recv() {
         pending_commands.fetch_sub(1, Ordering::Relaxed);
         handle_recording_command(command, &mut recorders);
@@ -1082,8 +1469,8 @@ fn run_recording_worker(
         }
     }
 
-    for (session_id, mut recorder) in recorders {
-        if let Err(error) = recorder.flush_recording() {
+    for (session_id, mut recording_file) in recorders {
+        if let Err(error) = recording_file.recorder.flush_recording() {
             warn!(%error, session_id, worker_index, "failed to finalize call recording");
         }
     }
@@ -1091,18 +1478,39 @@ fn run_recording_worker(
 
 fn handle_recording_command(
     command: RecordingCommand,
-    recorders: &mut HashMap<u64, WavCallRecorder>,
+    recorders: &mut HashMap<u64, RecordingFile>,
 ) {
     match command {
         RecordingCommand::Packet { session, packet } => {
-            let recorder = match recorder_for_session(recorders, &session) {
-                Ok(recorder) => recorder,
+            if let Err(error) = session.ensure_disk_space() {
+                warn!(%error, session_id = session.id, "recording disk protection stopped packet write");
+                return;
+            }
+            let should_rotate = recorders
+                .get(&session.id)
+                .map(|recording_file| {
+                    recording_file.recorder.would_exceed_limit(
+                        packet.channel,
+                        packet.timestamp,
+                        packet.payload.len(),
+                        session.max_file_frames(),
+                    )
+                })
+                .unwrap_or(false);
+            if should_rotate {
+                if let Err(error) = rotate_recording(recorders, &session) {
+                    warn!(%error, session_id = session.id, "failed to rotate call recording");
+                    return;
+                }
+            }
+            let recording_file = match recorder_for_session(recorders, &session) {
+                Ok(recording_file) => recording_file,
                 Err(error) => {
                     warn!(%error, session_id = session.id, "failed to open call recording");
                     return;
                 }
             };
-            if let Err(error) = recorder.record(
+            if let Err(error) = recording_file.recorder.record(
                 packet.channel,
                 packet.payload_type,
                 packet.timestamp,
@@ -1114,12 +1522,12 @@ fn handle_recording_command(
         #[cfg(test)]
         RecordingCommand::Flush { session, reply } => {
             let result = recorder_for_session(recorders, &session)
-                .and_then(WavCallRecorder::flush_recording);
+                .and_then(|recording_file| recording_file.recorder.flush_recording());
             let _ = reply.send(result);
         }
         RecordingCommand::Finish { session_id } => {
-            if let Some(mut recorder) = recorders.remove(&session_id) {
-                if let Err(error) = recorder.flush_recording() {
+            if let Some(mut recording_file) = recorders.remove(&session_id) {
+                if let Err(error) = recording_file.recorder.flush_recording() {
                     warn!(%error, session_id, "failed to finalize call recording");
                 }
             }
@@ -1128,23 +1536,46 @@ fn handle_recording_command(
 }
 
 fn recorder_for_session<'a>(
-    recorders: &'a mut HashMap<u64, WavCallRecorder>,
+    recorders: &'a mut HashMap<u64, RecordingFile>,
     session: &RecordingSessionInfo,
-) -> io::Result<&'a mut WavCallRecorder> {
+) -> io::Result<&'a mut RecordingFile> {
     if let std::collections::hash_map::Entry::Vacant(entry) = recorders.entry(session.id) {
-        write_recording_metadata(
-            &session.metadata_path,
-            &session.call_id,
-            &session.wav_path,
-            session.caller_relay_port,
-            session.gateway_relay_port,
-        )?;
-        let recorder = WavCallRecorder::create(session.wav_path.clone())?;
-        entry.insert(recorder);
+        entry.insert(RecordingFile::create(session, 0)?);
     }
     recorders
         .get_mut(&session.id)
         .ok_or_else(|| io::Error::other("recording session was not initialized"))
+}
+
+fn rotate_recording(
+    recorders: &mut HashMap<u64, RecordingFile>,
+    session: &RecordingSessionInfo,
+) -> io::Result<()> {
+    let segment_index = recorders
+        .get(&session.id)
+        .map(|recording_file| recording_file.segment_index + 1)
+        .unwrap_or(1);
+    if let Some(mut previous) = recorders.remove(&session.id) {
+        previous.recorder.flush_recording()?;
+    }
+    recorders.insert(session.id, RecordingFile::create(session, segment_index)?);
+    Ok(())
+}
+
+struct RecordingFile {
+    segment_index: u32,
+    recorder: WavCallRecorder,
+}
+
+impl RecordingFile {
+    fn create(session: &RecordingSessionInfo, segment_index: u32) -> io::Result<Self> {
+        let wav_path = recording_segment_path(session, segment_index);
+        let recorder = WavCallRecorder::create(wav_path)?;
+        Ok(Self {
+            segment_index,
+            recorder,
+        })
+    }
 }
 
 struct RecordedRtpPacket {
@@ -1239,6 +1670,21 @@ impl WavCallRecorder {
             self.frames_since_flush = 0;
         }
         Ok(true)
+    }
+
+    fn would_exceed_limit(
+        &self,
+        channel: RecordingChannel,
+        timestamp: u32,
+        payload_len: usize,
+        max_frames: Option<u64>,
+    ) -> bool {
+        let Some(max_frames) = max_frames else {
+            return false;
+        };
+        let base = self.base_timestamps[channel.index()].unwrap_or(timestamp);
+        let start_frame = u64::from(timestamp.wrapping_sub(base));
+        self.frames_written > 0 && start_frame.saturating_add(payload_len as u64) > max_frames
     }
 
     fn start_frame(&mut self, channel: RecordingChannel, timestamp: u32) -> u64 {
@@ -1390,6 +1836,21 @@ fn recording_file_stem(call_id: &str) -> String {
     format!("{}-{}", sanitized, unix_timestamp_millis())
 }
 
+fn recording_segment_path(session: &RecordingSessionInfo, segment_index: u32) -> PathBuf {
+    if segment_index == 0 {
+        return session.wav_path.clone();
+    }
+
+    let directory = session.wav_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = session
+        .wav_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("recording");
+    let segment_stem = format!("{stem}-part-{segment_index:04}");
+    directory.join(format!("{segment_stem}.wav"))
+}
+
 fn unix_timestamp_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1397,48 +1858,74 @@ fn unix_timestamp_millis() -> u128 {
         .as_millis()
 }
 
-fn write_recording_metadata(
-    path: &Path,
-    call_id: &str,
-    wav_path: &Path,
-    caller_relay_port: u16,
-    gateway_relay_port: u16,
+fn cleanup_expired_recordings(
+    dir: &Path,
+    retention_secs: u64,
+    protected_paths: &HashSet<PathBuf>,
 ) -> io::Result<()> {
-    let metadata = format!(
-        concat!(
-            "{{\n",
-            "  \"call_id\": \"{}\",\n",
-            "  \"wav_path\": \"{}\",\n",
-            "  \"sample_rate\": {},\n",
-            "  \"channels\": {},\n",
-            "  \"caller_relay_port\": {},\n",
-            "  \"gateway_relay_port\": {},\n",
-            "  \"created_at_unix_ms\": {}\n",
-            "}}\n"
-        ),
-        json_escape(call_id),
-        json_escape(&wav_path.display().to_string()),
-        RECORDING_SAMPLE_RATE,
-        RECORDING_CHANNELS,
-        caller_relay_port,
-        gateway_relay_port,
-        unix_timestamp_millis()
-    );
-    fs::write(path, metadata)
+    if retention_secs == 0 {
+        return Ok(());
+    }
+
+    let retention = Duration::from_secs(retention_secs);
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if protected_paths.contains(&path) || !entry.file_type()?.is_file() {
+            continue;
+        }
+
+        let is_recording_artifact = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.eq_ignore_ascii_case("wav"))
+            .unwrap_or(false);
+        if !is_recording_artifact {
+            continue;
+        }
+
+        let is_expired = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .and_then(|modified| modified.elapsed().map_err(io::Error::other))
+            .map(|age| age >= retention)
+            .unwrap_or(false);
+        if is_expired {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(())
 }
 
-fn json_escape(value: &str) -> String {
-    value
-        .chars()
-        .flat_map(|ch| match ch {
-            '"' => "\\\"".chars().collect::<Vec<_>>(),
-            '\\' => "\\\\".chars().collect::<Vec<_>>(),
-            '\n' => "\\n".chars().collect::<Vec<_>>(),
-            '\r' => "\\r".chars().collect::<Vec<_>>(),
-            '\t' => "\\t".chars().collect::<Vec<_>>(),
-            ch => vec![ch],
-        })
-        .collect()
+fn available_disk_bytes(path: &Path) -> io::Result<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "recording path contains NUL")
+        })?;
+        let mut statistics = MaybeUninit::<libc::statvfs>::uninit();
+        let result = unsafe { libc::statvfs(path.as_ptr(), statistics.as_mut_ptr()) };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let statistics = unsafe { statistics.assume_init() };
+        let block_size = u128::from(if statistics.f_frsize == 0 {
+            statistics.f_bsize
+        } else {
+            statistics.f_frsize
+        });
+        let available = block_size * u128::from(statistics.f_bavail);
+        Ok(available.min(u128::from(u64::MAX)) as u64)
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(u64::MAX)
+    }
 }
 
 fn recording_error(error: io::Error) -> MediaError {
@@ -1744,6 +2231,8 @@ pub async fn spawn_rtp_relay_listeners(
             active_loops: Arc::clone(&relay.active_loops),
             crypto_sessions: Arc::clone(&relay.crypto_sessions),
             pending_srtp: Arc::clone(&relay.pending_srtp),
+            rtp_stats: Arc::clone(&relay.rtp_stats),
+            source_bindings: Arc::clone(&relay.source_bindings),
             state: Arc::clone(&relay.state),
         };
         let handle = tokio::spawn(relay_media_port(
@@ -1751,6 +2240,8 @@ pub async fn spawn_rtp_relay_listeners(
             port,
             relay_clone,
             config.symmetric_rtp_learning,
+            config.anti_spoofing,
+            config.source_relearn_after_secs,
             packet_kind,
             rx,
         ));
@@ -1852,11 +2343,14 @@ fn rtt_millis_from_compact_ntp(
     Some(u32::try_from(millis).unwrap_or(u32::MAX))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn relay_media_port(
     socket: UdpSocket,
     local_port: u16,
     relay: MediaRelayState,
     symmetric_rtp_learning: bool,
+    anti_spoofing: bool,
+    source_relearn_after_secs: u64,
     packet_kind: MediaPacketKind,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
@@ -1880,6 +2374,11 @@ async fn relay_media_port(
         };
         relay.record_metric(local_port, |metrics| metrics.received_packets += 1);
         debug!(local_port, packet_kind = packet_kind.label(), size, %source, "received media packet");
+
+        if !relay.accept_rtp_source(local_port, source, anti_spoofing, source_relearn_after_secs) {
+            warn!(%source, local_port, packet_kind = packet_kind.label(), "dropping media packet from unbound source");
+            continue;
+        }
 
         let mut decrypted_packet = None;
         if packet_kind == MediaPacketKind::Rtp {
@@ -1955,6 +2454,15 @@ async fn relay_media_port(
             relay.record_rtcp_reports(local_port, s);
         }
 
+        let generated_receiver_report = summary
+            .as_ref()
+            .and_then(|summary| summary.rtp_packet)
+            .and_then(|rtp_packet| {
+                let mut stats = relay.rtp_stats.entry(local_port).or_default();
+                stats.observe(rtp_packet);
+                stats.receiver_report()
+            });
+
         if symmetric_rtp_learning {
             if let Some(update) = relay.learn_symmetric_source(local_port, source) {
                 debug!(
@@ -1976,6 +2484,18 @@ async fn relay_media_port(
 
         if target.ip().is_unspecified() || target.port() == 0 {
             continue;
+        }
+
+        if let (Some(report), Some(rtcp_port)) =
+            (generated_receiver_report, target.port().checked_add(1))
+        {
+            let rtcp_target = SocketAddr::new(target.ip(), rtcp_port);
+            if let Err(error) = socket.send_to(&report, rtcp_target).await {
+                relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
+                warn!(%error, local_port, %rtcp_target, "failed to send generated RTCP receiver report");
+            } else {
+                relay.record_metric(local_port, |metrics| metrics.forwarded_packets += 1);
+            }
         }
 
         if let Some(s) = &summary {
@@ -2066,6 +2586,12 @@ fn env_usize(name: &str) -> Option<usize> {
         .and_then(|value| value.trim().parse::<usize>().ok())
 }
 
+fn env_u64(name: &str) -> Option<u64> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
 fn recording_worker_count() -> usize {
     env_usize(RECORDING_WORKERS_ENV)
         .filter(|workers| *workers > 0)
@@ -2152,7 +2678,7 @@ mod tests {
     use super::{
         is_sdp_body, parse_sdp_rtp_endpoint, rewrite_sdp_body, spawn_rtp_relay_listeners,
         MediaConfig, MediaCryptoSession, MediaError, MediaRelayMetrics, MediaRelayState,
-        RtpPacketView,
+        RtcpQualitySnapshot, RtcpQualityWindow, RtpPacketView,
     };
     use rtp_core::{SrtpConfig, SrtpContext};
     use sdp_core::RtpEndpoint;
@@ -2193,6 +2719,26 @@ mod tests {
         let decrypted_len = receiver.decrypt(&mut packet).unwrap();
         packet.truncate(decrypted_len);
         assert_eq!(packet, original);
+    }
+
+    #[test]
+    fn rtcp_quality_window_calculates_averages_and_mos() {
+        let mut window = RtcpQualityWindow::default();
+        window.observe(RtcpQualitySnapshot {
+            reports: 2,
+            report_blocks: 2,
+            last_fraction_lost: Some(13),
+            last_jitter: Some(80),
+            last_rtt_ms: Some(40),
+            ..RtcpQualitySnapshot::default()
+        });
+
+        assert_eq!(window.samples, 2);
+        assert_eq!(window.average_fraction_lost, Some(13));
+        assert_eq!(window.average_jitter, Some(80));
+        assert_eq!(window.average_rtt_ms, Some(40));
+        assert!(window.r_factor_x100.is_some());
+        assert!(window.mos_x100.is_some());
     }
 
     #[test]
@@ -2302,11 +2848,41 @@ mod tests {
         assert_eq!(i16::from_le_bytes([bytes[48], bytes[49]]), 0);
         assert_eq!(i16::from_le_bytes([bytes[50], bytes[51]]), 8);
 
-        let metadata_path = wav_path.with_extension("json");
-        let metadata = fs::read_to_string(metadata_path).unwrap();
-        assert!(metadata.contains("\"call_id\": \"call/with:unsafe@example.com\""));
-        assert!(metadata.contains("\"caller_relay_port\": 40000"));
-        assert!(metadata.contains("\"gateway_relay_port\": 40002"));
+        assert!(!wav_path.with_extension("json").exists());
+    }
+
+    #[test]
+    fn rotates_recording_when_segment_size_is_reached() {
+        let dir = test_recording_dir("rotates_recording_when_segment_size_is_reached");
+        let mut config = MediaConfig::new("127.0.0.1", 40_000, 40_002).with_recording(true, &dir);
+        config.recording_max_file_bytes = 52;
+        config.recording_max_duration_secs = 0;
+        let relay = MediaRelayState::new();
+        let first_path = relay
+            .start_call_recording("rotating-call", 40_000, 40_002, &config)
+            .unwrap()
+            .expect("recording should be enabled");
+
+        for (sequence, timestamp) in [(1, 0), (2, 2)] {
+            let packet = rtp_core::RtpPacket::new(0, sequence, timestamp, 42, vec![0xff, 0xff])
+                .unwrap()
+                .encode()
+                .unwrap();
+            let packet = RtpPacketView::parse(&packet).unwrap();
+            assert!(relay.record_rtp_packet(40_000, packet).unwrap());
+        }
+        relay.flush_recording_for_test(40_000).unwrap();
+
+        let second_path = first_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(format!(
+                "{}-part-0001.wav",
+                first_path.file_stem().unwrap().to_string_lossy()
+            ));
+        assert!(first_path.is_file());
+        assert!(second_path.is_file());
+        assert!(!second_path.with_extension("json").exists());
     }
 
     #[test]
@@ -2769,6 +3345,28 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn recording_storage_policy_reports_available_space() {
+        let dir = test_recording_dir("recording_storage_policy_reports_available_space");
+        let available = super::available_disk_bytes(&dir).unwrap();
+        assert!(available > 0);
+    }
+
+    #[test]
+    fn recording_storage_policy_rejects_insufficient_space() {
+        let dir = test_recording_dir("recording_storage_policy_rejects_insufficient_space");
+        let relay = MediaRelayState::new();
+        let mut config = MediaConfig::new("127.0.0.1", 40_000, 40_002).with_recording(true, &dir);
+        config.recording_min_free_bytes = u64::MAX;
+
+        let result = relay.start_call_recording("storage-policy-call", 40_000, 40_002, &config);
+        assert!(matches!(
+            result,
+            Err(MediaError::Recording(message))
+                if message.contains("below configured minimum")
+        ));
     }
 
     #[test]

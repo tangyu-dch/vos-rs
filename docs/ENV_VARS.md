@@ -70,6 +70,8 @@
 | `VOS_RS_RTP_PORT_MIN` | `40000` | RTP 中继端口范围最小值 |
 | `VOS_RS_RTP_PORT_MAX` | `40100` | RTP 中继端口范围最大值 |
 | `VOS_RS_RTP_SYMMETRIC_LEARNING` | `true` | 启用对称 RTP 学习（从首包学习真实远端地址） |
+| `VOS_RS_RTP_ANTI_SPOOFING` | `true` | 绑定 RTP 首个源地址，拒绝绑定窗口内的其他源 |
+| `VOS_RS_RTP_SOURCE_RELEARN_SECS` | `30` | RTP 源绑定重新学习间隔（秒） |
 | `VOS_RS_SIP_UDP_RECEIVE_BUFFER` | `4194304` | SIP UDP 接收缓冲区字节数；受操作系统 `rmem_max` 限制 |
 | `VOS_RS_SIP_UDP_SEND_BUFFER` | `4194304` | SIP UDP 发送缓冲区字节数；受操作系统 `wmem_max` 限制 |
 | `VOS_RS_MEDIA_METRICS_LOG` | `false` | 压测/诊断时将通话清理阶段的 RTP relay 指标提升到 info 日志；生产默认关闭 |
@@ -82,6 +84,10 @@
 | `VOS_RS_RECORDING_DIR` | `target/recordings` | 录音文件存储目录（本地后端时使用） |
 | `VOS_RS_RECORDING_WORKERS` | `min(cpu, 4)` | 录音 worker pool 大小；同一通话固定路由到同一个 worker，避免每通创建线程。媒体压力较高时可显式设为 `8`，不建议盲目超过信令 CPU 余量 |
 | `VOS_RS_RECORDING_QUEUE_CAPACITY` | `4096` | 每个录音 worker 的有界队列容量；队列满时 RTP 录音包会被计入 `recording_dropped_packets` |
+| `VOS_RS_RECORDING_RETENTION_SECS` | `604800` | 录音文件保留秒数；新通话启动录音时清理过期 `.wav`，设为 `0` 禁用自动清理 |
+| `VOS_RS_RECORDING_MIN_FREE_BYTES` | `536870912` | 录音目录所在文件系统的最低可用空间；启动录音和写入期间低于阈值会停止录音写入，设为 `0` 禁用保护 |
+| `VOS_RS_RECORDING_MAX_FILE_BYTES` | `134217728` | 单个 WAV 分段的最大文件大小；超过后自动创建 `-part-0001` 等分段，设为 `0` 禁用大小轮转 |
+| `VOS_RS_RECORDING_MAX_DURATION_SECS` | `3600` | 单个 WAV 分段的最大时长；超过后自动创建新分段，设为 `0` 禁用时长轮转 |
 
 ### 1.8.1 存储后端配置
 
@@ -119,7 +125,7 @@
     "retention_days": 90
   },
   {
-    "prefix": "metadata/",
+    "prefix": "recordings/part-",
     "primary_only": false,
     "retention_days": 0
   }
@@ -191,7 +197,7 @@ VOS_RS_RECORDING_DIR=/var/lib/vos-rs/recordings
 | GET | `/manage/active-calls` | 当前活跃呼叫 |
 | POST | `/manage/calls/:call_id/terminate` | 强制结束呼叫 |
 | GET | `/manage/route-preview` | 选路试算 |
-| GET | `/manage/media-metrics` | RTP/RTCP/录音聚合指标，包含 `recording_dropped_packets`、`recording_queue_depth` 与 `recording_errors` |
+| GET | `/manage/media-metrics` | RTP/RTCP/录音聚合指标，包含录音队列、RTCP 60 秒窗口平均丢包/jitter/RTT、MOS、R-factor 与质量告警计数 |
 
 ### 1.12 日志
 

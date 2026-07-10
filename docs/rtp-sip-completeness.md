@@ -7,7 +7,7 @@
 - SIP 控制面覆盖度：足以在 UDP 上运行基本的 B2BUA 呼叫流程。
 - RTP 媒体面覆盖度：足以通过 G.711 PCMU 和 PCMA 进行普通 RTP 中继。
 - SDP 音频媒体段 SDES-SRTP `a=crypto` 属性解析已加入 `sdp-core`，可提取 crypto tag、suite、key parameters 和 session parameters；`rtp-core` 已支持将 `inline:` key parameters 解码为 `SrtpConfig`。
-- 最主要的遗留差距：完整的 SIP 服务端事务/高级对话行为、高级 NAT 穿透、高级 RTCP 通话质量报告、SRTP、生产环境路由策略、集群状态以及运维可观测性。
+- 最主要的遗留差距：DTLS-SRTP 握手、完整 ICE/TURN 协商、多媒体段处理、集群状态/HA 以及运营商级转码与 QoS 控制。
 
 ## 当前本机性能基线
 
@@ -25,15 +25,18 @@
 
 - `tools/sipp/run_bench_media.sh` 现在使用长通话 SIPp 场景、SIPp timeout、真实 RTP 发送器和 edge 侧媒体计数器，避免旧脚本把“无媒体呼叫”误当成媒体 CPS。
 - `tools/sipp/rtp_range_sender.py` 会按配置的 RTP 端口范围发送 PCMU RTP，并在收到 TERM/INT 时输出最终发包统计。
-- 录音启动改为懒加载：接通路径只登记录音 session，首次收到 RTP 时才创建 WAV、写 JSON 元数据并启动录音 worker。
+- 录音启动改为懒加载：接通路径只登记录音 session，首次收到 RTP 时才创建 WAV 并启动录音 worker；录音地址在通话 CDR 中以 `local:` 前缀保存。
 - 录音从“每通一个 OS thread”改为固定 worker pool，同一通话固定分配到同一 worker，避免高 CPS 下线程爆炸。
 - WAV 录音不再每个 RTP 包随机 seek/read/write 和刷新 header，改为内存双声道混音缓冲、周期性顺序写入，并在录音结束时最终刷新 header。
 - sip-edge 管理 API 新增 `/manage/media-metrics`，api-server 新增 `/api/media/metrics`，并将媒体聚合指标接入 `/metrics` Prometheus 文本输出，可直接观察录音队列深度、队列容量、worker 数、录音队列丢包与录音错误计数。
+- RTCP 增加 60 秒质量窗口与 Prometheus 指标：平均丢包率（`x10000`）、平均 jitter/RTT（`x100`）、MOS（`x100`）、R-factor（`x100`）以及质量降级告警计数；告警只在正常到异常状态切换时记录一次。
 
 仍需优化的性能风险：
 
 - 当前录音已经使用固定 worker pool，但仍和 `sip-edge` 同进程竞争 CPU/磁盘；生产目标建议拆成专用媒体录音进程或独立媒体节点。
 - WAV 混音已改为内存缓冲和顺序写，录音队列容量可通过 `VOS_RS_RECORDING_QUEUE_CAPACITY` 调整，但高 pps 下仍受本地磁盘、worker 数、channel backpressure 和 SIPp 本机 UDP buffer 影响。
+- 录音已支持 `VOS_RS_RECORDING_RETENTION_SECS` 自动清理过期 WAV/JSON，并通过 `VOS_RS_RECORDING_MIN_FREE_BYTES` 在启动和写入期间保护磁盘空间；录音目录为活动会话保留文件，不会被清理任务删除。
+- 录音支持按 `VOS_RS_RECORDING_MAX_FILE_BYTES` 或 `VOS_RS_RECORDING_MAX_DURATION_SECS` 自动分段；首段保持原始 WAV 文件名，后续分段使用 `-part-0001` 后缀，所有文件地址写入通话 CDR。
 - 高 CPS 失败档会出现 INVITE/BYE client transaction timeout，需继续优化 SIP 事务调度、UDP socket buffer、SIPp 多实例压测方式和本机内核 UDP buffer。
 
 ## SIP 协议覆盖范围
@@ -97,20 +100,20 @@
 - 支持在主叫和网关段上从 SDP 学习 RTP/RTCP 目标。
 - 配对中继端口之间的对称 RTP/RTCP 源学习，默认通过 `VOS_RS_RTP_SYMMETRIC_LEARNING=true` 启用。
 - 基础的单端口 RTP/RTCP 计数器，以及关于丢包、抖动和估算 RTT 的最新/最大 RTCP 质量数据快照。
+- RTP relay 每 5 秒按接收统计生成 Receiver Report，并通过 RTCP 对端口转发；支持 60 秒滚动质量窗口、平均丢包/jitter/RTT、MOS、R-factor 与 Prometheus 指标。
+- RTP 源地址绑定、反欺骗丢包计数和超时重新学习，可通过 `VOS_RS_RTP_ANTI_SPOOFING` 与 `VOS_RS_RTP_SOURCE_RELEARN_SECS` 配置。
 - RFC 2833/4733 `telephone-event` RTP DTMF 中继、按 RTP timestamp 去重后的按键重建、CDR `dtmf_digits` 写入以及 `dtmf_events` 媒体指标计数。
-- 可选的呼叫录音（通过 `VOS_RS_RECORDING_ENABLED=true`），将中继的 PCMU/PCMA RTP 解码为单呼叫双声道 WAV 文件（附带 JSON 元数据）。
+- 可选的呼叫录音（通过 `VOS_RS_RECORDING_ENABLED=true`），将中继的 PCMU/PCMA RTP 解码为单呼叫双声道 WAV 文件，并把 `local:` 录音地址写入通话 CDR。
 
 未完成：
 
-- 基于转发生成的 RTCP 报告生成、长窗口丢包统计、抖动趋势跟踪以及 MOS/R-factor 通话质量报告。
-- SRTP/DTLS-SRTP 在 `rtp-core` 已有上下文和加解密基础；SDES `a=crypto` 已可解析，但尚未接入 SIP Edge 的 Offer/Answer 选择、RTP Relay 加解密和端到端媒体测试。
-- 高级对称 RTP 策略、源绑定、基于超时的重新学习和反欺骗（anti-spoofing）。
+- SRTP/DTLS-SRTP：SDES `a=crypto` 已接入 SIP Edge 的 Offer/Answer 端口绑定、首包 SSRC 学习和 RTP Relay 加解密路径；端到端 SIPp 加密媒体回归场景已加入。DTLS-SRTP 握手和稳定网关环境下的完整压测仍未完成。
 - ICE/STUN/TURN 支持（注：基础 STUN 发现已实现，用于公网地址发现）。
 - 更完整的 DTMF 实时事件流、按租户策略控制以及失败/异常事件告警（注：DTMF 事件审计明细表已落库至 `dtmf_events`，媒体聚合指标已可通过管理 API 与 Prometheus `/metrics` 查询）。
 - 转码、编解码器首选策略、ptime/maxptime 协商、舒适噪音、静音抑制以及当前 PCMU/PCMA 路径之外的动态负载映射。
 - 多个 `m=` 媒体部分、视频、T.38、RTP Bundle 及高级 Offer/Answer 行为。
 - 更稳健的单呼叫媒体销毁保障及分布式媒体中继协同。
-- 录音文件轮转、保留策略、合法拦截（lawful intercept）接口、QoS/DSCP 标记以及更细粒度的按租户/按网关 Prometheus 指标导出。
+- 合法拦截（lawful intercept）接口、QoS/DSCP 标记以及更细粒度的按租户/按网关 Prometheus 指标导出。
 
 ## 推荐的后续步骤与演进路线图
 
@@ -132,4 +135,4 @@
    - **核心目标**：支持 `telephone-event` 负载解析与转发，并对 DTMF 按键事件进行记录和审计。
 
 ---
-*注：当前主线已经覆盖 UDP/TCP/TLS/WS 传输、事务与服务端重传状态机、SDP 重写、RTP/RTCP 中继、PRACK 校验、呼叫保持、SBC 安全防御、Path/Service-Route 路由、PCMU/PCMA 协商、RTP/SIP INFO DTMF + `dtmf_events` 审计明细表、基础录音、CDR、PostgreSQL 与 NATS 队列化（含 DLQ 与有毒消息策略）及 RTCP MOS 报告；路由侧已补齐 LCR + 网关健康熔断 + 容量控制。下一阶段建议优先补齐 SRTP/DTLS-SRTP 或高可用/分布式存储。*
+*注：当前主线已经覆盖 UDP/TCP/TLS/WS 传输、事务与服务端重传状态机、SDP 重写、RTP/RTCP 中继、RTCP Receiver Report 生成、60 秒质量窗口与告警、RTP 源绑定、PRACK 校验、呼叫保持、SBC 安全防御、Path/Service-Route 路由、PCMU/PCMA 协商、RTP/SIP INFO DTMF + `dtmf_events` 审计明细表、录音 worker pool、录音保留/磁盘保护/分段轮转、CDR、PostgreSQL 与 NATS 队列化（含 DLQ 与有毒消息策略）。DTLS-SRTP 握手、完整 ICE/TURN、多媒体段和 HA 集群仍未完成。路由侧已补齐 LCR + 网关健康熔断 + 容量控制。*

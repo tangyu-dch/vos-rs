@@ -16,7 +16,7 @@ pub enum StorageBackendKind {
 /// 存储规则：按文件名前缀匹配，决定存储行为。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageRule {
-    /// 匹配的 key 前缀（如 "wav/"、"metadata/"）
+    /// 匹配的 key 前缀（如 "wav/"、"recordings/part-"）
     pub prefix: String,
     /// 该前缀的文件是否仅写主存储（不回退本地）
     #[serde(default = "default_true")]

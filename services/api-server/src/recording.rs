@@ -5,7 +5,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct RecordingInfo {
@@ -15,12 +15,6 @@ pub struct RecordingInfo {
     pub duration_secs: f64,
     pub created_at_ms: i64,
     pub has_audio: bool,
-}
-
-#[derive(Deserialize)]
-struct RecordingMetadata {
-    call_id: String,
-    created_at_unix_ms: i64,
 }
 
 /// 复刻 sip-edge `recording_file_stem` 的清洗规则：非 [A-Za-z0-9-_.] 替换为 `_`。
@@ -51,29 +45,13 @@ pub async fn list_recordings(
 
     let mut out = Vec::new();
     for file in files {
-        if !file.key.ends_with(".json") {
+        if !file.key.ends_with(".wav") {
             continue;
         }
-        let content = match storage.get(&file.key).await {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let meta: RecordingMetadata = match serde_json::from_slice(&content) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let stem = file.key.trim_end_matches(".json").to_string();
-        let wav_key = format!("{stem}.wav");
-        let has_audio = storage.exists(&wav_key).await.unwrap_or(false);
-        let size = if has_audio {
-            storage
-                .get(&wav_key)
-                .await
-                .map(|b| b.len() as u64)
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        let wav_key = file.key.clone();
+        let stem = wav_key.trim_end_matches(".wav").to_string();
+        let has_audio = true;
+        let size = file.size;
         // WAV: 8kHz stereo 16-bit = 32000 bytes/sec, minus 44 byte header
         let duration_secs = if size > 44 {
             ((size - 44) as f64) / 32000.0
@@ -81,11 +59,11 @@ pub async fn list_recordings(
             0.0
         };
         out.push(RecordingInfo {
-            call_id: meta.call_id,
+            call_id: stem.clone(),
             stem,
             size_bytes: size,
             duration_secs,
-            created_at_ms: meta.created_at_unix_ms,
+            created_at_ms: file.last_modified.unwrap_or_default(),
             has_audio,
         });
     }
