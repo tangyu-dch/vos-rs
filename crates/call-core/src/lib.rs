@@ -28,8 +28,8 @@ mod call;
 mod cdr;
 mod error;
 mod manager;
-mod routing;
 mod queue;
+mod routing;
 
 pub use call::{Call, CallId, CallLeg, CallState, FailureCause, LegDirection, LegId, LegState};
 pub use cdr::{CallCdr, CallQualityMetrics, CdrStatus};

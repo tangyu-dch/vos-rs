@@ -1,3 +1,41 @@
+//! # cdr-core：数据存储层
+//!
+//! 本 crate 是 VoIP 软交换平台的数据存储层，负责：
+//!
+//! - **CDR 存储**：通话详单（Call Detail Record）的持久化
+//! - **网关管理**：网关配置和健康状态的 CRUD
+//! - **路由管理**：路由规则的 CRUD
+//! - **用户管理**：SIP 用户的 CRUD
+//! - **计费管理**：费率、账户、账本、实时计费、离线对账
+//! - **注册管理**：SIP REGISTER 绑定的存储
+//! - **反欺诈**：反欺诈规则的 CRUD
+//! - **号码库存**：号码资源的 CRUD
+//! - **数据迁移**：数据库表结构自动迁移
+//!
+//! ## 数据库表
+//!
+//! | 表名 | 用途 |
+//! |------|------|
+//! | `call_cdrs` | 通话详单 |
+//! | `sip_gateways` | 网关配置 |
+//! | `sip_routes` | 路由规则 |
+//! | `sip_users` | SIP 用户 |
+//! | `sip_registrations` | 注册绑定 |
+//! | `billing_rates` | 费率表 |
+//! | `billing_accounts` | 计费账户 |
+//! | `billing_ledger` | 扣费流水 |
+//! | `gateway_health_status` | 网关健康状态 |
+//! | `anti_fraud_rules` | 反欺诈规则 |
+//! | `dtmf_events` | DTMF 事件 |
+//! | `number_inventory` | 号码库存 |
+//!
+//! ## 设计原则
+//!
+//! - 使用 `sqlx` 编译期 SQL 检查
+//! - 所有方法返回 `Result`，不使用 panic
+//! - 在线迁移（`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`）
+//! - 实时计费使用事务保证原子性
+
 mod models;
 mod schema;
 mod utils;
@@ -11,6 +49,10 @@ use tracing::warn;
 
 use schema::*;
 
+/// PostgreSQL 数据存储：所有数据访问的入口。
+///
+/// 封装了 PostgreSQL 连接池，提供所有数据表的 CRUD 操作。
+/// 使用 `sqlx` 编译期 SQL 检查，确保类型安全。
 #[derive(Debug, Clone)]
 pub struct PostgresCdrStore {
     pub(crate) pool: PgPool,
@@ -105,13 +147,24 @@ impl PostgresCdrStore {
         sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS half_open_successes INTEGER NOT NULL DEFAULT 0")
             .execute(&self.pool)
             .await?;
-        sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS last_probe_at TIMESTAMPTZ")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS last_probe_at TIMESTAMPTZ",
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS active_calls INTEGER NOT NULL DEFAULT 0")
             .execute(&self.pool)
             .await?;
         sqlx::query(CREATE_ANTI_FRAUD_RULES_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(MIGRATE_LEGACY_ANTI_FRAUD_RULES_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_ANTI_FRAUD_CONFIG_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(SEED_ANTI_FRAUD_CONFIG_SQL)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -198,7 +251,16 @@ impl PostgresCdrStore {
             let half_open_successes: i32 = row.get(5);
             let last_probe_at: Option<OffsetDateTime> = row.get(6);
             let active_calls: i32 = row.get(7);
-            list.push((id, open, failures, state, last_failure_at, half_open_successes, last_probe_at, active_calls));
+            list.push((
+                id,
+                open,
+                failures,
+                state,
+                last_failure_at,
+                half_open_successes,
+                last_probe_at,
+                active_calls,
+            ));
         }
         Ok(list)
     }
@@ -236,6 +298,29 @@ impl PostgresCdrStore {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    pub async fn list_anti_fraud_configs(&self) -> Result<Vec<AntiFraudConfigItem>, sqlx::Error> {
+        sqlx::query_as::<_, AntiFraudConfigItem>(
+            "SELECT config_key, config_value, description, updated_at FROM anti_fraud_config ORDER BY config_key"
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn update_anti_fraud_config(
+        &self,
+        key: &str,
+        value: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let r = sqlx::query(
+            "UPDATE anti_fraud_config SET config_value = $1, updated_at = NOW() WHERE config_key = $2"
+        )
+        .bind(value)
+        .bind(key)
+        .execute(&self.pool)
+        .await?;
         Ok(r.rows_affected() > 0)
     }
 
@@ -416,7 +501,9 @@ impl PostgresCdrStore {
             let weight: i32 = row.get(5);
             let time_start: Option<String> = row.get(6);
             let time_end: Option<String> = row.get(7);
-            routes.push((id, prefix, priority, gateway_id, cost, weight, time_start, time_end));
+            routes.push((
+                id, prefix, priority, gateway_id, cost, weight, time_start, time_end,
+            ));
         }
         Ok(routes)
     }
@@ -601,11 +688,12 @@ impl PostgresCdrStore {
         aor: &str,
         contact_uri: &str,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM sip_registrations WHERE aor = $1 AND contact_uri = $2")
-            .bind(aor)
-            .bind(contact_uri)
-            .execute(&self.pool)
-            .await?;
+        let result =
+            sqlx::query("DELETE FROM sip_registrations WHERE aor = $1 AND contact_uri = $2")
+                .bind(aor)
+                .bind(contact_uri)
+                .execute(&self.pool)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -770,11 +858,10 @@ impl PostgresCdrStore {
         let avg_loss: Option<f64> = row.get(5);
         let avg_jitter: Option<f64> = row.get(6);
 
-        let reg_row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM sip_registrations WHERE expires_at > now()",
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let reg_row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM sip_registrations WHERE expires_at > now()")
+                .fetch_one(&self.pool)
+                .await?;
 
         let gw_row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sip_gateways")
             .fetch_one(&self.pool)
@@ -827,11 +914,9 @@ impl PostgresCdrStore {
     }
 
     pub async fn list_users(&self) -> Result<Vec<SipUser>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT username, created_at FROM sip_users ORDER BY username",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query("SELECT username, created_at FROM sip_users ORDER BY username")
+            .fetch_all(&self.pool)
+            .await?;
         let mut users = Vec::with_capacity(rows.len());
         for row in rows {
             users.push(SipUser {
@@ -880,7 +965,9 @@ impl PostgresCdrStore {
                 host: row.get(1),
                 port: row.get::<Option<i32>, _>(2).map(|p| p as u16),
                 transport: row.get(3),
-                max_capacity: row.get::<Option<i32>, _>(4).and_then(|c| u32::try_from(c).ok()),
+                max_capacity: row
+                    .get::<Option<i32>, _>(4)
+                    .and_then(|c| u32::try_from(c).ok()),
                 gateway_type: row.get(5),
                 prefix_rules: row.get(6),
                 supports_registration: row.get(7),
@@ -1274,7 +1361,10 @@ impl PostgresCdrStore {
                 continue;
             }
 
-            let user = caller.as_deref().and_then(utils::extract_sip_user).unwrap_or("");
+            let user = caller
+                .as_deref()
+                .and_then(utils::extract_sip_user)
+                .unwrap_or("");
             if user.is_empty() {
                 skipped += 1;
                 continue;
@@ -1400,10 +1490,7 @@ mod tests {
 
     #[test]
     fn test_match_rate() {
-        let rates = vec![
-            ("86".to_string(), 0.5),
-            ("8613".to_string(), 0.3),
-        ];
+        let rates = vec![("86".to_string(), 0.5), ("8613".to_string(), 0.3)];
         assert_eq!(match_rate("8613800138000", &rates), 0.3);
         assert_eq!(match_rate("861012345678", &rates), 0.5);
         assert_eq!(match_rate("12345", &rates), 0.0);

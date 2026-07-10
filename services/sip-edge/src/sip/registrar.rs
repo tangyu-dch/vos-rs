@@ -1,3 +1,29 @@
+//! # SIP REGISTER 注册处理
+//!
+//! 本模块实现了 SIP REGISTER 请求的处理，包括：
+//!
+//! - **注册处理**：处理 REGISTER 请求，绑定 Contact 地址
+//! - **注销处理**：Expires=0 时移除 Contact 绑定
+//! - **查询处理**：不带 Contact 的 REGISTER 查询当前绑定
+//! - **过期管理**：自动清理过期的注册绑定
+//!
+//! ## 注册流程
+//!
+//! ```text
+//! REGISTER → 验证 Digest Auth → 存储 Contact 绑定 → 返回 200 OK
+//! ```
+//!
+//! ## Contact 绑定
+//!
+//! 每个 AOR（Address of Record）可以有多个 Contact 绑定，
+//! 用于支持多设备注册和故障转移。
+//!
+//! ## 配置
+//!
+//! | 环境变量 | 说明 | 默认值 |
+//! |---------|------|--------|
+//! | `VOS_RS_SIP_AUTH_USERS` | 认证用户列表 | 空 |
+
 use cdr_core::PostgresCdrStore;
 use sip_core::{SipRequest, SipUri};
 use std::{

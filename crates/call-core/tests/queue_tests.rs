@@ -1,4 +1,4 @@
-use call_core::{Agent, AgentState, CallQueue, CallId, QueueStrategy};
+use call_core::{Agent, AgentState, CallId, CallQueue, QueueStrategy};
 use std::time::Duration;
 
 #[test]
@@ -20,10 +20,16 @@ fn test_round_robin_queue_allocation() {
     let a2 = &allocations[1];
     assert_eq!(a1.0.as_str(), "call1");
     assert_eq!(a2.0.as_str(), "call2");
-    
+
     // Check states
-    assert_eq!(queue.agents.get("agent1").unwrap().state, AgentState::Ringing);
-    assert_eq!(queue.agents.get("agent2").unwrap().state, AgentState::Ringing);
+    assert_eq!(
+        queue.agents.get("agent1").unwrap().state,
+        AgentState::Ringing
+    );
+    assert_eq!(
+        queue.agents.get("agent2").unwrap().state,
+        AgentState::Ringing
+    );
 
     // End call1 on agent1
     queue.record_call_end("agent1", Duration::from_secs(10));
@@ -39,7 +45,7 @@ fn test_least_active_queue_allocation() {
     a1.active_calls = 5;
     let mut a2 = Agent::new("agent2", 10);
     a2.active_calls = 2; // Should be chosen first since it has fewer active calls
-    
+
     queue.add_agent(a1);
     queue.add_agent(a2);
 

@@ -1,3 +1,32 @@
+//! # cdr-worker：CDR 异步写入服务
+//!
+//! 本服务从 NATS JetStream 消费 CDR 事件，批量写入 PostgreSQL。
+//!
+//! ## 架构
+//!
+//! ```text
+//! sip-edge → NATS JetStream → cdr-worker → PostgreSQL
+//! ```
+//!
+//! ## 功能
+//!
+//! - **批量写入**：累积多条 CDR 后批量 INSERT，减少数据库压力
+//! - **超时刷新**：批量未满时按超时强制刷新
+//! - **死信队列**：写入失败的 CDR 进入 DLQ，避免阻塞
+//! - **指数退避**：数据库写入失败时指数退避重试
+//! - **幂等性**：按 call_id 去重，防止重复写入
+//!
+//! ## 配置
+//!
+//! | 环境变量 | 说明 | 默认值 |
+//! |---------|------|--------|
+//! | `VOS_RS_DATABASE_URL` | PostgreSQL 连接 | postgres://localhost/vos_rs |
+//! | `VOS_RS_NATS_URL` | NATS 地址 | nats://127.0.0.1:4222 |
+//! | `VOS_RS_CDR_BATCH_SIZE` | 批量大小 | 50 |
+//! | `VOS_RS_CDR_BATCH_TIMEOUT_MS` | 超时刷新 | 100ms |
+//! | `VOS_RS_CDR_MAX_DELIVERIES` | 最大投递次数 | 5 |
+//! | `VOS_RS_CDR_DB_RETRY_ATTEMPTS` | DB 重试次数 | 3 |
+
 use async_nats::jetstream::{self, consumer::PullConsumer, stream, AckKind};
 use cdr_core::{CdrEvent, PostgresCdrStore, DEFAULT_CDR_STREAM, DEFAULT_CDR_SUBJECT};
 use futures::StreamExt;

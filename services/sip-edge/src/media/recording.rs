@@ -1,17 +1,17 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::{fs, io};
-use std::fs::File;
-use std::collections::{HashMap, HashSet};
-use std::io::{Seek, SeekFrom, Write};
-use std::time::Duration;
 use rtp_core::{AudioCodec, RtpPacketView};
-use std::mem::MaybeUninit;
+use sdp_core::SdpError;
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::ffi::CString;
 use std::fmt;
-use std::error::Error;
-use sdp_core::SdpError;
+use std::fs::File;
+use std::io::{Seek, SeekFrom, Write};
+use std::mem::MaybeUninit;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use std::{fs, io};
 use tracing::warn;
 
 use crate::media::config::MediaConfig;
@@ -74,7 +74,11 @@ impl RecordingSession {
         }
     }
 
-    pub fn try_record(&self, channel: RecordingChannel, packet: RtpPacketView<'_>) -> io::Result<bool> {
+    pub fn try_record(
+        &self,
+        channel: RecordingChannel,
+        packet: RtpPacketView<'_>,
+    ) -> io::Result<bool> {
         if AudioCodec::from_static_payload_type(packet.payload_type).is_none()
             || packet.payload.is_empty()
         {
@@ -835,7 +839,7 @@ impl MediaRelayState {
             config.recording_retention_secs,
             config.recording_min_free_bytes,
         )
-            .map_err(recording_error)?;
+        .map_err(recording_error)?;
 
         let stem = recording_file_stem(call_id);
         let wav_path = config.recording_dir.join(format!("{stem}.wav"));

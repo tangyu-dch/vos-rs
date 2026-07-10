@@ -99,15 +99,23 @@ async fn terminate(State(state): State<Arc<EdgeState>>, Path(call_id): Path<Stri
 
     // Real-time billing: settle the call on force terminate.
     if let Some(ref db) = state.db_store {
-        if let Some(call) = state.call_manager.get(&call_core::CallId::new(call_id.clone())) {
+        if let Some(call) = state
+            .call_manager
+            .get(&call_core::CallId::new(call_id.clone()))
+        {
             let caller_user = call.caller.as_deref().and_then(|s| {
                 let idx = s.find("sip:")?;
                 let rest = &s[idx + 4..];
                 let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
-                if end == 0 { None } else { Some(&rest[..end]) }
+                if end == 0 {
+                    None
+                } else {
+                    Some(&rest[..end])
+                }
             });
             let callee = call.inbound.remote_uri.user.as_deref().unwrap_or("");
-            let duration_ms = call.ended_at
+            let duration_ms = call
+                .ended_at
                 .and_then(|e| e.duration_since(call.started_at).ok())
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);

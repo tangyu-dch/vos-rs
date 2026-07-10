@@ -1,7 +1,29 @@
-use rtp_core::{RtpPacketView, TelephoneEvent};
-use cdr_core::DtmfEventRecord;
-use tracing::debug;
+//! # DTMF 处理
+//!
+//! 本模块实现了 DTMF（Dual-Tone Multi-Frequency）信号的检测和处理，包括：
+//!
+//! - **RFC 2833**：RTP telephone-event 检测
+//! - **SIP INFO**：SIP INFO 方式的 DTMF 传递
+//! - **DTMF 累积**：按通话累积 DTMF 数字序列
+//! - **审计记录**：DTMF 事件写入审计表
+//!
+//! ## 支持的 DTMF 数字
+//!
+//! ```text
+//! 0-9, *, #, A-D
+//! ```
+//!
+//! ## 事件格式
+//!
+//! RFC 2833 telephone-event：
+//! - Event: DTMF 数字（0-15）
+//! - End: 事件结束标志
+//! - Duration: 事件持续时间
+
 use crate::media::relay::MediaRelayState;
+use cdr_core::DtmfEventRecord;
+use rtp_core::{RtpPacketView, TelephoneEvent};
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct DtmfState {

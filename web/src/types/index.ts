@@ -204,15 +204,16 @@ export interface NumberInventory {
 
 // ===== 防盗打 =====
 export interface AntiFraudRule {
-  id: number;
+  id: string;
   rule_type: string;
-  value: string;
-  description?: string;
-  enabled?: boolean;
+  target_value: string;
+  limit_number: number | null;
+  enabled: boolean;
   created_at?: string;
 }
 export interface AntiFraudConfigItem {
-  key: string;
-  value: string;
+  config_key: string;
+  config_value: string;
   description?: string;
+  updated_at?: string;
 }

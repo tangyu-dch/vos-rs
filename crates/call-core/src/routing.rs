@@ -1,11 +1,45 @@
+//! # 路由引擎与网关健康追踪
+//!
+//! 本模块实现了 VoIP 软交换的核心路由选择逻辑和网关健康熔断器。
+//!
+//! ## 路由选择流程
+//!
+//! 1. 从 `sip_routes` 表加载路由规则（含 weight 字段）
+//! 2. 按被叫号码最长前缀匹配（prefix length DESC）
+//! 3. 同前缀按优先级排序（priority DESC，数字越大越优先）
+//! 4. 同优先级按成本升序（cost ASC，LCR 最低成本路由）
+//! 5. 同等条件下按权重加权随机（weight DESC/random）
+//! 6. 检查时间窗口（time_start/time_end）
+//! 7. 检查网关健康状态（Circuit Breaker）
+//! 8. 检查并发容量（max_capacity / current_concurrent）
+//! 9. 只对最终选中的网关执行 acquire（HalfOpen probe 保护）
+//!
+//! ## 网关健康熔断器（Circuit Breaker）
+//!
+//! 状态机：
+//! - **Closed**：正常状态，所有呼叫正常路由
+//! - **Open**：熔断状态，拒绝所有呼叫，等待恢复间隔
+//! - **HalfOpen**：半开状态，允许少量探测呼叫，成功则恢复 Closed
+//!
+//! 恢复条件：
+//! - 连续失败次数 >= `failure_threshold` 时打开电路
+//! - `recovery_interval` 后进入 HalfOpen
+//! - HalfOpen 下连续 `HALF_OPEN_SUCCESS_THRESHOLD`（5）次成功恢复 Closed
+//! - HalfOpen 下任何失败重新打开电路
+
 use crate::{CallError, CallResult};
 use sip_core::SipUri;
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
+/// HalfOpen 状态下允许通过的用户流量采样率（10%）。
 const HALF_OPEN_SAMPLE_RATE: f64 = 0.10;
+/// HalfOpen 状态下恢复到 Closed 所需的连续成功次数。
 const HALF_OPEN_SUCCESS_THRESHOLD: u32 = 5;
 
+/// 网关唯一标识符。
+///
+/// 用于在路由表和健康追踪器中标识不同的网关。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GatewayId(String);
 
@@ -19,11 +53,19 @@ impl GatewayId {
     }
 }
 
+/// 路由目标：指向特定网关的路由条目。
+///
+/// 包含网关地址、容量限制、Caller ID 重写规则等配置。
+/// 路由引擎根据 `RouteTarget` 构建出站 INVITE 的目标地址。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteTarget {
+    /// 网关唯一标识
     pub gateway_id: GatewayId,
+    /// 网关主机地址
     pub host: String,
+    /// 网关 SIP 端口
     pub port: Option<u16>,
+    /// 传输协议（udp/tcp/tls）
     pub transport: Option<String>,
     /// Maximum concurrent calls allowed through this gateway.
     /// `None` means unlimited.
@@ -163,16 +205,31 @@ impl RouteTarget {
     }
 }
 
+/// 路由条目：定义被叫号码到网关的映射规则。
+///
+/// 每条路由包含前缀匹配规则、优先级、成本和权重。
+/// 路由引擎根据这些字段进行排序和选择：
+/// - 前缀越长越优先（更精确匹配）
+/// - 优先级数字越大越优先
+/// - 成本越低越优先（LCR）
+/// - 同等条件下按权重加权随机
 #[derive(Debug, Clone, PartialEq)]
 pub struct Route {
+    /// 路由唯一标识
     pub id: String,
+    /// 被叫号码前缀（如 "86" 表示中国大陆，"8613" 表示中国移动）
     pub prefix: String,
+    /// 优先级（数字越大越优先）
     pub priority: u16,
-    /// Per-call cost for Lowest Cost Routing.
-    /// Lower cost is preferred when prefix length and priority are equal.
-    /// Defaults to `0.0` (no cost).
+    /// 每呼叫成本（用于最低成本路由 LCR）
+    /// 当前缀长度和优先级相同时，成本越低越优先
+    /// 默认为 0.0（无成本）
     pub cost: f64,
+    /// 权重（用于同等条件下的加权随机负载均衡）
+    /// 权重越高，被选为第一候选的概率越大
+    /// 默认为 100
     pub weight: u32,
+    /// 路由目标（网关地址和配置）
     pub target: RouteTarget,
 }
 
@@ -233,10 +290,17 @@ impl Route {
     }
 }
 
+/// 选中的路由：路由引擎最终选择的路由条目。
+///
+/// 包含路由 ID、目标网关和出站 SIP URI。
+/// 用于构建出站 INVITE 请求。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedRoute {
+    /// 路由 ID
     pub route_id: String,
+    /// 目标网关配置
     pub target: RouteTarget,
+    /// 出站 SIP URI（已应用前缀规则）
     pub outbound_uri: SipUri,
 }
 
@@ -244,29 +308,38 @@ pub struct SelectedRoute {
 // Gateway health tracking
 // ---------------------------------------------------------------------------
 
-/// Circuit breaker state for a gateway.
+/// 网关健康熔断器状态。
+///
+/// 状态机转换：
+/// - `Closed` → `Open`：连续失败次数 >= `failure_threshold`
+/// - `Open` → `HalfOpen`：`recovery_interval` 后允许探测
+/// - `HalfOpen` → `Closed`：连续成功次数 >= `HALF_OPEN_SUCCESS_THRESHOLD`
+/// - `HalfOpen` → `Open`：任何失败
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CircuitState {
-    /// Gateway is serving normal traffic.
+    /// 正常状态，所有呼叫正常路由
     Closed,
-    /// Gateway is not receiving normal traffic.
+    /// 熔断状态，拒绝所有呼叫，等待恢复间隔
     Open,
-    /// Gateway is receiving a small recovery sample.
+    /// 半开状态，允许少量探测呼叫
     HalfOpen,
 }
 
-/// Health state for a single gateway, used for circuit-breaking.
+/// 单个网关的健康状态，用于 Circuit Breaker 决策。
+///
+/// 跟踪网关的成功/失败计数、连续失败次数、最后成功/失败时间、
+/// 当前活跃呼叫数和熔断器状态。
 #[derive(Debug, Clone)]
 pub struct GatewayHealth {
-    /// Total successful call attempts (2xx response).
+    /// 总成功呼叫数（2xx 响应）
     success_count: u64,
-    /// Total failed call attempts (4xx/5xx/timeout).
+    /// 总失败呼叫数（4xx/5xx/timeout）
     failure_count: u64,
-    /// Consecutive failures since the last success.
+    /// 自上次成功以来的连续失败次数
     consecutive_failures: u32,
-    /// When the gateway was last marked healthy.
+    /// 最后一次成功的时间
     last_success: Option<Instant>,
-    /// When the gateway was last marked unhealthy (circuit open).
+    /// 最后一次失败的时间（用于判断恢复间隔）
     last_failure: Option<Instant>,
     /// Current active call count through this gateway.
     active_calls: u32,
@@ -370,16 +443,21 @@ impl GatewayHealth {
     }
 }
 
-/// Thresholds that control the gateway circuit breaker.
+/// 网关健康熔断器阈值配置。
+///
+/// 控制 Circuit Breaker 的行为参数：
+/// - 连续失败多少次后打开电路
+/// - 打开后多久进入 HalfOpen 探测
+/// - 成功率低于多少视为不健康
 #[derive(Debug, Clone)]
 pub struct HealthThresholds {
-    /// Open the circuit after this many consecutive failures.
+    /// 连续失败次数阈值，超过后打开电路（默认 5）
     pub failure_threshold: u32,
-    /// Half-open probe interval: after this duration, allow one trial call.
+    /// 恢复间隔：电路打开后多久进入 HalfOpen 探测（默认 30 秒）
     pub recovery_interval: Duration,
-    /// Minimum success rate below which a gateway is considered unhealthy.
+    /// 最低成功率阈值，低于此值视为不健康（默认 0.3，即 30%）
     pub min_success_rate: f64,
-    /// Minimum number of samples before success rate is evaluated.
+    /// 最少样本数，低于此数不评估成功率（默认 10）
     pub min_samples: u64,
 }
 
@@ -394,7 +472,14 @@ impl Default for HealthThresholds {
     }
 }
 
-/// Tracks health state for all known gateways.
+/// 网关健康追踪器：管理所有网关的 Circuit Breaker 状态。
+///
+/// 使用 `HashMap` 存储每个网关的健康状态，在路由选择时：
+/// - 过滤掉 Open 状态的网关（恢复间隔未到）
+/// - 对 HalfOpen 状态的网关限制探测流量
+/// - 对 Closed 状态的网关检查成功率
+///
+/// 线程安全：由 `EdgeState` 中的 `Mutex<GatewayHealthTracker>` 保护。
 #[derive(Debug, Clone)]
 pub struct GatewayHealthTracker {
     states: HashMap<String, GatewayHealth>,

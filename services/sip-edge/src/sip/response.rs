@@ -1,3 +1,25 @@
+//! # SIP 响应构建
+//!
+//! 本模块负责构建 SIP 响应消息，包括：
+//!
+//! - **100 Trying**：临时响应，防止重传
+//! - **180 Ringing**：振铃通知
+//! - **200 OK**：成功响应
+//! - **4xx/5xx**：错误响应
+//!
+//! ## 请求处理流程
+//!
+//! ```text
+//! 入站 INVITE → 路由选择 → 构建 100 Trying → 构建出站 INVITE → 返回给主叫
+//! ```
+//!
+//! ## 路由选择
+//!
+//! 使用 `CallManager::handle_inbound_invite_with_health` 选择路由：
+//! - 检查网关健康状态（Circuit Breaker）
+//! - 检查网关容量
+//! - 应用前缀规则和 Caller ID 重写
+
 use call_core::{CallError, CallManager, GatewayHealthTracker};
 use sip_core::{HeaderMap, Method, SipRequest, SipResponse, SipUri};
 

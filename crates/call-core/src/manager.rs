@@ -1,3 +1,26 @@
+//! # 呼叫管理器
+//!
+//! 本模块实现了 VoIP 呼叫的核心状态管理，包括：
+//!
+//! - **INVITE 处理**：接收入站 INVITE，选择路由，生成出站 INVITE
+//! - **响应处理**：处理出站响应（100/180/200/3xx/4xx/5xx），更新呼叫状态
+//! - **Failover**：408/5xx 响应自动切换到下一个候选网关
+//! - **终止处理**：BYE/CANCEL/超时处理，生成 CDR
+//! - **并发安全**：使用 `DashMap`（分片无锁）存储呼叫状态
+//!
+//! ## 呼叫生命周期
+//!
+//! ```text
+//! INVITE → Routing → Ringing → Established → Terminated
+//!                    ↓              ↓
+//!                  Failed         Failed
+//! ```
+//!
+//! ## 网关容量控制
+//!
+//! 每次成功选定网关后调用 `increment_active`，
+//! 呼叫结束（BYE/CANCEL/超时/failover）时调用 `decrement_active`。
+
 use crate::{
     Call, CallCdr, CallError, CallId, CallQualityMetrics, CallResult, CallState,
     GatewayHealthTracker, RouteTable,
@@ -6,37 +29,73 @@ use dashmap::DashMap;
 use sip_core::{SipRequest, SipResponse};
 use std::sync::RwLock;
 
+/// 入站 INVITE 处理结果。
+///
+/// 当 SIP 层收到入站 INVITE 时，调用 `CallManager::handle_inbound_invite` 处理。
+/// 返回结果包含呼叫 ID、状态、出站 URI 和 Caller ID 重写配置。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundInviteOutcome {
+    /// 呼叫 ID（SIP Call-ID）
     pub call_id: CallId,
+    /// 当前呼叫状态（通常为 Routing）
     pub state: CallState,
+    /// 出站 SIP URI（已应用前缀规则）
     pub outbound_uri: sip_core::SipUri,
-    /// Caller ID rewrite mode from the selected route's gateway.
+    /// Caller ID 重写模式（passthrough/virtual/random）
     pub caller_id_mode: Option<String>,
-    /// Fixed virtual caller number when caller_id_mode is "virtual".
+    /// 固定虚拟主叫号码（当 caller_id_mode 为 "virtual" 时使用）
     pub virtual_caller: Option<String>,
 }
 
+/// 出站响应处理结果。
+///
+/// 当收到网关的出站响应时，调用 `CallManager::handle_outbound_response` 处理。
+/// 返回结果包含呼叫 ID、状态、failover URI 和当前网关 ID。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutboundResponseOutcome {
+    /// 呼叫 ID
     pub call_id: CallId,
+    /// 当前呼叫状态
     pub state: CallState,
+    /// Failover URI（如果需要切换网关）
     pub failover_uri: Option<sip_core::SipUri>,
+    /// 当前网关 ID（用于健康状态更新）
     pub gateway_id: String,
 }
 
+/// 呼叫终止结果。
+///
+/// 当收到入站 BYE 或呼叫超时时，调用 `CallManager::handle_inbound_termination` 处理。
+/// 返回结果包含呼叫 ID 和最终状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminationOutcome {
+    /// 呼叫 ID
     pub call_id: CallId,
+    /// 最终呼叫状态（通常为 Terminated）
     pub state: CallState,
 }
 
-/// 并发安全的呼叫管理器：calls 用 DashMap（分片无锁），routes 用 RwLock（读多写少），
-/// completed_cdrs 用 Mutex。所有方法 `&self`，可被多个 worker 并行调用。
+/// 并发安全的呼叫管理器。
+///
+/// 核心职责：
+/// - 管理所有活跃呼叫的状态（Routing/Ringing/Established/Failed/Terminated）
+/// - 处理入站 INVITE：选择路由、生成出站 INVITE
+/// - 处理出站响应：更新状态、触发 Failover
+/// - 处理 BYE/CANCEL：终止呼叫、生成 CDR
+///
+/// 并发模型：
+/// - `calls`：使用 `DashMap`（分片无锁 HashMap），支持高并发读写
+/// - `routes`：使用 `RwLock`（读多写少），路由表热更新时写锁
+/// - `cdr_sender`：异步通道，CDR 异步写入数据库
+///
+/// 所有方法接受 `&self`，可被多个 worker 并行调用。
 #[derive(Debug)]
 pub struct CallManager {
+    /// 活跃呼叫表（Call-ID → Call）
     calls: DashMap<CallId, Call>,
+    /// 路由表（支持热更新）
     routes: RwLock<RouteTable>,
+    /// CDR 异步写入通道
     cdr_sender: tokio::sync::mpsc::UnboundedSender<CallCdr>,
 }
 

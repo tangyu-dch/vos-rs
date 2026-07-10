@@ -42,7 +42,10 @@ mod report;
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{sse::{Event, KeepAlive, Sse}, IntoResponse},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse,
+    },
     routing::{get, post, put},
     Json, Router,
 };
@@ -113,6 +116,8 @@ pub(crate) struct AppState {
     recording_storage: Arc<dyn storage_core::StorageBackend>,
     /// sip-edge 管理 API 地址
     sip_manage_base: String,
+    /// 调用 sip-edge 管理 API 的共享 HTTP 客户端，统一连接池和超时。
+    internal_client: reqwest::Client,
     /// NATS 客户端（用于路由热加载广播）
     nats_client: Option<async_nats::Client>,
     /// JWT 签名密钥
@@ -259,14 +264,27 @@ async fn get_dashboard_stats(
 ) -> Result<Json<DashboardStats>, ApiError> {
     let active_calls = {
         let url = format!("{}/manage/active-calls", state.sip_manage_base);
-        match reqwest::get(&url).await {
-            Ok(resp) => {
-                let text = resp.text().await.unwrap_or_default();
-                serde_json::from_str::<serde_json::Value>(&text)
-                    .ok()
-                    .and_then(|v| v["active_calls"].as_i64())
-                    .unwrap_or(0)
+        let token = env::var("VOS_RS_INTERNAL_SECRET");
+        let request = state.internal_client.get(&url);
+        let request = match token {
+            Ok(token) if !token.is_empty() => request.header("X-VOS-Token", token),
+            _ => {
+                return state
+                    .store
+                    .get_dashboard_stats(0)
+                    .await
+                    .map(Json)
+                    .map_err(|e| ApiError {
+                        error: e.to_string(),
+                    })
             }
+        };
+        match request.send().await {
+            Ok(resp) => resp
+                .json::<Vec<serde_json::Value>>()
+                .await
+                .map(|calls| calls.len() as i64)
+                .unwrap_or(0),
             Err(_) => 0,
         }
     };
@@ -660,11 +678,9 @@ struct UpdateAntiFraudRuleRequest {
     enabled: bool,
 }
 
-#[derive(Serialize)]
-struct AntiFraudConfigItem {
-    key: String,
-    value: String,
-    description: String,
+#[derive(Debug, Deserialize)]
+struct UpdateAntiFraudConfigRequest {
+    config_value: String,
 }
 
 async fn list_anti_fraud_rules(
@@ -741,8 +757,41 @@ async fn delete_anti_fraud_rule(
     }
 }
 
-async fn list_anti_fraud_config() -> Result<Json<Vec<AntiFraudConfigItem>>, ApiError> {
-    Ok(Json(Vec::new()))
+async fn list_anti_fraud_config(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<cdr_core::AntiFraudConfigItem>>, ApiError> {
+    state
+        .store
+        .list_anti_fraud_configs()
+        .await
+        .map(Json)
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
+}
+
+async fn update_anti_fraud_config(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    Json(req): Json<UpdateAntiFraudConfigRequest>,
+) -> Result<StatusCode, ApiError> {
+    if req.config_value.len() > 1024 {
+        return Err(ApiError::internal("防盗打配置值长度不能超过 1024 个字符"));
+    }
+
+    let updated = state
+        .store
+        .update_anti_fraud_config(&key, &req.config_value)
+        .await
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
+
+    if updated {
+        Ok(StatusCode::OK)
+    } else {
+        Err(ApiError::internal("防盗打配置项不存在"))
+    }
 }
 
 async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse {
@@ -759,7 +808,8 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
             return (headers, Metrics::encode_metrics());
         }
     };
-    match reqwest::Client::new()
+    match state
+        .internal_client
         .get(&url)
         .header("X-VOS-Token", secret)
         .send()
@@ -955,8 +1005,16 @@ async fn audit_log(
     let method = req.method().clone();
     let uri = req.uri().clone();
 
-    let username = req.extensions().get::<Claims>().map(|c| c.sub.clone()).unwrap_or_else(|| "anonymous".to_string());
-    let role = req.extensions().get::<Claims>().map(|c| c.role.clone()).unwrap_or_else(|| "unknown".to_string());
+    let username = req
+        .extensions()
+        .get::<Claims>()
+        .map(|c| c.sub.clone())
+        .unwrap_or_else(|| "anonymous".to_string());
+    let role = req
+        .extensions()
+        .get::<Claims>()
+        .map(|c| c.role.clone())
+        .unwrap_or_else(|| "unknown".to_string());
 
     let is_write_op = method != axum::http::Method::GET;
 
@@ -982,27 +1040,44 @@ async fn dashboard_events(
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     let state_clone = state.clone();
     let stream = stream::unfold(
-        (state_clone, tokio::time::interval(std::time::Duration::from_secs(2))),
+        (
+            state_clone,
+            tokio::time::interval(std::time::Duration::from_secs(2)),
+        ),
         |(state, mut interval)| async move {
             interval.tick().await;
 
-            let client = reqwest::Client::new();
-            let active_calls = match client.get(format!("{}/manage/active-calls", state.sip_manage_base)).send().await {
-                Ok(resp) => {
-                    resp.json::<Vec<serde_json::Value>>().await.map(|v| v.len() as u32).unwrap_or(0)
-                }
+            let token = env::var("VOS_RS_INTERNAL_SECRET").ok();
+            let active_calls = match token {
+                Some(token) if !token.is_empty() => match state
+                    .internal_client
+                    .get(format!("{}/manage/active-calls", state.sip_manage_base))
+                    .header("X-VOS-Token", token)
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp
+                        .json::<Vec<serde_json::Value>>()
+                        .await
+                        .map(|v| v.len() as u32)
+                        .unwrap_or(0),
+                    Err(_) => 0,
+                },
                 _ => 0,
             };
 
-            let gw_status = if let Ok(accounts) = state.store.list_accounts().await {
-                accounts.len() as u32
-            } else {
-                0
+            let trunk_online_count = match state.store.list_gateways_full().await {
+                Ok(gateways) => gateways
+                    .iter()
+                    .filter(|gateway| gateway.enabled != Some(false))
+                    .filter(|gateway| gateway.circuit_state.as_deref() != Some("open"))
+                    .count() as u32,
+                Err(_) => 0,
             };
 
             let data = serde_json::json!({
                 "active_calls": active_calls,
-                "trunk_online_count": gw_status,
+                "trunk_online_count": trunk_online_count,
                 "timestamp": time::OffsetDateTime::now_utc().unix_timestamp(),
             });
 
@@ -1013,7 +1088,6 @@ async fn dashboard_events(
 
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
-
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -1037,6 +1111,10 @@ async fn main() -> anyhow::Result<()> {
     let nats_client = async_nats::connect(&nats_url).await.ok();
     let sip_manage_base =
         env::var("VOS_RS_MANAGE_BASE").unwrap_or_else(|_| "http://127.0.0.1:8082".to_string());
+    let internal_client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(1))
+        .timeout(std::time::Duration::from_secs(3))
+        .build()?;
 
     let jwt_secret = match env::var("VOS_RS_API_JWT_SECRET") {
         Ok(val) if !val.trim().is_empty() => val.into_bytes(),
@@ -1056,6 +1134,7 @@ async fn main() -> anyhow::Result<()> {
         store: Arc::new(store),
         recording_storage,
         sip_manage_base,
+        internal_client,
         nats_client,
         jwt_secret,
     };
@@ -1138,6 +1217,7 @@ async fn main() -> anyhow::Result<()> {
             put(update_anti_fraud_rule).delete(delete_anti_fraud_rule),
         )
         .route("/api/anti-fraud/config", get(list_anti_fraud_config))
+        .route("/api/anti-fraud/config/:key", put(update_anti_fraud_config))
         .route("/api/dashboard/events", get(dashboard_events))
         .route_layer(axum::middleware::from_fn(audit_log))
         .route_layer(axum::middleware::from_fn_with_state(

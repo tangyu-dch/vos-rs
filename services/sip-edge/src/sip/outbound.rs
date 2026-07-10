@@ -1,3 +1,20 @@
+//! # SIP 出站消息构建
+//!
+//! 本模块负责构建出站 SIP 消息，包括：
+//!
+//! - **INVITE**：出站呼叫邀请（含 SDP、Session Timer、Topology Hiding）
+//! - **ACK**：确认响应
+//! - **BYE**：终止呼叫
+//! - **OPTIONS**：网关健康探测
+//! - **NOTIFY**：REFER 转接进度通知
+//! - **INFO**：DTMF 传递
+//! - **REFER**：呼叫转接
+//!
+//! ## Topology Hiding
+//!
+//! 出站 INVITE 使用独立的 Call-ID（external_call_id），
+//! 隐藏内部拓扑信息，防止外部网关探测内部网络结构。
+
 use sip_core::{HeaderMap, Method, SipRequest, SipUri};
 use std::str::FromStr;
 
@@ -249,6 +266,7 @@ pub fn build_notify_sipfrag(
         "active;expires=60",
     )
 }
+#[allow(clippy::too_many_arguments)]
 pub fn build_transfer_invite(
     call_id: &str,
     from: &str,
@@ -257,8 +275,12 @@ pub fn build_transfer_invite(
     advertised_addr: &str,
     target_uri: &SipUri,
     sdp_body: &[u8],
+    replaces: Option<&str>,
 ) -> Vec<u8> {
     let branch = format!("z9hG4bK-transfer-{}-{}", token_fragment(call_id), cseq);
+    let replaces_header = replaces
+        .map(|val| format!("Replaces: {}\r\n", val))
+        .unwrap_or_default();
     let request = format!(
         "INVITE {uri} SIP/2.0\r\n\
          Via: SIP/2.0/UDP {addr};branch={branch}\r\n\
@@ -268,6 +290,7 @@ pub fn build_transfer_invite(
          Call-ID: {call_id}\r\n\
          CSeq: {cseq} INVITE\r\n\
          Contact: <sip:vosrs@{addr}>\r\n\
+         {replaces_hdr}\
          Content-Type: application/sdp\r\n\
          Content-Length: {body_len}\r\n\r\n",
         uri = target_uri,
@@ -277,6 +300,7 @@ pub fn build_transfer_invite(
         to = to,
         call_id = call_id,
         cseq = cseq,
+        replaces_hdr = replaces_header,
         body_len = sdp_body.len()
     );
     let mut bytes = request.into_bytes();

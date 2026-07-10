@@ -1,3 +1,26 @@
+//! # storage-core：统一存储抽象
+//!
+//! 本 crate 提供了统一的文件存储接口，支持多种后端：
+//!
+//! - **本地文件系统**：开发和小规模部署
+//! - **阿里云 OSS**：生产环境云存储
+//! - **双写模式**：本地 + OSS 同时写入，保证数据安全
+//!
+//! ## 配置
+//!
+//! 通过 `StorageConfig` 配置存储后端：
+//! - `kind`：后端类型（local/oss/dual）
+//! - `base_dir`：本地存储目录
+//! - `oss_endpoint`：OSS 端点
+//! - `oss_bucket`：OSS 桶名
+//! - `oss_access_key`：OSS 访问密钥
+//!
+//! ## 使用场景
+//!
+//! - 录音文件存储
+//! - CDR 导出文件
+//! - 系统配置文件
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use thiserror::Error;

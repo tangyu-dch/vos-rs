@@ -1,6 +1,28 @@
+//! # 媒体质量指标
+//!
+//! 本模块实现了 RTP/RTCP 质量监控和指标收集，包括：
+//!
+//! - **RTP 统计**：接收/转发/丢弃包计数
+//! - **RTCP 质量窗口**：60 秒滚动窗口的丢包率、抖动、RTT
+//! - **MOS 计算**：基于 E-model 的 MOS 分数计算
+//! - **录音统计**：录音队列深度、错误计数
+//! - **DTMF 统计**：DTMF 事件计数
+//!
+//! ## MOS 计算公式
+//!
+//! ```text
+//! R = 93.2 - 0.024 * d - 0.11 * e - 0.01 * j
+//! MOS = 1 + 0.035 * R + 0.000007 * R * (R - 60) * (100 - R)
+//! ```
+//!
+//! 其中：
+//! - `d`：单向延迟（ms）
+//! - `e`：丢包率（%）
+//! - `j`：抖动（ms）
+
+use crate::media::utils::{rtt_millis_from_compact_ntp, unix_timestamp_millis};
 use rtp_core::{RtcpReportBlock, RtpPacketView};
 use serde::Serialize;
-use crate::media::utils::{unix_timestamp_millis, rtt_millis_from_compact_ntp};
 
 pub(crate) const RTCP_QUALITY_WINDOW_MS: u128 = 60_000;
 

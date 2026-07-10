@@ -1,3 +1,25 @@
+//! # 数据库表结构定义
+//!
+//! 本模块定义了所有数据库表的 CREATE TABLE 语句。
+//! 使用 `sqlx` 编译期 SQL 检查，确保 SQL 语法正确。
+//!
+//! ## 表结构概览
+//!
+//! | 表名 | 用途 | 关键字段 |
+//! |------|------|----------|
+//! | `call_cdrs` | 通话详单 | call_id, status, duration_ms, mos |
+//! | `sip_gateways` | 网关配置 | id, host, port, max_capacity |
+//! | `sip_routes` | 路由规则 | prefix, priority, gateway_id, cost, weight |
+//! | `sip_users` | SIP 用户 | username, password |
+//! | `sip_registrations` | 注册绑定 | aor, contact_uri, expires_at |
+//! | `billing_rates` | 费率表 | prefix, rate_per_minute |
+//! | `billing_accounts` | 计费账户 | username, balance, credit_limit |
+//! | `billing_ledger` | 扣费流水 | call_id, amount, balance_after |
+//! | `gateway_health_status` | 网关健康 | gateway_id, state, last_failure_at |
+//! | `anti_fraud_rules` | 反欺诈规则 | rule_type, target_value, limit_number |
+//! | `dtmf_events` | DTMF 事件 | call_id, digit, source, timestamp_ms |
+//! | `number_inventory` | 号码库存 | number, status, direction |
+
 pub(super) const CREATE_CDR_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS call_cdrs (
     id BIGSERIAL PRIMARY KEY,
@@ -119,6 +141,78 @@ CREATE TABLE IF NOT EXISTS anti_fraud_rules (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
+"#;
+
+/// 防盗打全局配置表。
+pub(super) const CREATE_ANTI_FRAUD_CONFIG_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS anti_fraud_config (
+    config_key TEXT PRIMARY KEY,
+    config_value TEXT NOT NULL,
+    description TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+/// 将早期版本的反盗打规则表迁移到当前统一模型。
+///
+/// 早期脚本使用 `BIGSERIAL id` 和 `value` 字段，新模型使用字符串 ID、
+/// `target_value` 和可选的并发限制。迁移通过 information_schema 判断字段，
+/// 因此可以安全地在新旧数据库上重复执行。
+pub(super) const MIGRATE_LEGACY_ANTI_FRAUD_RULES_SQL: &str = r#"
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'anti_fraud_rules' AND column_name = 'value'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'anti_fraud_rules' AND column_name = 'target_value'
+    ) THEN
+        ALTER TABLE anti_fraud_rules ADD COLUMN target_value TEXT;
+        UPDATE anti_fraud_rules SET target_value = value WHERE target_value IS NULL;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'anti_fraud_rules' AND column_name = 'target_value'
+    ) THEN
+        ALTER TABLE anti_fraud_rules ADD COLUMN target_value TEXT;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'anti_fraud_rules' AND column_name = 'limit_number'
+    ) THEN
+        ALTER TABLE anti_fraud_rules ADD COLUMN limit_number INTEGER;
+    END IF;
+END $$;
+
+ALTER TABLE anti_fraud_rules
+    ALTER COLUMN id TYPE TEXT USING id::TEXT;
+
+UPDATE anti_fraud_rules
+SET target_value = COALESCE(target_value, '')
+WHERE target_value IS NULL;
+
+ALTER TABLE anti_fraud_rules
+    ALTER COLUMN target_value SET NOT NULL;
+"#;
+
+/// 防盗打默认配置，使用幂等插入保证不会覆盖运营方已有设置。
+pub(super) const SEED_ANTI_FRAUD_CONFIG_SQL: &str = r#"
+INSERT INTO anti_fraud_config (config_key, config_value, description) VALUES
+    ('enabled', 'true', '启用防盗打'),
+    ('max_concurrent_per_account', '50', '每账户最大并发呼叫数'),
+    ('max_concurrent_per_ip', '20', '每 IP 最大并发呼叫数'),
+    ('max_cps_per_account', '10', '每账户每秒最大呼叫数'),
+    ('min_call_duration', '3', '最短通话时长（秒）'),
+    ('max_call_duration', '3600', '最长通话时长（秒）'),
+    ('short_call_threshold', '5', '短通话检测阈值'),
+    ('short_call_window', '60', '短通话检测窗口（秒）'),
+    ('block_international', 'true', '拦截国际呼叫'),
+    ('block_premium', 'true', '拦截高额号码'),
+    ('allow_zero_balance', 'false', '允许零余额呼叫')
+ON CONFLICT (config_key) DO NOTHING
 "#;
 
 pub(super) const CREATE_BILLING_RATES_TABLE_SQL: &str = r#"

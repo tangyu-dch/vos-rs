@@ -272,8 +272,8 @@ pub(crate) async fn handle_request(
     // Pre-call balance check: reject if caller has no balance.
     if let Some(ref _plan) = outbound_invite {
         if let Some(ref db) = edge_state.db_store {
-            let caller_user = crate::edge_state::EdgeState::username_from_request(&request)
-                .unwrap_or_default();
+            let caller_user =
+                crate::edge_state::EdgeState::username_from_request(&request).unwrap_or_default();
             let callee = request.uri.user.as_deref().unwrap_or("");
             if !caller_user.is_empty() {
                 match db.check_balance(&caller_user, callee).await {
@@ -284,7 +284,9 @@ pub(crate) async fn handle_request(
                                 peer.to_string(),
                                 response::error_for_call_error(
                                     &request,
-                                    &call_core::CallError::GatewayUnavailable("余额不足".to_string()),
+                                    &call_core::CallError::GatewayUnavailable(
+                                        "余额不足".to_string(),
+                                    ),
                                 ),
                             )];
                         }
@@ -335,7 +337,10 @@ pub(crate) async fn handle_request(
             .unwrap_or_default();
 
         let mut candidates = Vec::new();
-        if let Some(call) = edge_state.call_manager.get(&call_core::CallId::new(internal_call_id.clone())) {
+        if let Some(call) = edge_state
+            .call_manager
+            .get(&call_core::CallId::new(internal_call_id.clone()))
+        {
             candidates = call.candidates.clone();
         }
 
@@ -374,10 +379,10 @@ pub(crate) async fn handle_request(
             .map(|v| v.as_str().trim().to_lowercase() == "true")
             .unwrap_or(false)
             || request
-            .headers
-            .get("x-call-forking")
-            .map(|v| v.as_str().trim().to_lowercase() == "true")
-            .unwrap_or(false);
+                .headers
+                .get("x-call-forking")
+                .map(|v| v.as_str().trim().to_lowercase() == "true")
+                .unwrap_or(false);
 
         if forking_enabled && candidates.len() > 1 {
             let fork_candidates = candidates.iter().take(3).cloned().collect::<Vec<_>>();
@@ -394,7 +399,10 @@ pub(crate) async fn handle_request(
                         .unwrap_or("vos-rs")
                 );
                 edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
-                forks_to_save.push((external_call_id.clone(), candidate.target.gateway_id.as_str().to_string()));
+                forks_to_save.push((
+                    external_call_id.clone(),
+                    candidate.target.gateway_id.as_str().to_string(),
+                ));
 
                 let target = outbound::target_addr_for(&candidate.outbound_uri);
                 let bytes = outbound::build_outbound_invite_with_session_timer_and_call_id(
@@ -473,7 +481,11 @@ pub(crate) async fn handle_request(
                     health.increment_active(&outbound_invite.gateway_id);
                     health.get_gateway_status(&outbound_invite.gateway_id)
                 };
-                crate::timers::persist_gateway_health(edge_state, outbound_invite.gateway_id.clone(), status);
+                crate::timers::persist_gateway_health(
+                    edge_state,
+                    outbound_invite.gateway_id.clone(),
+                    status,
+                );
             }
         }
 
@@ -928,16 +940,17 @@ pub(crate) async fn handle_in_dialog_request(
                     if let Some(ref db) = edge_state.db_store {
                         let call = edge_state.call_manager.get(&outcome.call_id);
                         if let Some(call) = call {
-                            let caller_user = call
-                                .caller
-                                .as_deref()
-                                .and_then(|s| {
-                                    // Extract user from "sip:user@host" or "<sip:user@host>"
-                                    let idx = s.find("sip:")?;
-                                    let rest = &s[idx + 4..];
-                                    let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
-                                    if end == 0 { None } else { Some(&rest[..end]) }
-                                });
+                            let caller_user = call.caller.as_deref().and_then(|s| {
+                                // Extract user from "sip:user@host" or "<sip:user@host>"
+                                let idx = s.find("sip:")?;
+                                let rest = &s[idx + 4..];
+                                let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
+                                if end == 0 {
+                                    None
+                                } else {
+                                    Some(&rest[..end])
+                                }
+                            });
                             let callee = call.inbound.remote_uri.user.as_deref().unwrap_or("");
                             let duration_ms = call
                                 .ended_at
@@ -1635,8 +1648,12 @@ fn percent_decode(s: &str) -> String {
     while let Some(ch) = chars.next() {
         if ch == '%' {
             let mut hex = String::new();
-            if let Some(h1) = chars.next() { hex.push(h1); }
-            if let Some(h2) = chars.next() { hex.push(h2); }
+            if let Some(h1) = chars.next() {
+                hex.push(h1);
+            }
+            if let Some(h2) = chars.next() {
+                hex.push(h2);
+            }
             if let Ok(val) = u8::from_str_radix(&hex, 16) {
                 result.push(val as char);
             } else {

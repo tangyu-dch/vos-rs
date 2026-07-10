@@ -15,8 +15,7 @@ pub(crate) fn duration_millis(d: Duration) -> i64 {
 pub(crate) fn offset_from_millis(millis: i64) -> OffsetDateTime {
     let secs = millis / 1000;
     let nanos = ((millis % 1000) * 1_000_000) as u32;
-    OffsetDateTime::from_unix_timestamp(secs)
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH)
+    OffsetDateTime::from_unix_timestamp(secs).unwrap_or(OffsetDateTime::UNIX_EPOCH)
         + time::Duration::nanoseconds(nanos as i64)
 }
 
@@ -59,9 +58,9 @@ pub(crate) fn cdr_event_from_row(row: &sqlx::postgres::PgRow) -> crate::models::
             let ts: time::OffsetDateTime = row.get(3);
             ts.unix_timestamp_nanos() as i64 / 1_000_000
         },
-        answered_at_ms: row.get::<Option<time::OffsetDateTime>, _>(4).map(|ts| {
-            ts.unix_timestamp_nanos() as i64 / 1_000_000
-        }),
+        answered_at_ms: row
+            .get::<Option<time::OffsetDateTime>, _>(4)
+            .map(|ts| ts.unix_timestamp_nanos() as i64 / 1_000_000),
         ended_at_ms: {
             let ts: time::OffsetDateTime = row.get(5);
             ts.unix_timestamp_nanos() as i64 / 1_000_000

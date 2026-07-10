@@ -36,6 +36,7 @@ export default function AntiFraud() {
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingRule, setEditingRule] = useState<AntiFraudRule | null>(null);
+  const [editingConfig, setEditingConfig] = useState<AntiFraudConfigItem | null>(null);
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState('rules');
 
@@ -73,7 +74,7 @@ export default function AntiFraud() {
     setModalVisible(true);
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string) => {
     try {
       await apiService.deleteAntiFraudRule(id);
       Message.success('删除成功');
@@ -86,17 +87,26 @@ export default function AntiFraud() {
   const handleSubmit = async () => {
     try {
       const values = await form.validate();
+      const limitVal = values.limit_number !== undefined && values.limit_number !== null && values.limit_number !== ''
+        ? Number(values.limit_number)
+        : null;
+
       if (editingRule) {
         await apiService.updateAntiFraudRule(editingRule.id, {
-          description: values.description,
-          enabled: values.enabled,
+          rule_type: editingRule.rule_type,
+          target_value: editingRule.target_value,
+          limit_number: limitVal,
+          enabled: values.enabled !== undefined ? values.enabled : true,
         });
         Message.success('更新成功');
       } else {
+        const generatedId = "rule_" + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
         await apiService.createAntiFraudRule({
+          id: generatedId,
           rule_type: values.rule_type,
-          value: values.value,
-          description: values.description,
+          target_value: values.target_value,
+          limit_number: limitVal,
+          enabled: true,
         });
         Message.success('创建成功');
       }
@@ -104,6 +114,18 @@ export default function AntiFraud() {
       loadData();
     } catch {
       /* 校验失败 */
+    }
+  };
+
+  const handleConfigSave = async () => {
+    if (!editingConfig) return;
+    try {
+      await apiService.updateAntiFraudConfig(editingConfig.config_key, editingConfig.config_value);
+      Message.success('配置已更新');
+      setEditingConfig(null);
+      await loadData();
+    } catch {
+      Message.error('配置更新失败');
     }
   };
 
@@ -118,14 +140,14 @@ export default function AntiFraud() {
       },
     },
     {
-      title: '值',
-      dataIndex: 'value',
+      title: '匹配目标值',
+      dataIndex: 'target_value',
       render: (v: string) => <span className="cell-mono cell-strong">{v}</span>,
     },
     {
-      title: '说明',
-      dataIndex: 'description',
-      render: (v: string) => v || '—',
+      title: '并发限制数',
+      dataIndex: 'limit_number',
+      render: (v: number | null) => (v !== null && v !== undefined ? `${v} 并发` : '无限制'),
     },
     {
       title: '状态',
@@ -183,6 +205,15 @@ export default function AntiFraud() {
       dataIndex: 'updated_at',
       width: 170,
       render: (d: string) => (d ? new Date(d).toLocaleString('zh-CN') : '—'),
+    },
+    {
+      title: '操作',
+      width: 90,
+      render: (_: unknown, record: AntiFraudConfigItem) => (
+        <Button type="text" size="small" icon={<IconEdit />} onClick={() => setEditingConfig({ ...record })}>
+          编辑
+        </Button>
+      ),
     },
   ];
 
@@ -259,24 +290,45 @@ export default function AntiFraud() {
             </Select>
           </FormItem>
           <FormItem
-            label="值"
-            field="value"
+            label="目标匹配值"
+            field="target_value"
             required
-            rules={[{ required: true, message: '请输入值' }]}
+            rules={[{ required: true, message: '请输入目标值' }]}
           >
             <Input
               placeholder="号码前缀（如 116）或 IP/CIDR（如 10.0.0.0/24）"
               disabled={!!editingRule}
             />
           </FormItem>
-          <FormItem label="说明" field="description">
-            <Input placeholder="可选" />
+          <FormItem label="并发限制" field="limit_number">
+            <Input placeholder="输入允许的最高并发数（留空代表无限制）" type="number" />
           </FormItem>
           {editingRule && (
             <FormItem label="启用" field="enabled" triggerPropName="checked">
               <Switch />
             </FormItem>
           )}
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`编辑配置 - ${editingConfig?.config_key ?? ''}`}
+        visible={!!editingConfig}
+        onOk={handleConfigSave}
+        onCancel={() => setEditingConfig(null)}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form layout="vertical">
+          <FormItem label="配置说明">
+            <div>{editingConfig?.description || '—'}</div>
+          </FormItem>
+          <FormItem label="配置值" required>
+            <Input
+              value={editingConfig?.config_value ?? ''}
+              onChange={(value) => setEditingConfig((current) => current ? { ...current, config_value: value } : current)}
+            />
+          </FormItem>
         </Form>
       </Modal>
     </div>

@@ -284,9 +284,19 @@ pub(crate) async fn handle_datagram(
                                 t_mut.active_forks.clear();
                             }
                             if let Some(ref orig_req) = t_mut.original_request {
-                                from_header = orig_req.headers.get("from").map(|v| v.as_str().to_string()).unwrap_or_default();
-                                to_header = orig_req.headers.get("to").map(|v| v.as_str().to_string()).unwrap_or_default();
-                                invite_cseq = orig_req.headers.get("cseq")
+                                from_header = orig_req
+                                    .headers
+                                    .get("from")
+                                    .map(|v| v.as_str().to_string())
+                                    .unwrap_or_default();
+                                to_header = orig_req
+                                    .headers
+                                    .get("to")
+                                    .map(|v| v.as_str().to_string())
+                                    .unwrap_or_default();
+                                invite_cseq = orig_req
+                                    .headers
+                                    .get("cseq")
                                     .and_then(|v| crate::sip::dialog::cseq_number(v.as_str()))
                                     .unwrap_or(1);
                                 request_user = orig_req.uri.user.clone();
@@ -295,16 +305,25 @@ pub(crate) async fn handle_datagram(
 
                         for (fork_cid, fork_gw) in forks_to_cancel {
                             if !fork_gw.is_empty() {
-                                let mut health = edge_state.gateway_health.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut health = edge_state
+                                    .gateway_health
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
                                 health.decrement_active(&fork_gw);
                                 let status = health.get_gateway_status(&fork_gw);
                                 drop(health);
-                                crate::timers::persist_gateway_health(edge_state, fork_gw.clone(), status);
+                                crate::timers::persist_gateway_health(
+                                    edge_state,
+                                    fork_gw.clone(),
+                                    status,
+                                );
                             }
 
                             if let Some(ref user) = request_user {
                                 let routes = edge_state.call_manager.routes();
-                                let gateway_target = routes.routes().iter()
+                                let gateway_target = routes
+                                    .routes()
+                                    .iter()
                                     .find(|r| r.target.gateway_id.as_str() == fork_gw)
                                     .map(|r| r.target.clone());
                                 if let Some(target) = gateway_target {
@@ -333,26 +352,39 @@ pub(crate) async fn handle_datagram(
                                         to = to_header,
                                         fork_cid = fork_cid,
                                         cseq = invite_cseq
-                                    ).into_bytes();
-                                    cancel_datagrams.push(PendingDatagram::new(target_addr, cancel_bytes));
+                                    )
+                                    .into_bytes();
+                                    cancel_datagrams
+                                        .push(PendingDatagram::new(target_addr, cancel_bytes));
                                 }
                             }
                         }
                     } else if sip_response.status_code >= 300 {
                         let mut fork_gw_to_decrement = None;
                         if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
-                            if let Some(pos) = t_mut.active_forks.iter().position(|(f_cid, _)| f_cid == &raw_external_call_id) {
+                            if let Some(pos) = t_mut
+                                .active_forks
+                                .iter()
+                                .position(|(f_cid, _)| f_cid == &raw_external_call_id)
+                            {
                                 let (_, gw) = t_mut.active_forks.remove(pos);
                                 fork_gw_to_decrement = Some(gw);
                             }
                         }
                         if let Some(gw_id) = fork_gw_to_decrement {
                             if !gw_id.is_empty() {
-                                let mut health = edge_state.gateway_health.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut health = edge_state
+                                    .gateway_health
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
                                 health.decrement_active(&gw_id);
                                 let status = health.get_gateway_status(&gw_id);
                                 drop(health);
-                                crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
+                                crate::timers::persist_gateway_health(
+                                    edge_state,
+                                    gw_id.clone(),
+                                    status,
+                                );
                             }
                         }
                     }
@@ -741,7 +773,17 @@ pub(crate) async fn handle_datagram(
                         health.record_failure(&gateway_id);
                     }
 
-                    if let (Some(db), Some((open, failures, state_str, last_failure_at, half_open_successes, active_calls))) = (
+                    if let (
+                        Some(db),
+                        Some((
+                            open,
+                            failures,
+                            state_str,
+                            last_failure_at,
+                            half_open_successes,
+                            active_calls,
+                        )),
+                    ) = (
                         edge_state.db_store.clone(),
                         health.get_gateway_status(&gateway_id),
                     ) {
@@ -1165,7 +1207,8 @@ pub(crate) async fn handle_datagram(
                         }
                     }
 
-                    let mut datagrams = vec![PendingDatagram::new(transaction.peer, forwarded_bytes)];
+                    let mut datagrams =
+                        vec![PendingDatagram::new(transaction.peer, forwarded_bytes)];
                     datagrams.extend(cancel_datagrams);
                     datagrams
                 }

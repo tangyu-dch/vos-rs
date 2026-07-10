@@ -274,7 +274,9 @@ pub(crate) fn spawn_session_timer_watchdog(
                         let tx = entry.value();
 
                         // Check 1: Balance exhaustion
-                        if let (Some(est), Some(max_dur)) = (tx.established_at, tx.max_duration_secs) {
+                        if let (Some(est), Some(max_dur)) =
+                            (tx.established_at, tx.max_duration_secs)
+                        {
                             if est.elapsed().as_secs() >= u64::from(max_dur) {
                                 warn!(
                                     call_id,
@@ -290,7 +292,9 @@ pub(crate) fn spawn_session_timer_watchdog(
                         }
 
                         // Check 2: Session Timer expiration
-                        if let (Some(expires), Some(last_refresh)) = (tx.session_expires, tx.last_session_refresh) {
+                        if let (Some(expires), Some(last_refresh)) =
+                            (tx.session_expires, tx.last_session_refresh)
+                        {
                             let elapsed = last_refresh.elapsed().as_secs();
                             if elapsed >= u64::from(expires) {
                                 warn!(
@@ -386,15 +390,23 @@ pub(crate) fn spawn_session_timer_watchdog(
 
                 // Real-time billing: settle the call on timeout.
                 if let Some(ref db) = edge_state.db_store {
-                    if let Some(call) = edge_state.call_manager.get(&call_core::CallId::new(call_id.clone())) {
+                    if let Some(call) = edge_state
+                        .call_manager
+                        .get(&call_core::CallId::new(call_id.clone()))
+                    {
                         let caller_user = call.caller.as_deref().and_then(|s| {
                             let idx = s.find("sip:")?;
                             let rest = &s[idx + 4..];
                             let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
-                            if end == 0 { None } else { Some(&rest[..end]) }
+                            if end == 0 {
+                                None
+                            } else {
+                                Some(&rest[..end])
+                            }
                         });
                         let callee = call.inbound.remote_uri.user.as_deref().unwrap_or("");
-                        let duration_ms = call.ended_at
+                        let duration_ms = call
+                            .ended_at
                             .and_then(|e| e.duration_since(call.started_at).ok())
                             .map(|d| d.as_millis() as i64)
                             .unwrap_or(0);
@@ -404,7 +416,9 @@ pub(crate) fn spawn_session_timer_watchdog(
                             let callee = callee.to_string();
                             let cid = call_id.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = db.settle_call(&cid, &user, &callee, duration_ms).await {
+                                if let Err(e) =
+                                    db.settle_call(&cid, &user, &callee, duration_ms).await
+                                {
                                     tracing::warn!(call_id = %cid, error = %e, "timeout settlement failed");
                                 }
                             });
@@ -601,7 +615,15 @@ pub(crate) fn persist_gateway_health(
     gateway_id: String,
     status: Option<(bool, i32, String, Option<std::time::SystemTime>, i32, i32)>,
 ) {
-    let Some((circuit_open, failures, state_str, last_failure_sys, half_open_successes, active_calls)) = status else {
+    let Some((
+        circuit_open,
+        failures,
+        state_str,
+        last_failure_sys,
+        half_open_successes,
+        active_calls,
+    )) = status
+    else {
         return;
     };
     let Some(db) = edge_state.db_store.clone() else {

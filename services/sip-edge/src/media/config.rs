@@ -1,3 +1,27 @@
+//! # 媒体配置
+//!
+//! 本模块定义了媒体处理的配置参数，包括：
+//!
+//! - **RTP 配置**：地址、端口范围、对称学习、反欺骗
+//! - **录音配置**：启用状态、目录、保留时间、磁盘保护
+//!
+//! ## 配置项
+//!
+//! | 环境变量 | 说明 | 默认值 |
+//! |---------|------|--------|
+//! | `VOS_RS_RTP_ADVERTISED_ADDR` | RTP 对外通告地址 | 127.0.0.1 |
+//! | `VOS_RS_RTP_PORT_MIN` | RTP 端口范围起始 | 40000 |
+//! | `VOS_RS_RTP_PORT_MAX` | RTP 端口范围结束 | 40100 |
+//! | `VOS_RS_RTP_SYMMETRIC_LEARNING` | 对称 RTP 学习 | true |
+//! | `VOS_RS_RTP_ANTI_SPOOFING` | RTP 反欺骗 | true |
+//! | `VOS_RS_RTP_SOURCE_RELEARN_SECS` | RTP 源重新学习间隔 | 30s |
+//! | `VOS_RS_RECORDING_ENABLED` | 录音开关 | false |
+//! | `VOS_RS_RECORDING_DIR` | 录音目录 | target/recordings |
+//! | `VOS_RS_RECORDING_RETENTION_SECS` | 录音保留时间 | 7 天 |
+//! | `VOS_RS_RECORDING_MIN_FREE_BYTES` | 最小磁盘空间 | 512MB |
+//! | `VOS_RS_RECORDING_MAX_FILE_BYTES` | 最大录音文件 | 128MB |
+//! | `VOS_RS_RECORDING_MAX_DURATION_SECS` | 最大录音时长 | 3600s |
+
 use std::env;
 use std::path::PathBuf;
 

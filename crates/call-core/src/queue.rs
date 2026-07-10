@@ -183,7 +183,7 @@ impl CallQueue {
                 // Order agents stably by ID to apply round robin index
                 let mut sorted_idle = idle_agent_ids;
                 sorted_idle.sort();
-                
+
                 let idx = self.round_robin_index % sorted_idle.len();
                 let chosen = sorted_idle[idx].clone();
                 self.round_robin_index = (idx + 1) % sorted_idle.len();

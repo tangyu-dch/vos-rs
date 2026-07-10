@@ -304,13 +304,18 @@ export const apiService = {
     const r = await api.get<AntiFraudConfigItem[]>('/anti-fraud/config');
     return r.data;
   },
-  async createAntiFraudRule(rule: { rule_type: string; value: string; description?: string }): Promise<void> {
+  async updateAntiFraudConfig(key: string, configValue: string): Promise<void> {
+    await api.put(`/anti-fraud/config/${encodeURIComponent(key)}`, {
+      config_value: configValue,
+    });
+  },
+  async createAntiFraudRule(rule: { id: string; rule_type: string; target_value: string; limit_number: number | null; enabled: boolean }): Promise<void> {
     await api.post('/anti-fraud/rules', rule);
   },
-  async updateAntiFraudRule(id: number, data: { description?: string; enabled?: boolean }): Promise<void> {
+  async updateAntiFraudRule(id: string, data: { rule_type: string; target_value: string; limit_number: number | null; enabled: boolean }): Promise<void> {
     await api.put(`/anti-fraud/rules/${id}`, data);
   },
-  async deleteAntiFraudRule(id: number): Promise<void> {
+  async deleteAntiFraudRule(id: string): Promise<void> {
     await api.delete(`/anti-fraud/rules/${id}`);
   },
 };

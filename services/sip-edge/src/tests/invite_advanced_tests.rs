@@ -1075,7 +1075,6 @@
         }
 
         let branch_1_call_id = &branches[0].0;
-        let branch_1_target = &branches[0].1;
         let ok_200 = format!(
             "SIP/2.0 200 OK\r\n\
              Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n\
@@ -1112,4 +1111,3 @@
             assert_eq!(health.health(canceled_gw).map(|h| h.active_calls()).unwrap_or(0), 0);
         }
     }
-

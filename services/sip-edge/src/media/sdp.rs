@@ -18,12 +18,12 @@
 //! 当 SDP 包含兼容的音频编解码器时，使用字节级快速重写，
 //! 避免完整的解析-修改-序列化流程。
 
-use std::str;
-use sip_core::HeaderMap;
-use sdp_core::{RtpEndpoint, SessionDescription};
 use crate::media::recording::MediaError;
 use rtp_core::AudioCodec;
+use sdp_core::{RtpEndpoint, SessionDescription};
+use sip_core::HeaderMap;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::str;
 
 pub fn is_sdp_body(headers: &HeaderMap, body: &[u8]) -> bool {
     if body.is_empty() {
@@ -57,7 +57,9 @@ pub fn validate_media_negotiation(body: &[u8]) -> Result<(), MediaError> {
         && !upper.contains("G722")
         && !upper.contains("G729")
     {
-        return Err(MediaError::Sdp(sdp_core::SdpError::MissingCompatibleAudioCodec));
+        return Err(MediaError::Sdp(
+            sdp_core::SdpError::MissingCompatibleAudioCodec,
+        ));
     }
     Ok(())
 }

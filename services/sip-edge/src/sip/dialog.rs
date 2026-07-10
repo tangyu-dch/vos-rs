@@ -1,13 +1,42 @@
+//! # SIP 对话管理
+//!
+//! 本模块实现了 SIP 对话（Dialog）的验证和管理。
+//!
+//! ## 对话验证
+//!
+//! 对话内请求（in-dialog request）必须满足：
+//! - From tag 与对话匹配
+//! - To tag 与对话匹配
+//! - CSeq 单调递增
+//! - 来源地址与对话匹配
+//!
+//! ## 错误处理
+//!
+//! | 错误 | 状态码 | 说明 |
+//! |------|--------|------|
+//! | `PeerMismatch` | 481 | 来源地址不匹配 |
+//! | `FromTagMismatch` | 481 | From tag 不匹配 |
+//! | `ToTagMismatch` | 481 | To tag 不匹配 |
+//! | `CSeqOutOfOrder` | 500 | CSeq 乱序 |
+
 use std::fmt;
 
+/// 对话验证错误类型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DialogValidationError {
+    /// 来源地址与对话不匹配
     PeerMismatch,
+    /// 缺少 From tag
     MissingFromTag,
+    /// From tag 不匹配
     FromTagMismatch,
+    /// To tag 不匹配
     ToTagMismatch,
+    /// 缺少 CSeq
     MissingCSeq,
+    /// 无效 CSeq
     InvalidCSeq,
+    /// CSeq 乱序
     CSeqOutOfOrder { received: u32, last: u32 },
 }
 

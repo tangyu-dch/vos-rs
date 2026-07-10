@@ -1,4 +1,11 @@
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+//! # 媒体工具函数
+//!
+//! 本模块提供媒体处理的通用工具函数，包括：
+//!
+//! - **时间戳**：Unix 毫秒时间戳、NTP 时间戳
+//! - **RTT 计算**：从 RTCP SR/RR 计算往返时延
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn unix_timestamp_millis() -> u128 {
     SystemTime::now()

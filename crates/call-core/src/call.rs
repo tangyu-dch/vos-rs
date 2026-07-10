@@ -1,7 +1,34 @@
+//! # 呼叫状态机
+//!
+//! 本模块定义了 SIP 呼叫的核心数据结构和状态转换逻辑。
+//!
+//! ## 呼叫状态
+//!
+//! ```text
+//! Routing → Ringing → Established → Terminated
+//!            ↓           ↓
+//!          Failed      Failed
+//! ```
+//!
+//! - **Routing**：INVITE 已接收，正在选择路由
+//! - **Ringing**：收到 180 Ringing
+//! - **Established**：收到 200 OK，通话建立
+//! - **Terminated**：收到 BYE，通话结束
+//! - **Failed**：呼叫失败（4xx/5xx/timeout）
+//!
+//! ## 呼叫分支（Call Leg）
+//!
+//! 每个呼叫有两个分支：
+//! - **Inbound**：主叫方到软交换
+//! - **Outbound**：软交换到被叫方（网关）
+
 use crate::{CallError, CallResult, GatewayId, RouteTarget, SelectedRoute};
 use sip_core::{SipRequest, SipUri};
 use std::time::SystemTime;
 
+/// SIP Call-ID：呼叫的全局唯一标识符。
+///
+/// 用于在呼叫管理器中标识不同的呼叫。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CallId(String);
 
@@ -15,6 +42,7 @@ impl CallId {
     }
 }
 
+/// 呼叫分支 ID：标识呼叫的 inbound/outbound 分支。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LegId(String);
 
@@ -28,28 +56,46 @@ impl LegId {
     }
 }
 
+/// 呼叫分支方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegDirection {
+    /// 入站（主叫方到软交换）
     Inbound,
+    /// 出站（软交换到网关）
     Outbound,
 }
 
+/// 呼叫分支状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegState {
+    /// 新建
     New,
+    /// 正在发送 INVITE
     Inviting,
+    /// 收到 180 Ringing
     Ringing,
+    /// 收到 200 OK
     Answered,
+    /// 已终止
     Terminated,
+    /// 失败
     Failed,
 }
 
+/// 呼叫状态。
+///
+/// 表示整个呼叫的生命周期状态，用于路由选择和 CDR 生成。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallState {
+    /// 正在选择路由（INVITE 已接收）
     Routing,
+    /// 收到 180 Ringing
     Ringing,
+    /// 通话建立（收到 200 OK）
     Established,
+    /// 通话终止（收到 BYE）
     Terminated,
+    /// 呼叫失败（4xx/5xx/timeout）
     Failed,
 }
 
@@ -67,35 +113,77 @@ impl CallState {
 
 use serde::{Deserialize, Serialize};
 
+/// 呼叫失败原因。
+///
+/// 包含 SIP 状态码和失败原因描述。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureCause {
+    /// SIP 状态码（如 408、503）
     pub status_code: Option<u16>,
+    /// 失败原因描述
     pub reason: String,
 }
 
+/// 呼叫分支：表示呼叫的一端（inbound 或 outbound）。
+///
+/// 每个呼叫有两个分支：
+/// - Inbound：主叫方到软交换
+/// - Outbound：软交换到网关
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallLeg {
+    /// 分支 ID
     pub id: LegId,
+    /// 分支方向
     pub direction: LegDirection,
+    /// 远端 SIP URI
     pub remote_uri: SipUri,
     pub state: LegState,
 }
 
+/// 呼叫：VoIP 通话的完整状态表示。
+///
+/// 每个 SIP INVITE 创建一个 `Call` 对象，包含：
+/// - 呼叫 ID、主叫号码、呼叫方向
+/// - 入站/出站分支（CallLeg）
+/// - 路由候选列表和当前选中索引
+/// - 呼叫状态、失败原因、时间戳
+/// - 录音路径、质量指标
+///
+/// 呼叫状态机：
+/// ```text
+/// Routing → Ringing → Established → Terminated
+///            ↓           ↓
+///          Failed      Failed
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Call {
+    /// 呼叫 ID（SIP Call-ID）
     pub id: CallId,
+    /// 主叫号码（From header）
     pub caller: Option<String>,
+    /// 入站分支（主叫方到软交换）
     pub inbound: CallLeg,
+    /// 出站分支（软交换到网关）
     pub outbound: Option<CallLeg>,
+    /// 出站分支历史（Failover 时记录）
     pub outbound_history: Vec<CallLeg>,
+    /// 路由候选列表（按优先级排序）
     pub candidates: Vec<SelectedRoute>,
+    /// 当前选中的候选索引
     pub current_candidate_index: usize,
+    /// 当前呼叫状态
     pub state: CallState,
+    /// 失败原因（仅在 Failed 状态时有值）
     pub failure_cause: Option<FailureCause>,
+    /// 呼叫开始时间
     pub started_at: SystemTime,
+    /// 呼叫接通时间（收到 200 OK）
     pub answered_at: Option<SystemTime>,
+    /// 呼叫结束时间（收到 BYE）
     pub ended_at: Option<SystemTime>,
+    /// 录音文件路径
     pub recording_path: Option<String>,
+    /// 呼叫方向（inbound/outbound）
     pub direction: String,
 }
 

@@ -1,3 +1,28 @@
+//! # SIP 事务管理
+//!
+//! 本模块实现了 SIP 事务状态机，包括：
+//!
+//! - **INVITE 客户端事务**：出站 INVITE 的重传和超时处理
+//! - **Non-INVITE 客户端事务**：出站 BYE/OPTIONS 等的重传
+//! - **INVITE 服务端事务**：入站 INVITE 的响应处理
+//! - **Non-INVITE 服务端事务**：入站 BYE/INFO 等的响应处理
+//!
+//! ## 事务状态机
+//!
+//! ```text
+//! INVITE 客户端事务：
+//!   调用 → Calling → Proceeding → Completed → Terminated
+//!
+//! Non-INVITE 客户端事务：
+//!   调用 → Trying → Proceeding → Completed → Terminated
+//! ```
+//!
+//! ## 重传机制
+//!
+//! - INVITE 事务使用 Timer A（初始重传间隔）和 Timer B（事务超时）
+//! - 非 INVITE 事务使用 Timer F（事务超时）
+//! - 重传间隔指数增长，最大不超过 Timer B/F
+
 use sip_core::{Method, SipRequest};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::net::UdpSocket;

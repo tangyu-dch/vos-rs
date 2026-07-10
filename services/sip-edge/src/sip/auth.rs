@@ -1,3 +1,25 @@
+//! # SIP Digest Auth 认证
+//!
+//! 本模块实现了 SIP Digest Auth 认证机制，包括：
+//!
+//! - **Digest 计算**：MD5(username:realm:password) + nonce + method + uri
+//! - **Nonce 管理**：动态 nonce 生成和防重放保护
+//! - **用户管理**：从环境变量或数据库加载用户凭据
+//!
+//! ## 配置
+//!
+//! | 环境变量 | 说明 | 默认值 |
+//! |---------|------|--------|
+//! | `VOS_RS_SIP_AUTH_USERS` | 用户列表（user:password, 格式） | 空 |
+//! | `VOS_RS_SIP_AUTH_REALM` | Digest Realm | vos-rs |
+//! | `VOS_RS_SIP_AUTH_NONCE` | 开发环境固定 nonce | vos-rs-dev-nonce |
+//!
+//! ## 安全机制
+//!
+//! - 动态 nonce 包含时间戳和计数器，防止重放攻击
+//! - nonce 有效期可配置
+//! - 密码使用 HA1 哈希存储
+
 use cdr_core::PostgresCdrStore;
 use dashmap::DashMap;
 use sip_core::SipRequest;
