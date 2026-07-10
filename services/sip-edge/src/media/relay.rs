@@ -136,6 +136,8 @@ pub struct MediaRelayState {
     recording_pool: Arc<RecordingPool>,
     dtmf_states: Arc<DashMap<u16, DtmfState>>,
     active_loops: Arc<DashMap<u16, Vec<tokio::sync::oneshot::Sender<()>>>>,
+    crypto_sessions: Arc<DashMap<u16, Arc<tokio::sync::Mutex<MediaCryptoSession>>>>,
+    pending_srtp: Arc<DashMap<u16, PendingSrtpConfig>>,
     state: Arc<Mutex<MediaRelayStateInner>>,
 }
 
@@ -149,6 +151,8 @@ impl Clone for MediaRelayState {
             recording_pool: Arc::clone(&self.recording_pool),
             dtmf_states: Arc::clone(&self.dtmf_states),
             active_loops: Arc::clone(&self.active_loops),
+            crypto_sessions: Arc::clone(&self.crypto_sessions),
+            pending_srtp: Arc::clone(&self.pending_srtp),
             state: Arc::clone(&self.state),
         }
     }
@@ -287,6 +291,12 @@ struct DtmfState {
     last_timestamp: Option<u32>,
 }
 
+#[derive(Debug, Clone)]
+struct PendingSrtpConfig {
+    suite: String,
+    key_params: String,
+}
+
 /// SRTP state for one RTP direction and SSRC.
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -325,6 +335,8 @@ impl MediaRelayState {
             )),
             dtmf_states: Arc::new(DashMap::new()),
             active_loops: Arc::new(DashMap::new()),
+            crypto_sessions: Arc::new(DashMap::new()),
+            pending_srtp: Arc::new(DashMap::new()),
             state: Arc::new(Mutex::new(MediaRelayStateInner {
                 next_port: DEFAULT_RTP_PORT_MIN,
                 leased_rtp_ports: HashSet::new(),
@@ -393,6 +405,8 @@ impl MediaRelayState {
                     recording_pool: Arc::clone(&self.recording_pool),
                     dtmf_states: Arc::clone(&self.dtmf_states),
                     active_loops: Arc::clone(&self.active_loops),
+                    crypto_sessions: Arc::clone(&self.crypto_sessions),
+                    pending_srtp: Arc::clone(&self.pending_srtp),
                     state: Arc::clone(&self.state),
                 };
                 let rtp_learning = config.symmetric_rtp_learning;
@@ -413,6 +427,8 @@ impl MediaRelayState {
                     recording_pool: Arc::clone(&self.recording_pool),
                     dtmf_states: Arc::clone(&self.dtmf_states),
                     active_loops: Arc::clone(&self.active_loops),
+                    crypto_sessions: Arc::clone(&self.crypto_sessions),
+                    pending_srtp: Arc::clone(&self.pending_srtp),
                     state: Arc::clone(&self.state),
                 };
                 tokio::spawn(relay_media_port(
@@ -460,6 +476,40 @@ impl MediaRelayState {
         self.targets.insert(relay_port, target);
     }
 
+    /// Registers the SDES-SRTP context for one local RTP direction.
+    #[allow(dead_code)]
+    pub(crate) fn register_srtp_session(
+        &self,
+        relay_port: u16,
+        suite: &str,
+        key_params: &str,
+        ssrc: u32,
+    ) -> Result<(), SrtpError> {
+        let session = MediaCryptoSession::from_sdes(suite, key_params, ssrc)?;
+        self.crypto_sessions
+            .insert(relay_port, Arc::new(tokio::sync::Mutex::new(session)));
+        Ok(())
+    }
+
+    pub(crate) fn register_srtp_offer(&self, relay_port: u16, suite: &str, key_params: &str) {
+        self.pending_srtp.insert(
+            relay_port,
+            PendingSrtpConfig {
+                suite: suite.to_string(),
+                key_params: key_params.to_string(),
+            },
+        );
+    }
+
+    pub(crate) fn clear_srtp_session(&self, relay_port: u16) {
+        self.crypto_sessions.remove(&relay_port);
+        self.pending_srtp.remove(&relay_port);
+        if let Some(peer_port) = self.peer_ports.get(&relay_port).map(|value| *value) {
+            self.crypto_sessions.remove(&peer_port);
+            self.pending_srtp.remove(&peer_port);
+        }
+    }
+
     pub fn clear_target(&self, relay_port: u16) {
         let rtp_port = rtp_port_for(relay_port).unwrap_or(relay_port);
         let peer_port = self.peer_ports.get(&rtp_port).map(|v| *v);
@@ -467,6 +517,7 @@ impl MediaRelayState {
         self.metrics.remove(&rtp_port);
         self.peer_ports.remove(&rtp_port);
         self.recordings.remove(&rtp_port);
+        self.clear_srtp_session(rtp_port);
         self.dtmf_states.remove(&rtp_port);
         {
             let mut state = self.state.lock().expect("media relay lock poisoned");
@@ -1691,6 +1742,8 @@ pub async fn spawn_rtp_relay_listeners(
             recording_pool: Arc::clone(&relay.recording_pool),
             dtmf_states: Arc::clone(&relay.dtmf_states),
             active_loops: Arc::clone(&relay.active_loops),
+            crypto_sessions: Arc::clone(&relay.crypto_sessions),
+            pending_srtp: Arc::clone(&relay.pending_srtp),
             state: Arc::clone(&relay.state),
         };
         let handle = tokio::spawn(relay_media_port(
@@ -1828,7 +1881,56 @@ async fn relay_media_port(
         relay.record_metric(local_port, |metrics| metrics.received_packets += 1);
         debug!(local_port, packet_kind = packet_kind.label(), size, %source, "received media packet");
 
-        let packet = &buffer[..size];
+        let mut decrypted_packet = None;
+        if packet_kind == MediaPacketKind::Rtp {
+            if let Ok(view) = RtpPacketView::parse(&buffer[..size]) {
+                let peer_port = relay.peer_ports.get(&local_port).map(|entry| *entry);
+                for port in [Some(local_port), peer_port].into_iter().flatten() {
+                    if relay.crypto_sessions.contains_key(&port) {
+                        continue;
+                    }
+                    let Some(offer) = relay.pending_srtp.get(&port).map(|entry| entry.clone())
+                    else {
+                        continue;
+                    };
+                    match MediaCryptoSession::from_sdes(&offer.suite, &offer.key_params, view.ssrc)
+                    {
+                        Ok(session) => {
+                            relay
+                                .crypto_sessions
+                                .insert(port, Arc::new(tokio::sync::Mutex::new(session)));
+                        }
+                        Err(error) => {
+                            relay.record_metric(local_port, |metrics| {
+                                metrics.dropped_invalid_packets += 1
+                            });
+                            warn!(%error, port, "invalid pending SDES-SRTP offer");
+                        }
+                    }
+                }
+            }
+            if let Some(session) = relay
+                .crypto_sessions
+                .get(&local_port)
+                .map(|entry| entry.clone())
+            {
+                let mut candidate = buffer[..size].to_vec();
+                let decrypted_len = match session.lock().await.decrypt(&mut candidate) {
+                    Ok(length) => length,
+                    Err(error) => {
+                        relay.record_metric(local_port, |metrics| {
+                            metrics.dropped_invalid_packets += 1
+                        });
+                        warn!(%error, local_port, "dropping RTP packet with invalid SRTP authentication");
+                        continue;
+                    }
+                };
+                candidate.truncate(decrypted_len);
+                decrypted_packet = Some(candidate);
+            }
+        }
+
+        let packet = decrypted_packet.as_deref().unwrap_or(&buffer[..size]);
         if packet.is_empty() {
             continue;
         }
@@ -1897,7 +1999,26 @@ async fn relay_media_port(
             }
         }
 
-        if let Err(error) = socket.send_to(packet, target).await {
+        let mut encrypted_packet = None;
+        if packet_kind == MediaPacketKind::Rtp {
+            if let Some(peer_port) = relay.peer_ports.get(&local_port).map(|entry| *entry) {
+                if let Some(session) = relay
+                    .crypto_sessions
+                    .get(&peer_port)
+                    .map(|entry| entry.clone())
+                {
+                    let mut candidate = packet.to_vec();
+                    if let Err(error) = session.lock().await.encrypt(&mut candidate) {
+                        relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
+                        warn!(%error, local_port, "failed to encrypt RTP packet for relay target");
+                        continue;
+                    }
+                    encrypted_packet = Some(candidate);
+                }
+            }
+        }
+        let outbound_packet = encrypted_packet.as_deref().unwrap_or(packet);
+        if let Err(error) = socket.send_to(outbound_packet, target).await {
             relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
             warn!(%error, %source, %target, local_port, packet_kind = packet_kind.label(), "failed to relay media packet");
             continue;

@@ -26,7 +26,7 @@ pub(crate) use sip::transaction;
 // Constants re-exported for tests
 pub(crate) use config::{
     DATABASE_URL_ENV, DEFAULT_GATEWAY_ENV, NATS_CDR_STREAM_ENV, NATS_CDR_SUBJECT_ENV, NATS_URL_ENV,
-    TLS_BIND_ENV, TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
+    TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
 };
 pub(crate) use timers::{
     calculate_mos_for_legs, spawn_client_transaction_retransmission, spawn_nat_keepalive_loop,
@@ -41,7 +41,7 @@ use nats_cdr::NatsCdrPublisher;
 use net::{
     create_tls_acceptor, handle_stream_connection, handle_ws_connection, SipStream, Transport,
 };
-use sdp_core::RtpEndpoint;
+use sdp_core::{RtpEndpoint, SessionDescription};
 use sip::{
     AuthConfig, AuthDecision, ClientTransactionKey, DialogValidationError, RequestTransactionKey,
 };
@@ -393,7 +393,9 @@ async fn main() -> Result<(), AnyError> {
     }
 
     // Start TLS listener (default derived port 5061) only when TLS material is configured.
-    let tls_bind_addr = env_non_empty(TLS_BIND_ENV)
+    let tls_bind_addr = edge_config
+        .tls_bind_addr
+        .clone()
         .or_else(|| {
             bind_addr.parse::<SocketAddr>().ok().map(|addr| {
                 let mut tls_addr = addr;
@@ -685,13 +687,6 @@ fn init_tracing() {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("sip_edge=info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
-}
-
-fn env_non_empty(name: &str) -> Option<String> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 async fn cdr_sinks_from_env() -> Result<CdrSinks, AnyError> {
@@ -2967,6 +2962,19 @@ fn prepare_rewritten_sdp(
     }
 
     let relay_endpoint = media_relay.allocate_endpoint(media_config)?;
+    if let Ok(sdp_text) = std::str::from_utf8(body) {
+        if let Ok(session) = SessionDescription::parse(sdp_text) {
+            if let Ok(crypto_attributes) = session.first_audio_srtp_crypto() {
+                if let Some(crypto) = crypto_attributes.first() {
+                    media_relay.register_srtp_offer(
+                        relay_endpoint.port,
+                        &crypto.suite,
+                        &crypto.key_params,
+                    );
+                }
+            }
+        }
+    }
     match media::rewrite_sdp_and_extract_endpoint(body, &relay_endpoint) {
         Ok((body, original_endpoint)) => Ok(Some(RewrittenSdp {
             original_endpoint: Some(original_endpoint),

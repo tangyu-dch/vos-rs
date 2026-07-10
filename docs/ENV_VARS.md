@@ -48,7 +48,7 @@
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `VOS_RS_SIP_TLS_BIND` | _(从 UDP bind 推导，端口 5061)_ | TLS 监听地址 |
+| `VOS_RS_SIP_TLS_BIND` | _(从 UDP bind 推导，端口 5061)_ | TLS 监听地址；配置后由 `EdgeConfig` 统一管理 |
 | `VOS_RS_SIP_TLS_CERT_PATH` | _(空，TLS 禁用)_ | TLS 证书文件路径 |
 | `VOS_RS_SIP_TLS_KEY_PATH` | _(空)_ | TLS 私钥文件路径 |
 | `VOS_RS_SIP_TLS_ALLOW_TEST_CERT` | `false` | 允许自签名/测试证书 |
