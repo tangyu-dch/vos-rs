@@ -791,4 +791,5 @@ mod tests {
     include!("tests/transaction_retransmit_tests.rs");
     include!("tests/dtmf_cdr_tests.rs");
     include!("tests/gateway_health_probe_tests.rs");
+    include!("tests/realtime_billing_tests.rs");
 }
