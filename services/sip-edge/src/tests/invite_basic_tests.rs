@@ -196,6 +196,45 @@
     }
 
     #[tokio::test]
+    async fn invite_with_newly_supported_codecs_passes() {
+        let edge_state = state_with_default_route();
+        let body = concat!(
+            "v=0\r\n",
+            "o=caller 1 1 IN IP4 192.0.2.10\r\n",
+            "s=caller\r\n",
+            "c=IN IP4 192.0.2.10\r\n",
+            "t=0 0\r\n",
+            "m=audio 49170 RTP/AVP 111 18\r\n",
+            "a=rtpmap:111 opus/48000/2\r\n",
+            "a=rtpmap:18 G729/8000\r\n"
+        );
+        let request = format!(
+            concat!(
+                "INVITE sip:13801380000@example.com SIP/2.0\r\n",
+                "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-sdp-supported-opus\r\n",
+                "Max-Forwards: 70\r\n",
+                "From: <sip:1001@example.com>;tag=from-tag\r\n",
+                "To: <sip:13801380000@example.com>\r\n",
+                "Call-ID: invite-sdp-supported-opus@example.com\r\n",
+                "CSeq: 1 INVITE\r\n",
+                "Content-Type: application/sdp\r\n",
+                "Content-Length: {}\r\n",
+                "\r\n",
+                "{}"
+            ),
+            body.len(),
+            body
+        );
+
+        let datagrams =
+            handle_datagram(request.as_bytes(), peer(), &edge_state, &edge_config()).await;
+
+        assert!(!datagrams.is_empty());
+        let response = datagram_text(&datagrams[0]);
+        assert!(response.starts_with("SIP/2.0 100 Trying\r\n"));
+    }
+
+    #[tokio::test]
     async fn invite_with_exhausted_rtp_ports_receives_service_unavailable() {
         let edge_state = state_with_default_route();
         let edge_config = EdgeConfig {
