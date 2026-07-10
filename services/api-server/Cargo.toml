@@ -25,3 +25,6 @@ time = { version = "0.3", features = ["parsing"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 storage-core = { path = "../../crates/storage-core" }
 prometheus-client = "0.23"
+jsonwebtoken = "9"
+md5 = "0.7"
+async-nats = "0.38"

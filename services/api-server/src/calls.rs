@@ -13,10 +13,19 @@ fn err(e: impl std::fmt::Display) -> E {
     (StatusCode::BAD_GATEWAY, e.to_string())
 }
 
+fn get_internal_token() -> Result<String, E> {
+    std::env::var("VOS_RS_INTERNAL_SECRET")
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "VOS_RS_INTERNAL_SECRET 未配置".to_string()))
+}
+
 /// 活跃呼叫列表（转发到 sip-edge 管理 API）。
 pub async fn list_active(State(state): State<AppState>) -> Result<Json<Value>, E> {
     let url = format!("{}/manage/active-calls", state.sip_manage_base);
-    let v: Value = reqwest::get(&url)
+    let token = get_internal_token()?;
+    let v: Value = reqwest::Client::new()
+        .get(&url)
+        .header("X-VOS-Token", token)
+        .send()
         .await
         .map_err(err)?
         .json()
@@ -28,7 +37,11 @@ pub async fn list_active(State(state): State<AppState>) -> Result<Json<Value>, E
 /// RTP/录音聚合指标（转发到 sip-edge 管理 API）。
 pub async fn media_metrics(State(state): State<AppState>) -> Result<Json<Value>, E> {
     let url = format!("{}/manage/media-metrics", state.sip_manage_base);
-    let v: Value = reqwest::get(&url)
+    let token = get_internal_token()?;
+    let v: Value = reqwest::Client::new()
+        .get(&url)
+        .header("X-VOS-Token", token)
+        .send()
         .await
         .map_err(err)?
         .json()
@@ -46,8 +59,10 @@ pub async fn terminate_call(
         "{}/manage/calls/{}/terminate",
         state.sip_manage_base, call_id
     );
+    let token = get_internal_token()?;
     let status = reqwest::Client::new()
         .post(&url)
+        .header("X-VOS-Token", token)
         .send()
         .await
         .map_err(err)?
@@ -70,7 +85,11 @@ pub async fn route_preview(
         state.sip_manage_base,
         urlencoding(&q.destination)
     );
-    let v: Value = reqwest::get(&url)
+    let token = get_internal_token()?;
+    let v: Value = reqwest::Client::new()
+        .get(&url)
+        .header("X-VOS-Token", token)
+        .send()
         .await
         .map_err(err)?
         .json()

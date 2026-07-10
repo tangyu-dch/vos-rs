@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
 use time::OffsetDateTime;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -26,19 +26,43 @@ use billing::{
 };
 use calls::{list_active, media_metrics, route_preview, terminate_call as calls_terminate};
 use cdr_core::{
-    CdrEvent, DashboardStats, DtmfEventRecord, HourlyTrend, PostgresCdrStore, SipGateway,
-    SipRegistration, SipRoute, SipUser,
+    AntiFraudRule, CdrEvent, DashboardStats, DtmfEventRecord, HourlyTrend, PostgresCdrStore,
+    SipGateway, SipRegistration, SipRoute, SipUser,
 };
 use metrics::{MediaMetricsSnapshot, Metrics};
 use numbers::{create_number, delete_number, list_numbers, update_number};
 use recording::{get_recording_audio, list_recordings};
 use report::{export_cdrs_csv, get_report_summary};
 
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Claims {
+    pub sub: String,  // 登录用户名
+    pub role: String, // 角色
+    pub exp: usize,   // 过期时间戳
+}
+
+#[derive(Debug, Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LoginResponse {
+    token: String,
+    username: String,
+    role: String,
+}
+
 #[derive(Clone)]
 pub(crate) struct AppState {
     store: Arc<PostgresCdrStore>,
     recording_storage: Arc<dyn storage_core::StorageBackend>,
     sip_manage_base: String,
+    nats_client: Option<async_nats::Client>,
+    jwt_secret: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +139,7 @@ struct CreateRouteRequest {
     priority: i32,
     gateway_id: String,
     cost: f64,
+    weight: Option<i32>,
     time_start: Option<String>,
     time_end: Option<String>,
 }
@@ -125,6 +150,7 @@ struct UpdateRouteRequest {
     priority: i32,
     gateway_id: String,
     cost: f64,
+    weight: Option<i32>,
     time_start: Option<String>,
     time_end: Option<String>,
 }
@@ -134,9 +160,37 @@ struct ApiError {
     error: String,
 }
 
+impl ApiError {
+    fn internal(msg: impl Into<String>) -> Self {
+        Self { error: msg.into() }
+    }
+
+    fn unauthorized(msg: impl Into<String>) -> Self {
+        Self { error: msg.into() }
+    }
+
+    fn forbidden(msg: impl Into<String>) -> Self {
+        Self { error: msg.into() }
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(self)).into_response()
+        let is_unauthorized = self.error.contains("用户名或密码错误")
+            || self.error.contains("缺少凭证")
+            || self.error.contains("凭证格式不正确")
+            || self.error.contains("无效 Token");
+
+        let is_forbidden = self.error.contains("越权") || self.error.contains("无权");
+
+        let status = if is_unauthorized {
+            StatusCode::UNAUTHORIZED
+        } else if is_forbidden {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (status, Json(self)).into_response()
     }
 }
 
@@ -266,9 +320,14 @@ async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<StatusCode, ApiError> {
+    // 强制转换为 HA1 哈希，防止明文存储
+    let ha1 = format!(
+        "{:x}",
+        md5::compute(format!("{}:{}:{}", req.username, "vos-rs", req.password).as_bytes())
+    );
     state
         .store
-        .insert_user(&req.username, &req.password)
+        .insert_user(&req.username, &ha1)
         .await
         .map_err(|e| ApiError {
             error: e.to_string(),
@@ -281,9 +340,14 @@ async fn update_user(
     Path(username): Path<String>,
     Json(req): Json<UpdateUserRequest>,
 ) -> Result<StatusCode, ApiError> {
+    // 强制转换为 HA1 哈希，防止明文存储
+    let ha1 = format!(
+        "{:x}",
+        md5::compute(format!("{}:{}:{}", username, "vos-rs", req.password).as_bytes())
+    );
     state
         .store
-        .insert_user(&username, &req.password)
+        .insert_user(&username, &ha1)
         .await
         .map_err(|e| ApiError {
             error: e.to_string(),
@@ -422,6 +486,17 @@ async fn delete_gateway(
     }
 }
 
+async fn publish_route_reload(nats: &Option<async_nats::Client>) {
+    if let Some(client) = nats {
+        if let Err(e) = client
+            .publish("vos_rs.routing.reload", axum::body::Bytes::from("reload"))
+            .await
+        {
+            tracing::warn!(error = %e, "NATS 路由重载广播发布失败");
+        }
+    }
+}
+
 async fn list_routes(State(state): State<AppState>) -> Result<Json<Vec<SipRoute>>, ApiError> {
     state
         .store
@@ -437,6 +512,7 @@ async fn create_route(
     State(state): State<AppState>,
     Json(req): Json<CreateRouteRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let weight = req.weight.unwrap_or(100).clamp(1, 10000);
     state
         .store
         .insert_route_with_cost(
@@ -445,6 +521,7 @@ async fn create_route(
             req.priority,
             &req.gateway_id,
             req.cost,
+            weight,
             req.time_start.as_deref(),
             req.time_end.as_deref(),
         )
@@ -452,6 +529,7 @@ async fn create_route(
         .map_err(|e| ApiError {
             error: e.to_string(),
         })?;
+    publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::CREATED)
 }
 
@@ -460,6 +538,7 @@ async fn update_route(
     Path(id): Path<String>,
     Json(req): Json<UpdateRouteRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let weight = req.weight.unwrap_or(100).clamp(1, 10000);
     state
         .store
         .insert_route_with_cost(
@@ -468,6 +547,7 @@ async fn update_route(
             req.priority,
             &req.gateway_id,
             req.cost,
+            weight,
             req.time_start.as_deref(),
             req.time_end.as_deref(),
         )
@@ -475,6 +555,7 @@ async fn update_route(
         .map_err(|e| ApiError {
             error: e.to_string(),
         })?;
+    publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }
 
@@ -486,6 +567,7 @@ async fn delete_route(
         error: e.to_string(),
     })?;
     if deleted {
+        publish_route_reload(&state.nats_client).await;
         Ok(StatusCode::OK)
     } else {
         Ok(StatusCode::NOT_FOUND)
@@ -505,12 +587,20 @@ async fn list_registrations(
         })
 }
 
-#[derive(Serialize)]
-struct AntiFraudRule {
-    id: i32,
+#[derive(Deserialize)]
+struct CreateAntiFraudRuleRequest {
+    id: String,
     rule_type: String,
-    value: String,
-    description: String,
+    target_value: String,
+    limit_number: Option<i32>,
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct UpdateAntiFraudRuleRequest {
+    rule_type: String,
+    target_value: String,
+    limit_number: Option<i32>,
     enabled: bool,
 }
 
@@ -521,40 +611,78 @@ struct AntiFraudConfigItem {
     description: String,
 }
 
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct CreateAntiFraudRuleRequest {
-    rule_type: String,
-    value: String,
-    description: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct UpdateAntiFraudRuleRequest {
-    description: Option<String>,
-    enabled: Option<bool>,
-}
-
-async fn list_anti_fraud_rules() -> Result<Json<Vec<AntiFraudRule>>, ApiError> {
-    Ok(Json(Vec::new()))
+async fn list_anti_fraud_rules(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<AntiFraudRule>>, ApiError> {
+    state
+        .store
+        .list_anti_fraud_rules()
+        .await
+        .map(Json)
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
 }
 
 async fn create_anti_fraud_rule(
-    Json(_req): Json<CreateAntiFraudRuleRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(serde_json::json!({"ok": true})))
+    State(state): State<AppState>,
+    Json(req): Json<CreateAntiFraudRuleRequest>,
+) -> Result<StatusCode, ApiError> {
+    let rule = AntiFraudRule {
+        id: req.id,
+        rule_type: req.rule_type,
+        target_value: req.target_value,
+        limit_number: req.limit_number,
+        enabled: req.enabled,
+    };
+    state
+        .store
+        .insert_anti_fraud_rule(&rule)
+        .await
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
+    Ok(StatusCode::CREATED)
 }
 
 async fn update_anti_fraud_rule(
-    Path(_id): Path<i32>,
-    Json(_req): Json<UpdateAntiFraudRuleRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(serde_json::json!({"ok": true})))
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateAntiFraudRuleRequest>,
+) -> Result<StatusCode, ApiError> {
+    let rule = AntiFraudRule {
+        id,
+        rule_type: req.rule_type,
+        target_value: req.target_value,
+        limit_number: req.limit_number,
+        enabled: req.enabled,
+    };
+    state
+        .store
+        .insert_anti_fraud_rule(&rule)
+        .await
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
+    Ok(StatusCode::OK)
 }
 
-async fn delete_anti_fraud_rule(Path(_id): Path<i32>) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(serde_json::json!({"ok": true})))
+async fn delete_anti_fraud_rule(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let deleted = state
+        .store
+        .delete_anti_fraud_rule(&id)
+        .await
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })?;
+    if deleted {
+        Ok(StatusCode::OK)
+    } else {
+        Ok(StatusCode::NOT_FOUND)
+    }
 }
 
 async fn list_anti_fraud_config() -> Result<Json<Vec<AntiFraudConfigItem>>, ApiError> {
@@ -563,7 +691,24 @@ async fn list_anti_fraud_config() -> Result<Json<Vec<AntiFraudConfigItem>>, ApiE
 
 async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse {
     let url = format!("{}/manage/media-metrics", state.sip_manage_base);
-    match reqwest::get(&url).await {
+    let secret = match env::var("VOS_RS_INTERNAL_SECRET") {
+        Ok(val) => val,
+        Err(_) => {
+            tracing::warn!("VOS_RS_INTERNAL_SECRET 未配置，跳过 sip-edge 指标拉取");
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+            );
+            return (headers, Metrics::encode_metrics());
+        }
+    };
+    match reqwest::Client::new()
+        .get(&url)
+        .header("X-VOS-Token", secret)
+        .send()
+        .await
+    {
         Ok(response) => match response.json::<MediaMetricsSnapshot>().await {
             Ok(snapshot) => Metrics::update_media_metrics(&snapshot),
             Err(error) => tracing::debug!(%error, "failed to decode sip-edge media metrics"),
@@ -579,6 +724,142 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     (headers, Metrics::encode_metrics())
 }
 
+use std::time::SystemTime;
+
+async fn login(
+    State(state): State<AppState>,
+    Json(req): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, ApiError> {
+    let admin_password = env::var("VOS_RS_ADMIN_PASSWORD")
+        .map_err(|_| ApiError::internal("VOS_RS_ADMIN_PASSWORD 未配置，无法登录"))?;
+    let operator_password = env::var("VOS_RS_OPERATOR_PASSWORD")
+        .map_err(|_| ApiError::internal("VOS_RS_OPERATOR_PASSWORD 未配置，无法登录"))?;
+    let financier_password = env::var("VOS_RS_FINANCIER_PASSWORD")
+        .map_err(|_| ApiError::internal("VOS_RS_FINANCIER_PASSWORD 未配置，无法登录"))?;
+
+    let role = if req.username == "admin" && req.password == admin_password {
+        "admin".to_string()
+    } else if req.username == "operator" && req.password == operator_password {
+        "operator".to_string()
+    } else if req.username == "financier" && req.password == financier_password {
+        "financier".to_string()
+    } else {
+        tracing::warn!(username = %req.username, "登录失败：用户名或密码错误");
+        return Err(ApiError::unauthorized("用户名或密码错误".to_string()));
+    };
+
+    tracing::info!(username = %req.username, role = %role, "登录成功");
+
+    let exp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as usize
+        + 24 * 3600;
+
+    let claims = Claims {
+        sub: req.username,
+        role,
+        exp,
+    };
+
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(&state.jwt_secret),
+    )
+    .map_err(|e| ApiError::internal(format!("JWT 签名失败: {}", e)))?;
+
+    Ok(Json(LoginResponse {
+        token,
+        username: claims.sub,
+        role: claims.role,
+    }))
+}
+
+fn role_allows(role: &str, method: &str, path: &str) -> bool {
+    if role == "admin" {
+        return true;
+    }
+
+    // SIP user credentials are security-sensitive and remain administrator-only.
+    if path.starts_with("/api/users") {
+        return false;
+    }
+
+    let finance_path = path.starts_with("/api/rates")
+        || path.starts_with("/api/accounts")
+        || path.starts_with("/api/ledger")
+        || path.starts_with("/api/billing");
+    if finance_path {
+        return role == "financier";
+    }
+
+    let operations_path = path.starts_with("/api/gateways")
+        || path.starts_with("/api/routes")
+        || path.starts_with("/api/numbers")
+        || path.starts_with("/api/anti-fraud")
+        || (path.starts_with("/api/calls/") && method == "POST");
+    if operations_path {
+        return role == "operator";
+    }
+
+    let read_only_path = path.starts_with("/api/dashboard")
+        || path.starts_with("/api/cdrs")
+        || path.starts_with("/api/registrations")
+        || path.starts_with("/api/recordings")
+        || path.starts_with("/api/reports")
+        || path == "/api/calls/active"
+        || path == "/api/route-preview"
+        || path == "/api/media/metrics";
+    if read_only_path {
+        return role == "operator" || role == "financier";
+    }
+
+    false
+}
+
+async fn jwt_auth(
+    State(state): State<AppState>,
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, ApiError> {
+    let auth_header = req
+        .headers()
+        .get("authorization")
+        .and_then(|h| h.to_str().ok());
+
+    let Some(auth_str) = auth_header else {
+        return Err(ApiError::unauthorized("缺少凭证".to_string()));
+    };
+
+    if !auth_str.starts_with("Bearer ") {
+        return Err(ApiError::unauthorized("凭证格式不正确".to_string()));
+    }
+
+    let token = &auth_str[7..];
+    let validation = Validation::default();
+
+    match decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(&state.jwt_secret),
+        &validation,
+    ) {
+        Ok(token_data) => {
+            let path = req.uri().path();
+            let role = &token_data.claims.role;
+            if !role_allows(role, req.method().as_str(), path) {
+                return Err(ApiError::forbidden(format!(
+                    "越权访问：角色 {role} 无权访问 {path}"
+                )));
+            }
+
+            req.extensions_mut().insert(token_data.claims);
+            Ok(next.run(req).await)
+        }
+        Err(e) => Err(ApiError::unauthorized(format!("无效 Token: {}", e))),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -589,31 +870,76 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let database_url =
-        env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/vos_rs".to_string());
+    let database_url = env::var("VOS_RS_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://localhost/vos_rs".to_string());
 
     let store = PostgresCdrStore::connect(&database_url).await?;
     let storage_config = storage_core::StorageConfig::from_env();
-    let recording_storage: Arc<dyn storage_core::StorageBackend> = Arc::new(
-        storage_core::local::LocalStorage::new(&storage_config.local_dir)?,
-    );
+    let recording_storage: Arc<dyn storage_core::StorageBackend> =
+        storage_core::create_storage(&storage_config).await?.into();
+    let nats_url =
+        env::var("VOS_RS_NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string());
+    let nats_client = async_nats::connect(&nats_url).await.ok();
     let sip_manage_base =
         env::var("VOS_RS_MANAGE_BASE").unwrap_or_else(|_| "http://127.0.0.1:8082".to_string());
+
+    let jwt_secret = match env::var("VOS_RS_API_JWT_SECRET") {
+        Ok(val) if !val.trim().is_empty() => val.into_bytes(),
+        _ => {
+            if env::var("VOS_RS_ENV").unwrap_or_default() == "production" {
+                panic!("致命安全错误: 生产环境下必须配置 VOS_RS_API_JWT_SECRET 密钥！");
+            } else {
+                tracing::warn!(
+                    "警告: 未配置 VOS_RS_API_JWT_SECRET，将回退为默认不安全密钥进行开发调试"
+                );
+                b"vos-rs-secret-key-change-in-production".to_vec()
+            }
+        }
+    };
 
     let state = AppState {
         store: Arc::new(store),
         recording_storage,
         sip_manage_base,
+        nats_client,
+        jwt_secret,
     };
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors_origins_raw = env::var("VOS_RS_API_ALLOWED_ORIGINS").unwrap_or_default();
+    let cors = CorsLayer::new();
+    let cors = if !cors_origins_raw.trim().is_empty() {
+        let mut origins = Vec::new();
+        for origin in cors_origins_raw.split(',') {
+            if let Ok(val) = origin.trim().parse::<HeaderValue>() {
+                origins.push(val);
+            }
+        }
+        cors.allow_origin(origins)
+    } else {
+        tracing::warn!("警告: 未配置 VOS_RS_API_ALLOWED_ORIGINS，默认只允许 localhost:3000 和 localhost:8080 开发域名跨域访问");
+        cors.allow_origin([
+            "http://localhost:3000".parse().unwrap(),
+            "http://localhost:8080".parse().unwrap(),
+        ])
+    };
+    let cors = cors
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+        ])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+        ]);
 
-    let app = Router::new()
+    let public_routes = Router::new()
         .route("/health", get(health))
         .route("/metrics", get(prometheus_metrics))
+        .route("/api/auth/login", post(login));
+
+    let protected_routes = Router::new()
         .route("/api/dashboard/stats", get(get_dashboard_stats))
         .route("/api/dashboard/trend", get(get_dashboard_trend))
         .route("/api/cdrs", get(list_cdrs))
@@ -657,6 +983,14 @@ async fn main() -> anyhow::Result<()> {
             put(update_anti_fraud_rule).delete(delete_anti_fraud_rule),
         )
         .route("/api/anti-fraud/config", get(list_anti_fraud_config))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            jwt_auth,
+        ));
+
+    let app = Router::new()
+        .merge(public_routes)
+        .merge(protected_routes)
         .with_state(state)
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -672,4 +1006,35 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::role_allows;
+
+    #[test]
+    fn admin_can_access_every_protected_route() {
+        assert!(role_allows("admin", "POST", "/api/accounts/alice/credit"));
+        assert!(role_allows("admin", "DELETE", "/api/users/alice"));
+    }
+
+    #[test]
+    fn operator_cannot_access_finance_or_user_credentials() {
+        assert!(!role_allows(
+            "operator",
+            "POST",
+            "/api/accounts/alice/credit"
+        ));
+        assert!(!role_allows("operator", "PUT", "/api/users/alice"));
+        assert!(role_allows("operator", "POST", "/api/routes"));
+        assert!(role_allows("operator", "POST", "/api/calls/id/terminate"));
+    }
+
+    #[test]
+    fn financier_cannot_change_operations_configuration() {
+        assert!(!role_allows("financier", "POST", "/api/routes"));
+        assert!(!role_allows("financier", "POST", "/api/gateways"));
+        assert!(role_allows("financier", "POST", "/api/billing/reconcile"));
+        assert!(role_allows("financier", "GET", "/api/cdrs"));
+    }
 }
