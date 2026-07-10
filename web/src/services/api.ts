@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { clearSession, getAccessToken, saveSession, type AuthSession, isUserRole } from './auth';
 import type {
   CdrEvent,
   SipUser,
@@ -28,9 +29,45 @@ const api = axios.create({
   },
 });
 
+api.interceptors.request.use((config) => {
+  const token = getAccessToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && window.location.pathname !== '/login') {
+      clearSession();
+      window.location.assign('/login');
+    }
+    return Promise.reject(error);
+  },
+);
+
 // ===== 仪表板 API =====
 
 export const apiService = {
+  async login(username: string, password: string): Promise<AuthSession> {
+    const response = await api.post<{ token: string; username: string; role: string }>(
+      '/auth/login',
+      { username, password },
+    );
+    if (!isUserRole(response.data.role)) {
+      throw new Error('服务器返回了未知角色');
+    }
+    const session: AuthSession = {
+      token: response.data.token,
+      username: response.data.username,
+      role: response.data.role,
+    };
+    saveSession(session);
+    return session;
+  },
+
   // 获取仪表板统计
   async getDashboardStats(): Promise<DashboardStats> {
     const response = await api.get<DashboardStats>('/dashboard/stats');
@@ -145,8 +182,11 @@ export const apiService = {
     const r = await api.get<RecordingInfo[]>('/recordings');
     return r.data;
   },
-  recordingAudioUrl(callId: string): string {
-    return `/api/recordings/${encodeURIComponent(callId)}/audio`;
+  async getRecordingAudio(callId: string): Promise<Blob> {
+    const response = await api.get<Blob>(`/recordings/${encodeURIComponent(callId)}/audio`, {
+      responseType: 'blob',
+    });
+    return response.data;
   },
 
   // ===== 报表 =====
@@ -156,11 +196,12 @@ export const apiService = {
     });
     return r.data;
   },
-  reportExportUrl(start?: string, end?: string): string {
-    const p = new URLSearchParams();
-    if (start) p.set('start_time', start);
-    if (end) p.set('end_time', end);
-    return `/api/reports/export?${p.toString()}`;
+  async exportReport(start?: string, end?: string): Promise<Blob> {
+    const response = await api.get<Blob>('/reports/export', {
+      params: { start_time: start, end_time: end },
+      responseType: 'blob',
+    });
+    return response.data;
   },
 
   // ===== 计费：费率 =====

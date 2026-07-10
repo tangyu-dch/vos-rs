@@ -24,6 +24,7 @@ import '@arco-design/web-react/es/Table/style/css.js'
 import '@arco-design/web-react/es/Tabs/style/css.js'
 import '@arco-design/web-react/es/Tag/style/css.js'
 import App from './App'
+import { AuthProvider } from './auth/AuthContext'
 import './index.css'
 
 // Initialize theme from localStorage
@@ -33,7 +34,9 @@ document.documentElement.setAttribute('data-theme', savedTheme)
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <App />
+      <AuthProvider>
+        <App />
+      </AuthProvider>
     </BrowserRouter>
   </React.StrictMode>,
 )

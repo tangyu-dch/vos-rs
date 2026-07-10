@@ -9,6 +9,7 @@ import {
   Alert,
   Empty,
   Tag,
+  Message,
 } from '@arco-design/web-react';
 import { IconSearch, IconDownload } from '@arco-design/web-react/icon';
 import { apiService } from '@/services/api';
@@ -239,9 +240,19 @@ export default function Reports() {
     };
   }, []);
 
-  const handleExport = () => {
+  const handleExport = async () => {
     const opts = activeRange === '全部' ? undefined : quickRange(activeRange);
-    window.open(apiService.reportExportUrl(opts?.start, opts?.end));
+    try {
+      const blob = await apiService.exportReport(opts?.start, opts?.end);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'vos-report.csv';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      Message.error('导出报表失败');
+    }
   };
 
   if (loading && !summary) {

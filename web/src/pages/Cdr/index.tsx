@@ -49,6 +49,22 @@ export default function Cdr() {
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [selectedCdr, setSelectedCdr] = useState<CdrEvent | null>(null);
   const [hasRecording, setHasRecording] = useState(false);
+  const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    setRecordingUrl(null);
+    if (!selectedCdr || !hasRecording) return;
+    apiService.getRecordingAudio(selectedCdr.call_id)
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob);
+        setRecordingUrl(objectUrl);
+      })
+      .catch(() => Message.error('加载录音失败'));
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [selectedCdr, hasRecording]);
 
   const loadCdrs = useCallback(
     async (page = 1, pageSize = pagination.pageSize) => {
@@ -355,12 +371,12 @@ export default function Cdr() {
                 <audio
                   controls
                   preload="none"
-                  src={apiService.recordingAudioUrl(selectedCdr.call_id)}
+                  src={recordingUrl ?? undefined}
                   style={{ width: '100%' }}
                 />
                 <div style={{ marginTop: 8 }}>
                   <a
-                    href={apiService.recordingAudioUrl(selectedCdr.call_id)}
+                    href={recordingUrl ?? undefined}
                     download
                     style={{ fontSize: 13, color: 'var(--accent)' }}
                   >

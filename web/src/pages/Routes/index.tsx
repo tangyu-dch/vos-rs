@@ -140,6 +140,12 @@ export default function RoutesPage() {
       render: (v: number) => <span className="cell-mono">¥{v.toFixed(4)}</span>,
     },
     {
+      title: '权重',
+      dataIndex: 'weight',
+      width: 80,
+      render: (v: number) => <span className="cell-mono">{v}</span>,
+    },
+    {
       title: '时间窗口',
       dataIndex: 'time_start',
       width: 150,
@@ -275,6 +281,9 @@ export default function RoutesPage() {
           </FormItem>
           <FormItem label="成本" field="cost" required rules={[{ required: true, message: '请输入成本' }]}>
             <InputNumber placeholder="0.0100" min={0} step={0.0001} precision={4} style={{ width: '100%' }} />
+          </FormItem>
+          <FormItem label="权重" field="weight" extra="相同优先级/成本条件下，权重越高越优先被选中">
+            <InputNumber placeholder="100" min={1} max={10000} style={{ width: '100%' }} />
           </FormItem>
           <FormItem label="生效起始" field="time_start" extra="HH:MM，留空表示不限时">
             <Input placeholder="如 09:00" />

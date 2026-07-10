@@ -1,5 +1,7 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '@/auth/AuthContext';
+import { canAccessPage, roleLabel } from '@/services/auth';
 import './Layout.css';
 
 interface LayoutProps {
@@ -48,6 +50,7 @@ export default function Layout({ children }: LayoutProps) {
   const [isTablet, setIsTablet] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const { session, logout } = useAuth();
 
   const selectedKey =
     location.pathname === '/' ? '/dashboard' : location.pathname;
@@ -111,7 +114,7 @@ export default function Layout({ children }: LayoutProps) {
           {NAV_GROUPS.map((g) => (
             <div className="sidebar-nav__group" key={g}>
               {!collapsed && <div className="sidebar-nav__group-title">{g}</div>}
-              {NAV_ITEMS.filter((it) => it.group === g).map((item) => (
+              {NAV_ITEMS.filter((it) => it.group === g && session && canAccessPage(session.role, it.key)).map((item) => (
                 <div
                   key={item.key}
                   className={`sidebar-nav__item ${selectedKey === item.key ? 'is-active' : ''}`}
@@ -193,7 +196,16 @@ export default function Layout({ children }: LayoutProps) {
               </span>
             </button>
 
-            <div className="topbar-avatar">A</div>
+            <button
+              className="topbar-avatar"
+              title={`${session?.username ?? ''} · ${session ? roleLabel(session.role) : ''}（点击退出）`}
+              onClick={() => {
+                logout();
+                navigate('/login', { replace: true });
+              }}
+            >
+              {(session?.username || 'A').slice(0, 1).toUpperCase()}
+            </button>
           </div>
         </header>
 
@@ -205,7 +217,7 @@ export default function Layout({ children }: LayoutProps) {
       {isMobile && (
         <nav className="bottombar">
           <div className="bottombar-inner">
-            {TAB_ITEMS.map((tab) => (
+            {TAB_ITEMS.filter((tab) => tab.key === '/more' || (session && canAccessPage(session.role, tab.key))).map((tab) => (
               <button
                 key={tab.key}
                 className={`tab-item ${selectedKey === tab.key || (tab.key === '/more' && sidebarOpen) ? 'tab-item--active' : ''}`}

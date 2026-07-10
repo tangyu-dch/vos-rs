@@ -11,6 +11,7 @@ import {
 } from '@arco-design/web-react';
 import { IconRefresh, IconDelete } from '@arco-design/web-react/icon';
 import { apiService } from '@/services/api';
+import { useAuth } from '@/auth/AuthContext';
 import type { ActiveCall } from '@/types';
 import { extractSipUser } from '@/utils/sip';
 
@@ -28,6 +29,7 @@ function duration(ms: number): string {
 }
 
 export default function ActiveCalls() {
+  const { session } = useAuth();
   const [calls, setCalls] = useState<ActiveCall[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +112,7 @@ export default function ActiveCalls() {
       dataIndex: 'actions',
       width: 100,
       fixed: 'right' as const,
-      render: (_: any, r: ActiveCall) => (
+      render: (_: any, r: ActiveCall) => session?.role === 'financier' ? null : (
         <Popconfirm title="确认强制拆线？" icon={null} onOk={() => handleTerminate(r.call_id)}>
           <Button type="text" size="small" status="danger" icon={<IconDelete />}>
             拆线

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
   Card,
   Table,
@@ -8,7 +8,7 @@ import {
   Empty,
   Tag,
 } from '@arco-design/web-react';
-import { IconRefresh, IconDownload } from '@arco-design/web-react/icon';
+import { IconRefresh, IconDownload, IconPlayArrow, IconPause } from '@arco-design/web-react/icon';
 import { apiService } from '@/services/api';
 import type { RecordingInfo } from '@/types';
 
@@ -23,6 +23,10 @@ export default function Recordings() {
   const [data, setData] = useState<RecordingInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [loadingAudio, setLoadingAudio] = useState(false);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,9 +41,59 @@ export default function Recordings() {
     }
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const playRecording = async (callId: string) => {
+    // If already playing this recording, pause it
+    if (playingId === callId && audioRef.current) {
+      if (audioRef.current.paused) {
+        audioRef.current.play();
+      } else {
+        audioRef.current.pause();
+      }
+      return;
+    }
+
+    // Stop current playback and release URL
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+    }
+
+    // Load new recording
+    setLoadingAudio(true);
+    try {
+      const blob = await apiService.getRecordingAudio(callId);
+      const url = URL.createObjectURL(blob);
+      setAudioUrl(url);
+      setPlayingId(callId);
+    } catch {
+      Message.error('加载录音失败');
+      setPlayingId(null);
+      setAudioUrl(null);
+    } finally {
+      setLoadingAudio(false);
+    }
+  };
+
+  const handleAudioEnded = () => {
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+    }
+    setPlayingId(null);
+    setAudioUrl(null);
+  };
+
+  const downloadRecording = async (callId: string) => {
+    try {
+      const blob = await apiService.getRecordingAudio(callId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${callId}.wav`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      Message.error('下载录音失败');
+    }
+  };
 
   const columns = [
     {
@@ -76,17 +130,30 @@ export default function Recordings() {
       title: '在线试听',
       dataIndex: 'call_id',
       width: 340,
-      render: (callId: string, record: RecordingInfo) =>
-        record.has_audio ? (
-          <audio
-            controls
-            preload="none"
-            src={apiService.recordingAudioUrl(callId)}
-            style={{ height: 32, verticalAlign: 'middle' }}
-          />
-        ) : (
-          '—'
-        ),
+      render: (callId: string, record: RecordingInfo) => {
+        if (!record.has_audio) return '—';
+        const isPlaying = playingId === callId;
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Button
+              type="text"
+              size="small"
+              icon={isPlaying && !audioRef.current?.paused ? <IconPause /> : <IconPlayArrow />}
+              loading={loadingAudio && playingId === callId}
+              onClick={() => playRecording(callId)}
+            />
+            {isPlaying && audioUrl && (
+              <audio
+                ref={audioRef}
+                controls
+                src={audioUrl}
+                onEnded={handleAudioEnded}
+                style={{ height: 32, verticalAlign: 'middle', flex: 1 }}
+              />
+            )}
+          </div>
+        );
+      },
     },
     {
       title: '操作',
@@ -99,7 +166,7 @@ export default function Recordings() {
             type="text"
             size="small"
             icon={<IconDownload />}
-            onClick={() => window.open(apiService.recordingAudioUrl(record.call_id))}
+            onClick={() => downloadRecording(record.call_id)}
           >
             下载
           </Button>

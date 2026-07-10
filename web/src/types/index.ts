@@ -55,6 +55,7 @@ export interface SipRoute {
   priority: number;
   gateway_id: string;
   cost: number;
+  weight: number;
   time_start?: string;
   time_end?: string;
   created_at?: string;

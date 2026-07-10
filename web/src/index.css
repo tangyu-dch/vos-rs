@@ -1351,3 +1351,29 @@ input {
 [data-theme='dark'] .arco-tabs-content {
   background: transparent !important;
 }
+
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--bg-root);
+  padding: 24px;
+}
+
+.login-card {
+  width: min(100%, 400px);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-lg);
+}
+
+.login-brand {
+  color: var(--accent);
+  font: 700 32px var(--font-display);
+  text-align: center;
+}
+
+.login-subtitle {
+  color: var(--text-secondary);
+  text-align: center;
+  margin: 8px 0 28px;
+}

@@ -54,13 +54,4 @@ describe('apiService', () => {
     expect(typeof apiService.terminateCall).toBe('function');
   });
 
-  it('recordingAudioUrl returns correct URL', () => {
-    const url = apiService.recordingAudioUrl('test-call-id');
-    expect(url).toBe('/api/recordings/test-call-id/audio');
-  });
-
-  it('recordingAudioUrl encodes special characters', () => {
-    const url = apiService.recordingAudioUrl('call@example.com');
-    expect(url).toBe('/api/recordings/call%40example.com/audio');
-  });
 });
