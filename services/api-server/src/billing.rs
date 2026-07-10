@@ -51,6 +51,20 @@ fn err(e: impl std::fmt::Display) -> E {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
+fn invalid(message: impl Into<String>) -> E {
+    (StatusCode::BAD_REQUEST, message.into())
+}
+
+fn validate_rate(prefix: &str, rate_per_minute: f64) -> Result<(), E> {
+    if prefix.len() > 64 || !prefix.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(invalid("费率前缀必须是 64 个字符以内的数字"));
+    }
+    if !rate_per_minute.is_finite() || !(0.0..=1_000_000.0).contains(&rate_per_minute) {
+        return Err(invalid("费率必须是 0 到 1000000 之间的有效数字"));
+    }
+    Ok(())
+}
+
 pub async fn list_rates(State(state): State<AppState>) -> Result<Json<Vec<BillingRate>>, E> {
     state.store.list_rates().await.map(Json).map_err(err)
 }
@@ -59,6 +73,7 @@ pub async fn create_rate(
     State(state): State<AppState>,
     Json(b): Json<RateBody>,
 ) -> Result<StatusCode, E> {
+    validate_rate(&b.prefix, b.rate_per_minute)?;
     state
         .store
         .upsert_rate(
@@ -77,6 +92,7 @@ pub async fn update_rate(
     Path(id): Path<String>,
     Json(b): Json<RateUpdate>,
 ) -> Result<StatusCode, E> {
+    validate_rate(&b.prefix, b.rate_per_minute)?;
     state
         .store
         .upsert_rate(&id, &b.prefix, b.rate_per_minute, b.description.as_deref())
@@ -106,6 +122,12 @@ pub async fn credit_account(
     Path(username): Path<String>,
     Json(b): Json<CreditBody>,
 ) -> Result<Json<CreditResult>, E> {
+    if !b.amount.is_finite() || !(0.01..=100_000_000.0).contains(&b.amount) {
+        return Err(invalid("充值金额必须是 0.01 到 100000000 之间的有效数字"));
+    }
+    if username.is_empty() || username.len() > 128 {
+        return Err(invalid("账户名长度无效"));
+    }
     let balance = state
         .store
         .credit_account(&username, b.amount)
@@ -140,10 +162,37 @@ pub async fn reconcile(
         .as_deref()
         .and_then(parse_dt)
         .unwrap_or(end - Duration::days(30));
+    if start > end {
+        return Err(invalid("对账开始时间不能晚于结束时间"));
+    }
     state
         .store
         .reconcile_billing(start, end)
         .await
         .map(Json)
         .map_err(err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_rate, StatusCode};
+
+    #[test]
+    fn rejects_negative_or_non_finite_rates() {
+        assert!(validate_rate("86", -0.01).is_err());
+        assert!(validate_rate("86", f64::NAN).is_err());
+        assert!(validate_rate("86", f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn accepts_numeric_rate_prefixes() {
+        assert!(validate_rate("8613", 0.35).is_ok());
+        assert!(validate_rate("", 0.0).is_ok());
+    }
+
+    #[test]
+    fn returns_bad_request_for_invalid_input() {
+        let error = super::invalid("invalid");
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+    }
 }
