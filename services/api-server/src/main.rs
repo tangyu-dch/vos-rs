@@ -404,6 +404,7 @@ async fn create_gateway(
         caller_id_mode: req.caller_id_mode,
         virtual_caller: req.virtual_caller,
         current_concurrent: Some(0),
+        circuit_state: Some("closed".to_string()),
         account_id: req.account_id,
         max_concurrent: req.max_concurrent,
         enabled: req.enabled,
@@ -453,6 +454,7 @@ async fn update_gateway(
         caller_id_mode: req.caller_id_mode.or_else(|| old.caller_id_mode.clone()),
         virtual_caller: req.virtual_caller.or_else(|| old.virtual_caller.clone()),
         current_concurrent: old.current_concurrent,
+        circuit_state: old.circuit_state.clone(),
         account_id: req.account_id.or(old.account_id),
         max_concurrent: req.max_concurrent.or(old.max_concurrent),
         enabled: req.enabled.or(old.enabled),
@@ -1012,6 +1014,8 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::role_allows;
 
+    // ===== Unit tests for role_allows =====
+
     #[test]
     fn admin_can_access_every_protected_route() {
         assert!(role_allows("admin", "POST", "/api/accounts/alice/credit"));
@@ -1036,5 +1040,106 @@ mod tests {
         assert!(!role_allows("financier", "POST", "/api/gateways"));
         assert!(role_allows("financier", "POST", "/api/billing/reconcile"));
         assert!(role_allows("financier", "GET", "/api/cdrs"));
+    }
+
+    #[test]
+    fn operator_can_read_cdrs_and_recordings() {
+        assert!(role_allows("operator", "GET", "/api/cdrs"));
+        assert!(role_allows("operator", "GET", "/api/recordings"));
+        assert!(role_allows("operator", "GET", "/api/dashboard/stats"));
+        assert!(role_allows("operator", "GET", "/api/registrations"));
+    }
+
+    #[test]
+    fn operator_can_access_operations_endpoints() {
+        assert!(role_allows("operator", "POST", "/api/routes"));
+        assert!(role_allows("operator", "POST", "/api/gateways"));
+        assert!(role_allows("operator", "POST", "/api/numbers"));
+        assert!(role_allows("operator", "POST", "/api/anti-fraud/rules"));
+        assert!(role_allows("operator", "POST", "/api/calls/id/terminate"));
+    }
+
+    #[test]
+    fn operator_cannot_access_finance_endpoints() {
+        assert!(!role_allows("operator", "GET", "/api/accounts"));
+        assert!(!role_allows("operator", "POST", "/api/rates"));
+        assert!(!role_allows("operator", "POST", "/api/billing/reconcile"));
+        assert!(!role_allows("operator", "GET", "/api/ledger"));
+    }
+
+    #[test]
+    fn operator_cannot_access_user_credentials() {
+        assert!(!role_allows("operator", "GET", "/api/users"));
+        assert!(!role_allows("operator", "POST", "/api/users"));
+        assert!(!role_allows("operator", "PUT", "/api/users/alice"));
+        assert!(!role_allows("operator", "DELETE", "/api/users/alice"));
+    }
+
+    #[test]
+    fn financier_can_access_billing_endpoints() {
+        assert!(role_allows("financier", "GET", "/api/cdrs"));
+        assert!(role_allows("financier", "GET", "/api/rates"));
+        assert!(role_allows("financier", "POST", "/api/rates"));
+        assert!(role_allows("financier", "GET", "/api/accounts"));
+        assert!(role_allows("financier", "POST", "/api/billing/reconcile"));
+        assert!(role_allows("financier", "GET", "/api/ledger"));
+    }
+
+    #[test]
+    fn financier_cannot_access_operations_endpoints() {
+        assert!(!role_allows("financier", "POST", "/api/routes"));
+        assert!(!role_allows("financier", "POST", "/api/gateways"));
+        assert!(!role_allows("financier", "POST", "/api/numbers"));
+        assert!(!role_allows("financier", "POST", "/api/anti-fraud/rules"));
+    }
+
+    #[test]
+    fn financier_cannot_access_user_credentials() {
+        assert!(!role_allows("financier", "GET", "/api/users"));
+        assert!(!role_allows("financier", "POST", "/api/users"));
+    }
+
+    #[test]
+    fn no_role_cannot_access_anything() {
+        assert!(!role_allows("unknown", "GET", "/api/cdrs"));
+        assert!(!role_allows("unknown", "POST", "/api/routes"));
+        assert!(!role_allows("unknown", "GET", "/api/accounts"));
+        assert!(!role_allows("", "GET", "/api/cdrs"));
+    }
+
+    #[test]
+    fn admin_can_access_all_read_only_endpoints() {
+        assert!(role_allows("admin", "GET", "/api/cdrs"));
+        assert!(role_allows("admin", "GET", "/api/recordings"));
+        assert!(role_allows("admin", "GET", "/api/dashboard/stats"));
+        assert!(role_allows("admin", "GET", "/api/registrations"));
+        assert!(role_allows("admin", "GET", "/api/media/metrics"));
+        assert!(role_allows("admin", "GET", "/api/route-preview"));
+    }
+
+    #[test]
+    fn admin_can_access_all_write_endpoints() {
+        assert!(role_allows("admin", "POST", "/api/routes"));
+        assert!(role_allows("admin", "POST", "/api/gateways"));
+        assert!(role_allows("admin", "POST", "/api/users"));
+        assert!(role_allows("admin", "POST", "/api/rates"));
+        assert!(role_allows("admin", "POST", "/api/billing/reconcile"));
+        assert!(role_allows("admin", "POST", "/api/anti-fraud/rules"));
+        assert!(role_allows("admin", "DELETE", "/api/routes/r1"));
+        assert!(role_allows("admin", "DELETE", "/api/gateways/gw1"));
+        assert!(role_allows("admin", "DELETE", "/api/users/alice"));
+    }
+
+    #[test]
+    fn operator_can_access_route_preview_and_media_metrics() {
+        assert!(role_allows("operator", "GET", "/api/route-preview"));
+        assert!(role_allows("operator", "GET", "/api/media/metrics"));
+    }
+
+    #[test]
+    fn financier_can_read_cdrs_and_registrations() {
+        assert!(role_allows("financier", "GET", "/api/cdrs"));
+        assert!(role_allows("financier", "GET", "/api/registrations"));
+        assert!(role_allows("financier", "GET", "/api/recordings"));
     }
 }
