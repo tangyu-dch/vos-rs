@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS gateway_health_status (
     last_failure_at TIMESTAMPTZ,
     half_open_successes INTEGER NOT NULL DEFAULT 0,
     last_probe_at TIMESTAMPTZ,
+    active_calls INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;

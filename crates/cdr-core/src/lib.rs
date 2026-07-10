@@ -108,6 +108,9 @@ impl PostgresCdrStore {
         sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS last_probe_at TIMESTAMPTZ")
             .execute(&self.pool)
             .await?;
+        sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS active_calls INTEGER NOT NULL DEFAULT 0")
+            .execute(&self.pool)
+            .await?;
         sqlx::query(CREATE_ANTI_FRAUD_RULES_TABLE_SQL)
             .execute(&self.pool)
             .await?;
@@ -134,11 +137,12 @@ impl PostgresCdrStore {
         last_failure_at: Option<OffsetDateTime>,
         half_open_successes: i32,
         last_probe_at: Option<OffsetDateTime>,
+        active_calls: i32,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO gateway_health_status \
-             (gateway_id, circuit_open, consecutive_failures, state, last_failure_at, half_open_successes, last_probe_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, now()) \
+             (gateway_id, circuit_open, consecutive_failures, state, last_failure_at, half_open_successes, last_probe_at, active_calls, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) \
              ON CONFLICT (gateway_id) DO UPDATE \
              SET circuit_open = EXCLUDED.circuit_open, \
                  consecutive_failures = EXCLUDED.consecutive_failures, \
@@ -146,6 +150,7 @@ impl PostgresCdrStore {
                  last_failure_at = EXCLUDED.last_failure_at, \
                  half_open_successes = EXCLUDED.half_open_successes, \
                  last_probe_at = EXCLUDED.last_probe_at, \
+                 active_calls = EXCLUDED.active_calls, \
                  updated_at = now()",
         )
         .bind(gateway_id)
@@ -155,6 +160,7 @@ impl PostgresCdrStore {
         .bind(last_failure_at)
         .bind(half_open_successes)
         .bind(last_probe_at)
+        .bind(active_calls)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -171,11 +177,12 @@ impl PostgresCdrStore {
             Option<OffsetDateTime>,
             i32,
             Option<OffsetDateTime>,
+            i32,
         )>,
         sqlx::Error,
     > {
         let rows = sqlx::query(
-            "SELECT gateway_id, circuit_open, consecutive_failures, state, last_failure_at, half_open_successes, last_probe_at \
+            "SELECT gateway_id, circuit_open, consecutive_failures, state, last_failure_at, half_open_successes, last_probe_at, active_calls \
              FROM gateway_health_status",
         )
         .fetch_all(&self.pool)
@@ -190,7 +197,8 @@ impl PostgresCdrStore {
             let last_failure_at: Option<OffsetDateTime> = row.get(4);
             let half_open_successes: i32 = row.get(5);
             let last_probe_at: Option<OffsetDateTime> = row.get(6);
-            list.push((id, open, failures, state, last_failure_at, half_open_successes, last_probe_at));
+            let active_calls: i32 = row.get(7);
+            list.push((id, open, failures, state, last_failure_at, half_open_successes, last_probe_at, active_calls));
         }
         Ok(list)
     }
@@ -854,14 +862,19 @@ impl PostgresCdrStore {
 
     pub async fn list_gateways_full(&self) -> Result<Vec<SipGateway>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, host, port, transport, max_capacity, gateway_type, prefix_rules, \
-             supports_registration, caller_id_mode, virtual_caller, max_concurrent, account_id, \
-             enabled, created_at FROM sip_gateways ORDER BY id",
+            "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.prefix_rules, \
+             g.supports_registration, g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, \
+             g.enabled, g.created_at, h.active_calls, h.state \
+             FROM sip_gateways g \
+             LEFT JOIN gateway_health_status h ON g.id = h.gateway_id \
+             ORDER BY g.id",
         )
         .fetch_all(&self.pool)
         .await?;
         let mut gateways = Vec::with_capacity(rows.len());
         for row in rows {
+            let active_calls: Option<i32> = row.get(14);
+            let state: Option<String> = row.get(15);
             gateways.push(SipGateway {
                 id: row.get(0),
                 host: row.get(1),
@@ -877,7 +890,8 @@ impl PostgresCdrStore {
                 parent_gateway_id: None,
                 caller_id_mode: row.get(8),
                 virtual_caller: row.get(9),
-                current_concurrent: None,
+                current_concurrent: Some(active_calls.unwrap_or(0)),
+                circuit_state: Some(state.unwrap_or_else(|| "closed".to_string())),
                 account_id: row.get(10),
                 max_concurrent: row.get(11),
                 enabled: row.get(12),

@@ -192,6 +192,7 @@ pub struct SipGateway {
     pub caller_id_mode: Option<String>,
     pub virtual_caller: Option<String>,
     pub current_concurrent: Option<i32>,
+    pub circuit_state: Option<String>,
     pub account_id: Option<i64>,
     pub max_concurrent: Option<i32>,
     pub enabled: Option<bool>,
