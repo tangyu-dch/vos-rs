@@ -400,3 +400,34 @@ pub struct AntiFraudConfigItem {
     )]
     pub updated_at: Option<OffsetDateTime>,
 }
+
+/// 管理 API 审计日志记录。
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, PartialEq)]
+pub struct AuditLog {
+    pub id: i64,
+    pub request_id: String,
+    pub username: String,
+    pub role: String,
+    pub method: String,
+    pub path: String,
+    pub status_code: i32,
+    pub source_ip: Option<String>,
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub created_at: Option<OffsetDateTime>,
+}
+
+/// 写入审计日志所需的请求信息。
+#[derive(Debug, Clone)]
+pub struct AuditLogInput<'a> {
+    pub request_id: &'a str,
+    pub username: &'a str,
+    pub role: &'a str,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub status_code: u16,
+    pub source_ip: Option<&'a str>,
+}

@@ -259,3 +259,21 @@ CREATE TABLE IF NOT EXISTS number_inventory (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
+
+/// 管理 API 审计日志表。
+pub(super) const CREATE_AUDIT_LOGS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS api_audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    role TEXT NOT NULL,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    status_code INTEGER NOT NULL,
+    source_ip INET,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+pub(super) const CREATE_AUDIT_LOGS_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_api_audit_logs_created_at ON api_audit_logs (created_at DESC)";

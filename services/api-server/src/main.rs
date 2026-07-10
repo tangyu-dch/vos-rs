@@ -64,8 +64,8 @@ use billing::{
 };
 use calls::{list_active, media_metrics, route_preview, terminate_call as calls_terminate};
 use cdr_core::{
-    AntiFraudRule, CdrEvent, DashboardStats, DtmfEventRecord, HourlyTrend, PostgresCdrStore,
-    SipGateway, SipRegistration, SipRoute, SipUser,
+    AntiFraudRule, AuditLogInput, CdrEvent, DashboardStats, DtmfEventRecord, HourlyTrend,
+    PostgresCdrStore, SipGateway, SipRegistration, SipRoute, SipUser,
 };
 use metrics::{MediaMetricsSnapshot, Metrics};
 use numbers::{create_number, delete_number, list_numbers, update_number};
@@ -73,6 +73,7 @@ use recording::{get_recording_audio, list_recordings};
 use report::{export_cdrs_csv, get_report_summary};
 
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use uuid::Uuid;
 
 /// JWT 声明：包含用户身份和权限信息。
 ///
@@ -770,6 +771,29 @@ async fn list_anti_fraud_config(
         })
 }
 
+#[derive(Debug, Deserialize)]
+struct AuditLogQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+}
+
+/// 查询管理 API 审计日志，仅管理员可访问。
+async fn list_audit_logs(
+    State(state): State<AppState>,
+    Query(query): Query<AuditLogQuery>,
+) -> Result<Json<Vec<cdr_core::AuditLog>>, ApiError> {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(50).clamp(1, 200);
+    state
+        .store
+        .list_audit_logs(page_size, (page - 1) * page_size)
+        .await
+        .map(Json)
+        .map_err(|e| ApiError {
+            error: e.to_string(),
+        })
+}
+
 async fn update_anti_fraud_config(
     State(state): State<AppState>,
     Path(key): Path<String>,
@@ -999,11 +1023,27 @@ async fn jwt_auth(
 }
 
 async fn audit_log(
+    State(state): State<AppState>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let method = req.method().clone();
     let uri = req.uri().clone();
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let source_ip = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
 
     let username = req
         .extensions()
@@ -1016,22 +1056,43 @@ async fn audit_log(
         .map(|c| c.role.clone())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let is_write_op = method != axum::http::Method::GET;
-
     let response = next.run(req).await;
+    let status = response.status();
+    let store = state.store.clone();
+    let audit_request_id = request_id.clone();
+    let audit_username = username.clone();
+    let audit_role = role.clone();
+    let audit_method = method.to_string();
+    let audit_path = uri.path().to_string();
+    let audit_source_ip = source_ip.clone();
+    tokio::spawn(async move {
+        let input = AuditLogInput {
+            request_id: &audit_request_id,
+            username: &audit_username,
+            role: &audit_role,
+            method: &audit_method,
+            path: &audit_path,
+            status_code: status.as_u16(),
+            source_ip: audit_source_ip.as_deref(),
+        };
+        if let Err(error) = store.insert_audit_log(&input).await {
+            tracing::warn!(%error, request_id = %audit_request_id, "写入 API 审计日志失败");
+        }
+    });
 
-    if is_write_op {
-        let status = response.status();
-        tracing::info!(
-            action = %method,
-            path = %uri.path(),
-            operator = %username,
-            role = %role,
-            status = status.as_u16(),
-            "OPERATOR AUDIT LOG"
-        );
+    tracing::info!(
+        request_id = %request_id,
+        action = %method,
+        path = %uri.path(),
+        operator = %username,
+        role = %role,
+        status = status.as_u16(),
+        "API audit log"
+    );
+    let mut response = response;
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert("X-Request-ID", value);
     }
-
     response
 }
 
@@ -1218,8 +1279,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/anti-fraud/config", get(list_anti_fraud_config))
         .route("/api/anti-fraud/config/:key", put(update_anti_fraud_config))
+        .route("/api/audit-logs", get(list_audit_logs))
         .route("/api/dashboard/events", get(dashboard_events))
-        .route_layer(axum::middleware::from_fn(audit_log))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            audit_log,
+        ))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             jwt_auth,

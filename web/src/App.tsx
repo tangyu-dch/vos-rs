@@ -19,6 +19,7 @@ const Reports = lazy(() => import('./pages/Reports'))
 const Rates = lazy(() => import('./pages/Rates'))
 const Accounts = lazy(() => import('./pages/Accounts'))
 const AntiFraud = lazy(() => import('./pages/AntiFraud'))
+const AuditLogs = lazy(() => import('./pages/AuditLogs'))
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { session } = useAuth();
@@ -56,6 +57,7 @@ function App() {
                 <Route path="/accounts" element={<Page path="/accounts"><Accounts /></Page>} />
                 <Route path="/recordings" element={<Page path="/recordings"><Recordings /></Page>} />
                 <Route path="/anti-fraud" element={<Page path="/anti-fraud"><AntiFraud /></Page>} />
+                <Route path="/audit-logs" element={<Page path="/audit-logs"><AuditLogs /></Page>} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </Routes>
             </Suspense>

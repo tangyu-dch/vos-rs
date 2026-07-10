@@ -31,6 +31,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: '/accounts', icon: '🏦', title: '账户', group: '计费' },
   { key: '/recordings', icon: '🎙', title: '录音', group: '数据分析' },
   { key: '/anti-fraud', icon: '🛡', title: '防盗打', group: '安全' },
+  { key: '/audit-logs', icon: '🧾', title: '审计日志', group: '安全' },
 ];
 
 const NAV_GROUPS = ['实时监控', '号码路由', '数据分析', '计费', '安全'];

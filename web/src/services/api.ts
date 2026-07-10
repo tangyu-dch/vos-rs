@@ -19,6 +19,7 @@ import type {
   NumberInventory,
   AntiFraudRule,
   AntiFraudConfigItem,
+  AuditLog,
 } from '@/types';
 
 const api = axios.create({
@@ -308,6 +309,12 @@ export const apiService = {
     await api.put(`/anti-fraud/config/${encodeURIComponent(key)}`, {
       config_value: configValue,
     });
+  },
+  async getAuditLogs(page = 1, pageSize = 50): Promise<AuditLog[]> {
+    const response = await api.get<AuditLog[]>('/audit-logs', {
+      params: { page, page_size: pageSize },
+    });
+    return response.data;
   },
   async createAntiFraudRule(rule: { id: string; rule_type: string; target_value: string; limit_number: number | null; enabled: boolean }): Promise<void> {
     await api.post('/anti-fraud/rules', rule);

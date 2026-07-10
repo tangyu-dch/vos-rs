@@ -218,3 +218,15 @@ export interface AntiFraudConfigItem {
   description?: string;
   updated_at?: string;
 }
+
+export interface AuditLog {
+  id: number;
+  request_id: string;
+  username: string;
+  role: string;
+  method: string;
+  path: string;
+  status_code: number;
+  source_ip?: string;
+  created_at?: string;
+}
