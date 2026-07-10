@@ -43,6 +43,7 @@ export interface SipGateway {
   caller_id_mode?: string;
   virtual_caller?: string;
   current_concurrent?: number;
+  circuit_state?: 'closed' | 'open' | 'half_open' | string;
   account_id?: number;
   max_concurrent?: number;
   enabled?: boolean;

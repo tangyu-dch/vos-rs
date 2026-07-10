@@ -22,6 +22,11 @@ import type { SipGateway } from '@/types';
 const FormItem = Form.Item;
 
 const TRANSPORT_MAP: Record<string, string> = { udp: '#6366f1', tcp: '#06b6d4', tls: '#8b5cf6' };
+const CIRCUIT_STATE: Record<string, { color: string; text: string }> = {
+  closed: { color: 'green', text: '正常' },
+  open: { color: 'red', text: '熔断' },
+  half_open: { color: 'orange', text: '半开探测' },
+};
 
 export default function PeerGateways() {
   const [gateways, setGateways] = useState<SipGateway[]>([]);
@@ -101,6 +106,11 @@ export default function PeerGateways() {
     { title: '端口', dataIndex: 'port', width: 100, render: (v: number) => <span className="cell-mono">{v || '—'}</span> },
     { title: '协议', dataIndex: 'transport', width: 100, render: (v: string) => <Tag color={TRANSPORT_MAP[v] || '#94a3b8'} style={{ borderRadius: 6 }}>{v?.toUpperCase()}</Tag> },
     { title: '最大容量', dataIndex: 'max_capacity', width: 120, render: (v: number) => v ? <span className="cell-mono">{v}</span> : '—' },
+    { title: '当前并发', dataIndex: 'current_concurrent', width: 100, render: (v: number) => <span className="cell-mono">{v || 0}</span> },
+    { title: '健康状态', dataIndex: 'circuit_state', width: 100, render: (v: string) => {
+      const state = CIRCUIT_STATE[v || 'closed'] || { color: 'gray', text: v || '未知' };
+      return <Tag color={state.color}>{state.text}</Tag>;
+    } },
     {
       title: '前缀规则', dataIndex: 'prefix_rules', minWidth: 300,
       render: (v: string) => {

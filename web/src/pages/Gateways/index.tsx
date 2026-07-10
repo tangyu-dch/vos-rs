@@ -15,6 +15,12 @@ const TRANSPORT_COLOR: Record<string, string> = {
   tls: 'var(--status-away)',
 };
 
+const CIRCUIT_STATE: Record<string, { color: string; text: string }> = {
+  closed: { color: 'green', text: '正常' },
+  open: { color: 'red', text: '熔断' },
+  half_open: { color: 'orange', text: '半开探测' },
+};
+
 export default function Gateways() {
   const [gateways, setGateways] = useState<SipGateway[]>([]);
   const [loading, setLoading] = useState(false);
@@ -75,6 +81,10 @@ export default function Gateways() {
     { title: '对接方式', dataIndex: 'caller_id_mode', width: 100, render: (v: string) => v === 'virtual' ? <Tag color="blue">虚拟主叫</Tag> : v === 'random' ? <Tag color="green">随机选号</Tag> : <Tag>透传</Tag> },
     { title: '最大并发', dataIndex: 'max_concurrent', width: 90, render: (v: number) => v ? <span className="cell-mono">{v}</span> : '—' },
     { title: '当前并发', dataIndex: 'current_concurrent', width: 90, render: (v: number) => <span className="cell-mono">{v || 0}</span> },
+    { title: '健康状态', dataIndex: 'circuit_state', width: 100, render: (v: string) => {
+      const state = CIRCUIT_STATE[v || 'closed'] || { color: 'gray', text: v || '未知' };
+      return <Tag color={state.color}>{state.text}</Tag>;
+    } },
     { title: '状态', dataIndex: 'enabled', width: 70, render: (v: boolean) => v !== false ? <Tag color="green">启用</Tag> : <Tag color="red">禁用</Tag> },
     { title: '操作', dataIndex: 'actions', width: 140, fixed: 'right' as const,
       render: (_: any, record: SipGateway) => (
