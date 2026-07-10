@@ -319,6 +319,18 @@ pub(crate) async fn handle_request(
                 );
             }
         }
+
+        let internal_call_id = request
+            .headers
+            .get("call-id")
+            .map(|v| v.as_str().to_string())
+            .unwrap_or_default();
+
+        let mut candidates = Vec::new();
+        if let Some(call) = edge_state.call_manager.get(&call_core::CallId::new(internal_call_id.clone())) {
+            candidates = call.candidates.clone();
+        }
+
         edge_state.remember_inbound_invite(
             &request,
             peer,
@@ -331,24 +343,12 @@ pub(crate) async fn handle_request(
         );
 
         let mut datagrams = vec![PendingDatagram::new(peer.to_string(), response)];
-        let target = if let Some(ref override_addr) = outbound_invite.target_override_addr {
-            override_addr.clone()
-        } else {
-            outbound::target_addr_for(&outbound_invite.outbound_uri)
-        };
         let path = if let Some(ref contact) = registered_contact {
             contact.path.as_slice()
         } else {
             &[]
         };
 
-        // Topology Hiding: generate a fresh Call-ID for the outbound (gateway) leg.
-        // The inbound Call-ID is retained internally; the gateway sees only the external one.
-        let internal_call_id = request
-            .headers
-            .get("call-id")
-            .map(|v| v.as_str().to_string())
-            .unwrap_or_default();
         let nonce_input = format!(
             "{}-{}",
             internal_call_id,
@@ -358,46 +358,114 @@ pub(crate) async fn handle_request(
                 .as_nanos()
         );
         let md5_hex = format!("{:x}", md5::compute(nonce_input.as_bytes()));
-        let external_call_id = format!(
-            "{}@{}",
-            &md5_hex[..16],
-            edge_config
-                .advertised_addr
-                .split(':')
-                .next()
-                .unwrap_or("vos-rs")
-        );
-        edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
-        debug!(
-            internal_call_id,
-            external_call_id, "topology hiding: registered Call-ID mapping"
-        );
 
-        let bytes = outbound::build_outbound_invite_with_session_timer_and_call_id(
-            &request,
-            &outbound_invite.outbound_uri,
-            &edge_config.advertised_addr,
-            rewritten_sdp
-                .as_ref()
-                .map(|sdp| sdp.body.as_slice())
-                .unwrap_or(request.body.as_slice()),
-            edge_config.session_expires_gateway,
-            path,
-            &external_call_id,
-        );
-        datagrams.push(PendingDatagram::new(target, bytes));
+        let forking_enabled = request
+            .headers
+            .get("x-forking-enabled")
+            .map(|v| v.as_str().trim().to_lowercase() == "true")
+            .unwrap_or(false)
+            || request
+            .headers
+            .get("x-call-forking")
+            .map(|v| v.as_str().trim().to_lowercase() == "true")
+            .unwrap_or(false);
 
-        // Increment active call count for the selected gateway.
-        if !outbound_invite.gateway_id.is_empty() {
-            let status = {
-                let mut health = edge_state
-                    .gateway_health
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                health.increment_active(&outbound_invite.gateway_id);
-                health.get_gateway_status(&outbound_invite.gateway_id)
+        if forking_enabled && candidates.len() > 1 {
+            let fork_candidates = candidates.iter().take(3).cloned().collect::<Vec<_>>();
+            let mut forks_to_save = Vec::new();
+            for (i, candidate) in fork_candidates.iter().enumerate() {
+                let external_call_id = format!(
+                    "{}-f{}@{}",
+                    &md5_hex[..12],
+                    i,
+                    edge_config
+                        .advertised_addr
+                        .split(':')
+                        .next()
+                        .unwrap_or("vos-rs")
+                );
+                edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
+                forks_to_save.push((external_call_id.clone(), candidate.target.gateway_id.as_str().to_string()));
+
+                let target = outbound::target_addr_for(&candidate.outbound_uri);
+                let bytes = outbound::build_outbound_invite_with_session_timer_and_call_id(
+                    &request,
+                    &candidate.outbound_uri,
+                    &edge_config.advertised_addr,
+                    rewritten_sdp
+                        .as_ref()
+                        .map(|sdp| sdp.body.as_slice())
+                        .unwrap_or(request.body.as_slice()),
+                    edge_config.session_expires_gateway,
+                    path,
+                    &external_call_id,
+                );
+                datagrams.push(PendingDatagram::new(target, bytes));
+
+                let gw_id = candidate.target.gateway_id.as_str().to_string();
+                if !gw_id.is_empty() {
+                    let status = {
+                        let mut health = edge_state
+                            .gateway_health
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        health.increment_active(&gw_id);
+                        health.get_gateway_status(&gw_id)
+                    };
+                    crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
+                }
+            }
+
+            if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(&internal_call_id) {
+                t_mut.active_forks = forks_to_save;
+            }
+        } else {
+            let external_call_id = format!(
+                "{}@{}",
+                &md5_hex[..16],
+                edge_config
+                    .advertised_addr
+                    .split(':')
+                    .next()
+                    .unwrap_or("vos-rs")
+            );
+            edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
+            debug!(
+                internal_call_id,
+                external_call_id, "topology hiding: registered Call-ID mapping"
+            );
+
+            let target = if let Some(ref override_addr) = outbound_invite.target_override_addr {
+                override_addr.clone()
+            } else {
+                outbound::target_addr_for(&outbound_invite.outbound_uri)
             };
-            crate::timers::persist_gateway_health(edge_state, outbound_invite.gateway_id.clone(), status);
+
+            let bytes = outbound::build_outbound_invite_with_session_timer_and_call_id(
+                &request,
+                &outbound_invite.outbound_uri,
+                &edge_config.advertised_addr,
+                rewritten_sdp
+                    .as_ref()
+                    .map(|sdp| sdp.body.as_slice())
+                    .unwrap_or(request.body.as_slice()),
+                edge_config.session_expires_gateway,
+                path,
+                &external_call_id,
+            );
+            datagrams.push(PendingDatagram::new(target, bytes));
+
+            if !outbound_invite.gateway_id.is_empty() {
+                let status = {
+                    let mut health = edge_state
+                        .gateway_health
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    health.increment_active(&outbound_invite.gateway_id);
+                    health.get_gateway_status(&outbound_invite.gateway_id)
+                };
+                crate::timers::persist_gateway_health(edge_state, outbound_invite.gateway_id.clone(), status);
+            }
         }
 
         return datagrams;
@@ -514,6 +582,7 @@ async fn handle_out_of_dialog_message(
                 transfer_peer: None,
                 transferee_is_caller: false,
                 callee_behind_nat: target_contact.is_some(),
+                active_forks: Vec::new(),
             },
         );
     }
@@ -1152,6 +1221,24 @@ pub(crate) async fn handle_in_dialog_request(
                     port = target_relay_rtp.port,
                 );
 
+                let replaces_header_val = if let Some(refer_to_val) = refer_to_str {
+                    if let Some(idx) = refer_to_val.find("?Replaces=") {
+                        let part = &refer_to_val[idx + "?Replaces=".len()..];
+                        let end_idx = part.find('>').unwrap_or(part.len());
+                        let encoded = &part[..end_idx];
+                        Some(percent_decode(encoded))
+                    } else if let Some(idx) = refer_to_val.find("&Replaces=") {
+                        let part = &refer_to_val[idx + "&Replaces=".len()..];
+                        let end_idx = part.find('>').unwrap_or(part.len());
+                        let encoded = &part[..end_idx];
+                        Some(percent_decode(encoded))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 let invite_bytes = outbound::build_transfer_invite(
                     &transfer_call_id,
                     from_header,
@@ -1160,6 +1247,7 @@ pub(crate) async fn handle_in_dialog_request(
                     &edge_config.advertised_addr,
                     &outbound_uri,
                     sdp_body.as_bytes(),
+                    replaces_header_val.as_deref(),
                 );
 
                 let target_addr = outbound::target_addr_for(&outbound_uri);
@@ -1528,4 +1616,25 @@ fn parse_sip_info_dtmf(content_type: &str, body: &[u8]) -> Option<char> {
         }
     }
     None
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            let mut hex = String::new();
+            if let Some(h1) = chars.next() { hex.push(h1); }
+            if let Some(h2) = chars.next() { hex.push(h2); }
+            if let Ok(val) = u8::from_str_radix(&hex, 16) {
+                result.push(val as char);
+            } else {
+                result.push('%');
+                result.push_str(&hex);
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }

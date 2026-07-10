@@ -230,6 +230,12 @@ pub(crate) async fn handle_datagram(
                 }
             }
 
+            let raw_external_call_id = sip_response
+                .headers
+                .get("call-id")
+                .map(|call_id| call_id.as_str().to_string())
+                .unwrap_or_default();
+
             // Topology Hiding: translate external Call-ID (seen by gateway) back to internal
             // Call-ID (used by inbound_transactions map and the caller-facing leg).
             // We also patch sip_response.headers in-place so all downstream code (including
@@ -250,6 +256,108 @@ pub(crate) async fn handle_datagram(
             } else {
                 call_id.clone()
             };
+
+            let is_invite = sip_response
+                .headers
+                .get("cseq")
+                .map(|cseq| cseq.as_str().contains("INVITE"))
+                .unwrap_or(false);
+
+            let mut cancel_datagrams = Vec::new();
+
+            if is_invite {
+                if let Some(ref cid) = call_id {
+                    if (200..300).contains(&sip_response.status_code) {
+                        let mut forks_to_cancel = Vec::new();
+                        let mut request_user = None;
+                        let mut from_header = String::new();
+                        let mut to_header = String::new();
+                        let mut invite_cseq = 1;
+
+                        if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
+                            if !t_mut.active_forks.is_empty() {
+                                for (fork_cid, fork_gw) in t_mut.active_forks.iter() {
+                                    if fork_cid != &raw_external_call_id {
+                                        forks_to_cancel.push((fork_cid.clone(), fork_gw.clone()));
+                                    }
+                                }
+                                t_mut.active_forks.clear();
+                            }
+                            if let Some(ref orig_req) = t_mut.original_request {
+                                from_header = orig_req.headers.get("from").map(|v| v.as_str().to_string()).unwrap_or_default();
+                                to_header = orig_req.headers.get("to").map(|v| v.as_str().to_string()).unwrap_or_default();
+                                invite_cseq = orig_req.headers.get("cseq")
+                                    .and_then(|v| crate::sip::dialog::cseq_number(v.as_str()))
+                                    .unwrap_or(1);
+                                request_user = orig_req.uri.user.clone();
+                            }
+                        }
+
+                        for (fork_cid, fork_gw) in forks_to_cancel {
+                            if !fork_gw.is_empty() {
+                                let mut health = edge_state.gateway_health.lock().unwrap_or_else(|e| e.into_inner());
+                                health.decrement_active(&fork_gw);
+                                let status = health.get_gateway_status(&fork_gw);
+                                drop(health);
+                                crate::timers::persist_gateway_health(edge_state, fork_gw.clone(), status);
+                            }
+
+                            if let Some(ref user) = request_user {
+                                let routes = edge_state.call_manager.routes();
+                                let gateway_target = routes.routes().iter()
+                                    .find(|r| r.target.gateway_id.as_str() == fork_gw)
+                                    .map(|r| r.target.clone());
+                                if let Some(target) = gateway_target {
+                                    let outbound_uri = sip_core::SipUri {
+                                        secure: false,
+                                        user: Some(user.clone()),
+                                        host: target.host.clone(),
+                                        port: target.port,
+                                        params: Vec::new(),
+                                    };
+                                    let target_addr = outbound::target_addr_for(&outbound_uri);
+                                    let branch = format!("z9hG4bK-cancel-{}", fork_cid);
+                                    let cancel_bytes = format!(
+                                        "CANCEL {uri} SIP/2.0\r\n\
+                                         Via: SIP/2.0/UDP {addr};branch={branch}\r\n\
+                                         Max-Forwards: 70\r\n\
+                                         From: {from}\r\n\
+                                         To: {to}\r\n\
+                                         Call-ID: {fork_cid}\r\n\
+                                         CSeq: {cseq} CANCEL\r\n\
+                                         Content-Length: 0\r\n\r\n",
+                                        uri = outbound_uri,
+                                        addr = edge_config.advertised_addr,
+                                        branch = branch,
+                                        from = from_header,
+                                        to = to_header,
+                                        fork_cid = fork_cid,
+                                        cseq = invite_cseq
+                                    ).into_bytes();
+                                    cancel_datagrams.push(PendingDatagram::new(target_addr, cancel_bytes));
+                                }
+                            }
+                        }
+                    } else if sip_response.status_code >= 300 {
+                        let mut fork_gw_to_decrement = None;
+                        if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
+                            if let Some(pos) = t_mut.active_forks.iter().position(|(f_cid, _)| f_cid == &raw_external_call_id) {
+                                let (_, gw) = t_mut.active_forks.remove(pos);
+                                fork_gw_to_decrement = Some(gw);
+                            }
+                        }
+                        if let Some(gw_id) = fork_gw_to_decrement {
+                            if !gw_id.is_empty() {
+                                let mut health = edge_state.gateway_health.lock().unwrap_or_else(|e| e.into_inner());
+                                health.decrement_active(&gw_id);
+                                let status = health.get_gateway_status(&gw_id);
+                                drop(health);
+                                crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
+                            }
+                        }
+                    }
+                }
+            }
 
             let original_call_id = if let Some(ref cid) = call_id {
                 edge_state.refer_transfers.get(cid).map(|r| r.clone())
@@ -1052,7 +1160,9 @@ pub(crate) async fn handle_datagram(
                         }
                     }
 
-                    vec![PendingDatagram::new(transaction.peer, forwarded_bytes)]
+                    let mut datagrams = vec![PendingDatagram::new(transaction.peer, forwarded_bytes)];
+                    datagrams.extend(cancel_datagrams);
+                    datagrams
                 }
                 None => {
                     warn!("received outbound SIP response without inbound transaction");

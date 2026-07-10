@@ -97,6 +97,7 @@ pub(crate) struct InboundTransaction {
     pub(crate) transfer_peer: Option<String>,
     pub(crate) transferee_is_caller: bool,
     pub(crate) callee_behind_nat: bool,
+    pub(crate) active_forks: Vec<(String, String)>,
 }
 
 impl InboundTransaction {
@@ -770,6 +771,7 @@ impl EdgeState {
                 transfer_peer: None,
                 transferee_is_caller: false,
                 callee_behind_nat,
+                active_forks: Vec::new(),
             },
         );
 
