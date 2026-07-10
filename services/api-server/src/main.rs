@@ -1,3 +1,37 @@
+//! # api-server：REST API 服务
+//!
+//! 本服务提供 VoIP 软交换平台的 RESTful API，包括：
+//!
+//! - **认证与授权**：JWT Token + RBAC（admin/operator/financier）
+//! - **仪表盘**：实时统计、趋势图表
+//! - **CDR 管理**：通话详单查询、导出
+//! - **用户管理**：SIP 用户 CRUD
+//! - **网关管理**：网关配置、健康状态
+//! - **路由管理**：路由规则 CRUD、试算
+//! - **计费管理**：费率、账户、账本、对账
+//! - **录音管理**：录音列表、播放、下载
+//! - **号码管理**：号码库存 CRUD
+//! - **反欺诈**：规则配置
+//! - **Prometheus 指标**：/metrics 端点
+//!
+//! ## API 端点
+//!
+//! | 路径 | 方法 | 说明 | 权限 |
+//! |------|------|------|------|
+//! | `/api/auth/login` | POST | 登录 | 公开 |
+//! | `/health` | GET | 健康检查 | 公开 |
+//! | `/metrics` | GET | Prometheus 指标 | 公开 |
+//! | `/api/dashboard/stats` | GET | 仪表盘统计 | operator/admin |
+//! | `/api/cdrs` | GET | CDR 列表 | 所有角色 |
+//! | `/api/users` | CRUD | 用户管理 | admin |
+//! | `/api/gateways` | CRUD | 网关管理 | admin/operator |
+//! | `/api/routes` | CRUD | 路由管理 | admin/operator |
+//! | `/api/rates` | CRUD | 费率管理 | admin/financier |
+//! | `/api/accounts` | GET | 账户列表 | admin/financier |
+//! | `/api/recordings` | GET | 录音列表 | 所有角色 |
+//! | `/api/numbers` | CRUD | 号码管理 | admin/operator |
+//! | `/api/anti-fraud/rules` | CRUD | 反欺诈规则 | admin/operator |
+
 mod billing;
 mod calls;
 mod metrics;
@@ -8,10 +42,11 @@ mod report;
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::IntoResponse,
+    response::{sse::{Event, KeepAlive, Sse}, IntoResponse},
     routing::{get, post, put},
     Json, Router,
 };
+use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
@@ -36,32 +71,51 @@ use report::{export_cdrs_csv, get_report_summary};
 
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 
+/// JWT 声明：包含用户身份和权限信息。
+///
+/// 用于认证中间件验证请求身份。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: String,  // 登录用户名
-    pub role: String, // 角色
-    pub exp: usize,   // 过期时间戳
+    /// 用户名（subject）
+    pub sub: String,
+    /// 角色（admin/operator/financier）
+    pub role: String,
+    /// 过期时间戳（Unix 秒）
+    pub exp: usize,
 }
 
+/// 登录请求
 #[derive(Debug, Deserialize)]
 struct LoginRequest {
     username: String,
     password: String,
 }
 
+/// 登录响应
 #[derive(Debug, Serialize)]
 struct LoginResponse {
+    /// JWT Token
     token: String,
+    /// 用户名
     username: String,
+    /// 角色
     role: String,
 }
 
+/// 应用状态：所有处理器共享的状态。
+///
+/// 包含数据库连接、存储后端、NATS 客户端和 JWT 密钥。
 #[derive(Clone)]
 pub(crate) struct AppState {
+    /// 数据库存储
     store: Arc<PostgresCdrStore>,
+    /// 录音存储后端
     recording_storage: Arc<dyn storage_core::StorageBackend>,
+    /// sip-edge 管理 API 地址
     sip_manage_base: String,
+    /// NATS 客户端（用于路由热加载广播）
     nats_client: Option<async_nats::Client>,
+    /// JWT 签名密钥
     jwt_secret: Vec<u8>,
 }
 
@@ -728,6 +782,17 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
 
 use std::time::SystemTime;
 
+/// 用户登录：验证凭据并返回 JWT Token。
+///
+/// 支持三种角色：
+/// - `admin`：管理员，可访问所有端点
+/// - `operator`：运维，可访问运维和只读端点
+/// - `financier`：财务，可访问计费和只读端点
+///
+/// 密码通过环境变量配置（`VOS_RS_ADMIN_PASSWORD` 等），
+/// 未配置时返回错误（生产环境禁止默认密码）。
+///
+/// 成功返回 24 小时有效期的 JWT Token。
 async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -778,6 +843,16 @@ async fn login(
     }))
 }
 
+/// RBAC 权限检查：根据角色、HTTP 方法和路径判断是否允许访问。
+///
+/// 角色权限矩阵：
+/// - **admin**：所有端点
+/// - **operator**：运维端点（网关、路由、号码、反欺诈）+ 只读端点
+/// - **financier**：计费端点（费率、账户、账本）+ 只读端点
+///
+/// 安全规则：
+/// - `/api/users` 始终仅限 admin（SIP 用户凭证安全敏感）
+/// - 只读端点（CDR、录音、仪表盘）对所有角色开放
 fn role_allows(role: &str, method: &str, path: &str) -> bool {
     if role == "admin" {
         return true;
@@ -820,6 +895,17 @@ fn role_allows(role: &str, method: &str, path: &str) -> bool {
     false
 }
 
+/// JWT 认证中间件：验证请求中的 Bearer Token 并检查 RBAC 权限。
+///
+/// 流程：
+/// 1. 从 Authorization 头提取 Bearer Token
+/// 2. 验证 Token 签名和有效期
+/// 3. 检查角色是否有权访问目标端点
+/// 4. 将 Claims 注入请求扩展，供后续处理器使用
+///
+/// 错误响应：
+/// - 401：缺少凭证、Token 无效或过期
+/// - 403：角色无权访问
 async fn jwt_auth(
     State(state): State<AppState>,
     mut req: axum::extract::Request,
@@ -861,6 +947,73 @@ async fn jwt_auth(
         Err(e) => Err(ApiError::unauthorized(format!("无效 Token: {}", e))),
     }
 }
+
+async fn audit_log(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+
+    let username = req.extensions().get::<Claims>().map(|c| c.sub.clone()).unwrap_or_else(|| "anonymous".to_string());
+    let role = req.extensions().get::<Claims>().map(|c| c.role.clone()).unwrap_or_else(|| "unknown".to_string());
+
+    let is_write_op = method != axum::http::Method::GET;
+
+    let response = next.run(req).await;
+
+    if is_write_op {
+        let status = response.status();
+        tracing::info!(
+            action = %method,
+            path = %uri.path(),
+            operator = %username,
+            role = %role,
+            status = status.as_u16(),
+            "OPERATOR AUDIT LOG"
+        );
+    }
+
+    response
+}
+
+async fn dashboard_events(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let state_clone = state.clone();
+    let stream = stream::unfold(
+        (state_clone, tokio::time::interval(std::time::Duration::from_secs(2))),
+        |(state, mut interval)| async move {
+            interval.tick().await;
+
+            let client = reqwest::Client::new();
+            let active_calls = match client.get(format!("{}/manage/active-calls", state.sip_manage_base)).send().await {
+                Ok(resp) => {
+                    resp.json::<Vec<serde_json::Value>>().await.map(|v| v.len() as u32).unwrap_or(0)
+                }
+                _ => 0,
+            };
+
+            let gw_status = if let Ok(accounts) = state.store.list_accounts().await {
+                accounts.len() as u32
+            } else {
+                0
+            };
+
+            let data = serde_json::json!({
+                "active_calls": active_calls,
+                "trunk_online_count": gw_status,
+                "timestamp": time::OffsetDateTime::now_utc().unix_timestamp(),
+            });
+
+            let event = Event::default().data(data.to_string());
+            Some((Ok(event), (state, interval)))
+        },
+    );
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -985,6 +1138,8 @@ async fn main() -> anyhow::Result<()> {
             put(update_anti_fraud_rule).delete(delete_anti_fraud_rule),
         )
         .route("/api/anti-fraud/config", get(list_anti_fraud_config))
+        .route("/api/dashboard/events", get(dashboard_events))
+        .route_layer(axum::middleware::from_fn(audit_log))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             jwt_auth,
