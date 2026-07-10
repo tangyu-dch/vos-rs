@@ -386,3 +386,100 @@
             );
         }
     }
+
+    #[tokio::test]
+    async fn test_refer_attended_transfer_lifecycle() {
+        let edge_state = state_with_default_route();
+        let call_id = "refer-attended-001";
+        let offer_sdp = "v=0\r\no=- 0 0 IN IP4 192.0.2.10\r\ns=-\r\nc=IN IP4 192.0.2.10\r\nt=0 0\r\nm=audio 49170 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n";
+
+        let invite = format!(
+            "INVITE sip:13800138000@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-inv-att\r\nMax-Forwards: 70\r\nFrom: <sip:1001@example.com>;tag=from-tag\r\nTo: <sip:13800138000@example.com>\r\nCall-ID: {call_id}\r\nCSeq: 1 INVITE\r\nContact: <sip:1001@192.0.2.10>\r\nContent-Type: application/sdp\r\nContent-Length: {len}\r\n\r\n{offer_sdp}",
+            len = offer_sdp.len()
+        );
+        handle_datagram(
+            invite.as_bytes(),
+            "192.0.2.10:5060".parse().unwrap(),
+            &edge_state,
+            &edge_config(),
+        )
+        .await;
+
+        let answer_sdp = "v=0\r\no=- 0 0 IN IP4 198.51.100.20\r\ns=-\r\nc=IN IP4 198.51.100.20\r\nt=0 0\r\nm=audio 49200 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n";
+        let ok_200 = format!(
+            "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-inv-att\r\nFrom: <sip:1001@example.com>;tag=from-tag\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {call_id}\r\nCSeq: 1 INVITE\r\nContact: <sip:13800138000@gw1.example.com:5060>\r\nContent-Type: application/sdp\r\nContent-Length: {len}\r\n\r\n{answer_sdp}",
+            len = answer_sdp.len()
+        );
+        handle_datagram(
+            ok_200.as_bytes(),
+            "203.0.113.20:5060".parse().unwrap(),
+            &edge_state,
+            &edge_config(),
+        )
+        .await;
+
+        let refer = format!(
+            "REFER sip:edge.example.com SIP/2.0\r\n\
+             Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-ref-att\r\n\
+             Max-Forwards: 70\r\n\
+             From: <sip:1001@example.com>;tag=from-tag\r\n\
+             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             Call-ID: {call_id}\r\n\
+             CSeq: 2 REFER\r\n\
+             Refer-To: <sip:1002@example.com?Replaces=replaced-call-id%3Bto-tag%3Dxyz%3Bfrom-tag%3Dabc>\r\n\
+             Content-Length: 0\r\n\r\n"
+        );
+        let datagrams = handle_datagram(
+            refer.as_bytes(),
+            "192.0.2.10:5060".parse().unwrap(),
+            &edge_state,
+            &edge_config(),
+        )
+        .await;
+
+        assert_eq!(datagrams.len(), 3);
+        let invite_c = datagram_text(&datagrams[2]);
+        assert!(invite_c.contains("Replaces: replaced-call-id;to-tag=xyz;from-tag=abc\r\n"));
+
+        let transfer_call_id = invite_c
+            .lines()
+            .find(|l| l.starts_with("Call-ID:"))
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_string();
+
+        let busy_486 = format!(
+            "SIP/2.0 486 Busy Here\r\n\
+             Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-transfer-refer-rollback-001-52\r\n\
+             From: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:1002@example.com>;tag=c-tag\r\n\
+             Call-ID: {transfer_call_id}\r\n\
+             CSeq: 1 INVITE\r\n\
+             Content-Length: 0\r\n\r\n"
+        );
+        let err_datagrams = handle_datagram(
+            busy_486.as_bytes(),
+            "203.0.113.20:5060".parse().unwrap(),
+            &edge_state,
+            &edge_config(),
+        )
+        .await;
+
+        assert_eq!(err_datagrams.len(), 1);
+        let notify_err = datagram_text(&err_datagrams[0]);
+        assert!(notify_err.contains("SIP/2.0 486 Busy Here\r\n"));
+
+        let tx = edge_state.inbound_transactions.get(call_id).unwrap();
+        let caller_relay = tx.caller_relay_rtp.as_ref().unwrap();
+        let gw_relay = tx.gateway_relay_rtp.as_ref().unwrap();
+        assert_eq!(
+            edge_state.media_relay.target_for_port(caller_relay.port),
+            Some("198.51.100.20:49200".parse().unwrap())
+        );
+        assert_eq!(
+            edge_state.media_relay.target_for_port(gw_relay.port),
+            Some("192.0.2.10:49170".parse().unwrap())
+        );
+    }

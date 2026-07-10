@@ -1024,3 +1024,92 @@
         assert!(response.contains("X-VOS-RS-Error: User concurrent call limit exceeded"));
     }
 
+    #[tokio::test]
+    async fn test_parallel_ringing_call_forking() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let edge_state = EdgeState::new(
+            CallManager::new(
+                RouteTable::new(vec![
+                    Route::new("route1", "", 100, RouteTarget::new("gw1", "gw1.example.com", Some(5060))),
+                    Route::new("route2", "", 100, RouteTarget::new("gw2", "gw2.example.com", Some(5060))),
+                ]),
+                tx,
+            ),
+        );
+
+        let invite = concat!(
+            "INVITE sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-forking\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "To: <sip:13800138000@example.com>\r\n",
+            "Call-ID: forking-call-1@example.com\r\n",
+            "CSeq: 1 INVITE\r\n",
+            "X-Forking-Enabled: true\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        );
+
+        let datagrams = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
+        assert_eq!(datagrams.len(), 3);
+        assert_eq!(datagrams[0].target, peer().to_string());
+        
+        let mut branches = Vec::new();
+        for d in &datagrams[1..3] {
+            let invite_txt = datagram_text(d);
+            let call_id = invite_txt
+                .lines()
+                .find(|l| l.starts_with("Call-ID:"))
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap()
+                .to_string();
+            branches.push((call_id, d.target.clone()));
+        }
+
+        {
+            let health = edge_state.gateway_health.lock().unwrap();
+            assert_eq!(health.health("gw1").map(|h| h.active_calls()).unwrap_or(0), 1);
+            assert_eq!(health.health("gw2").map(|h| h.active_calls()).unwrap_or(0), 1);
+        }
+
+        let branch_1_call_id = &branches[0].0;
+        let branch_1_target = &branches[0].1;
+        let ok_200 = format!(
+            "SIP/2.0 200 OK\r\n\
+             Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n\
+             From: <sip:1001@example.com>;tag=from-tag\r\n\
+             To: <sip:13800138000@example.com>;tag=gw-tag-1\r\n\
+             Call-ID: {branch_call_id}\r\n\
+             CSeq: 1 INVITE\r\n\
+             Content-Length: 0\r\n\r\n",
+            branch_call_id = branch_1_call_id
+        );
+
+        let res_datagrams = handle_datagram(
+            ok_200.as_bytes(),
+            "198.51.100.20:5060".parse().unwrap(),
+            &edge_state,
+            &edge_config(),
+        )
+        .await;
+
+        assert_eq!(res_datagrams.len(), 2);
+        assert_eq!(res_datagrams[0].target, peer().to_string());
+        
+        let cancel_datagram = &res_datagrams[1];
+        assert_eq!(cancel_datagram.target, branches[1].1);
+        let cancel_txt = datagram_text(cancel_datagram);
+        assert!(cancel_txt.starts_with("CANCEL "));
+        assert!(cancel_txt.contains(&format!("Call-ID: {}", branches[1].0)));
+
+        {
+            let health = edge_state.gateway_health.lock().unwrap();
+            let winning_gw = if branches[0].1.contains("gw1") { "gw1" } else { "gw2" };
+            let canceled_gw = if branches[1].1.contains("gw1") { "gw1" } else { "gw2" };
+            assert_eq!(health.health(winning_gw).map(|h| h.active_calls()).unwrap_or(0), 1);
+            assert_eq!(health.health(canceled_gw).map(|h| h.active_calls()).unwrap_or(0), 0);
+        }
+    }
+
