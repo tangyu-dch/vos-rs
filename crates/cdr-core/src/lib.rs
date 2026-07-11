@@ -1302,6 +1302,40 @@ impl PostgresCdrStore {
         Ok(rates)
     }
 
+    /// 按页读取费率配置。
+    pub async fn list_rates_page(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<BillingRate>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, prefix, rate_per_minute, description, created_at \
+             FROM billing_rates ORDER BY length(prefix) DESC, prefix LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| BillingRate {
+                id: row.get(0),
+                prefix: row.get(1),
+                rate_per_minute: row.get(2),
+                description: row.get(3),
+                created_at: row.get(4),
+            })
+            .collect())
+    }
+
+    /// 返回费率配置总数。
+    pub async fn count_rates(&self) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM billing_rates")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
+    }
+
     pub async fn upsert_rate(
         &self,
         id: &str,

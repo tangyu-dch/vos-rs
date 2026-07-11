@@ -67,8 +67,22 @@ fn validate_rate(prefix: &str, rate_per_minute: f64) -> Result<(), E> {
     Ok(())
 }
 
-pub async fn list_rates(State(state): State<AppState>) -> Result<Json<Vec<BillingRate>>, E> {
-    state.store.list_rates().await.map(Json).map_err(err)
+pub async fn list_rates(
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<PaginatedResponse<BillingRate>>, E> {
+    let (page, page_size, offset) = normalize_page(&query);
+    let (items, total) = tokio::try_join!(
+        state.store.list_rates_page(page_size, offset),
+        state.store.count_rates(),
+    )
+    .map_err(err)?;
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+    }))
 }
 
 pub async fn create_rate(

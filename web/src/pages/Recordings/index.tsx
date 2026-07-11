@@ -22,17 +22,24 @@ function formatSize(bytes: number): string {
 export default function Recordings() {
   const [data, setData] = useState<RecordingInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [loadingAudio, setLoadingAudio] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (nextPage = 1, nextPageSize = 20) => {
     setLoading(true);
     setError(null);
     try {
-      setData(await apiService.getRecordings());
+      const result = await apiService.getRecordings(nextPage, nextPageSize);
+      setData(result.items);
+      setTotal(result.total);
+      setPage(nextPage);
+      setPageSize(nextPageSize);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
       Message.error('获取录音列表失败');
@@ -184,7 +191,7 @@ export default function Recordings() {
           <span className="sub">呼叫录音在线试听与下载（G.711 双声道 8kHz/16bit WAV）</span>
         </div>
         <div className="page-header__actions">
-          <Button icon={<IconRefresh />} onClick={load}>
+          <Button icon={<IconRefresh />} onClick={() => load(page, pageSize)}>
             刷新
           </Button>
         </div>
@@ -199,7 +206,7 @@ export default function Recordings() {
           data={data}
           rowKey="call_id"
           loading={loading}
-          pagination={{ pageSize: 20, sizeCanChange: true }}
+          pagination={{ current: page, pageSize, total, sizeCanChange: true, sizeOptions: [10, 20, 50, 100], onChange: (nextPage) => load(nextPage, pageSize), onPageSizeChange: (nextPageSize) => load(1, nextPageSize) }}
           scroll={{ x: 1000 }}
           noDataElement={<Empty description="暂无录音（接通呼叫结束后生成）" />}
         />

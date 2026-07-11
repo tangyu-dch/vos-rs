@@ -22,16 +22,23 @@ const FormItem = Form.Item;
 export default function Rates() {
   const [rates, setRates] = useState<BillingRate[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState<BillingRate | null>(null);
   const [form] = Form.useForm();
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (nextPage = 1, nextPageSize = 20) => {
     setLoading(true);
     setError(null);
     try {
-      setRates(await apiService.getRates());
+      const data = await apiService.getRates(nextPage, nextPageSize);
+      setRates(data.items);
+      setTotal(data.total);
+      setPage(nextPage);
+      setPageSize(nextPageSize);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
       Message.error('获取费率列表失败');
@@ -134,7 +141,7 @@ export default function Rates() {
           <span className="sub">按被叫前缀配置计费费率（最长前缀优先匹配）</span>
         </div>
         <div className="page-header__actions">
-          <Button icon={<IconRefresh />} onClick={load}>
+          <Button icon={<IconRefresh />} onClick={() => load(page, pageSize)}>
             刷新
           </Button>
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>
@@ -152,7 +159,7 @@ export default function Rates() {
           data={rates}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, sizeCanChange: true }}
+          pagination={{ current: page, pageSize, total, sizeCanChange: true, sizeOptions: [10, 20, 50, 100], onChange: (nextPage) => load(nextPage, pageSize), onPageSizeChange: (nextPageSize) => load(1, nextPageSize) }}
           noDataElement={<Empty description="暂无费率配置" />}
         />
       </Card>

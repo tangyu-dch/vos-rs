@@ -185,8 +185,10 @@ export const apiService = {
   },
 
   // ===== 录音 =====
-  async getRecordings(): Promise<RecordingInfo[]> {
-    const r = await api.get<RecordingInfo[]>('/recordings');
+  async getRecordings(page = 1, pageSize = 20): Promise<PaginatedResponse<RecordingInfo>> {
+    const r = await api.get<PaginatedResponse<RecordingInfo>>('/recordings', {
+      params: { page, page_size: pageSize },
+    });
     return r.data;
   },
   async getRecordingAudio(callId: string): Promise<Blob> {
@@ -212,8 +214,10 @@ export const apiService = {
   },
 
   // ===== 计费：费率 =====
-  async getRates(): Promise<BillingRate[]> {
-    const r = await api.get<BillingRate[]>('/rates');
+  async getRates(page = 1, pageSize = 20): Promise<PaginatedResponse<BillingRate>> {
+    const r = await api.get<PaginatedResponse<BillingRate>>('/rates', {
+      params: { page, page_size: pageSize },
+    });
     return r.data;
   },
   async createRate(rate: BillingRate): Promise<void> {

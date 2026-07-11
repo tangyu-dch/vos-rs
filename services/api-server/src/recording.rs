@@ -1,13 +1,13 @@
-use crate::AppState;
+use crate::{normalize_page, AppState, PageQuery, PaginatedResponse};
 use axum::{
-    extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    extract::{Path, Query, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
 };
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct RecordingInfo {
     pub call_id: String,
     pub stem: String,
@@ -34,7 +34,8 @@ fn sanitize_call_id(call_id: &str) -> String {
 /// 列出录音目录下所有录音（按创建时间倒序）。
 pub async fn list_recordings(
     State(state): State<AppState>,
-) -> Result<Json<Vec<RecordingInfo>>, (StatusCode, String)> {
+    Query(query): Query<PageQuery>,
+) -> Result<Json<PaginatedResponse<RecordingInfo>>, (StatusCode, String)> {
     let storage = &state.recording_storage;
     let prefix = "";
 
@@ -69,7 +70,18 @@ pub async fn list_recordings(
     }
 
     out.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
-    Ok(Json(out))
+    let total = i64::try_from(out.len()).unwrap_or(i64::MAX);
+    let (page, page_size, offset) = normalize_page(&query);
+    let start = usize::try_from(offset).unwrap_or(usize::MAX).min(out.len());
+    let end = start
+        .saturating_add(usize::try_from(page_size).unwrap_or(0))
+        .min(out.len());
+    Ok(Json(PaginatedResponse {
+        items: out[start..end].to_vec(),
+        total,
+        page,
+        page_size,
+    }))
 }
 
 /// 按 call_id 获取录音音频流（WAV）。
@@ -87,7 +99,7 @@ pub async fn get_recording_audio(
 
     let wav_key = files
         .iter()
-        .find(|f| f.key.starts_with(&prefix) && f.key.ends_with(".wav"))
+        .find(|f| f.key.ends_with(".wav") && f.key.trim_end_matches(".wav") == prefix)
         .map(|f| f.key.clone())
         .ok_or_else(|| (StatusCode::NOT_FOUND, "未找到该通话的录音".into()))?;
 
@@ -97,11 +109,12 @@ pub async fn get_recording_audio(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "audio/wav".parse().unwrap());
-    headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav"));
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     headers.insert(
         header::CONTENT_LENGTH,
-        bytes.len().to_string().parse().unwrap(),
+        HeaderValue::from_str(&bytes.len().to_string())
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "音频长度无效".into()))?,
     );
     Ok((StatusCode::OK, headers, bytes).into_response())
 }
