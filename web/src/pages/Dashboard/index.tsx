@@ -3,6 +3,7 @@ import { Spin, Alert, Empty } from '@arco-design/web-react';
 import { IconRefresh } from '@arco-design/web-react/icon';
 import { apiService } from '@/services/api';
 import { useTheme } from '@/theme/ThemeContext';
+import { usePageVisibility } from '@/hooks/usePageVisibility';
 import type { DashboardStats, HourlyTrend, ActiveCall } from '@/types';
 import { graphic, init, type ECharts } from '@/utils/charts';
 import './Dashboard.css';
@@ -85,6 +86,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [callFilter, setCallFilter] = useState<CallFilter>('all');
   const [now, setNow] = useState(Date.now());
+  const pageVisible = usePageVisibility();
 
   const trendRef = useRef<HTMLDivElement>(null);
   const trendChart = useRef<ECharts | null>(null);
@@ -93,9 +95,10 @@ export default function Dashboard() {
 
   // ─── Clock ───
   useEffect(() => {
+    if (!pageVisible) return;
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tick);
-  }, []);
+  }, [pageVisible]);
 
   // ─── Load Data ───
   const loadData = useCallback(async () => {
@@ -118,10 +121,11 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    loadData();
+    if (!pageVisible) return;
+    void loadData();
     const refreshInterval = setInterval(loadData, 5000);
     return () => clearInterval(refreshInterval);
-  }, [loadData]);
+  }, [loadData, pageVisible]);
 
   // ─── Trend Chart ───
   useEffect(() => {

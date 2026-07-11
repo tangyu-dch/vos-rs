@@ -5,6 +5,7 @@ import { useTheme } from '@/theme/ThemeContext';
 import { apiService } from '@/services/api';
 import type { CdrEvent } from '@/types';
 import { canAccessPage, roleLabel } from '@/services/auth';
+import { usePageVisibility } from '@/hooks/usePageVisibility';
 import './Layout.css';
 
 interface LayoutProps {
@@ -66,6 +67,7 @@ export default function Layout({ children }: LayoutProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<QuickSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const pageVisible = usePageVisibility();
 
   const selectedKey =
     location.pathname === '/' ? '/dashboard' : location.pathname;
@@ -131,6 +133,7 @@ export default function Layout({ children }: LayoutProps) {
 
   // 顶部通知和导航徽标显示真实活跃呼叫数，避免使用固定演示数据。
   useEffect(() => {
+    if (!pageVisible) return;
     let disposed = false;
     const refreshActiveCallCount = async () => {
       try {
@@ -147,7 +150,7 @@ export default function Layout({ children }: LayoutProps) {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [pageVisible]);
 
   const toggleSidebar = () => {
     if (isMobile || isTablet) {

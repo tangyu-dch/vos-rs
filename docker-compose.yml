@@ -37,8 +37,6 @@ services:
     command: [
       "--js",
       "--store_dir", "/data",
-      "--max_file", "256mb",
-      "--max_mem", "64mb",
       "--port", "4222",
       "--http_port", "8222"
     ]
@@ -57,13 +55,45 @@ services:
     networks:
       - vos_rs_network
 
+  # RustFS：S3 兼容对象存储，录音归档到 recordings bucket。
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: vos-rs-rustfs
+    command: ["/data"]
+    environment:
+      RUSTFS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
+      RUSTFS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "${RUSTFS_API_PORT:-9000}:9000"
+      - "${RUSTFS_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - vos_rs_rustfs:/data
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
+
+  rustfs-init:
+    image: minio/mc:latest
+    container_name: vos-rs-rustfs-init
+    depends_on:
+      rustfs:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command: >-
+      "until mc alias set rustfs http://rustfs:9000 ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      ${RUSTFS_SECRET_KEY:-rustfsadmin}; do sleep 2; done;
+      mc mb --ignore-existing rustfs/${RUSTFS_BUCKET:-recordings}"
+    restart: "no"
+    networks:
+      - vos_rs_network
+
   # ========== 应用服务 ==========
 
   sip-edge:
     build:
       context: .
       dockerfile: Dockerfile
-      target: builder
     container_name: vos-rs-sip-edge
     command: ["./sip-edge"]
     environment:
@@ -120,8 +150,10 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
+      rustfs:
+        condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8082/manage/active-calls || exit 1"]
+      test: ["CMD-SHELL", "curl -sf -H 'X-VOS-Token: ${INTERNAL_SECRET:-change-me-in-production}' http://localhost:8082/manage/active-calls || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -134,7 +166,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: builder
     container_name: vos-rs-api-server
     command: ["./api-server"]
     environment:
@@ -142,7 +173,8 @@ services:
       VOS_RS_DATABASE_URL: "postgres://${POSTGRES_USER:-vos_rs}:${POSTGRES_PASSWORD:-vos_rs}@postgres:5432/${POSTGRES_DB:-vos_rs}"
 
       # API 配置
-      API_PORT: "${API_PORT:-8080}"
+      # 容器内端口固定，宿主机端口通过 API_HOST_PORT 单独映射。
+      API_PORT: "8080"
       VOS_RS_MANAGE_BASE: "http://sip-edge:8082"
 
       # JWT 密钥（生产环境必须修改）
@@ -158,6 +190,13 @@ services:
 
       # 录音目录
       VOS_RS_RECORDING_DIR: /data/recordings
+      VOS_RS_STORAGE_BACKEND: "${STORAGE_BACKEND:-oss}"
+      VOS_RS_OSS_ENDPOINT: "${RUSTFS_ENDPOINT:-http://rustfs:9000}"
+      VOS_RS_OSS_BUCKET: "${RUSTFS_BUCKET:-recordings}"
+      VOS_RS_OSS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
+      VOS_RS_OSS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
+      VOS_RS_OSS_KEY_PREFIX: "${RUSTFS_KEY_PREFIX:-recordings/}"
+      VOS_RS_OSS_REGION: "${RUSTFS_REGION:-us-east-1}"
 
       # CORS 配置
       VOS_RS_API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:80}"
@@ -166,7 +205,7 @@ services:
       RUST_LOG: "${RUST_LOG:-api_server=info}"
 
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "${API_HOST_PORT:-8080}:8080"
     volumes:
       - vos_rs_recordings:/data/recordings
     depends_on:
@@ -174,6 +213,10 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
+      rustfs:
+        condition: service_started
+      rustfs-init:
+        condition: service_completed_successfully
       sip-edge:
         condition: service_healthy
     healthcheck:
@@ -190,7 +233,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: builder
     container_name: vos-rs-cdr-worker
     command: ["./cdr-worker"]
     environment:
@@ -261,3 +303,6 @@ volumes:
   vos_rs_recordings:
     driver: local
     name: vos_rs_recordings
+  vos_rs_rustfs:
+    driver: local
+    name: vos_rs_rustfs

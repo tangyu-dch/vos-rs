@@ -1334,6 +1334,26 @@ async fn main() -> anyhow::Result<()> {
     let storage_config = storage_core::StorageConfig::from_env();
     let recording_storage: Arc<dyn storage_core::StorageBackend> =
         storage_core::create_storage(&storage_config).await?.into();
+    if recording_storage.backend_name() != "local" {
+        let storage = Arc::clone(&recording_storage);
+        let recording_dir = storage_config.local_dir.clone();
+        tokio::spawn(async move {
+            let mut uploaded_sizes = std::collections::HashMap::new();
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+            loop {
+                interval.tick().await;
+                let uploaded = crate::recording::sync_local_recordings(
+                    storage.as_ref(),
+                    std::path::Path::new(&recording_dir),
+                    &mut uploaded_sizes,
+                )
+                .await;
+                if uploaded > 0 {
+                    tracing::info!(uploaded, "录音文件已归档到对象存储");
+                }
+            }
+        });
+    }
     let nats_url =
         env::var("VOS_RS_NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string());
     let nats_client = async_nats::connect(&nats_url).await.ok();

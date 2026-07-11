@@ -4,6 +4,64 @@ use axum::{
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
 };
+use std::{
+    collections::HashMap,
+    path::Path as FsPath,
+    time::{Duration, SystemTime},
+};
+use storage_core::StorageBackend;
+
+/// 将已经停止写入的本地 WAV 归档到对象存储。
+///
+/// SIP Edge 录音使用本地顺序写入以保证 RTP 热路径稳定，API Server 负责把
+/// 闭合后的文件异步归档到 RustFS。文件最后修改时间小于 10 秒时跳过，避免
+/// 上传仍在增长的 WAV 文件。
+pub async fn sync_local_recordings(
+    storage: &dyn StorageBackend,
+    directory: &FsPath,
+    uploaded_sizes: &mut HashMap<String, u64>,
+) -> usize {
+    let Ok(mut entries) = tokio::fs::read_dir(directory).await else {
+        return 0;
+    };
+    let mut uploaded = 0;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("wav") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        let recently_modified = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age < Duration::from_secs(10));
+        if recently_modified {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let size = metadata.len();
+        if uploaded_sizes.get(file_name) == Some(&size) {
+            continue;
+        }
+        let Ok(data) = tokio::fs::read(&path).await else {
+            continue;
+        };
+        if storage
+            .put(file_name, data.into(), Some("audio/wav"))
+            .await
+            .is_ok()
+        {
+            uploaded_sizes.insert(file_name.to_string(), size);
+            uploaded += 1;
+        }
+    }
+    uploaded
+}
 
 /// 复刻 sip-edge `recording_file_stem` 的清洗规则：非 [A-Za-z0-9-_.] 替换为 `_`。
 fn sanitize_call_id(call_id: &str) -> String {
@@ -27,21 +85,25 @@ pub async fn get_recording_audio(
     let storage = &state.recording_storage;
     let prefix = sanitize_call_id(&call_id);
 
-    let files = storage
-        .list("")
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-
-    let wav_key = files
-        .iter()
-        .find(|f| f.key.ends_with(".wav") && f.key.trim_end_matches(".wav") == prefix)
-        .map(|f| f.key.clone())
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "未找到该通话的录音".into()))?;
-
-    let bytes = storage
-        .get(&wav_key)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // 优先按确定的对象 key 读取，避免依赖 S3 ListObjects 权限；分段录音再回退到列表查询。
+    let bytes = match storage.get(&(prefix.clone() + ".wav")).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            let files = storage
+                .list("")
+                .await
+                .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+            let wav_key = files
+                .iter()
+                .find(|f| f.key.ends_with(".wav") && f.key.trim_end_matches(".wav") == prefix)
+                .map(|f| f.key.clone())
+                .ok_or_else(|| (StatusCode::NOT_FOUND, "未找到该通话的录音".into()))?;
+            storage
+                .get(&wav_key)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        }
+    };
 
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav"));

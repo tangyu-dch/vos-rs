@@ -60,22 +60,32 @@ impl OssStorage {
         format!("{}.{}", self.bucket, without_proto)
     }
 
-    fn sign_v4(&self, _method: &str, full_key: &str, date: &str, payload_hash: &str) -> String {
+    fn sign_v4(
+        &self,
+        method: &str,
+        full_key: &str,
+        date: &str,
+        date_full: &str,
+        payload_hash: &str,
+    ) -> String {
         let region =
             std::env::var("VOS_RS_OSS_REGION").unwrap_or_else(|_| "cn-hangzhou".to_string());
         let credential_scope = format!("{}/{}/s3/aws4_request", date, region);
         let host = self.host();
 
         let canonical_headers = format!(
-            "content-type:application/octet-stream\nhost:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{date}T000000Z\n"
+            "content-type:application/octet-stream\nhost:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{date_full}\n"
         );
         let signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date";
+        // RustFS 默认使用 path-style：/{bucket}/{object-key}。
+        let canonical_uri = format!("/{}/{}", self.bucket, full_key);
 
-        let canonical_request =
-            format!("GET\n/{full_key}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
+        let canonical_request = format!(
+            "{method}\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+        );
 
         let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{date}T000000Z\n{credential_scope}\n{:x}",
+            "AWS4-HMAC-SHA256\n{date_full}\n{credential_scope}\n{:x}",
             Sha256::digest(canonical_request.as_bytes())
         );
 
@@ -110,8 +120,13 @@ impl OssStorage {
             .unwrap_or_else(|| {
                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()
             });
-        let authorization =
-            self.sign_v4(method.as_str(), &self.full_key(key), &date, &payload_hash);
+        let authorization = self.sign_v4(
+            method.as_str(),
+            &self.full_key(key),
+            &date,
+            &date_full,
+            &payload_hash,
+        );
 
         let mut req = self
             .client
@@ -149,7 +164,8 @@ impl StorageBackend for OssStorage {
         let date = Utc::now().format("%Y%m%d").to_string();
         let date_full = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let payload_hash = format!("{:x}", Sha256::digest(&data));
-        let authorization = self.sign_v4("PUT", &self.full_key(key), &date, &payload_hash);
+        let authorization =
+            self.sign_v4("PUT", &self.full_key(key), &date, &date_full, &payload_hash);
         let ct = content_type.unwrap_or("application/octet-stream");
 
         let resp = self

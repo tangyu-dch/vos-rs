@@ -14,6 +14,7 @@ import { apiService } from '@/services/api';
 import { useAuth } from '@/auth/AuthContext';
 import type { ActiveCall } from '@/types';
 import { extractSipUser } from '@/utils/sip';
+import { usePageVisibility } from '@/hooks/usePageVisibility';
 
 const STATE_MAP: Record<string, { color: string; text: string }> = {
   Routing: { color: 'blue', text: '路由中' },
@@ -35,6 +36,7 @@ export default function ActiveCalls() {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const pageVisible = usePageVisibility();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,17 +53,15 @@ export default function ActiveCalls() {
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
-
-  useEffect(() => {
+    if (!pageVisible) return;
+    void load();
     const t = setInterval(load, 5000);
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       clearInterval(t);
       clearInterval(tick);
     };
-  }, [load]);
+  }, [load, pageVisible]);
 
   const handleTerminate = async (callId: string) => {
     try {
