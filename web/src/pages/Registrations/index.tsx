@@ -22,18 +22,22 @@ function getExpStatus(expiresAt: string) {
 
 export default function Registrations() {
   const [registrations, setRegistrations] = useState<SipRegistration[]>([]);
-  const [filtered, setFiltered] = useState<SipRegistration[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchText, setSearchText] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (nextPage = 1, nextPageSize = 20, keyword = '') => {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiService.getRegistrations();
-      setRegistrations(data);
-      setFiltered(data);
+      const data = await apiService.getRegistrations(nextPage, nextPageSize, keyword || undefined);
+      setRegistrations(data.items);
+      setTotal(data.total);
+      setPage(nextPage);
+      setPageSize(nextPageSize);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
       Message.error('获取注册信息失败');
@@ -46,25 +50,8 @@ export default function Registrations() {
     load();
   }, [load]);
 
-  useEffect(() => {
-    const kw = searchText.trim().toLowerCase();
-    if (!kw) {
-      setFiltered(registrations);
-      return;
-    }
-    setFiltered(
-      registrations.filter(
-        (r) =>
-          r.aor.toLowerCase().includes(kw) ||
-          r.contact_uri.toLowerCase().includes(kw) ||
-          r.received_from.toLowerCase().includes(kw)
-      )
-    );
-  }, [searchText, registrations]);
-
-  const onlineCount = registrations.filter(
-    (r) => new Date(r.expires_at).getTime() > Date.now()
-  ).length;
+  // 后端只返回 expires_at > now() 的有效注册，total 即在线终端总数。
+  const onlineCount = total;
 
   const columns = [
     {
@@ -113,7 +100,7 @@ export default function Registrations() {
           <span className="sub">查看当前在线终端的 SIP 注册状态</span>
         </div>
         <div className="page-header__actions">
-          <Button icon={<IconRefresh />} onClick={load}>
+          <Button icon={<IconRefresh />} onClick={() => load(page, pageSize, searchText)}>
             刷新
           </Button>
         </div>
@@ -125,7 +112,7 @@ export default function Registrations() {
           <span className="reg-stats__label">在线终端</span>
         </div>
         <div className="reg-stats__item">
-          <span className="reg-stats__num font-num">{registrations.length}</span>
+          <span className="reg-stats__num font-num">{total}</span>
           <span className="reg-stats__label">注册记录</span>
         </div>
       </div>
@@ -138,7 +125,10 @@ export default function Registrations() {
             placeholder="搜索 AOR / 联系地址 / 来源"
             style={{ width: 320 }}
             value={searchText}
-            onChange={setSearchText}
+            onChange={(value) => {
+              setSearchText(value);
+              load(1, pageSize, value);
+            }}
             prefix={<IconSearch />}
             allowClear
           />
@@ -146,10 +136,10 @@ export default function Registrations() {
         <Table
           className="app-table"
           columns={columns}
-          data={filtered}
+          data={registrations}
           rowKey={(r) => `${r.aor}-${r.contact_uri}`}
           loading={loading}
-          pagination={{ pageSize: 20, sizeCanChange: true }}
+          pagination={{ current: page, pageSize, total, sizeCanChange: true, sizeOptions: [10, 20, 50, 100], onChange: (nextPage) => load(nextPage, pageSize, searchText), onPageSizeChange: (nextPageSize) => load(1, nextPageSize, searchText) }}
           scroll={{ x: 980 }}
           noDataElement={<Empty description="暂无注册记录" />}
         />

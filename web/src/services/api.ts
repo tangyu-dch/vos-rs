@@ -180,8 +180,10 @@ export const apiService = {
 
   // ===== 注册信息 API =====
 
-  async getRegistrations(): Promise<SipRegistration[]> {
-    const response = await api.get<SipRegistration[]>('/registrations');
+  async getRegistrations(page = 1, pageSize = 20, keyword?: string): Promise<PaginatedResponse<SipRegistration>> {
+    const response = await api.get<PaginatedResponse<SipRegistration>>('/registrations', {
+      params: { page, page_size: pageSize, keyword },
+    });
     return response.data;
   },
 

@@ -695,17 +695,38 @@ async fn delete_route(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct RegistrationQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    keyword: Option<String>,
+}
+
 async fn list_registrations(
     State(state): State<AppState>,
-) -> Result<Json<Vec<SipRegistration>>, ApiError> {
-    state
-        .store
-        .list_registrations()
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
+    Query(query): Query<RegistrationQuery>,
+) -> Result<Json<PaginatedResponse<SipRegistration>>, ApiError> {
+    let page_query = PageQuery {
+        page: query.page,
+        page_size: query.page_size,
+        gateway_type: None,
+    };
+    let (page, page_size, offset) = normalize_page(&page_query);
+    let (items, total) = tokio::try_join!(
+        state
+            .store
+            .list_registrations_page(query.keyword.as_deref(), page_size, offset),
+        state.store.count_registrations(query.keyword.as_deref()),
+    )
+    .map_err(|e| ApiError {
+        error: e.to_string(),
+    })?;
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+    }))
 }
 
 #[derive(Deserialize)]

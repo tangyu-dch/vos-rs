@@ -1253,6 +1253,61 @@ impl PostgresCdrStore {
         Ok(registrations)
     }
 
+    /// 按页读取当前有效注册，并支持 AOR、联系地址和来源地址筛选。
+    pub async fn list_registrations_page(
+        &self,
+        keyword: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<SipRegistration>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT aor, contact_uri, received_from, expires_at, path, updated_at \
+             FROM sip_registrations \
+             WHERE expires_at > now() \
+               AND ($1::TEXT IS NULL OR aor ILIKE '%' || $1 || '%' \
+                    OR contact_uri ILIKE '%' || $1 || '%' \
+                    OR received_from ILIKE '%' || $1 || '%') \
+             ORDER BY aor LIMIT $2 OFFSET $3",
+        )
+        .bind(keyword)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SipRegistration {
+                aor: row.get(0),
+                contact_uri: row.get(1),
+                received_from: row.get(2),
+                expires_at: row.get(3),
+                path: row
+                    .get::<Option<String>, _>(4)
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                updated_at: row.get(5),
+            })
+            .collect())
+    }
+
+    /// 返回当前有效注册总数，可按关键字筛选。
+    pub async fn count_registrations(&self, keyword: Option<&str>) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sip_registrations \
+             WHERE expires_at > now() \
+               AND ($1::TEXT IS NULL OR aor ILIKE '%' || $1 || '%' \
+                    OR contact_uri ILIKE '%' || $1 || '%' \
+                    OR received_from ILIKE '%' || $1 || '%')",
+        )
+        .bind(keyword)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     pub async fn get_dtmf_events(
         &self,
         call_id: &str,
