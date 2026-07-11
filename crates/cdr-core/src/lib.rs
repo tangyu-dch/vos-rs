@@ -185,6 +185,14 @@ impl PostgresCdrStore {
         Ok(())
     }
 
+    /// 检查数据库连接是否仍然可用，用于服务就绪探针。
+    pub async fn ping(&self) -> Result<(), sqlx::Error> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+    }
+
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }

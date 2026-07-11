@@ -276,6 +276,17 @@ async fn health() -> &'static str {
     "OK"
 }
 
+/// 就绪探针：进程存活不代表数据库可用，只有依赖检查通过才返回 200。
+async fn ready(State(state): State<AppState>) -> StatusCode {
+    match state.store.ping().await {
+        Ok(()) => StatusCode::OK,
+        Err(error) => {
+            tracing::warn!(%error, "API 就绪检查失败");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    }
+}
+
 async fn get_dashboard_stats(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardStats>, ApiError> {
@@ -1387,6 +1398,7 @@ async fn main() -> anyhow::Result<()> {
 
     let public_routes = Router::new()
         .route("/health", get(health))
+        .route("/ready", get(ready))
         .route("/metrics", get(prometheus_metrics))
         .route("/api/auth/login", post(login));
 
