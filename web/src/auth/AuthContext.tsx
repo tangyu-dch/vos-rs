@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { apiService } from '@/services/api';
 import { clearSession, getSession, type AuthSession } from '@/services/auth';
 
@@ -12,6 +12,17 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(() => getSession());
+
+  // 其他标签页退出或切换账号时，当前标签页也必须立即失效，避免继续展示旧权限。
+  useEffect(() => {
+    const syncSession = (event: StorageEvent) => {
+      if (event.key === 'vos-auth-session') {
+        setSession(getSession());
+      }
+    };
+    window.addEventListener('storage', syncSession);
+    return () => window.removeEventListener('storage', syncSession);
+  }, []);
 
   const value = useMemo<AuthContextValue>(
     () => ({

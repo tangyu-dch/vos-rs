@@ -71,7 +71,7 @@ export function isForbiddenError(error: unknown): boolean {
   return Boolean(
     typeof error === 'object' &&
       error !== null &&
-      'response' in error &&
-      (error as { response?: { status?: number } }).response?.status === 403,
+      (('status' in error && (error as { status?: number }).status === 403) ||
+        ('response' in error && (error as { response?: { status?: number } }).response?.status === 403)),
   );
 }

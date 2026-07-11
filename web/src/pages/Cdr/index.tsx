@@ -24,6 +24,14 @@ import './Cdr.css';
 
 const { RangePicker } = DatePicker;
 
+interface CdrFilters {
+  call_id: string;
+  caller: string;
+  callee: string;
+  status: string;
+  dateRange: string[];
+}
+
 function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   const minutes = Math.floor(seconds / 60);
@@ -43,7 +51,7 @@ export default function Cdr() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 });
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<CdrFilters>({
     call_id: searchParams.get('call_id') || '',
     caller: searchParams.get('caller') || '',
     callee: searchParams.get('callee') || '',
@@ -79,18 +87,18 @@ export default function Cdr() {
   }, [selectedCdr, hasRecording]);
 
   const loadCdrs = useCallback(
-    async (page = 1, pageSize = pagination.pageSize) => {
+    async (page = 1, pageSize = pagination.pageSize, activeFilters: CdrFilters = filters) => {
       setLoading(true);
       setError(null);
       try {
-        const params: any = { page, page_size: pageSize };
-        if (filters.call_id) params.call_id = filters.call_id;
-        if (filters.caller) params.caller = filters.caller;
-        if (filters.callee) params.callee = filters.callee;
-        if (filters.status) params.status = filters.status;
-        if (filters.dateRange && filters.dateRange.length === 2) {
-          params.start_time = new Date(filters.dateRange[0]).toISOString();
-          params.end_time = new Date(filters.dateRange[1]).toISOString();
+        const params: Parameters<typeof apiService.getCdrs>[0] = { page, page_size: pageSize };
+        if (activeFilters.call_id) params.call_id = activeFilters.call_id;
+        if (activeFilters.caller) params.caller = activeFilters.caller;
+        if (activeFilters.callee) params.callee = activeFilters.callee;
+        if (activeFilters.status) params.status = activeFilters.status;
+        if (activeFilters.dateRange.length === 2) {
+          params.start_time = new Date(activeFilters.dateRange[0]).toISOString();
+          params.end_time = new Date(activeFilters.dateRange[1]).toISOString();
         }
         const result = await apiService.getCdrs(params);
         setCdrs(result.items);
@@ -102,7 +110,7 @@ export default function Cdr() {
         setLoading(false);
       }
     },
-    [filters]
+    [filters, pagination.pageSize]
   );
 
   useEffect(() => {
@@ -112,8 +120,9 @@ export default function Cdr() {
   const handleSearch = () => loadCdrs(1, pagination.pageSize);
 
   const handleReset = () => {
-    setFilters({ call_id: '', caller: '', callee: '', status: '', dateRange: [] });
-    setTimeout(() => loadCdrs(1, pagination.pageSize), 0);
+    const nextFilters: CdrFilters = { call_id: '', caller: '', callee: '', status: '', dateRange: [] };
+    setFilters(nextFilters);
+    void loadCdrs(1, pagination.pageSize, nextFilters);
   };
 
   const handleViewDetail = async (record: CdrEvent) => {

@@ -2,6 +2,7 @@ import axios from 'axios';
 import { clearSession, getAccessToken, saveSession, type AuthSession, isUserRole } from './auth';
 import type {
   CdrEvent,
+  DtmfEvent,
   SipUser,
   SipGateway,
   SipRoute,
@@ -35,16 +36,37 @@ interface ApiErrorBody {
   details?: string;
 }
 
+/** 统一的 API 错误，保留 HTTP 状态码供页面执行鉴权和重试逻辑。 */
+export class ApiError extends Error {
+  readonly status?: number;
+  readonly code?: string;
+  readonly requestId?: string;
+
+  constructor(message: string, options: { status?: number; code?: string; requestId?: string } = {}) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = options.status;
+    this.code = options.code;
+    this.requestId = options.requestId;
+  }
+}
+
 /** 将后端错误统一转换成页面可直接展示的中文错误，并保留请求编号。 */
-export function formatApiError(error: unknown): Error {
+export function formatApiError(error: unknown): ApiError | Error {
+  if (error instanceof ApiError) {
+    return error;
+  }
   if (error instanceof Error && !(error as Error & { response?: unknown }).response) {
     return error;
   }
-  const response = (error as { response?: { data?: ApiErrorBody; headers?: Record<string, string> } } | null)?.response;
+  const response = (error as { response?: { status?: number; data?: ApiErrorBody; headers?: Record<string, string> } } | null)?.response;
   const body = response?.data;
   const message = body?.error || body?.message || body?.details || '请求失败，请稍后重试';
   const requestId = response?.headers?.['x-request-id'] || response?.headers?.['X-Request-ID'];
-  return new Error(requestId ? `${message}（请求 ID: ${requestId}）` : message);
+  return new ApiError(requestId ? `${message}（请求 ID: ${requestId}）` : message, {
+    status: response?.status,
+    requestId,
+  });
 }
 
 api.interceptors.request.use((config) => {
@@ -117,8 +139,10 @@ export const apiService = {
     callee?: string;
     start_time?: string;
     end_time?: string;
+    signal?: AbortSignal;
   }): Promise<PaginatedResponse<CdrEvent>> {
-    const response = await api.get<PaginatedResponse<CdrEvent>>('/cdrs', { params });
+    const { signal, ...query } = params;
+    const response = await api.get<PaginatedResponse<CdrEvent>>('/cdrs', { params: query, signal });
     return response.data;
   },
 
@@ -127,8 +151,8 @@ export const apiService = {
     return response.data;
   },
 
-  async getDtmfEvents(callId: string): Promise<any[]> {
-    const response = await api.get<any[]>(`/cdrs/${callId}/dtmf`);
+  async getDtmfEvents(callId: string): Promise<DtmfEvent[]> {
+    const response = await api.get<DtmfEvent[]>(`/cdrs/${callId}/dtmf`);
     return response.data;
   },
 

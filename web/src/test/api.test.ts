@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { apiService, formatApiError } from '@/services/api';
+import { ApiError, apiService, formatApiError } from '@/services/api';
+import { isForbiddenError } from '@/services/auth';
 
 // Mock axios
 vi.mock('axios', () => ({
@@ -60,6 +61,15 @@ describe('apiService', () => {
     });
 
     expect(error.message).toBe('无权访问该接口（请求 ID: req_test_001）');
+    expect(error).toBeInstanceOf(ApiError);
+  });
+
+  it('preserves HTTP status for permission handling', () => {
+    const error = formatApiError({
+      response: { status: 403, data: { message: '禁止访问' } },
+    });
+
+    expect(isForbiddenError(error)).toBe(true);
   });
 
 });

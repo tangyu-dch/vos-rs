@@ -89,14 +89,15 @@ export default function Layout({ children }: LayoutProps) {
       return;
     }
     let disposed = false;
+    const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setSearching(true);
       try {
         const params = { page: 1, page_size: 6 };
         const [callIdResult, callerResult, calleeResult] = await Promise.all([
-          apiService.getCdrs({ ...params, call_id: query }),
-          apiService.getCdrs({ ...params, caller: query }),
-          apiService.getCdrs({ ...params, callee: query }),
+          apiService.getCdrs({ ...params, call_id: query, signal: controller.signal }),
+          apiService.getCdrs({ ...params, caller: query, signal: controller.signal }),
+          apiService.getCdrs({ ...params, callee: query, signal: controller.signal }),
         ]);
         const merged = new Map<string, CdrEvent>();
         [...callIdResult.items, ...callerResult.items, ...calleeResult.items].forEach((item) => merged.set(item.call_id, item));
@@ -117,6 +118,7 @@ export default function Layout({ children }: LayoutProps) {
     }, 280);
     return () => {
       disposed = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [searchQuery]);
