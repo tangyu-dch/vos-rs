@@ -94,6 +94,9 @@ impl PostgresCdrStore {
         sqlx::query(MIGRATION_ADD_ROUTE_WEIGHT)
             .execute(&self.pool)
             .await?;
+        sqlx::query(CREATE_SIP_REGISTRATIONS_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
         sqlx::query("ALTER TABLE sip_registrations ADD COLUMN IF NOT EXISTS path TEXT")
             .execute(&self.pool)
             .await?;
@@ -132,9 +135,6 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_NUMBER_INVENTORY_TABLE_SQL)
             .execute(&self.pool)
             .await?;
-        sqlx::query(CREATE_SIP_REGISTRATIONS_TABLE_SQL)
-            .execute(&self.pool)
-            .await?;
         sqlx::query(CREATE_GATEWAY_HEALTH_TABLE_SQL)
             .execute(&self.pool)
             .await?;
@@ -161,6 +161,15 @@ impl PostgresCdrStore {
         sqlx::query(MIGRATE_LEGACY_ANTI_FRAUD_RULES_SQL)
             .execute(&self.pool)
             .await?;
+        sqlx::query(MIGRATE_LEGACY_ANTI_FRAUD_RULES_STEP2_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(MIGRATE_LEGACY_ANTI_FRAUD_RULES_STEP3_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(MIGRATE_LEGACY_ANTI_FRAUD_RULES_STEP4_SQL)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(CREATE_ANTI_FRAUD_CONFIG_TABLE_SQL)
             .execute(&self.pool)
             .await?;
@@ -183,14 +192,16 @@ impl PostgresCdrStore {
     /// 持久化一条管理 API 审计记录。
     pub async fn insert_audit_log(&self, input: &AuditLogInput<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO api_audit_logs (request_id, username, role, method, path, status_code, source_ip) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7::inet)",
+            "INSERT INTO api_audit_logs (request_id, username, role, method, path, query_params, request_body, status_code, source_ip) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::inet)",
         )
         .bind(input.request_id)
         .bind(input.username)
         .bind(input.role)
         .bind(input.method)
         .bind(input.path)
+        .bind(input.query_params)
+        .bind(input.request_body)
         .bind(i32::from(input.status_code))
         .bind(input.source_ip)
         .execute(&self.pool)
@@ -205,7 +216,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<AuditLog>, sqlx::Error> {
         sqlx::query_as::<_, AuditLog>(
-            "SELECT id, request_id, username, role, method, path, status_code, \
+            "SELECT id, request_id, username, role, method, path, query_params, request_body, status_code, \
                     host(source_ip) AS source_ip, created_at \
              FROM api_audit_logs ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
         )

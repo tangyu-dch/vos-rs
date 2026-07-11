@@ -186,14 +186,20 @@ BEGIN
         ALTER TABLE anti_fraud_rules ADD COLUMN limit_number INTEGER;
     END IF;
 END $$;
+"#;
 
+pub(super) const MIGRATE_LEGACY_ANTI_FRAUD_RULES_STEP2_SQL: &str = r#"
 ALTER TABLE anti_fraud_rules
     ALTER COLUMN id TYPE TEXT USING id::TEXT;
+"#;
 
+pub(super) const MIGRATE_LEGACY_ANTI_FRAUD_RULES_STEP3_SQL: &str = r#"
 UPDATE anti_fraud_rules
 SET target_value = COALESCE(target_value, '')
 WHERE target_value IS NULL;
+"#;
 
+pub(super) const MIGRATE_LEGACY_ANTI_FRAUD_RULES_STEP4_SQL: &str = r#"
 ALTER TABLE anti_fraud_rules
     ALTER COLUMN target_value SET NOT NULL;
 "#;

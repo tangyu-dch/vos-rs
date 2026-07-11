@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Card, Form, Input, Message } from '@arco-design/web-react';
+import { Button, Form, Input, Message } from '@arco-design/web-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
 
@@ -28,21 +28,65 @@ export default function Login() {
 
   return (
     <div className="login-page">
-      <Card className="login-card" bordered={false}>
-        <div className="login-brand">VOS-RS</div>
-        <div className="login-subtitle">VoIP 运营管理平台</div>
-        <Form form={form} layout="vertical" onSubmit={handleSubmit}>
-          <FormItem field="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input placeholder="请输入用户名" autoComplete="username" />
-          </FormItem>
-          <FormItem field="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password placeholder="请输入密码" autoComplete="current-password" />
-          </FormItem>
-          <Button type="primary" long htmlType="submit" loading={loading}>
-            登录
-          </Button>
-        </Form>
-      </Card>
+      <div className="login-container">
+        {/* 左侧品牌区 */}
+        <div className="login-brand-section">
+          <div className="login-brand-content">
+            <div className="login-logo">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <rect width="48" height="48" rx="12" fill="var(--accent)" fillOpacity="0.15"/>
+                <path d="M16 20C16 17.7909 17.7909 16 20 16H28C30.2091 16 32 17.7909 32 20V28C32 30.2091 30.2091 32 28 32H20C17.7909 32 16 30.2091 16 28V20Z" stroke="var(--accent)" strokeWidth="2"/>
+                <circle cx="24" cy="24" r="3" fill="var(--accent)"/>
+                <path d="M24 16V20M24 28V32M16 24H20M28 24H32" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </div>
+            <h1 className="login-title">VOS-RS</h1>
+            <p className="login-desc">VoIP 软交换运营管理平台</p>
+            <div className="login-features">
+              <div className="login-feature">
+                <span className="feature-icon">⚡</span>
+                <span>高性能信令处理</span>
+              </div>
+              <div className="login-feature">
+                <span className="feature-icon"> ️</span>
+                <span>全方位安全防护</span>
+              </div>
+              <div className="login-feature">
+                <span className="feature-icon"> </span>
+                <span>实时呼叫监控</span>
+              </div>
+              <div className="login-feature">
+                <span className="feature-icon"> </span>
+                <span>智能路由引擎</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 右侧登录区 */}
+        <div className="login-form-section">
+          <div className="login-form-wrapper">
+            <div className="login-form-header">
+              <h2>欢迎回来</h2>
+              <p>请登录您的账户</p>
+            </div>
+            <Form form={form} layout="vertical" onSubmit={handleSubmit} className="login-form">
+              <FormItem field="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
+                <Input placeholder="请输入用户名" autoComplete="username" size="large" />
+              </FormItem>
+              <FormItem field="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
+                <Input.Password placeholder="请输入密码" autoComplete="current-password" size="large" />
+              </FormItem>
+              <Button type="primary" long htmlType="submit" loading={loading} size="large" className="login-btn">
+                登录
+              </Button>
+            </Form>
+            <div className="login-footer">
+              <span className="login-hint">默认账户：admin / admin123</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

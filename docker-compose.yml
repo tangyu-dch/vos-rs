@@ -1,68 +1,263 @@
+# VOS-RS Docker Compose 配置
+# 使用方法:
+#   开发环境: docker-compose up -d
+#   生产环境: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   查看日志: docker-compose logs -f [service]
+#   停止服务: docker-compose down
+
 services:
+  # ========== 基础设施 ==========
+
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
+    container_name: vos-rs-postgres
     environment:
-      POSTGRES_USER: vos_rs
-      POSTGRES_PASSWORD: vos_rs
-      POSTGRES_DB: vos_rs
+      POSTGRES_USER: ${POSTGRES_USER:-vos_rs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vos_rs}
+      POSTGRES_DB: ${POSTGRES_DB:-vos_rs}
+      # 性能优化
+      POSTGRES_INITDB_ARGS: "--data-checksums"
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - vos_rs_pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vos_rs"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vos_rs}"]
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: vos-rs-nats
+    command: [
+      "--js",
+      "--store_dir", "/data",
+      "--max_file", "256mb",
+      "--max_mem", "64mb",
+      "--port", "4222",
+      "--http_port", "8222"
+    ]
+    ports:
+      - "${NATS_PORT:-4222}:4222"
+      - "${NATS_MONITOR_PORT:-8222}:8222"
+    volumes:
+      - vos_rs_nats:/data
+    healthcheck:
+      test: ["CMD-SHELL", "nats-server --help > /dev/null 2>&1 || wget -qO- http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
+
+  # ========== 应用服务 ==========
 
   sip-edge:
-    build: .
-    command: ./sip-edge
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: vos-rs-sip-edge
+    command: ["./sip-edge"]
     environment:
-      VOS_RS_SIP_UDP_BIND: 0.0.0.0:5060
-      VOS_RS_SIP_DEFAULT_GATEWAY: 127.0.0.1:5070
-      VOS_RS_DATABASE_URL: postgres://vos_rs:vos_rs@postgres:5432/vos_rs
-      VOS_RS_MANAGE_BIND: 0.0.0.0:8082
-      VOS_RS_RECORDING_ENABLED: "true"
+      # SIP 配置
+      VOS_RS_SIP_UDP_BIND: "0.0.0.0:5060"
+      VOS_RS_SIP_ADVERTISED_ADDR: "${SIP_ADVERTISED_ADDR:-sip-edge:5060}"
+      VOS_RS_SIP_DEFAULT_GATEWAY: "${SIP_DEFAULT_GATEWAY:-127.0.0.1:5070}"
+      VOS_RS_SIP_UDP_RECEIVE_BUFFER: "${SIP_UDP_RECEIVE_BUFFER:-4194304}"
+      VOS_RS_SIP_UDP_SEND_BUFFER: "${SIP_UDP_SEND_BUFFER:-4194304}"
+
+      # RTP 配置
+      VOS_RS_RTP_ADVERTISED_ADDR: "${RTP_ADVERTISED_ADDR:-sip-edge}"
+      VOS_RS_RTP_PORT_MIN: "${RTP_PORT_MIN:-40000}"
+      VOS_RS_RTP_PORT_MAX: "${RTP_PORT_MAX:-40100}"
+      VOS_RS_RTP_SYMMETRIC_LEARNING: "${RTP_SYMMETRIC_LEARNING:-true}"
+      VOS_RS_RTP_ANTI_SPOOFING: "${RTP_ANTI_SPOOFING:-true}"
+
+      # 数据库
+      VOS_RS_DATABASE_URL: "postgres://${POSTGRES_USER:-vos_rs}:${POSTGRES_PASSWORD:-vos_rs}@postgres:5432/${POSTGRES_DB:-vos_rs}"
+
+      # NATS
+      VOS_RS_NATS_URL: "nats://nats:4222"
+      VOS_RS_NATS_CDR_STREAM: "VOS_RS_CDRS"
+      VOS_RS_NATS_CDR_SUBJECT: "vos-rs.cdrs"
+
+      # 录音
+      VOS_RS_RECORDING_ENABLED: "${RECORDING_ENABLED:-true}"
       VOS_RS_RECORDING_DIR: /data/recordings
-      RUST_LOG: sip_edge=info
+      VOS_RS_RECORDING_WORKERS: "${RECORDING_WORKERS:-4}"
+      VOS_RS_RECORDING_QUEUE_CAPACITY: "${RECORDING_QUEUE_CAPACITY:-4096}"
+      VOS_RS_RECORDING_RETENTION_SECS: "${RECORDING_RETENTION_SECS:-604800}"
+
+      # 认证
+      VOS_RS_SIP_AUTH_USERS: "${SIP_AUTH_USERS:-1001:secret,1002:secret}"
+      VOS_RS_SIP_AUTH_REALM: "${SIP_AUTH_REALM:-vos-rs}"
+
+      # 内部密钥
+      VOS_RS_INTERNAL_SECRET: "${INTERNAL_SECRET:-change-me-in-production}"
+
+      # 管理 API
+      VOS_RS_MANAGE_BIND: "0.0.0.0:8082"
+
+      # 日志
+      RUST_LOG: "${RUST_LOG:-sip_edge=info}"
+
+    ports:
+      - "${SIP_UDP_PORT:-5060}:5060/udp"
+      - "${SIP_TCP_PORT:-5060}:5060/tcp"
+      - "${MANAGE_PORT:-8082}:8082"
+    volumes:
+      - vos_rs_recordings:/data/recordings
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "5060:5060/udp"
-      - "5060:5060"
-      - "8082:8082"
-    volumes:
-      - vos_rs_recordings:/data/recordings
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8082/manage/active-calls || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
 
   api-server:
-    build: .
-    command: ./api-server
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: vos-rs-api-server
+    command: ["./api-server"]
     environment:
-      DATABASE_URL: postgres://vos_rs:vos_rs@postgres:5432/vos_rs
-      API_PORT: "8080"
+      # 数据库
+      VOS_RS_DATABASE_URL: "postgres://${POSTGRES_USER:-vos_rs}:${POSTGRES_PASSWORD:-vos_rs}@postgres:5432/${POSTGRES_DB:-vos_rs}"
+
+      # API 配置
+      API_PORT: "${API_PORT:-8080}"
+      VOS_RS_MANAGE_BASE: "http://sip-edge:8082"
+
+      # JWT 密钥（生产环境必须修改）
+      VOS_RS_API_JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
+
+      # 登录密码（生产环境必须修改）
+      VOS_RS_ADMIN_PASSWORD: "${ADMIN_PASSWORD:-admin123}"
+      VOS_RS_OPERATOR_PASSWORD: "${OPERATOR_PASSWORD:-operator123}"
+      VOS_RS_FINANCIER_PASSWORD: "${FINANCIER_PASSWORD:-financier123}"
+
+      # 内部密钥
+      VOS_RS_INTERNAL_SECRET: "${INTERNAL_SECRET:-change-me-in-production}"
+
+      # 录音目录
       VOS_RS_RECORDING_DIR: /data/recordings
-      VOS_RS_MANAGE_BASE: http://sip-edge:8082
+
+      # CORS 配置
+      VOS_RS_API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:80}"
+
+      # 日志
+      RUST_LOG: "${RUST_LOG:-api_server=info}"
+
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - vos_rs_recordings:/data/recordings
     depends_on:
       postgres:
         condition: service_healthy
+      nats:
+        condition: service_healthy
       sip-edge:
-        condition: service_started
-    ports:
-      - "8080:8080"
-    volumes:
-      - vos_rs_recordings:/data/recordings
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
+
+  cdr-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: vos-rs-cdr-worker
+    command: ["./cdr-worker"]
+    environment:
+      # 数据库
+      VOS_RS_DATABASE_URL: "postgres://${POSTGRES_USER:-vos_rs}:${POSTGRES_PASSWORD:-vos_rs}@postgres:5432/${POSTGRES_DB:-vos_rs}"
+
+      # NATS
+      VOS_RS_NATS_URL: "nats://nats:4222"
+      VOS_RS_NATS_CDR_STREAM: "VOS_RS_CDRS"
+      VOS_RS_NATS_CDR_SUBJECT: "vos-rs.cdrs"
+      VOS_RS_NATS_CDR_CONSUMER: "vos-rs-cdr-worker"
+
+      # 批量配置
+      VOS_RS_CDR_BATCH_SIZE: "${CDR_BATCH_SIZE:-50}"
+      VOS_RS_CDR_BATCH_TIMEOUT_MS: "${CDR_BATCH_TIMEOUT_MS:-100}"
+      VOS_RS_CDR_MAX_DELIVERIES: "${CDR_MAX_DELIVERIES:-5}"
+
+      # 日志
+      RUST_LOG: "${RUST_LOG:-cdr_worker=info}"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
+
+  # ========== 前端 ==========
 
   web:
     build:
       context: .
       dockerfile: web/Dockerfile
-    depends_on:
-      - api-server
+    container_name: vos-rs-web
     ports:
-      - "3000:80"
+      - "${WEB_PORT:-3000}:80"
+    depends_on:
+      api-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
+
+# ========== 网络 ==========
+
+networks:
+  vos_rs_network:
+    driver: bridge
+    name: vos_rs_network
+
+# ========== 卷 ==========
 
 volumes:
   vos_rs_pg:
+    driver: local
+    name: vos_rs_pg
+  vos_rs_nats:
+    driver: local
+    name: vos_rs_nats
   vos_rs_recordings:
+    driver: local
+    name: vos_rs_recordings

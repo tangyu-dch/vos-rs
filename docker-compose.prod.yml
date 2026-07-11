@@ -1,0 +1,75 @@
+# 生产环境配置覆盖
+# 使用方法: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  postgres:
+    # 生产环境不暴露端口到宿主机
+    ports: []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请设置 POSTGRES_PASSWORD}
+    # 生产环境使用更强的资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  nats:
+    # 生产环境不暴露端口到宿主机
+    ports: []
+    command: [
+      "--js",
+      "--store_dir", "/data",
+      "--max_file", "1gb",
+      "--max_mem", "256mb",
+      "--port", "4222",
+      "--http_port", "8222",
+      # 生产环境启用监控认证
+      "--username", "${NATS_USER:-nats_admin}",
+      "--password", "${NATS_PASSWORD:?请设置 NATS_PASSWORD}"
+    ]
+
+  sip-edge:
+    environment:
+      # 生产环境必须修改的密钥
+      VOS_RS_INTERNAL_SECRET: ${INTERNAL_SECRET:?请设置 INTERNAL_SECRET}
+      # 生产环境禁用默认密码
+      VOS_RS_SIP_AUTH_USERS: ${SIP_AUTH_USERS:?请设置 SIP_AUTH_USERS}
+      # 生产环境使用真实网关
+      VOS_RS_SIP_DEFAULT_GATEWAY: ${SIP_DEFAULT_GATEWAY:?请设置 SIP_DEFAULT_GATEWAY}
+      VOS_RS_SIP_ADVERTISED_ADDR: ${SIP_ADVERTISED_ADDR:?请设置 SIP_ADVERTISED_ADDR}
+      VOS_RS_RTP_ADVERTISED_ADDR: ${RTP_ADVERTISED_ADDR:?请设置 RTP_ADVERTISED_ADDR}
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+        reservations:
+          memory: 1G
+          cpus: "1.0"
+
+  api-server:
+    environment:
+      # 生产环境必须修改的密钥
+      VOS_RS_API_JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
+      VOS_RS_INTERNAL_SECRET: ${INTERNAL_SECRET:?请设置 INTERNAL_SECRET}
+      # 生产环境必须修改密码
+      VOS_RS_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请设置 ADMIN_PASSWORD}
+      VOS_RS_OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:?请设置 OPERATOR_PASSWORD}
+      VOS_RS_FINANCIER_PASSWORD: ${FINANCIER_PASSWORD:?请设置 FINANCIER_PASSWORD}
+      # 生产环境限制 CORS
+      VOS_RS_API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:?请设置 API_ALLOWED_ORIGINS}
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+        reservations:
+          memory: 512M
+
+  web:
+    deploy:
+      resources:
+        limits:
+          memory: 256M

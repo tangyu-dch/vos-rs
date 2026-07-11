@@ -410,6 +410,8 @@ pub struct AuditLog {
     pub role: String,
     pub method: String,
     pub path: String,
+    pub query_params: Option<String>,
+    pub request_body: Option<String>,
     pub status_code: i32,
     pub source_ip: Option<String>,
     #[serde(
@@ -428,6 +430,8 @@ pub struct AuditLogInput<'a> {
     pub role: &'a str,
     pub method: &'a str,
     pub path: &'a str,
+    pub query_params: Option<&'a str>,
+    pub request_body: Option<&'a str>,
     pub status_code: u16,
     pub source_ip: Option<&'a str>,
 }

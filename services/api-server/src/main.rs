@@ -1022,13 +1022,58 @@ async fn jwt_auth(
     }
 }
 
+/// 对审计请求体中的敏感字段做递归脱敏。
+///
+/// 审计日志用于追踪操作，不应成为凭据泄露的新渠道。无法解析为 JSON
+/// 时不记录原文，只保留固定提示，避免把表单或未知格式直接落库。
+fn sanitize_audit_json(body: &[u8]) -> String {
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return "[已省略无法解析的 JSON 请求体]".to_string();
+    };
+    redact_sensitive_json_value(&mut value);
+    serde_json::to_string(&value).unwrap_or_else(|_| "[已省略审计请求体]".to_string())
+}
+
+/// 递归遍历 JSON 对象和数组，将常见凭据字段替换成固定占位符。
+fn redact_sensitive_json_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, child) in object.iter_mut() {
+                if matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "password"
+                        | "passwd"
+                        | "secret"
+                        | "token"
+                        | "access_token"
+                        | "refresh_token"
+                        | "api_key"
+                        | "authorization"
+                        | "ha1"
+                ) {
+                    *child = serde_json::Value::String("[已脱敏]".to_string());
+                } else {
+                    redact_sensitive_json_value(child);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 async fn audit_log(
     State(state): State<AppState>,
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let method = req.method().clone();
     let uri = req.uri().clone();
+    let query_params = uri.query().map(|q| q.to_string());
     let request_id = req
         .headers()
         .get("x-request-id")
@@ -1056,6 +1101,40 @@ async fn audit_log(
         .map(|c| c.role.clone())
         .unwrap_or_else(|| "unknown".to_string());
 
+    // 仅记录经过脱敏的 JSON 请求体，避免把密码、Token 等凭据写入审计库。
+    let request_body = if matches!(
+        method,
+        axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::PATCH
+    ) {
+        let (parts, body) = req.into_parts();
+        const MAX_AUDIT_BODY_BYTES: usize = 256 * 1024;
+        let content_type = parts
+            .headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let body_result = axum::body::to_bytes(body, MAX_AUDIT_BODY_BYTES).await;
+        let body_bytes = match body_result {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(%error, request_id = %request_id, "读取审计请求体失败，跳过请求体记录");
+                axum::body::Bytes::new()
+            }
+        };
+        let body_str = if content_type.starts_with("application/json") {
+            sanitize_audit_json(&body_bytes)
+        } else if body_bytes.is_empty() {
+            String::new()
+        } else {
+            format!("[已省略非 JSON 请求体，大小 {} 字节]", body_bytes.len())
+        };
+        req = axum::extract::Request::from_parts(parts, axum::body::Body::from(body_bytes));
+        (!body_str.is_empty()).then_some(body_str)
+    } else {
+        None
+    };
+
     let response = next.run(req).await;
     let status = response.status();
     let store = state.store.clone();
@@ -1064,6 +1143,8 @@ async fn audit_log(
     let audit_role = role.clone();
     let audit_method = method.to_string();
     let audit_path = uri.path().to_string();
+    let audit_query_params = query_params.clone();
+    let audit_request_body = request_body.clone();
     let audit_source_ip = source_ip.clone();
     tokio::spawn(async move {
         let input = AuditLogInput {
@@ -1072,6 +1153,8 @@ async fn audit_log(
             role: &audit_role,
             method: &audit_method,
             path: &audit_path,
+            query_params: audit_query_params.as_deref(),
+            request_body: audit_request_body.as_deref(),
             status_code: status.as_u16(),
             source_ip: audit_source_ip.as_deref(),
         };
@@ -1312,7 +1395,8 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::role_allows;
+    use super::{redact_sensitive_json_value, role_allows, sanitize_audit_json};
+    use serde_json::json;
 
     // ===== Unit tests for role_allows =====
 
@@ -1441,5 +1525,30 @@ mod tests {
         assert!(role_allows("financier", "GET", "/api/cdrs"));
         assert!(role_allows("financier", "GET", "/api/registrations"));
         assert!(role_allows("financier", "GET", "/api/recordings"));
+    }
+
+    #[test]
+    fn audit_json_redacts_nested_credentials() {
+        let mut value = json!({
+            "username": "alice",
+            "password": "secret",
+            "nested": [{"access_token": "token-value"}],
+            "profile": {"api_key": "key-value"}
+        });
+
+        redact_sensitive_json_value(&mut value);
+
+        assert_eq!(value["password"], "[已脱敏]");
+        assert_eq!(value["nested"][0]["access_token"], "[已脱敏]");
+        assert_eq!(value["profile"]["api_key"], "[已脱敏]");
+        assert_eq!(value["username"], "alice");
+    }
+
+    #[test]
+    fn invalid_audit_json_is_not_recorded_as_plaintext() {
+        let result = sanitize_audit_json(br#"password=secret&token=value"#);
+
+        assert_eq!(result, "[已省略无法解析的 JSON 请求体]");
+        assert!(!result.contains("secret"));
     }
 }
