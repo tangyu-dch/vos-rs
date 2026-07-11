@@ -13,12 +13,19 @@ export default function AuditLogs() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (nextPage = 1, nextPageSize = 50) => {
     setLoading(true);
     setError(null);
     try {
-      setLogs(await apiService.getAuditLogs());
+      const data = await apiService.getAuditLogs(nextPage, nextPageSize);
+      setLogs(data.items);
+      setTotal(data.total);
+      setPage(nextPage);
+      setPageSize(nextPageSize);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : '加载失败';
       setError(message);
@@ -59,7 +66,7 @@ export default function AuditLogs() {
           data={logs}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 50, sizeCanChange: true }}
+          pagination={{ current: page, pageSize, total, sizeCanChange: true, sizeOptions: [20, 50, 100, 200], onChange: (nextPage) => load(nextPage, pageSize), onPageSizeChange: (nextPageSize) => load(1, nextPageSize) }}
           scroll={{ x: 1200 }}
           noDataElement={<Empty description="暂无审计记录" />}
         />

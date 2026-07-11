@@ -236,8 +236,10 @@ export const apiService = {
   },
 
   // ===== 计费：账户 =====
-  async getAccounts(): Promise<BillingAccount[]> {
-    const r = await api.get<BillingAccount[]>('/accounts');
+  async getAccounts(page = 1, pageSize = 20): Promise<PaginatedResponse<BillingAccount>> {
+    const r = await api.get<PaginatedResponse<BillingAccount>>('/accounts', {
+      params: { page, page_size: pageSize },
+    });
     return r.data;
   },
   async creditAccount(
@@ -247,9 +249,9 @@ export const apiService = {
     const r = await api.post(`/accounts/${username}/credit`, { amount });
     return r.data;
   },
-  async getLedger(username?: string): Promise<LedgerEntry[]> {
-    const r = await api.get<LedgerEntry[]>('/ledger', {
-      params: username ? { username } : {},
+  async getLedger(username?: string, page = 1, pageSize = 20): Promise<PaginatedResponse<LedgerEntry>> {
+    const r = await api.get<PaginatedResponse<LedgerEntry>>('/ledger', {
+      params: { username, page, page_size: pageSize },
     });
     return r.data;
   },
@@ -318,8 +320,8 @@ export const apiService = {
       config_value: configValue,
     });
   },
-  async getAuditLogs(page = 1, pageSize = 50): Promise<AuditLog[]> {
-    const response = await api.get<AuditLog[]>('/audit-logs', {
+  async getAuditLogs(page = 1, pageSize = 50): Promise<PaginatedResponse<AuditLog>> {
+    const response = await api.get<PaginatedResponse<AuditLog>>('/audit-logs', {
       params: { page, page_size: pageSize },
     });
     return response.data;

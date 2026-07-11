@@ -5,6 +5,7 @@ import {
   Button,
   Modal,
   Form,
+  Input,
   InputNumber,
   Message,
   Alert,
@@ -25,25 +26,47 @@ export default function Accounts() {
   const [accounts, setAccounts] = useState<BillingAccount[]>([]);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [accountPage, setAccountPage] = useState(1);
+  const [accountPageSize, setAccountPageSize] = useState(20);
+  const [accountTotal, setAccountTotal] = useState(0);
+  const [ledgerPage, setLedgerPage] = useState(1);
+  const [ledgerPageSize, setLedgerPageSize] = useState(20);
+  const [ledgerTotal, setLedgerTotal] = useState(0);
+  const [ledgerUser, setLedgerUser] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [creditUser, setCreditUser] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState(false);
   const [form] = Form.useForm();
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (
+    nextAccountPage = 1,
+    nextLedgerPage = 1,
+    nextAccountPageSize = 20,
+    nextLedgerPageSize = 20,
+    username = ledgerUser,
+  ) => {
     setLoading(true);
     setError(null);
     try {
-      const [a, l] = await Promise.all([apiService.getAccounts(), apiService.getLedger()]);
-      setAccounts(a);
-      setLedger(l);
+      const [a, l] = await Promise.all([
+        apiService.getAccounts(nextAccountPage, nextAccountPageSize),
+        apiService.getLedger(username || undefined, nextLedgerPage, nextLedgerPageSize),
+      ]);
+      setAccounts(a.items);
+      setAccountTotal(a.total);
+      setAccountPage(nextAccountPage);
+      setAccountPageSize(nextAccountPageSize);
+      setLedger(l.items);
+      setLedgerTotal(l.total);
+      setLedgerPage(nextLedgerPage);
+      setLedgerPageSize(nextLedgerPageSize);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
       Message.error('加载账户数据失败');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [ledgerUser]);
 
   useEffect(() => {
     load();
@@ -149,7 +172,7 @@ export default function Accounts() {
           <span className="sub">账户余额、充值与离线对账扣费明细</span>
         </div>
         <div className="page-header__actions">
-          <Button icon={<IconRefresh />} onClick={load}>
+          <Button icon={<IconRefresh />} onClick={() => load(accountPage, ledgerPage, accountPageSize, ledgerPageSize)}>
             刷新
           </Button>
           <Button
@@ -172,19 +195,19 @@ export default function Accounts() {
           data={accounts}
           rowKey="username"
           loading={loading}
-          pagination={false}
+          pagination={{ current: accountPage, pageSize: accountPageSize, total: accountTotal, sizeCanChange: true, sizeOptions: [10, 20, 50, 100], onChange: (nextPage) => load(nextPage, ledgerPage, accountPageSize, ledgerPageSize), onPageSizeChange: (nextPageSize) => load(1, ledgerPage, nextPageSize, ledgerPageSize) }}
           noDataElement={<Empty description="暂无账户（充值时自动创建）" />}
         />
       </Card>
 
-      <Card className="app-card" bordered={false} title="扣费明细" style={{ marginTop: 16 }}>
+      <Card className="app-card" bordered={false} title="扣费明细" style={{ marginTop: 16 }} extra={<Input.Search allowClear placeholder="按账户筛选" value={ledgerUser} onChange={setLedgerUser} onPressEnter={() => load(accountPage, 1, accountPageSize, ledgerPageSize)} onSearch={() => load(accountPage, 1, accountPageSize, ledgerPageSize)} style={{ width: 220 }} />}>
         <Table
           className="app-table"
           columns={ledgerColumns}
           data={ledger}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, sizeCanChange: true }}
+          pagination={{ current: ledgerPage, pageSize: ledgerPageSize, total: ledgerTotal, sizeCanChange: true, sizeOptions: [10, 20, 50, 100], onChange: (nextPage) => load(accountPage, nextPage, accountPageSize, ledgerPageSize), onPageSizeChange: (nextPageSize) => load(accountPage, 1, accountPageSize, nextPageSize) }}
           noDataElement={<Empty description="暂无扣费记录（点击离线对账生成）" />}
         />
       </Card>

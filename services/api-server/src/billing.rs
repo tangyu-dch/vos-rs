@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
-use crate::{parse_dt, AppState};
+use crate::{normalize_page, parse_dt, AppState, PageQuery, PaginatedResponse};
 use cdr_core::{BillingAccount, BillingRate, LedgerEntry, ReconcileResult};
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +32,8 @@ pub struct CreditBody {
 #[derive(Debug, Deserialize)]
 pub struct LedgerQuery {
     pub username: Option<String>,
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,8 +115,22 @@ pub async fn delete_rate(
     })
 }
 
-pub async fn list_accounts(State(state): State<AppState>) -> Result<Json<Vec<BillingAccount>>, E> {
-    state.store.list_accounts().await.map(Json).map_err(err)
+pub async fn list_accounts(
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<PaginatedResponse<BillingAccount>>, E> {
+    let (page, page_size, offset) = normalize_page(&query);
+    let (items, total) = tokio::try_join!(
+        state.store.list_accounts_page(page_size, offset),
+        state.store.count_accounts(),
+    )
+    .map_err(err)?;
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+    }))
 }
 
 pub async fn credit_account(
@@ -139,13 +155,26 @@ pub async fn credit_account(
 pub async fn list_ledger(
     State(state): State<AppState>,
     Query(q): Query<LedgerQuery>,
-) -> Result<Json<Vec<LedgerEntry>>, E> {
-    state
-        .store
-        .list_ledger(q.username.as_deref())
-        .await
-        .map(Json)
-        .map_err(err)
+) -> Result<Json<PaginatedResponse<LedgerEntry>>, E> {
+    let page_query = PageQuery {
+        page: q.page,
+        page_size: q.page_size,
+        gateway_type: None,
+    };
+    let (page, page_size, offset) = normalize_page(&page_query);
+    let (items, total) = tokio::try_join!(
+        state
+            .store
+            .list_ledger_page(q.username.as_deref(), page_size, offset),
+        state.store.count_ledger(q.username.as_deref()),
+    )
+    .map_err(err)?;
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+    }))
 }
 
 pub async fn reconcile(

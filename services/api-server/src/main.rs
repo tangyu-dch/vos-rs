@@ -825,17 +825,23 @@ struct AuditLogQuery {
 async fn list_audit_logs(
     State(state): State<AppState>,
     Query(query): Query<AuditLogQuery>,
-) -> Result<Json<Vec<cdr_core::AuditLog>>, ApiError> {
+) -> Result<Json<PaginatedResponse<cdr_core::AuditLog>>, ApiError> {
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(50).clamp(1, 200);
-    state
-        .store
-        .list_audit_logs(page_size, (page - 1) * page_size)
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
+    let offset = (page - 1).saturating_mul(page_size);
+    let (items, total) = tokio::try_join!(
+        state.store.list_audit_logs(page_size, offset),
+        state.store.count_audit_logs(),
+    )
+    .map_err(|e| ApiError {
+        error: e.to_string(),
+    })?;
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+    }))
 }
 
 async fn update_anti_fraud_config(

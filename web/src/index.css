@@ -774,11 +774,46 @@ input {
 [data-theme='dark'] .arco-input-password .arco-input-wrapper {
   background: var(--bg-panel-3) !important;
 }
+[data-theme='dark'] .arco-input-password .arco-input {
+  color: var(--text-primary) !important;
+  background: transparent !important;
+}
 [data-theme='dark'] .arco-input-password-btn {
   color: var(--text-muted) !important;
 }
 [data-theme='dark'] .arco-input-password-btn:hover {
   color: var(--text-primary) !important;
+}
+
+/* Login form specific overrides */
+.login-form .arco-input-wrapper {
+  background: var(--bg-panel-3) !important;
+  border-color: var(--border-default) !important;
+}
+.login-form .arco-input-wrapper:focus-within {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-dim) !important;
+}
+.login-form .arco-input {
+  color: var(--text-primary) !important;
+  background: transparent !important;
+}
+.login-form .arco-input::placeholder {
+  color: var(--text-muted) !important;
+}
+.login-form .arco-form-item-label {
+  color: var(--text-secondary) !important;
+}
+.login-form .arco-input-password .arco-input-wrapper {
+  background: var(--bg-panel-3) !important;
+  border-color: var(--border-default) !important;
+}
+.login-form .arco-input-password .arco-input {
+  color: var(--text-primary) !important;
+  background: transparent !important;
+}
+.login-form .arco-input-password .arco-input::placeholder {
+  color: var(--text-muted) !important;
 }
 
 /* ─── Modals ─── */
@@ -1376,69 +1411,81 @@ input {
 .floating-orb {
   position: absolute;
   border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.4;
-  animation: float 20s ease-in-out infinite;
+  filter: blur(120px);
+  opacity: 0.15;
 }
 
 .orb-1 {
-  width: 400px;
-  height: 400px;
-  background: var(--accent);
-  top: -100px;
-  left: -100px;
-  animation-delay: 0s;
+  width: 500px;
+  height: 500px;
+  background: #10b981;
+  top: -150px;
+  left: -150px;
+  animation: float1 25s ease-in-out infinite;
 }
 
 .orb-2 {
-  width: 300px;
-  height: 300px;
-  background: #8b5cf6;
-  bottom: -50px;
-  right: -50px;
-  animation-delay: -5s;
+  width: 400px;
+  height: 400px;
+  background: #6366f1;
+  bottom: -100px;
+  right: -100px;
+  animation: float2 30s ease-in-out infinite;
 }
 
 .orb-3 {
-  width: 250px;
-  height: 250px;
-  background: #06b6d4;
-  top: 50%;
-  left: 50%;
-  animation-delay: -10s;
+  width: 350px;
+  height: 350px;
+  background: #0891b2;
+  top: 40%;
+  left: 40%;
+  animation: float3 20s ease-in-out infinite;
 }
 
 .orb-4 {
-  width: 200px;
-  height: 200px;
-  background: #f59e0b;
-  bottom: 20%;
-  left: 10%;
-  animation-delay: -15s;
+  width: 300px;
+  height: 300px;
+  background: #d97706;
+  bottom: 10%;
+  left: 5%;
+  animation: float4 35s ease-in-out infinite;
 }
 
 .orb-5 {
-  width: 180px;
-  height: 180px;
-  background: #ec4899;
-  top: 20%;
-  right: 20%;
-  animation-delay: -8s;
+  width: 250px;
+  height: 250px;
+  background: #db2777;
+  top: 15%;
+  right: 15%;
+  animation: float5 28s ease-in-out infinite;
 }
 
-@keyframes float {
-  0%, 100% {
-    transform: translate(0, 0) scale(1);
-  }
-  25% {
-    transform: translate(50px, -30px) scale(1.1);
-  }
-  50% {
-    transform: translate(-20px, 50px) scale(0.9);
-  }
-  75% {
-    transform: translate(30px, 20px) scale(1.05);
-  }
+@keyframes float1 {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  33% { transform: translate(80px, -60px) rotate(120deg); }
+  66% { transform: translate(-40px, 80px) rotate(240deg); }
+}
+
+@keyframes float2 {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  33% { transform: translate(-70px, 50px) rotate(-120deg); }
+  66% { transform: translate(60px, -70px) rotate(-240deg); }
+}
+
+@keyframes float3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-50px, 60px) scale(1.15); }
+}
+
+@keyframes float4 {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(90px, -40px) rotate(180deg); }
+}
+
+@keyframes float5 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-60px, -50px) scale(1.1); }
+  66% { transform: translate(40px, 70px) scale(0.95); }
 }
 
 /* Theme Toggle Button */

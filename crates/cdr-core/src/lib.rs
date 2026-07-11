@@ -226,6 +226,14 @@ impl PostgresCdrStore {
         .await
     }
 
+    /// 返回审计日志总数，用于管理台分页。
+    pub async fn count_audit_logs(&self) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM api_audit_logs")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
+    }
+
     // ===== CDR =====
 
     pub async fn insert_call_cdr(&self, cdr: &call_core::CallCdr) -> Result<(), sqlx::Error> {
@@ -1341,6 +1349,39 @@ impl PostgresCdrStore {
         Ok(out)
     }
 
+    /// 按页读取计费账户。
+    pub async fn list_accounts_page(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<BillingAccount>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT username, balance, currency, created_at FROM billing_accounts \
+             ORDER BY username LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| BillingAccount {
+                username: row.get(0),
+                balance: row.get(1),
+                currency: row.get(2),
+                created_at: row.get(3),
+            })
+            .collect())
+    }
+
+    /// 返回计费账户总数。
+    pub async fn count_accounts(&self) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM billing_accounts")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
+    }
+
     pub async fn credit_account(&self, username: &str, amount: f64) -> Result<f64, sqlx::Error> {
         sqlx::query(
             "INSERT INTO billing_accounts (username, balance) VALUES ($1, $2) \
@@ -1498,6 +1539,63 @@ impl PostgresCdrStore {
             });
         }
         Ok(out)
+    }
+
+    /// 按页读取扣费明细，支持按账户筛选。
+    pub async fn list_ledger_page(
+        &self,
+        username: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
+        let rows = if let Some(username) = username {
+            sqlx::query(
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, amount, balance_after, created_at \
+                 FROM billing_ledger WHERE username = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
+            )
+            .bind(username)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, amount, balance_after, created_at \
+                 FROM billing_ledger ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        Ok(rows
+            .into_iter()
+            .map(|row| LedgerEntry {
+                id: row.get(0),
+                call_id: row.get(1),
+                username: row.get(2),
+                duration_ms: row.get(3),
+                rate_per_minute: row.get(4),
+                amount: row.get(5),
+                balance_after: row.get(6),
+                created_at: row.get(7),
+            })
+            .collect())
+    }
+
+    /// 返回扣费明细总数，可按账户筛选。
+    pub async fn count_ledger(&self, username: Option<&str>) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = if let Some(username) = username {
+            sqlx::query_as("SELECT COUNT(*) FROM billing_ledger WHERE username = $1")
+                .bind(username)
+                .fetch_one(&self.pool)
+                .await?
+        } else {
+            sqlx::query_as("SELECT COUNT(*) FROM billing_ledger")
+                .fetch_one(&self.pool)
+                .await?
+        };
+        Ok(row.0)
     }
 
     // ===== 计费：离线对账 =====
