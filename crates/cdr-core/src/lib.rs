@@ -82,6 +82,12 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_STATUS_INDEX_SQL)
             .execute(&self.pool)
             .await?;
+        sqlx::query(CREATE_CDR_CALLER_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_CDR_CALLEE_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(CREATE_SIP_USERS_TABLE_SQL)
             .execute(&self.pool)
             .await?;
@@ -91,6 +97,9 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_SIP_ROUTES_TABLE_SQL)
             .execute(&self.pool)
             .await?;
+        sqlx::query(CREATE_ROUTES_PRIORITY_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(MIGRATION_ADD_ROUTE_WEIGHT)
             .execute(&self.pool)
             .await?;
@@ -98,6 +107,9 @@ impl PostgresCdrStore {
             .execute(&self.pool)
             .await?;
         sqlx::query("ALTER TABLE sip_registrations ADD COLUMN IF NOT EXISTS path TEXT")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_REGISTRATIONS_EXPIRES_INDEX_SQL)
             .execute(&self.pool)
             .await?;
         sqlx::query("ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS max_capacity INTEGER")
@@ -132,10 +144,16 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_LEDGER_USERNAME_INDEX_SQL)
             .execute(&self.pool)
             .await?;
+        sqlx::query(CREATE_LEDGER_CREATED_AT_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(CREATE_NUMBER_INVENTORY_TABLE_SQL)
             .execute(&self.pool)
             .await?;
         sqlx::query(CREATE_GATEWAY_HEALTH_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_GATEWAY_HEALTH_STATE_INDEX_SQL)
             .execute(&self.pool)
             .await?;
         sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'closed'")

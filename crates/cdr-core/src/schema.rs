@@ -54,6 +54,10 @@ pub(super) const CREATE_STARTED_AT_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_call_cdrs_started_at ON call_cdrs (started_at)";
 pub(super) const CREATE_STATUS_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_call_cdrs_status ON call_cdrs (status)";
+pub(super) const CREATE_CDR_CALLER_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_call_cdrs_caller ON call_cdrs (caller)";
+pub(super) const CREATE_CDR_CALLEE_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_call_cdrs_callee ON call_cdrs (callee)";
 
 pub(super) const CREATE_SIP_USERS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS sip_users (
@@ -118,6 +122,9 @@ CREATE TABLE IF NOT EXISTS sip_registrations (
 )
 "#;
 
+pub(super) const CREATE_REGISTRATIONS_EXPIRES_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_registrations_expires_at ON sip_registrations (expires_at)";
+
 pub(super) const CREATE_GATEWAY_HEALTH_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS gateway_health_status (
     gateway_id TEXT PRIMARY KEY,
@@ -131,6 +138,12 @@ CREATE TABLE IF NOT EXISTS gateway_health_status (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
+
+pub(super) const CREATE_GATEWAY_HEALTH_STATE_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_gateway_health_state ON gateway_health_status (state)";
+
+pub(super) const CREATE_ROUTES_PRIORITY_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_routes_priority_id ON sip_routes (priority, id)";
 
 pub(super) const CREATE_ANTI_FRAUD_RULES_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS anti_fraud_rules (
@@ -256,6 +269,8 @@ CREATE TABLE IF NOT EXISTS billing_ledger (
 
 pub(super) const CREATE_LEDGER_USERNAME_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_billing_ledger_username ON billing_ledger (username)";
+pub(super) const CREATE_LEDGER_CREATED_AT_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_billing_ledger_created_at ON billing_ledger (created_at DESC)";
 
 pub(super) const CREATE_NUMBER_INVENTORY_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS number_inventory (

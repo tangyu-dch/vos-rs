@@ -3,6 +3,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+use tracing::warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpNet {
@@ -13,6 +14,9 @@ pub struct IpNet {
 impl IpNet {
     pub fn parse(s: &str) -> Result<Self, String> {
         let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() > 2 || parts.iter().any(|part| part.is_empty()) {
+            return Err(format!("无效 CIDR 规则: {s}"));
+        }
         let ip = IpAddr::from_str(parts[0]).map_err(|e| e.to_string())?;
         let mask_len = if parts.len() > 1 {
             parts[1].parse::<u8>().map_err(|e| e.to_string())?
@@ -22,6 +26,10 @@ impl IpNet {
                 IpAddr::V6(_) => 128,
             }
         };
+        let max_mask = if ip.is_ipv4() { 32 } else { 128 };
+        if mask_len > max_mask {
+            return Err(format!("CIDR 掩码超出范围: {s}"));
+        }
         Ok(Self { ip, mask_len })
     }
 
@@ -139,11 +147,23 @@ impl SbcEngine {
     pub fn new(allow_rules: &[&str], block_rules: &[&str], capacity: f64, fill_rate: f64) -> Self {
         let allowlist = allow_rules
             .iter()
-            .filter_map(|r| IpNet::parse(r).ok())
+            .filter_map(|rule| match IpNet::parse(rule) {
+                Ok(net) => Some(net),
+                Err(error) => {
+                    warn!(rule, %error, "忽略无效 SBC allowlist CIDR 规则");
+                    None
+                }
+            })
             .collect();
         let blocklist = block_rules
             .iter()
-            .filter_map(|r| IpNet::parse(r).ok())
+            .filter_map(|rule| match IpNet::parse(rule) {
+                Ok(net) => Some(net),
+                Err(error) => {
+                    warn!(rule, %error, "忽略无效 SBC blocklist CIDR 规则");
+                    None
+                }
+            })
             .collect();
         Self {
             allowlist,
@@ -191,6 +211,13 @@ mod tests {
         let net_single = IpNet::parse("10.0.0.1").unwrap();
         assert!(net_single.contains(&IpAddr::from_str("10.0.0.1").unwrap()));
         assert!(!net_single.contains(&IpAddr::from_str("10.0.0.2").unwrap()));
+    }
+
+    #[test]
+    fn test_ip_net_rejects_invalid_masks_and_segments() {
+        assert!(IpNet::parse("192.168.1.1/33").is_err());
+        assert!(IpNet::parse("2001:db8::1/129").is_err());
+        assert!(IpNet::parse("192.168.1.1/24/1").is_err());
     }
 
     #[test]
