@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { apiService } from '@/services/api';
+import { apiService, formatApiError } from '@/services/api';
 
 // Mock axios
 vi.mock('axios', () => ({
@@ -52,6 +52,17 @@ describe('apiService', () => {
 
   it('has terminateCall method', () => {
     expect(typeof apiService.terminateCall).toBe('function');
+  });
+
+  it('formats backend errors and keeps request id', () => {
+    const error = formatApiError({
+      response: {
+        data: { error: '无权访问该接口' },
+        headers: { 'x-request-id': 'req_test_001' },
+      },
+    });
+
+    expect(error.message).toBe('无权访问该接口（请求 ID: req_test_001）');
   });
 
 });

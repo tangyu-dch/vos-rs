@@ -30,6 +30,24 @@ const api = axios.create({
   },
 });
 
+interface ApiErrorBody {
+  error?: string;
+  message?: string;
+  details?: string;
+}
+
+/** 将后端错误统一转换成页面可直接展示的中文错误，并保留请求编号。 */
+export function formatApiError(error: unknown): Error {
+  if (error instanceof Error && !(error as Error & { response?: unknown }).response) {
+    return error;
+  }
+  const response = (error as { response?: { data?: ApiErrorBody; headers?: Record<string, string> } } | null)?.response;
+  const body = response?.data;
+  const message = body?.error || body?.message || body?.details || '请求失败，请稍后重试';
+  const requestId = response?.headers?.['x-request-id'] || response?.headers?.['X-Request-ID'];
+  return new Error(requestId ? `${message}（请求 ID: ${requestId}）` : message);
+}
+
 api.interceptors.request.use((config) => {
   const token = getAccessToken();
   if (token) {
@@ -45,7 +63,7 @@ api.interceptors.response.use(
       clearSession();
       window.location.assign('/login');
     }
-    return Promise.reject(error);
+    return Promise.reject(formatApiError(error));
   },
 );
 
