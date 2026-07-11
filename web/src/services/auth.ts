@@ -57,6 +57,7 @@ export function canAccessPage(role: UserRole, path: string): boolean {
   if (['/gateways', '/peer-gateways', '/routes', '/numbers', '/anti-fraud'].includes(path)) {
     return role === 'operator';
   }
+  if (path === '/audit-logs') return false;
 
   return [
     '/dashboard',

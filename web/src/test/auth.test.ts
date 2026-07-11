@@ -12,6 +12,8 @@ describe('frontend RBAC', () => {
     expect(canAccessPage('operator', '/accounts')).toBe(false);
     expect(canAccessPage('financier', '/accounts')).toBe(true);
     expect(canAccessPage('financier', '/gateways')).toBe(false);
+    expect(canAccessPage('operator', '/audit-logs')).toBe(false);
+    expect(canAccessPage('financier', '/audit-logs')).toBe(false);
   });
 
   it('persists and validates the login session', () => {

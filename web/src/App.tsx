@@ -4,6 +4,7 @@ import Layout from './components/Layout'
 import Login from './pages/Login'
 import { useAuth } from './auth/AuthContext'
 import { canAccessPage, type UserRole } from './services/auth'
+import AppErrorBoundary from './components/AppErrorBoundary'
 
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Cdr = lazy(() => import('./pages/Cdr'))
@@ -45,12 +46,13 @@ function App() {
       <Route path="*" element={
         <RequireAuth>
           <Layout>
-            <Suspense fallback={<div className="loading-wrap" aria-live="polite">加载中...</div>}>
-              <Routes>
+            <AppErrorBoundary>
+              <Suspense fallback={<div className="loading-wrap" aria-live="polite">加载中...</div>}>
+                <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<Page path="/dashboard"><Dashboard /></Page>} />
                 <Route path="/active-calls" element={<Page path="/active-calls"><ActiveCalls /></Page>} />
-                <Route path="/users" element={<Page path="/users" roles={['admin']}><Users /></Page>} />
+                <Route path="/users" element={<Page path="/users"><Users /></Page>} />
                 <Route path="/gateways" element={<Page path="/gateways"><Gateways /></Page>} />
                 <Route path="/peer-gateways" element={<Page path="/peer-gateways"><PeerGateways /></Page>} />
                 <Route path="/routes" element={<Page path="/routes"><RoutesPage /></Page>} />
@@ -61,10 +63,11 @@ function App() {
                 <Route path="/rates" element={<Page path="/rates"><Rates /></Page>} />
                 <Route path="/accounts" element={<Page path="/accounts"><Accounts /></Page>} />
                 <Route path="/anti-fraud" element={<Page path="/anti-fraud"><AntiFraud /></Page>} />
-                <Route path="/audit-logs" element={<Page path="/audit-logs"><AuditLogs /></Page>} />
-                <Route path="*" element={<Navigate to="/dashboard" replace />} />
-              </Routes>
-            </Suspense>
+                <Route path="/audit-logs" element={<Page path="/audit-logs" roles={['admin']}><AuditLogs /></Page>} />
+                  <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                </Routes>
+              </Suspense>
+            </AppErrorBoundary>
           </Layout>
         </RequireAuth>
       } />
