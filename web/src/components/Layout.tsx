@@ -2,6 +2,7 @@ import { ReactNode, useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
 import { useTheme } from '@/theme/ThemeContext';
+import { apiService } from '@/services/api';
 import { canAccessPage, roleLabel } from '@/services/auth';
 import './Layout.css';
 
@@ -19,7 +20,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { key: '/dashboard', icon: '⊞', title: '工作台总览', group: '实时监控' },
-  { key: '/active-calls', icon: '📞', title: '活跃呼叫', group: '实时监控', badge: 3 },
+  { key: '/active-calls', icon: '📞', title: '活跃呼叫', group: '实时监控' },
   { key: '/users', icon: '👥', title: 'SIP 用户', group: '号码路由' },
   { key: '/gateways', icon: '🗄', title: '落地网关', group: '号码路由' },
   { key: '/peer-gateways', icon: '🔗', title: '对接网关', group: '号码路由' },
@@ -37,9 +38,9 @@ const NAV_ITEMS: NavItem[] = [
 
 const NAV_GROUPS = ['实时监控', '号码路由', '数据分析', '计费', '安全'];
 
-const TAB_ITEMS = [
+const TAB_ITEMS: Array<{ key: string; icon: string; label: string; badge?: number }> = [
   { key: '/dashboard', icon: '⊞', label: '工作台' },
-  { key: '/active-calls', icon: '📞', label: '通话', badge: 3 },
+  { key: '/active-calls', icon: '📞', label: '通话' },
   { key: '/users', icon: '👤', label: '客户' },
   { key: '/reports', icon: '📊', label: '报表' },
   { key: '/more', icon: '⋯', label: '更多' },
@@ -54,6 +55,7 @@ export default function Layout({ children }: LayoutProps) {
   const navigate = useNavigate();
   const { session, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const [activeCallCount, setActiveCallCount] = useState(0);
 
   const selectedKey =
     location.pathname === '/' ? '/dashboard' : location.pathname;
@@ -73,6 +75,26 @@ export default function Layout({ children }: LayoutProps) {
       setSidebarOpen(false);
     }
   }, [location.pathname, isMobile, isTablet]);
+
+  // 顶部通知和导航徽标显示真实活跃呼叫数，避免使用固定演示数据。
+  useEffect(() => {
+    let disposed = false;
+    const refreshActiveCallCount = async () => {
+      try {
+        const calls = await apiService.getActiveCalls();
+        if (!disposed) setActiveCallCount(calls.length);
+      } catch {
+        // 活跃呼叫不可用时隐藏徽标，不打断主页面操作。
+        if (!disposed) setActiveCallCount(0);
+      }
+    };
+    refreshActiveCallCount();
+    const timer = window.setInterval(refreshActiveCallCount, 10_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const toggleSidebar = () => {
     if (isMobile || isTablet) {
@@ -127,9 +149,9 @@ export default function Layout({ children }: LayoutProps) {
                   {!collapsed && (
                     <span className="sidebar-nav__title">{item.title}</span>
                   )}
-                  {!collapsed && item.badge && (
-                    <span className="sidebar-nav__badge">{item.badge}</span>
-                  )}
+                  {!collapsed && (item.key === '/active-calls' ? activeCallCount : item.badge) ? (
+                    <span className="sidebar-nav__badge">{item.key === '/active-calls' ? activeCallCount : item.badge}</span>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -185,12 +207,17 @@ export default function Layout({ children }: LayoutProps) {
           </div>
 
           <div className="topbar-right">
-            <button className="topbar-btn" title="通知">
+            <button
+              className="topbar-btn"
+              title={activeCallCount > 0 ? `${activeCallCount} 个活跃呼叫` : '无活跃呼叫'}
+              aria-label="查看活跃呼叫"
+              onClick={() => navigate('/active-calls')}
+            >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
                 <path d="M13.73 21a2 2 0 0 1-3.46 0" />
               </svg>
-              <span className="topbar-btn__badge" />
+              {activeCallCount > 0 && <span className="topbar-btn__badge">{activeCallCount > 99 ? '99+' : activeCallCount}</span>}
             </button>
 
             <button
@@ -240,7 +267,9 @@ export default function Layout({ children }: LayoutProps) {
               >
                 <span className="tab-item__icon">{tab.icon}</span>
                 <span className="tab-item__label">{tab.label}</span>
-                {tab.badge && <span className="tab-item__badge">{tab.badge}</span>}
+                {(tab.key === '/active-calls' ? activeCallCount : tab.badge) ? (
+                  <span className="tab-item__badge">{tab.key === '/active-calls' ? activeCallCount : tab.badge}</span>
+                ) : null}
               </button>
             ))}
           </div>
