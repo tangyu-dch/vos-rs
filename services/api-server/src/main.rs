@@ -9,7 +9,7 @@
 //! - **网关管理**：网关配置、健康状态
 //! - **路由管理**：路由规则 CRUD、试算
 //! - **计费管理**：费率、账户、账本、对账
-//! - **录音管理**：录音列表、播放、下载
+//! - **录音管理**：通过 CDR 详情播放和下载
 //! - **号码管理**：号码库存 CRUD
 //! - **反欺诈**：规则配置
 //! - **Prometheus 指标**：/metrics 端点
@@ -28,7 +28,7 @@
 //! | `/api/routes` | CRUD | 路由管理 | admin/operator |
 //! | `/api/rates` | CRUD | 费率管理 | admin/financier |
 //! | `/api/accounts` | GET | 账户列表 | admin/financier |
-//! | `/api/recordings` | GET | 录音列表 | 所有角色 |
+//! | `/api/recordings/:call_id/audio` | GET | CDR 录音播放/下载 | 所有角色 |
 //! | `/api/numbers` | CRUD | 号码管理 | admin/operator |
 //! | `/api/anti-fraud/rules` | CRUD | 反欺诈规则 | admin/operator |
 
@@ -69,7 +69,7 @@ use cdr_core::{
 };
 use metrics::{MediaMetricsSnapshot, Metrics};
 use numbers::{create_number, delete_number, list_numbers, update_number};
-use recording::{get_recording_audio, list_recordings};
+use recording::get_recording_audio;
 use report::{export_cdrs_csv, get_report_summary};
 
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
@@ -1418,7 +1418,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/routes", get(list_routes).post(create_route))
         .route("/api/routes/:id", put(update_route).delete(delete_route))
         .route("/api/registrations", get(list_registrations))
-        .route("/api/recordings", get(list_recordings))
         .route("/api/recordings/:call_id/audio", get(get_recording_audio))
         .route("/api/reports/summary", get(get_report_summary))
         .route("/api/reports/export", get(export_cdrs_csv))
@@ -1516,7 +1515,11 @@ mod tests {
     #[test]
     fn operator_can_read_cdrs_and_recordings() {
         assert!(role_allows("operator", "GET", "/api/cdrs"));
-        assert!(role_allows("operator", "GET", "/api/recordings"));
+        assert!(role_allows(
+            "operator",
+            "GET",
+            "/api/recordings/call-1/audio"
+        ));
         assert!(role_allows("operator", "GET", "/api/dashboard/stats"));
         assert!(role_allows("operator", "GET", "/api/registrations"));
     }
@@ -1581,7 +1584,7 @@ mod tests {
     #[test]
     fn admin_can_access_all_read_only_endpoints() {
         assert!(role_allows("admin", "GET", "/api/cdrs"));
-        assert!(role_allows("admin", "GET", "/api/recordings"));
+        assert!(role_allows("admin", "GET", "/api/recordings/call-1/audio"));
         assert!(role_allows("admin", "GET", "/api/dashboard/stats"));
         assert!(role_allows("admin", "GET", "/api/registrations"));
         assert!(role_allows("admin", "GET", "/api/media/metrics"));
@@ -1611,7 +1614,11 @@ mod tests {
     fn financier_can_read_cdrs_and_registrations() {
         assert!(role_allows("financier", "GET", "/api/cdrs"));
         assert!(role_allows("financier", "GET", "/api/registrations"));
-        assert!(role_allows("financier", "GET", "/api/recordings"));
+        assert!(role_allows(
+            "financier",
+            "GET",
+            "/api/recordings/call-1/audio"
+        ));
     }
 
     #[test]

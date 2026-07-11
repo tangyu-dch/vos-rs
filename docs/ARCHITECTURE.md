@@ -224,7 +224,7 @@ sip-edge → CallManager.completed_cdrs → flush_completed_cdrs → PostgreSQL
 | 号码库存 | `/numbers` | 号码分配管理 |
 | 费率 | `/rates` | 费率 CRUD |
 | 账户 | `/accounts` | 账户余额管理 |
-| 录音 | `/recordings` | 录音列表、在线播放 |
+| 录音 | CDR 详情 | 在呼叫记录详情中在线播放和下载 |
 | 防盗打 | `/anti-fraud` | 防盗打规则管理 |
 
 ---

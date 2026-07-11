@@ -64,7 +64,6 @@ export function canAccessPage(role: UserRole, path: string): boolean {
     '/registrations',
     '/cdr',
     '/reports',
-    '/recordings',
   ].includes(path);
 }
 

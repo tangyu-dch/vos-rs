@@ -380,7 +380,7 @@ balance_after = balance_before - amount
 ### 6.4 录音 API
 
 ```
-GET  /api/recordings              → 录音列表
+GET  /api/recordings/:call_id/audio → CDR 详情录音播放/下载
 GET  /api/recordings/:call_id/audio → 下载音频 (WAV)
 ```
 
@@ -507,7 +507,7 @@ edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
 | `/api/gateways` | GET/POST | 网关 CRUD |
 | `/api/routes` | GET/POST | 路由 CRUD |
 | `/api/registrations` | GET | 注册列表 |
-| `/api/recordings` | GET | 录音列表 |
+| `/api/recordings/:call_id/audio` | GET | CDR 录音播放/下载 |
 | `/api/recordings/:call_id/audio` | GET | 下载录音 |
 | `/api/reports/summary` | GET | 报表汇总 |
 | `/api/reports/export` | GET | 导出 CSV |
@@ -535,7 +535,7 @@ edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
 | Routes | `/routes` | 路由管理 |
 | Registrations | `/registrations` | 注册状态 |
 | Numbers | `/numbers` | 号码库存管理 |
-| Recordings | `/recordings` | 录音管理 |
+| CDR Recording | CDR 详情 | 录音播放与下载 |
 | Reports | `/reports` | 报表 (7天/30天/自定义) |
 | Rates | `/rates` | 费率管理 |
 | Accounts | `/accounts` | 账户管理 |

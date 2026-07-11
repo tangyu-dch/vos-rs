@@ -9,7 +9,6 @@ import type {
   DashboardStats,
   HourlyTrend,
   PaginatedResponse,
-  RecordingInfo,
   ReportSummary,
   BillingRate,
   BillingAccount,
@@ -205,13 +204,7 @@ export const apiService = {
     return response.data;
   },
 
-  // ===== 录音 =====
-  async getRecordings(page = 1, pageSize = 20): Promise<PaginatedResponse<RecordingInfo>> {
-    const r = await api.get<PaginatedResponse<RecordingInfo>>('/recordings', {
-      params: { page, page_size: pageSize },
-    });
-    return r.data;
-  },
+  // 录音只作为 CDR 详情的附属资源提供，不再维护独立录音列表。
   async getRecordingAudio(callId: string): Promise<Blob> {
     const response = await api.get<Blob>(`/recordings/${encodeURIComponent(callId)}/audio`, {
       responseType: 'blob',

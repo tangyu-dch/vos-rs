@@ -14,7 +14,6 @@ const RoutesPage = lazy(() => import('./pages/Routes'))
 const Registrations = lazy(() => import('./pages/Registrations'))
 const ActiveCalls = lazy(() => import('./pages/ActiveCalls'))
 const Numbers = lazy(() => import('./pages/Numbers'))
-const Recordings = lazy(() => import('./pages/Recordings'))
 const Reports = lazy(() => import('./pages/Reports'))
 const Rates = lazy(() => import('./pages/Rates'))
 const Accounts = lazy(() => import('./pages/Accounts'))
@@ -61,7 +60,6 @@ function App() {
                 <Route path="/reports" element={<Page path="/reports"><Reports /></Page>} />
                 <Route path="/rates" element={<Page path="/rates"><Rates /></Page>} />
                 <Route path="/accounts" element={<Page path="/accounts"><Accounts /></Page>} />
-                <Route path="/recordings" element={<Page path="/recordings"><Recordings /></Page>} />
                 <Route path="/anti-fraud" element={<Page path="/anti-fraud"><AntiFraud /></Page>} />
                 <Route path="/audit-logs" element={<Page path="/audit-logs"><AuditLogs /></Page>} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />

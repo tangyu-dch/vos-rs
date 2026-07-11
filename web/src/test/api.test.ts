@@ -42,9 +42,6 @@ describe('apiService', () => {
     expect(typeof apiService.getRoutes).toBe('function');
   });
 
-  it('has getRecordings method', () => {
-    expect(typeof apiService.getRecordings).toBe('function');
-  });
 
   it('has getActiveCalls method', () => {
     expect(typeof apiService.getActiveCalls).toBe('function');

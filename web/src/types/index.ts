@@ -109,16 +109,6 @@ export interface PaginatedResponse<T> {
   page_size: number;
 }
 
-// ===== 录音 =====
-export interface RecordingInfo {
-  call_id: string;
-  stem: string;
-  size_bytes: number;
-  duration_secs: number;
-  created_at_ms: number;
-  has_audio: boolean;
-}
-
 // ===== 报表 =====
 export interface StatusBucket {
   status: string;
