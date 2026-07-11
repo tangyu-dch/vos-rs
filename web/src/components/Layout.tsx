@@ -1,6 +1,7 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
+import { useTheme } from '@/theme/ThemeContext';
 import { canAccessPage, roleLabel } from '@/services/auth';
 import './Layout.css';
 
@@ -52,6 +53,7 @@ export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { session, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   const selectedKey =
     location.pathname === '/' ? '/dashboard' : location.pathname;
@@ -85,7 +87,7 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   return (
-    <div className="app" data-theme={localStorage.getItem('vos-theme') || 'dark'}>
+    <div className="app" data-theme={theme}>
       {/* Sidebar */}
       <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''} ${sidebarOpen ? 'sidebar--open' : ''}`}>
         <div className="sidebar-brand">
@@ -191,9 +193,15 @@ export default function Layout({ children }: LayoutProps) {
               <span className="topbar-btn__badge" />
             </button>
 
-            <button className="theme-toggle" onClick={toggleTheme} title="切换主题">
-              <span className="theme-toggle__knob" id="themeKnob">
-                <span id="themeIcon">🌙</span>
+            <button
+              className="theme-toggle"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+              aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+              aria-pressed={theme === 'light'}
+            >
+              <span className="theme-toggle__knob">
+                <span aria-hidden="true">{theme === 'dark' ? '🌙' : '☀️'}</span>
               </span>
             </button>
 
@@ -250,25 +258,3 @@ export default function Layout({ children }: LayoutProps) {
     </div>
   );
 }
-
-function toggleTheme() {
-  const html = document.documentElement;
-  const icon = document.getElementById('themeIcon');
-  const current = html.getAttribute('data-theme');
-  const next = current === 'dark' ? 'light' : 'dark';
-  html.setAttribute('data-theme', next);
-  document.querySelector('.app')?.setAttribute('data-theme', next);
-  if (icon) icon.textContent = next === 'dark' ? '🌙' : '☀️';
-  localStorage.setItem('vos-theme', next);
-}
-
-// Load saved theme
-(function initTheme() {
-  const saved = localStorage.getItem('vos-theme');
-  if (saved) {
-    document.documentElement.setAttribute('data-theme', saved);
-    document.querySelector('.app')?.setAttribute('data-theme', saved);
-    const icon = document.getElementById('themeIcon');
-    if (icon) icon.textContent = saved === 'dark' ? '🌙' : '☀️';
-  }
-})();

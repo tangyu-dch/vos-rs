@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { Spin, Alert, Empty } from '@arco-design/web-react';
 import { IconRefresh } from '@arco-design/web-react/icon';
 import { apiService } from '@/services/api';
+import { useTheme } from '@/theme/ThemeContext';
 import type { DashboardStats, HourlyTrend, ActiveCall } from '@/types';
 import { graphic, init, type ECharts } from '@/utils/charts';
 import './Dashboard.css';
@@ -76,6 +77,7 @@ function KpiCard({ label, value, trend, sub, barColor = 'var(--accent)', barPerc
 }
 
 export default function Dashboard() {
+  const { theme } = useTheme();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [trend, setTrend] = useState<HourlyTrend[]>([]);
   const [activeCalls, setActiveCalls] = useState<ActiveCall[]>([]);
@@ -184,7 +186,7 @@ export default function Dashboard() {
         },
       ],
     });
-  }, [trend]);
+  }, [trend, theme]);
 
   // ─── Donut Chart ───
   useEffect(() => {
@@ -263,7 +265,7 @@ export default function Dashboard() {
         },
       ],
     });
-  }, [activeCalls]);
+  }, [activeCalls, theme]);
 
   // ─── Resize ───
   useEffect(() => {

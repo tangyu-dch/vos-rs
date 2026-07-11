@@ -25,18 +25,17 @@ import '@arco-design/web-react/es/Tabs/style/css.js'
 import '@arco-design/web-react/es/Tag/style/css.js'
 import App from './App'
 import { AuthProvider } from './auth/AuthContext'
+import { ThemeProvider } from './theme/ThemeContext'
 import './index.css'
-
-// Initialize theme from localStorage
-const savedTheme = localStorage.getItem('vos-theme') || 'dark'
-document.documentElement.setAttribute('data-theme', savedTheme)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </BrowserRouter>
+    </ThemeProvider>
   </React.StrictMode>,
 )

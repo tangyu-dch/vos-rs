@@ -1,35 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Button, Form, Input, Message } from '@arco-design/web-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
+import { useTheme } from '@/theme/ThemeContext';
 
 const FormItem = Form.Item;
-
-function getTheme(): 'dark' | 'light' {
-  return (localStorage.getItem('vos-theme') as 'dark' | 'light') || 'dark';
-}
-
-function setTheme(theme: 'dark' | 'light') {
-  localStorage.setItem('vos-theme', theme);
-  document.documentElement.setAttribute('data-theme', theme);
-}
 
 export default function Login() {
   const [loading, setLoading] = useState(false);
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const { login } = useAuth();
-  const [theme, setThemeState] = useState<'dark' | 'light'>(getTheme);
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
-
-  const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : 'dark';
-    setThemeState(next);
-    setTheme(next);
-  };
+  const { theme, toggleTheme } = useTheme();
 
   const handleSubmit = async () => {
     try {
@@ -59,7 +41,13 @@ export default function Login() {
       </div>
 
       {/* 主题切换按钮 */}
-      <button className="theme-toggle-login" onClick={toggleTheme} title={theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}>
+      <button
+        className="theme-toggle-login"
+        onClick={toggleTheme}
+        title={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+        aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+        aria-pressed={theme === 'light'}
+      >
         {theme === 'dark' ? (
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="5"/>
