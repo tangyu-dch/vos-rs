@@ -12,6 +12,7 @@ import {
   Message,
   Alert,
   Empty,
+  Spin,
 } from '@arco-design/web-react';
 import { IconSearch, IconEye, IconRefresh } from '@arco-design/web-react/icon';
 import { useSearchParams } from 'react-router-dom';
@@ -53,17 +54,25 @@ export default function Cdr() {
   const [selectedCdr, setSelectedCdr] = useState<CdrEvent | null>(null);
   const [hasRecording, setHasRecording] = useState(false);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  const [recordingLoading, setRecordingLoading] = useState(false);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
 
   useEffect(() => {
     let objectUrl: string | null = null;
     setRecordingUrl(null);
+    setRecordingError(null);
     if (!selectedCdr || !hasRecording) return;
+    setRecordingLoading(true);
     apiService.getRecordingAudio(selectedCdr.call_id)
       .then((blob) => {
         objectUrl = URL.createObjectURL(blob);
         setRecordingUrl(objectUrl);
       })
-      .catch(() => Message.error('加载录音失败'));
+      .catch(() => {
+        setRecordingError('录音加载失败，请稍后重试');
+        Message.error('加载录音失败');
+      })
+      .finally(() => setRecordingLoading(false));
     return () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
@@ -188,9 +197,16 @@ export default function Cdr() {
       dataIndex: 'recording_path',
       width: 70,
       align: 'center' as const,
-      render: (v: string | null) =>
+      render: (v: string | null, record: CdrEvent) =>
         v ? (
-          <span style={{ color: 'var(--status-online)', fontSize: 16 }} title="有录音">●</span>
+          <Button
+            type="text"
+            size="small"
+            onClick={() => handleViewDetail(record)}
+            style={{ color: 'var(--status-online)' }}
+          >
+            播放
+          </Button>
         ) : (
           <span style={{ color: 'var(--text-muted)', fontSize: 16 }} title="无录音">○</span>
         ),
@@ -379,21 +395,27 @@ export default function Cdr() {
             {hasRecording && (
               <div className="cdr-detail__section">
                 <div className="cdr-detail__section-title">录音回放</div>
-                <audio
-                  controls
-                  preload="none"
-                  src={recordingUrl ?? undefined}
-                  style={{ width: '100%' }}
-                />
-                <div style={{ marginTop: 8 }}>
-                  <a
-                    href={recordingUrl ?? undefined}
-                    download
-                    style={{ fontSize: 13, color: 'var(--accent)' }}
-                  >
-                    下载录音文件
-                  </a>
-                </div>
+                {recordingLoading && <Spin dot tip="正在加载录音..." />}
+                {recordingError && <Alert type="error" content={recordingError} />}
+                {recordingUrl && !recordingError && (
+                  <>
+                    <audio
+                      controls
+                      preload="none"
+                      src={recordingUrl}
+                      style={{ width: '100%' }}
+                    />
+                    <div style={{ marginTop: 8 }}>
+                      <a
+                        href={recordingUrl}
+                        download
+                        style={{ fontSize: 13, color: 'var(--accent)' }}
+                      >
+                        下载录音文件
+                      </a>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
