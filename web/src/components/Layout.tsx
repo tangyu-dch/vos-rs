@@ -94,17 +94,20 @@ export default function Layout({ children }: LayoutProps) {
       setSearching(true);
       try {
         const params = { page: 1, page_size: 6 };
-        const [callerResult, calleeResult] = await Promise.all([
+        const [callIdResult, callerResult, calleeResult] = await Promise.all([
+          apiService.getCdrs({ ...params, call_id: query }),
           apiService.getCdrs({ ...params, caller: query }),
           apiService.getCdrs({ ...params, callee: query }),
         ]);
         const merged = new Map<string, CdrEvent>();
-        [...callerResult.items, ...calleeResult.items].forEach((item) => merged.set(item.call_id, item));
+        [...callIdResult.items, ...callerResult.items, ...calleeResult.items].forEach((item) => merged.set(item.call_id, item));
         const results = Array.from(merged.values()).slice(0, 8).map((item) => ({
           callId: item.call_id,
           title: item.call_id,
           subtitle: `${item.caller || '未知主叫'} → ${item.callee || '未知被叫'}`,
-          path: `/cdr?caller=${encodeURIComponent(query)}`,
+          path: callIdResult.items.some((match) => match.call_id === item.call_id)
+            ? `/cdr?call_id=${encodeURIComponent(query)}`
+            : `/cdr?caller=${encodeURIComponent(query)}`,
         }));
         if (!disposed) setSearchResults(results);
       } catch {
@@ -255,7 +258,7 @@ export default function Layout({ children }: LayoutProps) {
             <input
               type="search"
               value={searchQuery}
-              placeholder="搜索主叫、被叫号码..."
+              placeholder="搜索 Call ID、主叫、被叫..."
               aria-label="搜索呼叫记录"
               onChange={(event) => setSearchQuery(event.target.value)}
               onKeyDown={(event) => {

@@ -822,6 +822,7 @@ impl PostgresCdrStore {
         page: i64,
         page_size: i64,
         status: Option<&str>,
+        call_id: Option<&str>,
         caller: Option<&str>,
         callee: Option<&str>,
         start: Option<OffsetDateTime>,
@@ -836,14 +837,16 @@ impl PostgresCdrStore {
              mos, dtmf_digits, recording_path, direction \
              FROM call_cdrs \
              WHERE ($1::text IS NULL OR status = $1) \
-               AND ($2::text IS NULL OR caller LIKE '%' || $2 || '%') \
-               AND ($3::text IS NULL OR callee LIKE '%' || $3 || '%') \
-               AND ($4::timestamptz IS NULL OR started_at >= $4) \
-               AND ($5::timestamptz IS NULL OR started_at <= $5) \
+               AND ($2::text IS NULL OR call_id LIKE '%' || $2 || '%') \
+               AND ($3::text IS NULL OR caller LIKE '%' || $3 || '%') \
+               AND ($4::text IS NULL OR callee LIKE '%' || $4 || '%') \
+               AND ($5::timestamptz IS NULL OR started_at >= $5) \
+               AND ($6::timestamptz IS NULL OR started_at <= $6) \
              ORDER BY started_at DESC \
-             LIMIT $6 OFFSET $7",
+             LIMIT $7 OFFSET $8",
         )
         .bind(status)
+        .bind(call_id)
         .bind(caller)
         .bind(callee)
         .bind(start)
@@ -856,12 +859,14 @@ impl PostgresCdrStore {
         let count_row = sqlx::query_scalar(
             "SELECT COUNT(*) FROM call_cdrs \
              WHERE ($1::text IS NULL OR status = $1) \
-               AND ($2::text IS NULL OR caller LIKE '%' || $2 || '%') \
-               AND ($3::text IS NULL OR callee LIKE '%' || $3 || '%') \
-               AND ($4::timestamptz IS NULL OR started_at >= $4) \
-               AND ($5::timestamptz IS NULL OR started_at <= $5)",
+               AND ($2::text IS NULL OR call_id LIKE '%' || $2 || '%') \
+               AND ($3::text IS NULL OR caller LIKE '%' || $3 || '%') \
+               AND ($4::text IS NULL OR callee LIKE '%' || $4 || '%') \
+               AND ($5::timestamptz IS NULL OR started_at >= $5) \
+               AND ($6::timestamptz IS NULL OR started_at <= $6)",
         )
         .bind(status)
+        .bind(call_id)
         .bind(caller)
         .bind(callee)
         .bind(start)

@@ -43,6 +43,7 @@ export default function Cdr() {
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 });
   const [filters, setFilters] = useState({
+    call_id: searchParams.get('call_id') || '',
     caller: searchParams.get('caller') || '',
     callee: searchParams.get('callee') || '',
     status: '',
@@ -74,6 +75,7 @@ export default function Cdr() {
       setError(null);
       try {
         const params: any = { page, page_size: pageSize };
+        if (filters.call_id) params.call_id = filters.call_id;
         if (filters.caller) params.caller = filters.caller;
         if (filters.callee) params.callee = filters.callee;
         if (filters.status) params.status = filters.status;
@@ -101,7 +103,7 @@ export default function Cdr() {
   const handleSearch = () => loadCdrs(1, pagination.pageSize);
 
   const handleReset = () => {
-    setFilters({ caller: '', callee: '', status: '', dateRange: [] });
+    setFilters({ call_id: '', caller: '', callee: '', status: '', dateRange: [] });
     setTimeout(() => loadCdrs(1, pagination.pageSize), 0);
   };
 
@@ -236,6 +238,13 @@ export default function Cdr() {
 
       <Card className="app-card filter-card" bordered={false}>
         <Space wrap size={[12, 12]}>
+          <Input
+            placeholder="Call ID"
+            style={{ width: 220 }}
+            value={filters.call_id}
+            onChange={(v) => setFilters({ ...filters, call_id: v })}
+            allowClear
+          />
           <Input
             placeholder="主叫号码"
             style={{ width: 180 }}

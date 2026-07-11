@@ -94,6 +94,7 @@ export const apiService = {
   async getCdrs(params: {
     page: number;
     page_size: number;
+    call_id?: string;
     status?: string;
     caller?: string;
     callee?: string;
