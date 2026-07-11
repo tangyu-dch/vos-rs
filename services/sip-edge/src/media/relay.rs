@@ -123,7 +123,10 @@ impl MediaRelayState {
     }
 
     pub fn allocate_endpoint(&self, config: &MediaConfig) -> Result<RtpEndpoint, MediaError> {
-        let mut inner = self.state.lock().expect("media relay lock poisoned");
+        let mut inner = self
+            .state
+            .lock()
+            .map_err(|_| MediaError::Io("media relay lock poisoned".to_string()))?;
         if inner.next_port < config.port_min || inner.next_port > config.port_max {
             inner.next_port = config.port_min;
         }
@@ -304,9 +307,14 @@ impl MediaRelayState {
         self.recordings.remove(&rtp_port);
         self.clear_srtp_session(rtp_port);
         self.dtmf_states.remove(&rtp_port);
-        {
-            let mut state = self.state.lock().expect("media relay lock poisoned");
-            state.leased_rtp_ports.remove(&rtp_port);
+        match self.state.lock() {
+            Ok(mut state) => {
+                state.leased_rtp_ports.remove(&rtp_port);
+            }
+            Err(_) => warn!(
+                rtp_port,
+                "media relay lock poisoned while releasing RTP port"
+            ),
         }
         if let Some(peer_port) = peer_port {
             self.targets.remove(&peer_port);

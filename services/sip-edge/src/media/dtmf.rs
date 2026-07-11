@@ -23,7 +23,7 @@
 use crate::media::relay::MediaRelayState;
 use cdr_core::DtmfEventRecord;
 use rtp_core::{RtpPacketView, TelephoneEvent};
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone)]
 pub struct DtmfState {
@@ -45,17 +45,29 @@ impl MediaRelayState {
     }
 
     pub fn get_dtmf_digits(&self, call_id: &str) -> Option<String> {
-        let inner = self.state.lock().expect("media relay lock poisoned");
+        let inner = match self.state.lock() {
+            Ok(inner) => inner,
+            Err(_) => {
+                warn!(call_id, "DTMF 状态锁已中毒，无法读取 DTMF");
+                return None;
+            }
+        };
         inner.dtmf_accumulators.get(call_id).cloned()
     }
 
     pub fn clear_dtmf_digits(&self, call_id: &str) {
-        let mut inner = self.state.lock().expect("media relay lock poisoned");
+        let Ok(mut inner) = self.state.lock() else {
+            warn!(call_id, "DTMF 状态锁已中毒，跳过清理");
+            return;
+        };
         inner.dtmf_accumulators.remove(call_id);
     }
 
     pub fn register_info_dtmf_digit(&self, call_id: &str, digit: char) {
-        let mut inner = self.state.lock().expect("media relay lock poisoned");
+        let Ok(mut inner) = self.state.lock() else {
+            warn!(call_id, "DTMF 状态锁已中毒，跳过 SIP INFO DTMF");
+            return;
+        };
         let acc = inner
             .dtmf_accumulators
             .entry(call_id.to_string())
@@ -71,12 +83,18 @@ impl MediaRelayState {
     }
 
     pub fn take_dtmf_events(&self, call_id: &str) -> Vec<DtmfEventRecord> {
-        let mut inner = self.state.lock().expect("media relay lock poisoned");
+        let Ok(mut inner) = self.state.lock() else {
+            warn!(call_id, "DTMF 状态锁已中毒，无法读取事件");
+            return Vec::new();
+        };
         inner.dtmf_event_log.remove(call_id).unwrap_or_default()
     }
 
     pub fn clear_dtmf_events(&self, call_id: &str) {
-        let mut inner = self.state.lock().expect("media relay lock poisoned");
+        let Ok(mut inner) = self.state.lock() else {
+            warn!(call_id, "DTMF 状态锁已中毒，跳过事件清理");
+            return;
+        };
         inner.dtmf_event_log.remove(call_id);
     }
 
@@ -103,7 +121,10 @@ impl MediaRelayState {
             if let Some(mut state) = self.dtmf_states.get_mut(&local_port) {
                 state.last_timestamp = Some(timestamp);
             }
-            let mut inner = self.state.lock().expect("media relay lock poisoned");
+            let Ok(mut inner) = self.state.lock() else {
+                warn!(call_id, "DTMF 状态锁已中毒，跳过 RTP DTMF");
+                return;
+            };
             let acc = inner.dtmf_accumulators.entry(call_id.clone()).or_default();
             acc.push(digit);
             let record =
