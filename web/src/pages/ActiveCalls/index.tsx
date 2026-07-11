@@ -34,6 +34,7 @@ export default function ActiveCalls() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,6 +42,7 @@ export default function ActiveCalls() {
     try {
       setCalls(await apiService.getActiveCalls());
       setNow(Date.now());
+      setLastUpdated(Date.now());
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
     } finally {
@@ -130,6 +132,10 @@ export default function ActiveCalls() {
           <span className="sub">实时通话监控（每 5 秒刷新，可强制拆线）</span>
         </div>
         <div className="page-header__actions">
+          <span className={`sync-status ${error ? 'sync-status--error' : 'sync-status--online'}`}>
+            <span className="sync-status__dot" />
+            {error ? '连接异常' : lastUpdated ? `已同步 ${new Date(lastUpdated).toLocaleTimeString('zh-CN')}` : '正在连接'}
+          </span>
           <Button icon={<IconRefresh />} onClick={load}>
             刷新
           </Button>

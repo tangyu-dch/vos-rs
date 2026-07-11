@@ -30,7 +30,13 @@ function RequireAuth({ children }: { children: ReactNode }) {
 function Page({ path, roles, children }: { path: string; roles?: UserRole[]; children: ReactNode }) {
   const { session } = useAuth();
   const allowed = session && (roles ? roles.includes(session.role) : canAccessPage(session.role, path));
-  return allowed ? <>{children}</> : <div className="page-wrap"><h1>无权访问</h1><p>当前角色没有访问此页面的权限。</p></div>;
+  return allowed ? <>{children}</> : (
+    <div className="page-wrap access-denied">
+      <div className="access-denied__icon">403</div>
+      <h1>暂无访问权限</h1>
+      <p>当前角色没有访问此页面的权限，请联系管理员开通。</p>
+    </div>
+  );
 }
 
 function App() {
