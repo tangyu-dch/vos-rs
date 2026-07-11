@@ -116,7 +116,9 @@ impl CallManager {
     }
 
     pub fn update_routes(&self, routes: RouteTable) {
-        *self.routes.write().expect("routes lock poisoned") = routes;
+        if let Ok(mut current) = self.routes.write() {
+            *current = routes;
+        }
     }
 
     pub fn handle_inbound_invite(&self, request: &SipRequest) -> CallResult<InboundInviteOutcome> {
@@ -141,7 +143,14 @@ impl CallManager {
         }
 
         let candidates = {
-            let routes = self.routes.read().expect("routes lock poisoned");
+            let routes = match self.routes.read() {
+                Ok(routes) => routes,
+                Err(_) => {
+                    return Err(CallError::NoRouteForDestination(
+                        call.inbound.remote_uri.to_string(),
+                    ));
+                }
+            };
             match health {
                 Some(health) => routes.select_healthy_candidates(
                     &call.inbound.remote_uri,
@@ -344,7 +353,10 @@ impl CallManager {
     }
 
     pub fn routes(&self) -> RouteTable {
-        self.routes.read().expect("routes lock poisoned").clone()
+        match self.routes.read() {
+            Ok(routes) => routes.clone(),
+            Err(_) => RouteTable::default(),
+        }
     }
 
     pub fn active_calls_count(&self) -> usize {
