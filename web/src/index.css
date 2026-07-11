@@ -1361,6 +1361,112 @@ input {
   background: var(--bg-root);
   padding: 24px;
   position: relative;
+  overflow: hidden;
+}
+
+/* Background Animation */
+.login-bg-animation {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.floating-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.4;
+  animation: float 20s ease-in-out infinite;
+}
+
+.orb-1 {
+  width: 400px;
+  height: 400px;
+  background: var(--accent);
+  top: -100px;
+  left: -100px;
+  animation-delay: 0s;
+}
+
+.orb-2 {
+  width: 300px;
+  height: 300px;
+  background: #8b5cf6;
+  bottom: -50px;
+  right: -50px;
+  animation-delay: -5s;
+}
+
+.orb-3 {
+  width: 250px;
+  height: 250px;
+  background: #06b6d4;
+  top: 50%;
+  left: 50%;
+  animation-delay: -10s;
+}
+
+.orb-4 {
+  width: 200px;
+  height: 200px;
+  background: #f59e0b;
+  bottom: 20%;
+  left: 10%;
+  animation-delay: -15s;
+}
+
+.orb-5 {
+  width: 180px;
+  height: 180px;
+  background: #ec4899;
+  top: 20%;
+  right: 20%;
+  animation-delay: -8s;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  25% {
+    transform: translate(50px, -30px) scale(1.1);
+  }
+  50% {
+    transform: translate(-20px, 50px) scale(0.9);
+  }
+  75% {
+    transform: translate(30px, 20px) scale(1.05);
+  }
+}
+
+/* Theme Toggle Button */
+.theme-toggle-login {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--card-bg);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.theme-toggle-login:hover {
+  background: var(--bg-panel-3);
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: rotate(15deg) scale(1.05);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
 }
 
 .login-container {
@@ -1372,6 +1478,8 @@ input {
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--border-subtle);
   overflow: hidden;
+  position: relative;
+  z-index: 1;
 }
 
 /* Brand Section */
@@ -1541,5 +1649,83 @@ input {
 
   .login-features {
     display: none;
+  }
+}
+
+/* ─── Console polish ─── */
+.page-wrap {
+  width: min(100%, 1600px);
+  min-height: 100%;
+  margin: 0 auto;
+}
+
+.page-header__actions .arco-btn {
+  border-radius: var(--radius-md);
+  min-height: 36px;
+}
+
+.page-header__actions .arco-btn-primary {
+  box-shadow: 0 6px 18px var(--accent-dim);
+}
+
+.app-card {
+  overflow: hidden;
+}
+
+.app-table .arco-table-pagination {
+  padding: 16px 4px 4px;
+}
+
+.app-table .arco-pagination-item,
+.app-table .arco-pagination-jumper-input,
+.app-table .arco-pagination-option {
+  border-radius: var(--radius-sm);
+}
+
+.app-table .arco-table-th:first-child,
+.app-table .arco-table-td:first-child {
+  padding-left: 20px !important;
+}
+
+.app-table .arco-table-th:last-child,
+.app-table .arco-table-td:last-child {
+  padding-right: 20px !important;
+}
+
+.arco-alert {
+  border-radius: var(--radius-md) !important;
+}
+
+.arco-modal {
+  border-radius: var(--radius-lg) !important;
+  overflow: hidden;
+}
+
+.arco-modal-header {
+  background: var(--bg-panel-2);
+  border-bottom-color: var(--border-subtle) !important;
+}
+
+@media (max-width: 767px) {
+  .page-wrap {
+    padding: 16px;
+  }
+
+  .page-header {
+    align-items: stretch;
+    flex-direction: column;
+    margin-bottom: 16px;
+  }
+
+  .page-header__actions {
+    width: 100%;
+  }
+
+  .page-header__actions .arco-btn {
+    flex: 1;
+  }
+
+  .app-card .arco-card-body {
+    padding: 14px;
   }
 }

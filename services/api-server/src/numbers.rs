@@ -1,11 +1,11 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
 use serde::Deserialize;
 
-use crate::AppState;
+use crate::{normalize_page, AppState, PageQuery, PaginatedResponse};
 use cdr_core::NumberInventory;
 
 #[derive(Debug, Deserialize)]
@@ -32,8 +32,22 @@ fn err(e: impl std::fmt::Display) -> E {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-pub async fn list_numbers(State(state): State<AppState>) -> Result<Json<Vec<NumberInventory>>, E> {
-    state.store.list_numbers().await.map(Json).map_err(err)
+pub async fn list_numbers(
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<PaginatedResponse<NumberInventory>>, E> {
+    let (page, page_size, offset) = normalize_page(&query);
+    let (items, total) = tokio::try_join!(
+        state.store.list_numbers_page(page_size, offset),
+        state.store.count_numbers(),
+    )
+    .map_err(err)?;
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+    }))
 }
 
 pub async fn create_number(

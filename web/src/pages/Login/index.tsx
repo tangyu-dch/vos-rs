@@ -1,25 +1,46 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button, Form, Input, Message } from '@arco-design/web-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
 
 const FormItem = Form.Item;
 
+function getTheme(): 'dark' | 'light' {
+  return (localStorage.getItem('vos-theme') as 'dark' | 'light') || 'dark';
+}
+
+function setTheme(theme: 'dark' | 'light') {
+  localStorage.setItem('vos-theme', theme);
+  document.documentElement.setAttribute('data-theme', theme);
+}
+
 export default function Login() {
   const [loading, setLoading] = useState(false);
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const { login } = useAuth();
+  const [theme, setThemeState] = useState<'dark' | 'light'>(getTheme);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setThemeState(next);
+    setTheme(next);
+  };
 
   const handleSubmit = async () => {
     try {
       const values = await form.validate();
       setLoading(true);
       await login(values.username, values.password);
+      Message.success('登录成功');
       navigate('/dashboard', { replace: true });
     } catch (error) {
       if (error instanceof Error && error.message !== '表单校验失败') {
-        Message.error('登录失败，请检查用户名和密码');
+        Message.error(error.message || '登录失败，请检查用户名和密码');
       }
     } finally {
       setLoading(false);
@@ -28,6 +49,29 @@ export default function Login() {
 
   return (
     <div className="login-page">
+      {/* 背景动画 */}
+      <div className="login-bg-animation">
+        <div className="floating-orb orb-1"></div>
+        <div className="floating-orb orb-2"></div>
+        <div className="floating-orb orb-3"></div>
+        <div className="floating-orb orb-4"></div>
+        <div className="floating-orb orb-5"></div>
+      </div>
+
+      {/* 主题切换按钮 */}
+      <button className="theme-toggle-login" onClick={toggleTheme} title={theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}>
+        {theme === 'dark' ? (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="5"/>
+            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+          </svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        )}
+      </button>
+
       <div className="login-container">
         {/* 左侧品牌区 */}
         <div className="login-brand-section">

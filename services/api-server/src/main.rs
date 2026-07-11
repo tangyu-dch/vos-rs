@@ -136,12 +136,27 @@ struct ListCdrsQuery {
     end_time: Option<String>,
 }
 
+/// 管理列表统一分页参数；服务端限制单页最大 100 条，避免大响应拖慢 API。
+#[derive(Debug, Deserialize)]
+pub(crate) struct PageQuery {
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+    pub gateway_type: Option<String>,
+}
+
+pub(crate) fn normalize_page(query: &PageQuery) -> (i64, i64, i64) {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
+    let offset = (page - 1).saturating_mul(page_size);
+    (page, page_size, offset)
+}
+
 #[derive(Debug, Serialize)]
-struct PaginatedResponse<T> {
-    items: Vec<T>,
-    total: i64,
-    page: i64,
-    page_size: i64,
+pub(crate) struct PaginatedResponse<T> {
+    pub(crate) items: Vec<T>,
+    pub(crate) total: i64,
+    pub(crate) page: i64,
+    pub(crate) page_size: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,15 +393,24 @@ async fn get_dtmf_events(
         })
 }
 
-async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<SipUser>>, ApiError> {
-    state
-        .store
-        .list_users()
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
+async fn list_users(
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<PaginatedResponse<SipUser>>, ApiError> {
+    let (page, page_size, offset) = normalize_page(&query);
+    let (items, total) = tokio::try_join!(
+        state.store.list_users_page(page_size, offset),
+        state.store.count_users(),
+    )
+    .map_err(|e| ApiError {
+        error: e.to_string(),
+    })?;
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+    }))
 }
 
 async fn create_user(
@@ -446,15 +470,26 @@ async fn delete_user(
     }
 }
 
-async fn list_gateways(State(state): State<AppState>) -> Result<Json<Vec<SipGateway>>, ApiError> {
-    state
-        .store
-        .list_gateways_full()
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
+async fn list_gateways(
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<PaginatedResponse<SipGateway>>, ApiError> {
+    let (page, page_size, offset) = normalize_page(&query);
+    let (items, total) = tokio::try_join!(
+        state
+            .store
+            .list_gateways_page(page_size, offset, query.gateway_type.as_deref()),
+        state.store.count_gateways(query.gateway_type.as_deref()),
+    )
+    .map_err(|e| ApiError {
+        error: e.to_string(),
+    })?;
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+    }))
 }
 
 async fn create_gateway(
@@ -572,15 +607,24 @@ async fn publish_route_reload(nats: &Option<async_nats::Client>) {
     }
 }
 
-async fn list_routes(State(state): State<AppState>) -> Result<Json<Vec<SipRoute>>, ApiError> {
-    state
-        .store
-        .list_routes_full()
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
+async fn list_routes(
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<PaginatedResponse<SipRoute>>, ApiError> {
+    let (page, page_size, offset) = normalize_page(&query);
+    let (items, total) = tokio::try_join!(
+        state.store.list_routes_page(page_size, offset),
+        state.store.count_routes(),
+    )
+    .map_err(|e| ApiError {
+        error: e.to_string(),
+    })?;
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+    }))
 }
 
 async fn create_route(
@@ -1395,7 +1439,9 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_sensitive_json_value, role_allows, sanitize_audit_json};
+    use super::{
+        normalize_page, redact_sensitive_json_value, role_allows, sanitize_audit_json, PageQuery,
+    };
     use serde_json::json;
 
     // ===== Unit tests for role_allows =====
@@ -1550,5 +1596,16 @@ mod tests {
 
         assert_eq!(result, "[已省略无法解析的 JSON 请求体]");
         assert!(!result.contains("secret"));
+    }
+
+    #[test]
+    fn management_page_parameters_are_bounded() {
+        let query = PageQuery {
+            page: Some(0),
+            page_size: Some(10_000),
+            gateway_type: None,
+        };
+
+        assert_eq!(normalize_page(&query), (1, 100, 0));
     }
 }

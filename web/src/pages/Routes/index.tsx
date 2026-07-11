@@ -24,6 +24,9 @@ export default function RoutesPage() {
   const [routes, setRoutes] = useState<SipRoute[]>([]);
   const [gateways, setGateways] = useState<SipGateway[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingRoute, setEditingRoute] = useState<SipRoute | null>(null);
@@ -47,13 +50,19 @@ export default function RoutesPage() {
     }
   };
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (nextPage = 1, nextPageSize = 20) => {
     setLoading(true);
     setError(null);
     try {
-      const [r, g] = await Promise.all([apiService.getRoutes(), apiService.getGateways()]);
-      setRoutes(r);
-      setGateways(g);
+      const [r, g] = await Promise.all([
+        apiService.getRoutes(nextPage, nextPageSize),
+        apiService.getGateways(1, 100),
+      ]);
+      setRoutes(r.items);
+      setTotal(r.total);
+      setPage(nextPage);
+      setPageSize(nextPageSize);
+      setGateways(g.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
       Message.error('获取数据失败');
@@ -191,7 +200,7 @@ export default function RoutesPage() {
           <span className="sub">按号前缀与优先级配置出局选路规则（LCR）</span>
         </div>
         <div className="page-header__actions">
-          <Button icon={<IconRefresh />} onClick={loadData}>
+          <Button icon={<IconRefresh />} onClick={() => loadData(page, pageSize)}>
             刷新
           </Button>
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>
@@ -246,7 +255,7 @@ export default function RoutesPage() {
           data={routes}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, sizeCanChange: true }}
+          pagination={{ current: page, pageSize, total, sizeCanChange: true, sizeOptions: [10, 20, 50, 100], onChange: (nextPage) => loadData(nextPage, pageSize), onPageSizeChange: (nextPageSize) => loadData(1, nextPageSize) }}
           scroll={{ x: 980 }}
           noDataElement={<Empty description="暂无路由规则" />}
         />

@@ -40,7 +40,8 @@ export default function PeerGateways() {
     setLoading(true);
     setError(null);
     try {
-      setGateways(await apiService.getGateways());
+      const data = await apiService.getGateways(1, 100, 'peer');
+      setGateways(data.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
     } finally {

@@ -116,8 +116,10 @@ export const apiService = {
 
   // ===== SIP 用户 API =====
 
-  async getUsers(): Promise<SipUser[]> {
-    const response = await api.get<SipUser[]>('/users');
+  async getUsers(page = 1, pageSize = 20): Promise<PaginatedResponse<SipUser>> {
+    const response = await api.get<PaginatedResponse<SipUser>>('/users', {
+      params: { page, page_size: pageSize },
+    });
     return response.data;
   },
 
@@ -135,8 +137,10 @@ export const apiService = {
 
   // ===== 网关 API =====
 
-  async getGateways(): Promise<SipGateway[]> {
-    const response = await api.get<SipGateway[]>('/gateways');
+  async getGateways(page = 1, pageSize = 20, gatewayType?: string): Promise<PaginatedResponse<SipGateway>> {
+    const response = await api.get<PaginatedResponse<SipGateway>>('/gateways', {
+      params: { page, page_size: pageSize, gateway_type: gatewayType },
+    });
     return response.data;
   },
 
@@ -154,8 +158,10 @@ export const apiService = {
 
   // ===== 路由 API =====
 
-  async getRoutes(): Promise<SipRoute[]> {
-    const response = await api.get<SipRoute[]>('/routes');
+  async getRoutes(page = 1, pageSize = 20): Promise<PaginatedResponse<SipRoute>> {
+    const response = await api.get<PaginatedResponse<SipRoute>>('/routes', {
+      params: { page, page_size: pageSize },
+    });
     return response.data;
   },
 
@@ -272,8 +278,10 @@ export const apiService = {
   },
 
   // ===== 号码库存 =====
-  async getNumbers(): Promise<NumberInventory[]> {
-    const r = await api.get<NumberInventory[]>('/numbers');
+  async getNumbers(page = 1, pageSize = 20): Promise<PaginatedResponse<NumberInventory>> {
+    const r = await api.get<PaginatedResponse<NumberInventory>>('/numbers', {
+      params: { page, page_size: pageSize },
+    });
     return r.data;
   },
   async createNumber(n: {

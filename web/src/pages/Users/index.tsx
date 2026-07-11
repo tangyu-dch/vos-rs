@@ -21,17 +21,23 @@ const FormItem = Form.Item;
 export default function Users() {
   const [users, setUsers] = useState<SipUser[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingUser, setEditingUser] = useState<SipUser | null>(null);
   const [form] = Form.useForm();
 
-  const loadUsers = useCallback(async () => {
+  const loadUsers = useCallback(async (nextPage = 1, nextPageSize = 20) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiService.getUsers();
-      setUsers(data);
+      const data = await apiService.getUsers(nextPage, nextPageSize);
+      setUsers(data.items);
+      setTotal(data.total);
+      setPage(nextPage);
+      setPageSize(nextPageSize);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
       Message.error('获取用户列表失败');
@@ -126,7 +132,7 @@ export default function Users() {
           <span className="sub">管理可注册的 SIP 账户凭证</span>
         </div>
         <div className="page-header__actions">
-          <Button icon={<IconRefresh />} onClick={loadUsers}>
+          <Button icon={<IconRefresh />} onClick={() => loadUsers(page, pageSize)}>
             刷新
           </Button>
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>
@@ -144,7 +150,7 @@ export default function Users() {
           data={users}
           rowKey="username"
           loading={loading}
-          pagination={{ pageSize: 20, sizeCanChange: true }}
+          pagination={{ current: page, pageSize, total, sizeCanChange: true, sizeOptions: [10, 20, 50, 100], onChange: (nextPage) => loadUsers(nextPage, pageSize), onPageSizeChange: (nextPageSize) => loadUsers(1, nextPageSize) }}
           noDataElement={<Empty description="暂无 SIP 用户" />}
         />
       </Card>

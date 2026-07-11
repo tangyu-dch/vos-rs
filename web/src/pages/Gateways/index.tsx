@@ -24,15 +24,24 @@ const CIRCUIT_STATE: Record<string, { color: string; text: string }> = {
 export default function Gateways() {
   const [gateways, setGateways] = useState<SipGateway[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingGateway, setEditingGateway] = useState<SipGateway | null>(null);
   const [form] = Form.useForm();
 
-  const loadGateways = useCallback(async () => {
+  const loadGateways = useCallback(async (nextPage = 1, nextPageSize = 20) => {
     setLoading(true);
     setError(null);
-    try { setGateways(await apiService.getGateways()); }
+    try {
+      const data = await apiService.getGateways(nextPage, nextPageSize, 'gateway');
+      setGateways(data.items);
+      setTotal(data.total);
+      setPage(nextPage);
+      setPageSize(nextPageSize);
+    }
     catch (err) { setError(err instanceof Error ? err.message : '加载失败'); Message.error('获取网关列表失败'); }
     finally { setLoading(false); }
   }, []);
@@ -105,14 +114,14 @@ export default function Gateways() {
       <div className="page-header">
         <div className="page-header__title"><h1>落地网关</h1><span className="sub">配置出局中继网关（我们主动拨出到对端）</span></div>
         <div className="page-header__actions">
-          <Button icon={<IconRefresh />} onClick={loadGateways}>刷新</Button>
+          <Button icon={<IconRefresh />} onClick={() => loadGateways(page, pageSize)}>刷新</Button>
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>新建网关</Button>
         </div>
       </div>
       {error && <Alert type="error" content={error} closable style={{ marginBottom: 16 }} />}
       <Card className="app-card" bordered={false}>
         <Table className="app-table" columns={columns} data={gateways.filter(g => g.gateway_type === 'gateway')} rowKey="id" loading={loading}
-          pagination={{ pageSize: 20, sizeCanChange: true, sizeOptions: [10, 20, 50, 100] }} scroll={{ x: 1200 }}
+          pagination={{ current: page, pageSize, total, sizeCanChange: true, sizeOptions: [10, 20, 50, 100], onChange: (nextPage) => loadGateways(nextPage, pageSize), onPageSizeChange: (nextPageSize) => loadGateways(1, nextPageSize) }} scroll={{ x: 1200 }}
           noDataElement={<Empty description="暂无落地网关" />} />
       </Card>
       <Modal title={editingGateway ? '编辑落地网关' : '新建落地网关'} visible={modalVisible} onOk={handleSubmit} onCancel={() => setModalVisible(false)} okText="保存" cancelText="取消">

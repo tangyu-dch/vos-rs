@@ -980,6 +980,37 @@ impl PostgresCdrStore {
         Ok(users)
     }
 
+    /// 按页读取 SIP 用户，避免管理端随数据增长一次性加载全部记录。
+    pub async fn list_users_page(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<SipUser>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT username, created_at FROM sip_users ORDER BY username LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SipUser {
+                username: row.get(0),
+                password: None,
+                created_at: row.get(1),
+            })
+            .collect())
+    }
+
+    /// 返回 SIP 用户总数，用于构造分页响应。
+    pub async fn count_users(&self) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sip_users")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
+    }
+
     pub async fn delete_user(&self, username: &str) -> Result<bool, sqlx::Error> {
         let result = sqlx::query("DELETE FROM sip_users WHERE username = $1")
             .bind(username)
@@ -1040,6 +1071,70 @@ impl PostgresCdrStore {
         Ok(gateways)
     }
 
+    /// 按页读取网关，并保留实时熔断状态与当前并发数。
+    pub async fn list_gateways_page(
+        &self,
+        limit: i64,
+        offset: i64,
+        gateway_type: Option<&str>,
+    ) -> Result<Vec<SipGateway>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.prefix_rules, \
+             g.supports_registration, g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, \
+             g.enabled, g.created_at, h.active_calls, h.state \
+             FROM sip_gateways g \
+             LEFT JOIN gateway_health_status h ON g.id = h.gateway_id \
+             WHERE ($3::TEXT IS NULL OR g.gateway_type = $3) \
+             ORDER BY g.id LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .bind(gateway_type)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SipGateway {
+                id: row.get(0),
+                host: row.get(1),
+                port: row.get::<Option<i32>, _>(2).map(|p| p as u16),
+                transport: row.get(3),
+                max_capacity: row
+                    .get::<Option<i32>, _>(4)
+                    .and_then(|capacity| u32::try_from(capacity).ok()),
+                gateway_type: row.get(5),
+                prefix_rules: row.get(6),
+                supports_registration: row.get(7),
+                reg_auth_type: None,
+                reg_username: None,
+                reg_password: None,
+                parent_gateway_id: None,
+                caller_id_mode: row.get(8),
+                virtual_caller: row.get(9),
+                current_concurrent: Some(row.get::<Option<i32>, _>(14).unwrap_or(0)),
+                circuit_state: Some(
+                    row.get::<Option<String>, _>(15)
+                        .unwrap_or_else(|| "closed".to_string()),
+                ),
+                account_id: row.get(10),
+                max_concurrent: row.get(11),
+                enabled: row.get(12),
+                created_at: row.get(13),
+            })
+            .collect())
+    }
+
+    /// 返回网关总数。
+    pub async fn count_gateways(&self, gateway_type: Option<&str>) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sip_gateways WHERE ($1::TEXT IS NULL OR gateway_type = $1)",
+        )
+        .bind(gateway_type)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     pub async fn delete_gateway(&self, id: &str) -> Result<bool, sqlx::Error> {
         let result = sqlx::query("DELETE FROM sip_gateways WHERE id = $1")
             .bind(id)
@@ -1069,6 +1164,44 @@ impl PostgresCdrStore {
             });
         }
         Ok(routes)
+    }
+
+    /// 按页读取路由规则，排序规则与路由引擎保持一致。
+    pub async fn list_routes_page(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<SipRoute>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, created_at \
+             FROM sip_routes ORDER BY priority, id LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SipRoute {
+                id: row.get(0),
+                prefix: row.get(1),
+                priority: row.get(2),
+                gateway_id: row.get(3),
+                cost: row.get(4),
+                weight: row.get(5),
+                time_start: row.get(6),
+                time_end: row.get(7),
+                created_at: row.get(8),
+            })
+            .collect())
+    }
+
+    /// 返回路由规则总数。
+    pub async fn count_routes(&self) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sip_routes")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
     }
 
     pub async fn delete_route(&self, id: &str) -> Result<bool, sqlx::Error> {
@@ -1490,6 +1623,44 @@ impl PostgresCdrStore {
             });
         }
         Ok(numbers)
+    }
+
+    /// 按页读取号码库存。
+    pub async fn list_numbers_page(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<NumberInventory>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT number, username, gateway_id, direction, max_concurrent, current_concurrent, status, created_at, updated_at \
+             FROM number_inventory ORDER BY number LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| NumberInventory {
+                number: row.get(0),
+                username: row.get(1),
+                gateway_id: row.get(2),
+                direction: row.get(3),
+                max_concurrent: row.get(4),
+                current_concurrent: row.get(5),
+                status: row.get(6),
+                created_at: row.get(7),
+                updated_at: row.get(8),
+            })
+            .collect())
+    }
+
+    /// 返回号码库存总数。
+    pub async fn count_numbers(&self) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM number_inventory")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
     }
 
     pub async fn upsert_number(
