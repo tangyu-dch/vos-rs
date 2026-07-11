@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
 import { useTheme } from '@/theme/ThemeContext';
 import { apiService } from '@/services/api';
+import type { CdrEvent } from '@/types';
 import { canAccessPage, roleLabel } from '@/services/auth';
 import './Layout.css';
 
@@ -16,6 +17,13 @@ interface NavItem {
   title: string;
   group: string;
   badge?: number;
+}
+
+interface QuickSearchResult {
+  callId: string;
+  title: string;
+  subtitle: string;
+  path: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -56,6 +64,9 @@ export default function Layout({ children }: LayoutProps) {
   const { session, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [activeCallCount, setActiveCallCount] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<QuickSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
 
   const selectedKey =
     location.pathname === '/' ? '/dashboard' : location.pathname;
@@ -69,6 +80,44 @@ export default function Layout({ children }: LayoutProps) {
     window.addEventListener('resize', checkSize);
     return () => window.removeEventListener('resize', checkSize);
   }, []);
+
+  // 顶部快速搜索复用 CDR 的服务端筛选，避免在浏览器加载全量通话记录。
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (query.length < 2) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    let disposed = false;
+    const timer = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        const params = { page: 1, page_size: 6 };
+        const [callerResult, calleeResult] = await Promise.all([
+          apiService.getCdrs({ ...params, caller: query }),
+          apiService.getCdrs({ ...params, callee: query }),
+        ]);
+        const merged = new Map<string, CdrEvent>();
+        [...callerResult.items, ...calleeResult.items].forEach((item) => merged.set(item.call_id, item));
+        const results = Array.from(merged.values()).slice(0, 8).map((item) => ({
+          callId: item.call_id,
+          title: item.call_id,
+          subtitle: `${item.caller || '未知主叫'} → ${item.callee || '未知被叫'}`,
+          path: `/cdr?caller=${encodeURIComponent(query)}`,
+        }));
+        if (!disposed) setSearchResults(results);
+      } catch {
+        if (!disposed) setSearchResults([]);
+      } finally {
+        if (!disposed) setSearching(false);
+      }
+    }, 280);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery]);
 
   useEffect(() => {
     if (isMobile || isTablet) {
@@ -203,7 +252,36 @@ export default function Layout({ children }: LayoutProps) {
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <input type="text" placeholder="搜索客户、号码、通话记录..." />
+            <input
+              type="search"
+              value={searchQuery}
+              placeholder="搜索主叫、被叫号码..."
+              aria-label="搜索呼叫记录"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setSearchQuery('');
+              }}
+            />
+            {(searching || searchResults.length > 0) && (
+              <div className="topbar-search__results" role="listbox">
+                {searching && <div className="topbar-search__empty">正在搜索...</div>}
+                {!searching && searchResults.map((result) => (
+                  <button
+                    key={result.callId}
+                    className="topbar-search__result"
+                    type="button"
+                    onClick={() => {
+                      navigate(result.path);
+                      setSearchQuery('');
+                    }}
+                  >
+                    <span className="topbar-search__result-title">{result.title}</span>
+                    <span className="topbar-search__result-subtitle">{result.subtitle}</span>
+                  </button>
+                ))}
+                {!searching && searchResults.length === 0 && <div className="topbar-search__empty">未找到匹配的呼叫记录</div>}
+              </div>
+            )}
           </div>
 
           <div className="topbar-right">

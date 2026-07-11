@@ -14,6 +14,7 @@ import {
   Empty,
 } from '@arco-design/web-react';
 import { IconSearch, IconEye, IconRefresh } from '@arco-design/web-react/icon';
+import { useSearchParams } from 'react-router-dom';
 import { apiService } from '@/services/api';
 import type { CdrEvent } from '@/types';
 import StatusTag from '@/components/StatusTag';
@@ -36,13 +37,14 @@ function formatDate(ms: number): string {
 }
 
 export default function Cdr() {
+  const [searchParams] = useSearchParams();
   const [cdrs, setCdrs] = useState<CdrEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 });
   const [filters, setFilters] = useState({
-    caller: '',
-    callee: '',
+    caller: searchParams.get('caller') || '',
+    callee: searchParams.get('callee') || '',
     status: '',
     dateRange: [] as string[],
   });
