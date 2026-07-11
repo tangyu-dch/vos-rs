@@ -31,6 +31,7 @@ pub async fn sync_local_recordings(
             continue;
         }
         let Ok(metadata) = entry.metadata().await else {
+            tracing::warn!(path = %path.display(), "读取录音文件元数据失败");
             continue;
         };
         let recently_modified = metadata
@@ -49,13 +50,12 @@ pub async fn sync_local_recordings(
             continue;
         }
         let Ok(data) = tokio::fs::read(&path).await else {
+            tracing::warn!(path = %path.display(), "读取录音文件失败，稍后重试归档");
             continue;
         };
-        if storage
-            .put(file_name, data.into(), Some("audio/wav"))
-            .await
-            .is_ok()
-        {
+        if let Err(error) = storage.put(file_name, data.into(), Some("audio/wav")).await {
+            tracing::warn!(file_name, %error, "录音归档到对象存储失败，稍后重试");
+        } else {
             uploaded_sizes.insert(file_name.to_string(), size);
             uploaded += 1;
         }

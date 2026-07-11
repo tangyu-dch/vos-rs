@@ -91,7 +91,8 @@
 
 ### 1.8.1 存储后端配置
 
-存储后端支持本地文件系统、OSS 兼容对象存储（阿里云 OSS、MinIO 等）和双写模式。
+存储后端支持本地文件系统、OSS 兼容对象存储（RustFS、阿里云 OSS、MinIO 等）和双写模式。
+SIP Edge 先将 RTP 录音顺序写入共享本地目录，API Server 会异步扫描已停止写入的 WAV 并归档到对象存储；通话记录播放接口优先从对象存储读取。
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
@@ -157,6 +158,15 @@ VOS_RS_OSS_BUCKET=vos-recordings
 VOS_RS_OSS_ACCESS_KEY=minioadmin
 VOS_RS_OSS_SECRET_KEY=minioadmin
 VOS_RS_OSS_KEY_PREFIX=recordings/
+
+# RustFS（Docker Compose 默认配置）
+VOS_RS_STORAGE_BACKEND=oss
+VOS_RS_OSS_ENDPOINT=http://rustfs:9000
+VOS_RS_OSS_BUCKET=recordings
+VOS_RS_OSS_ACCESS_KEY=rustfsadmin
+VOS_RS_OSS_SECRET_KEY=rustfsadmin
+VOS_RS_OSS_KEY_PREFIX=recordings/
+VOS_RS_OSS_REGION=us-east-1
 
 # 双写模式（生产推荐：OSS 为主，本地为备份）
 VOS_RS_STORAGE_BACKEND=dual

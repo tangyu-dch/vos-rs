@@ -8,6 +8,7 @@ VOS-RS 包含 4 个可运行组件：
 | `api-server` | REST API（管理控制台后端） | 8080 |
 | `web` | 前端管理控制台（nginx 静态） | 3000 |
 | `postgres` | 数据库（CDR/用户/网关/路由/计费/号码） | 5432 |
+| `rustfs` | RustFS S3 兼容录音对象存储 | 9000/API，9001/控制台 |
 
 ---
 
@@ -29,6 +30,7 @@ docker compose logs -f api-server
 启动后：
 - 前端：http://localhost:3000
 - API：http://localhost:8080
+- RustFS 控制台：http://localhost:9001（默认账号 `rustfsadmin`，生产环境必须修改）
 - 数据库初始化由 sip-edge/api-server 启动时自动 migrate（建表）
 
 停止：
@@ -43,6 +45,7 @@ docker compose down -v         # 停止并清空数据库/录音
 - 数据库账密：`postgres.environment`
 - SIP 端口：`sip-edge.ports` + `VOS_RS_SIP_UDP_BIND`
 - 录音：`VOS_RS_RECORDING_ENABLED` / `VOS_RS_RECORDING_DIR`
+- RustFS：`STORAGE_BACKEND=oss`、`RUSTFS_ENDPOINT`、`RUSTFS_BUCKET`、`RUSTFS_ACCESS_KEY`、`RUSTFS_SECRET_KEY`
 
 ---
 
