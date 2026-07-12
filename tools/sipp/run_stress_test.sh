@@ -64,6 +64,7 @@ DB_URL="${VOS_RS_DATABASE_URL:-postgres://vos_rs:vos_rs@127.0.0.1:5432/vos_rs}"
 if command -v psql &>/dev/null; then
   echo "Resetting gateway health and ensuring default route..."
   psql "$DB_URL" -c "DELETE FROM gateway_health_status;" 2>/dev/null || true
+  psql "$DB_URL" -c "UPDATE sip_gateways SET max_capacity = 10000 WHERE id = 'default';" 2>/dev/null || true
   psql "$DB_URL" -c "INSERT INTO sip_routes (id, prefix, priority, gateway_id, cost, weight) VALUES ('default', '', 100, 'default', 0.0, 100) ON CONFLICT (id) DO UPDATE SET prefix = EXCLUDED.prefix, gateway_id = EXCLUDED.gateway_id;" 2>/dev/null || true
 fi
 
@@ -131,9 +132,9 @@ VOS_RS_NATS_CDR_STREAM="${VOS_RS_NATS_CDR_STREAM:-VOS_RS_CDRS}" \
 VOS_RS_NATS_CDR_SUBJECT="${VOS_RS_NATS_CDR_SUBJECT:-vos-rs.cdrs}" \
 VOS_RS_INTERNAL_SECRET="${VOS_RS_INTERNAL_SECRET:-dev-internal-secret}" \
 VOS_RS_ANTI_FRAUD_ENABLED="false" \
-VOS_RS_CIRCUIT_BREAKER_FAILURE_THRESHOLD=100 \
-VOS_RS_CIRCUIT_BREAKER_RECOVERY_SECS=10 \
-VOS_RS_CIRCUIT_BREAKER_MIN_SAMPLES=10000 \
+VOS_RS_CIRCUIT_BREAKER_FAILURE_THRESHOLD=10000 \
+VOS_RS_CIRCUIT_BREAKER_RECOVERY_SECS=5 \
+VOS_RS_CIRCUIT_BREAKER_MIN_SAMPLES=100000 \
 VOS_RS_CIRCUIT_BREAKER_MIN_SUCCESS_RATE=0.01 \
 VOS_RS_SIP_AUTH_USERS=1001:secret,1002:secret \
 VOS_RS_SESSION_EXPIRES_GATEWAY=7200 \

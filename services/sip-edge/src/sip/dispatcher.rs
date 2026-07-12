@@ -927,6 +927,14 @@ pub(crate) async fn handle_datagram(
                         if let Some(ref uname) = username {
                             edge_state.decrement_user_concurrency(uname);
                         }
+                        // 递减网关活跃通话计数
+                        if !outbound_response_outcome.gateway_id.is_empty() {
+                            edge_state
+                                .gateway_health
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .decrement_active(&outbound_response_outcome.gateway_id);
+                        }
                         edge_state.inbound_transactions.remove(cid);
                     }
                 }
