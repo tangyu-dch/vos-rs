@@ -63,7 +63,7 @@ fi
 DB_URL="${VOS_RS_DATABASE_URL:-postgres://vos_rs:vos_rs@127.0.0.1:5432/vos_rs}"
 if command -v psql &>/dev/null; then
   echo "Resetting gateway health and ensuring default route..."
-  psql "$DB_URL" -c "UPDATE gateway_health_status SET circuit_open = false, consecutive_failures = 0, state = 'closed', half_open_successes = 0;" 2>/dev/null || true
+  psql "$DB_URL" -c "DELETE FROM gateway_health_status;" 2>/dev/null || true
   psql "$DB_URL" -c "INSERT INTO sip_routes (id, prefix, priority, gateway_id, cost, weight) VALUES ('default', '', 100, 'default', 0.0, 100) ON CONFLICT (id) DO UPDATE SET prefix = EXCLUDED.prefix, gateway_id = EXCLUDED.gateway_id;" 2>/dev/null || true
 fi
 
@@ -84,6 +84,27 @@ echo "  Edge:           $LOCAL_IP:$EDGE_PORT"
 echo "  Gateway UAS:    $LOCAL_IP:$GATEWAY_PORT"
 echo "============================================="
 echo
+
+# Start SIPp gateway UAS with rtp_echo (BEFORE sip-edge so OPTIONS probes succeed)
+echo "Starting SIPp gateway UAS (with rtp_echo)..."
+"$SIPP_BIN" "$LOCAL_IP:$EDGE_PORT" \
+  -sf "$SCENARIO_DIR/gateway_longcall.xml" \
+  -i "$LOCAL_IP" \
+  -p "$GATEWAY_PORT" \
+  -m 1000000 \
+  -aa \
+  -nostdin \
+  -rtp_echo \
+  -min_rtp_port 30000 \
+  -max_rtp_port 31000 \
+  -timeout "$((TOTAL_DURATION + 120))s" \
+  -trace_err \
+  -error_file "$LOG_DIR/gateway_errors.log" \
+  >"$LOG_DIR/gateway.stdout" 2>&1 &
+GATEWAY_PID=$!
+
+sleep 1
+echo "Gateway UAS started (PID: $GATEWAY_PID)"
 
 # Start sip-edge with recording + DB + NATS
 echo "Starting sip-edge (release)..."
@@ -124,27 +145,6 @@ if ! kill -0 "$EDGE_PID" 2>/dev/null; then
   exit 1
 fi
 echo "sip-edge started (PID: $EDGE_PID)"
-
-# Start SIPp gateway UAS with rtp_echo
-echo "Starting SIPp gateway UAS (with rtp_echo)..."
-"$SIPP_BIN" "$LOCAL_IP:$EDGE_PORT" \
-  -sf "$SCENARIO_DIR/gateway_longcall.xml" \
-  -i "$LOCAL_IP" \
-  -p "$GATEWAY_PORT" \
-  -m 1000000 \
-  -aa \
-  -nostdin \
-  -rtp_echo \
-  -min_rtp_port 30000 \
-  -max_rtp_port 31000 \
-  -timeout "$((TOTAL_DURATION + 120))s" \
-  -trace_err \
-  -error_file "$LOG_DIR/gateway_errors.log" \
-  >"$LOG_DIR/gateway.stdout" 2>&1 &
-GATEWAY_PID=$!
-
-sleep 0.5
-echo "Gateway UAS started (PID: $GATEWAY_PID)"
 echo
 
 # Run the stress test

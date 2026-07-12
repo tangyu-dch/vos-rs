@@ -584,15 +584,17 @@ fn chrono_like_epoch_millis() -> u128 {
 }
 
 pub(crate) fn record_probe_failure(edge_state: &EdgeState, gateway_id: &str, reason: String) {
-    let mut health = edge_state
-        .gateway_health
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    health.record_failure(gateway_id);
-    let status = health.get_gateway_status(gateway_id);
-    drop(health);
+    let status = {
+        let health = edge_state
+            .gateway_health
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        health.get_gateway_status(gateway_id)
+    };
     warn!(gateway = gateway_id, %reason, "gateway OPTIONS health probe failed");
-    persist_gateway_health(edge_state, gateway_id.to_string(), status);
+    if let Some(status) = status {
+        persist_gateway_health(edge_state, gateway_id.to_string(), Some(status));
+    }
 }
 
 pub(crate) fn record_probe_success(edge_state: &EdgeState, gateway_id: &str) {
