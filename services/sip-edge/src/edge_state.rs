@@ -299,7 +299,9 @@ impl EdgeState {
 
         Self {
             call_manager: std::sync::Arc::new(call_manager),
-            gateway_health: std::sync::Mutex::new(GatewayHealthTracker::default()),
+            gateway_health: std::sync::Mutex::new(GatewayHealthTracker::new(
+                call_core::HealthThresholds::from_env()
+            )),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay,
             registrar: tokio::sync::RwLock::new(RegistrationStore::new()),

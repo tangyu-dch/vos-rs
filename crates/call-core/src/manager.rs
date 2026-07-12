@@ -445,9 +445,14 @@ impl CallManager {
     /// Forcibly terminates a call by its Call-ID string, moving it to Failed
     /// state and archiving any CDR. Used by the session timer watchdog.
     pub fn terminate_call(&self, call_id: &str) {
+        self.terminate_call_with_reason(call_id, "Session-Expires timeout");
+    }
+
+    /// Forcibly terminates a call with a specific failure reason.
+    pub fn terminate_call_with_reason(&self, call_id: &str, reason: &str) {
         let cid = crate::CallId::new(call_id.to_string());
         if let Some(mut call) = self.calls.get_mut(&cid) {
-            let _ = call.fail(None, "Session-Expires timeout".to_string());
+            let _ = call.fail(None, reason.to_string());
             if let Some(cdr) = crate::cdr::CallCdr::from_completed_call(&call) {
                 self.push_cdr(cdr);
             }

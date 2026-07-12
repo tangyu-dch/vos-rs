@@ -265,7 +265,7 @@ pub(crate) fn spawn_session_timer_watchdog(
             }
 
             // 2. Collect expired calls without holding the lock during async I/O
-            let expired: Vec<(String, String, String)> = {
+            let expired: Vec<(String, String, String, String)> = {
                 edge_state
                     .inbound_transactions
                     .iter()
@@ -277,7 +277,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                         if let (Some(est), Some(max_dur)) =
                             (tx.established_at, tx.max_duration_secs)
                         {
-                            if est.elapsed().as_secs() >= u64::from(max_dur) {
+                            if max_dur > 0 && est.elapsed().as_secs() >= u64::from(max_dur) {
                                 warn!(
                                     call_id,
                                     max_duration = max_dur,
@@ -287,6 +287,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                                     call_id.clone(),
                                     tx.peer.clone(),
                                     tx.outbound_uri.to_string(),
+                                    "balance exhausted".to_string(),
                                 ));
                             }
                         }
@@ -307,6 +308,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                                     call_id.clone(),
                                     tx.peer.clone(),
                                     tx.outbound_uri.to_string(),
+                                    "session timer expired".to_string(),
                                 ));
                             }
                         }
@@ -316,7 +318,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                     .collect()
             };
 
-            for (call_id, caller_peer, gateway_uri) in expired {
+            for (call_id, caller_peer, gateway_uri, reason) in expired {
                 // Build a BYE toward the caller
                 let caller_bye = format!(
                     "BYE sip:{caller} SIP/2.0\r\n\
@@ -386,7 +388,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                         .unwrap_or_else(|e| e.into_inner())
                         .decrement_active(&gw_id);
                 }
-                edge_state.call_manager.terminate_call(&call_id);
+                edge_state.call_manager.terminate_call_with_reason(&call_id, &reason);
 
                 // Real-time billing: settle the call on timeout.
                 if let Some(ref db) = edge_state.db_store {
