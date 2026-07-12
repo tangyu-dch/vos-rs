@@ -76,6 +76,10 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_CALL_ID_INDEX_SQL)
             .execute(&self.pool)
             .await?;
+        // CDR 可能因 NATS 重投或 ACK 失败重复到达，数据库约束是最终幂等边界。
+        sqlx::query(CREATE_CALL_ID_UNIQUE_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(CREATE_STARTED_AT_INDEX_SQL)
             .execute(&self.pool)
             .await?;
@@ -200,6 +204,13 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_AUDIT_LOGS_INDEX_SQL)
             .execute(&self.pool)
             .await?;
+        // 迁移：添加审计日志的 query_params 和 request_body 列
+        sqlx::query("ALTER TABLE api_audit_logs ADD COLUMN IF NOT EXISTS query_params TEXT")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("ALTER TABLE api_audit_logs ADD COLUMN IF NOT EXISTS request_body TEXT")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -219,7 +230,7 @@ impl PostgresCdrStore {
     pub async fn insert_audit_log(&self, input: &AuditLogInput<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO api_audit_logs (request_id, username, role, method, path, query_params, request_body, status_code, source_ip) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::inet)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::inet)",
         )
         .bind(input.request_id)
         .bind(input.username)
@@ -420,6 +431,7 @@ impl PostgresCdrStore {
                 gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
                 mos, dtmf_digits, recording_path, direction
             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+            ON CONFLICT (call_id) DO NOTHING
             "#,
         )
         .bind(&event.call_id)
@@ -463,6 +475,7 @@ impl PostgresCdrStore {
                     gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
                     mos, dtmf_digits, recording_path, direction
                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+                ON CONFLICT (call_id) DO NOTHING
                 "#,
             )
             .bind(&event.call_id)

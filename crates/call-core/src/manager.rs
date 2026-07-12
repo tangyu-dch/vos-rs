@@ -27,7 +27,43 @@ use crate::{
 };
 use dashmap::DashMap;
 use sip_core::{SipRequest, SipResponse};
-use std::sync::RwLock;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, RwLock,
+};
+
+/// CDR 输出通道抽象。
+///
+/// 生产环境使用有界 `Sender`，测试和兼容调用方仍可使用无界 Sender。
+/// 呼叫热路径只尝试投递，不等待慢速数据库，从而避免阻塞 SIP 处理线程。
+pub trait CdrSink: Send + Sync + std::fmt::Debug {
+    /// 尝试投递一条 CDR；返回错误表示队列已满或消费者已退出。
+    fn try_send_cdr(&self, cdr: CallCdr) -> Result<(), CdrSendError>;
+}
+
+/// CDR 投递失败原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CdrSendError {
+    /// 有界队列已满，生产者不能阻塞等待。
+    QueueFull,
+    /// CDR 消费者已经退出。
+    ConsumerClosed,
+}
+
+impl CdrSink for tokio::sync::mpsc::Sender<CallCdr> {
+    fn try_send_cdr(&self, cdr: CallCdr) -> Result<(), CdrSendError> {
+        self.try_send(cdr).map_err(|error| match error {
+            tokio::sync::mpsc::error::TrySendError::Full(_) => CdrSendError::QueueFull,
+            tokio::sync::mpsc::error::TrySendError::Closed(_) => CdrSendError::ConsumerClosed,
+        })
+    }
+}
+
+impl CdrSink for tokio::sync::mpsc::UnboundedSender<CallCdr> {
+    fn try_send_cdr(&self, cdr: CallCdr) -> Result<(), CdrSendError> {
+        self.send(cdr).map_err(|_| CdrSendError::ConsumerClosed)
+    }
+}
 
 /// 入站 INVITE 处理结果。
 ///
@@ -96,23 +132,29 @@ pub struct CallManager {
     /// 路由表（支持热更新）
     routes: RwLock<RouteTable>,
     /// CDR 异步写入通道
-    cdr_sender: tokio::sync::mpsc::UnboundedSender<CallCdr>,
+    cdr_sender: Arc<dyn CdrSink>,
+    cdr_dropped: AtomicU64,
 }
 
 impl CallManager {
-    pub fn new(
-        routes: RouteTable,
-        cdr_sender: tokio::sync::mpsc::UnboundedSender<CallCdr>,
-    ) -> Self {
+    pub fn new<S: CdrSink + 'static>(routes: RouteTable, cdr_sender: S) -> Self {
         Self {
             calls: DashMap::new(),
             routes: RwLock::new(routes),
-            cdr_sender,
+            cdr_sender: Arc::new(cdr_sender),
+            cdr_dropped: AtomicU64::new(0),
         }
     }
 
     fn push_cdr(&self, cdr: CallCdr) {
-        let _ = self.cdr_sender.send(cdr);
+        if self.cdr_sender.try_send_cdr(cdr).is_err() {
+            self.cdr_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// 返回因 CDR 队列满或消费者退出而未能投递的数量。
+    pub fn dropped_cdr_count(&self) -> u64 {
+        self.cdr_dropped.load(Ordering::Relaxed)
     }
 
     pub fn update_routes(&self, routes: RouteTable) {

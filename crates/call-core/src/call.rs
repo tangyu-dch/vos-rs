@@ -317,6 +317,10 @@ impl Call {
     }
 
     pub fn mark_ringing(&mut self) -> CallResult<()> {
+        // Allow re-entry from Ringing (for 183 early media after 180)
+        if self.state == CallState::Ringing {
+            return Ok(());
+        }
         self.ensure_state(CallState::Routing, "mark_ringing")?;
 
         let outbound = self

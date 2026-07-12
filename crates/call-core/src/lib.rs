@@ -34,7 +34,10 @@ mod routing;
 pub use call::{Call, CallId, CallLeg, CallState, FailureCause, LegDirection, LegId, LegState};
 pub use cdr::{CallCdr, CallQualityMetrics, CdrStatus};
 pub use error::{CallError, CallResult};
-pub use manager::{CallManager, InboundInviteOutcome, OutboundResponseOutcome, TerminationOutcome};
+pub use manager::{
+    CallManager, CdrSendError, CdrSink, InboundInviteOutcome, OutboundResponseOutcome,
+    TerminationOutcome,
+};
 pub use queue::{Agent, AgentState, CallQueue, QueueMetrics, QueueStrategy, QueuedCall};
 pub use routing::{
     CircuitState, GatewayHealth, GatewayHealthTracker, GatewayId, HealthThresholds, Route,

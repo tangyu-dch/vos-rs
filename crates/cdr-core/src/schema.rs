@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS call_cdrs (
 
 pub(super) const CREATE_CALL_ID_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_call_cdrs_call_id ON call_cdrs (call_id)";
+pub(super) const CREATE_CALL_ID_UNIQUE_INDEX_SQL: &str =
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_call_cdrs_call_id_unique ON call_cdrs (call_id)";
 pub(super) const CREATE_STARTED_AT_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_call_cdrs_started_at ON call_cdrs (started_at)";
 pub(super) const CREATE_STATUS_INDEX_SQL: &str =
@@ -290,6 +292,8 @@ CREATE TABLE IF NOT EXISTS api_audit_logs (
     role TEXT NOT NULL,
     method TEXT NOT NULL,
     path TEXT NOT NULL,
+    query_params TEXT,
+    request_body TEXT,
     status_code INTEGER NOT NULL,
     source_ip INET,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()

@@ -104,7 +104,13 @@ async fn main() -> Result<(), AnyError> {
     let db_store = cdr_sinks.postgres.clone();
     let cdr_sinks = std::sync::Arc::new(cdr_sinks);
 
-    let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::unbounded_channel::<call_core::CallCdr>();
+    // 使用有界队列防止数据库/NATS 故障时 CDR 无限堆积。
+    let cdr_queue_capacity = env::var("VOS_RS_CDR_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(4096);
+    let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
     let call_manager = CallManager::new(route_table, cdr_tx);
 
     let edge_state = Arc::new(EdgeState::with_media_relay_and_db(

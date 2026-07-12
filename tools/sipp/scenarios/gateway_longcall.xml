@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="ISO-8859-1" ?>
 <!DOCTYPE scenario SYSTEM "sipp.dtd">
 
-<scenario name="VOS-RS gateway UAS long call">
+<scenario name="VOS-RS gateway UAS long call with early media">
   <recv request="INVITE" crlf="true"/>
 
+  <!-- 180 Ringing -->
   <send>
     <![CDATA[
 
@@ -19,8 +20,41 @@
     ]]>
   </send>
 
-  <pause milliseconds="100"/>
+  <pause milliseconds="200"/>
 
+  <!-- 183 Session Progress with SDP (early media) -->
+  <send retrans="500">
+    <![CDATA[
+
+      SIP/2.0 183 Session Progress
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]vosrsGw[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:gw@[local_ip]:[local_port];transport=[transport]>
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=gateway 1 1 IN IP[local_ip_type] [local_ip]
+      s=VOS-RS SIPp gateway early media
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 0 8 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:8 PCMA/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-16
+      a=sendrecv
+
+    ]]>
+  </send>
+
+  <!-- Ring duration: 2s gateway pause + caller adds 3-18s random = 5-20s total -->
+  <pause milliseconds="2000"/>
+
+  <!-- 200 OK (answer) -->
   <send retrans="500">
     <![CDATA[
 
@@ -44,6 +78,7 @@
       a=rtpmap:8 PCMA/8000
       a=rtpmap:101 telephone-event/8000
       a=fmtp:101 0-16
+      a=sendrecv
 
     ]]>
   </send>
