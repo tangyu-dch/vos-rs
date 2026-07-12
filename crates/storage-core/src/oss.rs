@@ -27,6 +27,7 @@ impl OssStorage {
     ) -> Result<Self, StorageError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .http1_only()
             .build()
             .map_err(|e| StorageError::ConfigError(format!("创建 HTTP 客户端失败: {e}")))?;
 
@@ -44,7 +45,14 @@ impl OssStorage {
         if self.key_prefix.is_empty() {
             key.to_string()
         } else {
-            format!("{}{}", self.key_prefix.trim_end_matches('/'), key)
+            let prefix = self.key_prefix.trim_end_matches('/');
+            if key.is_empty() {
+                prefix.to_string()
+            } else if key.starts_with('/') {
+                format!("{prefix}{key}")
+            } else {
+                format!("{prefix}/{key}")
+            }
         }
     }
 
@@ -57,7 +65,11 @@ impl OssStorage {
             .endpoint
             .trim_start_matches("https://")
             .trim_start_matches("http://");
-        format!("{}.{}", self.bucket, without_proto)
+        if without_proto.contains("aliyuncs.com") || without_proto.contains("amazonaws.com") {
+            format!("{}.{}", self.bucket, without_proto)
+        } else {
+            without_proto.to_string()
+        }
     }
 
     fn sign_v4(
@@ -67,14 +79,14 @@ impl OssStorage {
         date: &str,
         date_full: &str,
         payload_hash: &str,
+        content_type: &str,
     ) -> String {
-        let region =
-            std::env::var("VOS_RS_OSS_REGION").unwrap_or_else(|_| "cn-hangzhou".to_string());
+        let region = std::env::var("VOS_RS_OSS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
         let credential_scope = format!("{}/{}/s3/aws4_request", date, region);
         let host = self.host();
 
         let canonical_headers = format!(
-            "content-type:application/octet-stream\nhost:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{date_full}\n"
+            "content-type:{content_type}\nhost:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{date_full}\n"
         );
         let signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date";
         // RustFS 默认使用 path-style：/{bucket}/{object-key}。
@@ -126,6 +138,7 @@ impl OssStorage {
             &date,
             &date_full,
             &payload_hash,
+            "application/octet-stream",
         );
 
         let mut req = self
@@ -152,6 +165,23 @@ fn hmac_sha256_raw(key: &[u8], data: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
+/// 按 RFC 3986 规则编码 S3 查询参数。
+///
+/// 签名计算和实际请求必须使用完全相同的编码结果；不能直接把对象前缀
+/// 拼接到 URL，否则前缀中的 `/`、空格或非 ASCII 字符会导致签名不一致。
+fn percent_encode_query(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push_str(&format!("{byte:02X}"));
+        }
+    }
+    encoded
+}
+
 #[async_trait]
 impl StorageBackend for OssStorage {
     async fn put(
@@ -164,9 +194,15 @@ impl StorageBackend for OssStorage {
         let date = Utc::now().format("%Y%m%d").to_string();
         let date_full = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let payload_hash = format!("{:x}", Sha256::digest(&data));
-        let authorization =
-            self.sign_v4("PUT", &self.full_key(key), &date, &date_full, &payload_hash);
         let ct = content_type.unwrap_or("application/octet-stream");
+        let authorization = self.sign_v4(
+            "PUT",
+            &self.full_key(key),
+            &date,
+            &date_full,
+            &payload_hash,
+            ct,
+        );
 
         let resp = self
             .client
@@ -208,29 +244,82 @@ impl StorageBackend for OssStorage {
 
     async fn list(&self, prefix: &str) -> Result<Vec<FileInfo>, StorageError> {
         let full_prefix = self.full_key(prefix);
-        let url = format!(
-            "{}/{}/?prefix={}&delimiter=/",
-            self.endpoint, self.bucket, full_prefix
+        let date = Utc::now().format("%Y%m%d").to_string();
+        let date_full = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+        let empty_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+        let region = std::env::var("VOS_RS_OSS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+        let credential_scope = format!("{}/{}/s3/aws4_request", date, region);
+        let host = self.host();
+        let encoded_prefix = percent_encode_query(&full_prefix);
+
+        // S3 ListObjects: path is /{bucket}/ with query prefix=...
+        let canonical_uri = format!("/{}/", self.bucket);
+        let canonical_query = format!("prefix={encoded_prefix}");
+        let canonical_headers = format!(
+            "content-type:application/octet-stream\nhost:{host}\nx-amz-content-sha256:{empty_hash}\nx-amz-date:{date_full}\n"
+        );
+        let signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date";
+
+        let canonical_request = format!(
+            "GET\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{empty_hash}"
         );
 
-        let resp = self.client.get(&url).send().await?;
-        let body = resp.text().await.unwrap_or_default();
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{date_full}\n{credential_scope}\n{:x}",
+            Sha256::digest(canonical_request.as_bytes())
+        );
+
+        let k_secret = format!("AWS4{}", self.secret_key);
+        let k_date = hmac_sha256_raw(k_secret.as_bytes(), date.as_bytes());
+        let k_region = hmac_sha256_raw(&k_date, region.as_bytes());
+        let k_service = hmac_sha256_raw(&k_region, b"s3");
+        let k_signing = hmac_sha256_raw(&k_service, b"aws4_request");
+        let signature = hex::encode(hmac_sha256_raw(&k_signing, string_to_sign.as_bytes()));
+
+        let authorization = format!(
+            "AWS4-HMAC-SHA256 Credential={access_key}/{scope}, SignedHeaders={signed}, Signature={sig}",
+            access_key = self.access_key,
+            scope = credential_scope,
+            signed = signed_headers,
+            sig = signature,
+        );
+
+        let url = format!("{}/{}/?prefix={encoded_prefix}", self.endpoint, self.bucket);
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", &authorization)
+            .header("x-amz-date", &date_full)
+            .header("x-amz-content-sha256", empty_hash)
+            .header("Content-Type", "application/octet-stream")
+            .send()
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            tracing::warn!(status = %status, url = %url, "OSS ListObjects 失败");
+            return Err(StorageError::ConfigError(format!(
+                "OSS ListObjects 失败: {status} - {body}"
+            )));
+        }
 
         let mut results = Vec::new();
-        for line in body.lines() {
-            if line.contains("<Key>") {
-                if let Some(start) = line.find("<Key>") {
-                    if let Some(end) = line.find("</Key>") {
-                        let key = &line[start + 5..end];
-                        let key = key.strip_prefix(&self.key_prefix).unwrap_or(key);
-                        results.push(FileInfo {
-                            key: key.to_string(),
-                            size: 0,
-                            content_type: None,
-                            last_modified: None,
-                        });
-                    }
-                }
+        let mut rest = body.as_str();
+        while let Some(start) = rest.find("<Key>") {
+            rest = &rest[start + 5..];
+            if let Some(end) = rest.find("</Key>") {
+                let key = &rest[..end];
+                let key = key.strip_prefix(&self.key_prefix).unwrap_or(key);
+                results.push(FileInfo {
+                    key: key.to_string(),
+                    size: 0,
+                    content_type: None,
+                    last_modified: None,
+                });
+                rest = &rest[end + 6..];
+            } else {
+                break;
             }
         }
         Ok(results)
@@ -265,8 +354,9 @@ impl StorageBackend for OssStorage {
         let host = self.host();
         let empty_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
+        let canonical_uri = format!("/{}/{}", self.bucket, full_key);
         let canonical_request = format!(
-            "GET\n/{full_key}\n\ncontent-type:application/octet-stream\nhost:{host}\nx-amz-content-sha256:{empty_hash}\n\ncontent-type;host;x-amz-content-sha256\n{empty_hash}"
+            "GET\n{canonical_uri}\n\ncontent-type:application/octet-stream\nhost:{host}\nx-amz-content-sha256:{empty_hash}\n\ncontent-type;host;x-amz-content-sha256\n{empty_hash}"
         );
 
         let string_to_sign = format!(

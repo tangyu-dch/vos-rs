@@ -411,9 +411,9 @@
 }
 
 /* ─── KPI Grid ─── */
-.cc-kpi-grid {
+.kpi-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--space-gap);
   margin-bottom: var(--space-xl);
 }
@@ -824,17 +824,13 @@
 
 /* ─── Responsive: Tablet ─── */
 @media (max-width: 1280px) {
-  .cc-kpi-grid {
-    grid-template-columns: repeat(3, 1fr);
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 1023px) {
-  .cc-sidebar {
-    display: none;
-  }
-
-  .cc-kpi-grid {
+  .kpi-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 
@@ -843,33 +839,16 @@
   }
 }
 
-/* ─── Responsive: Mobile ─── */
 @media (max-width: 767px) {
-  .cc-header {
-    padding: 0 var(--space-lg);
-  }
-
-  .cc-header__btn--danger span {
-    display: none;
-  }
-
-  .cc-content {
-    padding: var(--space-lg);
-  }
-
-  .cc-kpi-grid {
+  .kpi-grid {
     display: flex;
     overflow-x: auto;
     scroll-snap-type: x mandatory;
     gap: var(--space-md);
     padding-bottom: var(--space-sm);
-    margin-left: calc(-1 * var(--space-lg));
-    margin-right: calc(-1 * var(--space-lg));
-    padding-left: var(--space-lg);
-    padding-right: var(--space-lg);
   }
 
-  .cc-kpi-grid::-webkit-scrollbar {
+  .kpi-grid::-webkit-scrollbar {
     display: none;
   }
 

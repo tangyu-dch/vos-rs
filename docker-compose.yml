@@ -61,28 +61,36 @@ services:
     container_name: vos-rs-rustfs
     command: ["/data"]
     environment:
-      RUSTFS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
-      RUSTFS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
+      RUSTFS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-${VOS_RS_OSS_ACCESS_KEY:-rustfsadmin}}"
+      RUSTFS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-${VOS_RS_OSS_SECRET_KEY:-rustfsadmin}}"
       RUSTFS_CONSOLE_ENABLE: "true"
     ports:
       - "${RUSTFS_API_PORT:-9000}:9000"
       - "${RUSTFS_CONSOLE_PORT:-9001}:9001"
     volumes:
       - vos_rs_rustfs:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
     networks:
       - vos_rs_network
 
+  # 首次启动时创建录音桶；mc mb --ignore-existing 保证重复启动幂等。
   rustfs-init:
     image: minio/mc:latest
     container_name: vos-rs-rustfs-init
     depends_on:
       rustfs:
-        condition: service_started
+        condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
     command: >-
-      "until mc alias set rustfs http://rustfs:9000 ${RUSTFS_ACCESS_KEY:-rustfsadmin}
-      ${RUSTFS_SECRET_KEY:-rustfsadmin}; do sleep 2; done;
+      "mc alias set rustfs http://rustfs:9000
+      ${RUSTFS_ACCESS_KEY:-${VOS_RS_OSS_ACCESS_KEY:-rustfsadmin}}
+      ${RUSTFS_SECRET_KEY:-${VOS_RS_OSS_SECRET_KEY:-rustfsadmin}};
       mc mb --ignore-existing rustfs/${RUSTFS_BUCKET:-recordings}"
     restart: "no"
     networks:
@@ -193,8 +201,8 @@ services:
       VOS_RS_STORAGE_BACKEND: "${STORAGE_BACKEND:-oss}"
       VOS_RS_OSS_ENDPOINT: "${RUSTFS_ENDPOINT:-http://rustfs:9000}"
       VOS_RS_OSS_BUCKET: "${RUSTFS_BUCKET:-recordings}"
-      VOS_RS_OSS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
-      VOS_RS_OSS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
+      VOS_RS_OSS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-${VOS_RS_OSS_ACCESS_KEY:-rustfsadmin}}"
+      VOS_RS_OSS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-${VOS_RS_OSS_SECRET_KEY:-rustfsadmin}}"
       VOS_RS_OSS_KEY_PREFIX: "${RUSTFS_KEY_PREFIX:-recordings/}"
       VOS_RS_OSS_REGION: "${RUSTFS_REGION:-us-east-1}"
 
@@ -214,7 +222,7 @@ services:
       nats:
         condition: service_healthy
       rustfs:
-        condition: service_started
+        condition: service_healthy
       rustfs-init:
         condition: service_completed_successfully
       sip-edge:
@@ -305,4 +313,6 @@ volumes:
     name: vos_rs_recordings
   vos_rs_rustfs:
     driver: local
-    name: vos_rs_rustfs
+    # RustFS 升级或本地测试发生元数据不兼容时，可通过
+    # RUSTFS_VOLUME_NAME 指向新卷，保留旧卷以便后续迁移和恢复。
+    name: ${RUSTFS_VOLUME_NAME:-vos_rs_rustfs}
