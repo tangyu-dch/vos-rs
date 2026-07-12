@@ -39,6 +39,23 @@ fn provisional_response_moves_call_to_ringing() {
 }
 
 #[test]
+fn repeated_provisional_response_keeps_call_ringing() {
+    let mut call = routed_call();
+
+    call.mark_ringing()
+        .expect("first provisional response should ring");
+    call.mark_ringing()
+        .expect("early media after 180 should remain valid");
+
+    assert_eq!(call.state, CallState::Ringing);
+    assert_eq!(call.inbound.state, LegState::Ringing);
+    assert_eq!(
+        call.outbound.expect("outbound leg should exist").state,
+        LegState::Ringing
+    );
+}
+
+#[test]
 fn answered_call_becomes_established() {
     let mut call = routed_call();
 
