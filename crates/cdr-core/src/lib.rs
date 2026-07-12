@@ -77,7 +77,7 @@ impl PostgresCdrStore {
             .execute(&self.pool)
             .await?;
         // CDR 可能因 NATS 重投或 ACK 失败重复到达，数据库约束是最终幂等边界。
-        sqlx::query(CREATE_CALL_ID_UNIQUE_INDEX_SQL)
+        sqlx::query(MIGRATE_CDR_IDEMPOTENCY_SQL)
             .execute(&self.pool)
             .await?;
         sqlx::query(CREATE_STARTED_AT_INDEX_SQL)

@@ -50,8 +50,21 @@ CREATE TABLE IF NOT EXISTS call_cdrs (
 
 pub(super) const CREATE_CALL_ID_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_call_cdrs_call_id ON call_cdrs (call_id)";
-pub(super) const CREATE_CALL_ID_UNIQUE_INDEX_SQL: &str =
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_call_cdrs_call_id_unique ON call_cdrs (call_id)";
+/// 一次性修复历史重复 CDR，并创建幂等唯一索引。
+///
+/// 通过检查索引是否存在避免每次服务启动都扫描整张 CDR 表。
+pub(super) const MIGRATE_CDR_IDEMPOTENCY_SQL: &str = r#"
+DO $$
+BEGIN
+    IF to_regclass('public.idx_call_cdrs_call_id_unique') IS NULL THEN
+        DELETE FROM call_cdrs older
+        USING call_cdrs newer
+        WHERE older.call_id = newer.call_id
+          AND older.id < newer.id;
+        CREATE UNIQUE INDEX idx_call_cdrs_call_id_unique ON call_cdrs (call_id);
+    END IF;
+END $$;
+"#;
 pub(super) const CREATE_STARTED_AT_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_call_cdrs_started_at ON call_cdrs (started_at)";
 pub(super) const CREATE_STATUS_INDEX_SQL: &str =

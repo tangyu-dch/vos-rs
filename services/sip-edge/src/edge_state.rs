@@ -408,8 +408,16 @@ impl EdgeState {
 
     /// BYE/CANCEL/超时清理时递减用户并发计数（防止下溢）
     pub(crate) fn decrement_user_concurrency(&self, username: &str) {
-        if let Some(mut entry) = self.user_concurrency.get_mut(username) {
-            *entry = entry.saturating_sub(1);
+        // remove_if 在同一分片锁内完成递减和删除，避免“先释放锁再 remove”
+        // 导致并发 INVITE 刚加上的计数被误删。
+        if let dashmap::mapref::entry::Entry::Occupied(mut entry) =
+            self.user_concurrency.entry(username.to_string())
+        {
+            if *entry.get() <= 1 {
+                entry.remove();
+            } else {
+                *entry.get_mut() -= 1;
+            }
         }
     }
 

@@ -243,9 +243,12 @@ async fn process_batch(
                 // Poison message: JSON deserialization failed — this is a permanent error.
                 // Route to DLQ and terminate so NATS will not redeliver it.
                 error!(%error, "invalid CDR event JSON; routing to DLQ as poison message");
-                publish_to_dlq(jetstream, dlq_subject, &msg.payload).await;
-                if let Err(term_err) = msg.ack_with(AckKind::Term).await {
-                    error!(%term_err, "failed to term poison message");
+                if publish_to_dlq(jetstream, dlq_subject, &msg.payload).await {
+                    if let Err(term_err) = msg.ack_with(AckKind::Term).await {
+                        error!(%term_err, "failed to term poison message");
+                    }
+                } else if let Err(nak_err) = msg.ack_with(AckKind::Nak(Some(nak_delay))).await {
+                    error!(%nak_err, "failed to nak poison message after DLQ failure");
                 }
             }
         }
@@ -318,9 +321,12 @@ async fn process_batch(
                 "exceeded max deliveries; routing batch to DLQ as poison messages"
             );
             for (event, msg) in valid_events.iter().zip(valid_messages.iter()) {
-                publish_to_dlq(jetstream, dlq_subject, &msg.payload).await;
-                if let Err(term_err) = msg.ack_with(AckKind::Term).await {
-                    error!(%term_err, call_id = %event.call_id, "failed to term poison message");
+                if publish_to_dlq(jetstream, dlq_subject, &msg.payload).await {
+                    if let Err(term_err) = msg.ack_with(AckKind::Term).await {
+                        error!(%term_err, call_id = %event.call_id, "failed to term poison message");
+                    }
+                } else if let Err(nak_err) = msg.ack_with(AckKind::Nak(Some(nak_delay))).await {
+                    error!(%nak_err, call_id = %event.call_id, "failed to nak message after DLQ failure");
                 }
             }
         }
@@ -330,7 +336,7 @@ async fn process_batch(
 }
 
 /// Publish a payload to the DLQ subject and await the JetStream publish ack.
-async fn publish_to_dlq(jetstream: &jetstream::Context, dlq_subject: &str, payload: &[u8]) {
+async fn publish_to_dlq(jetstream: &jetstream::Context, dlq_subject: &str, payload: &[u8]) -> bool {
     match jetstream
         .publish(dlq_subject.to_string(), payload.to_vec().into())
         .await
@@ -338,10 +344,14 @@ async fn publish_to_dlq(jetstream: &jetstream::Context, dlq_subject: &str, paylo
         Ok(ack_future) => {
             if let Err(ack_err) = ack_future.await {
                 error!(%ack_err, "DLQ publish ack failed");
+                false
+            } else {
+                true
             }
         }
         Err(pub_err) => {
             error!(%pub_err, "failed to publish message to DLQ");
+            false
         }
     }
 }

@@ -179,7 +179,8 @@ pub struct RecordingWorkerHandle {
 impl RecordingPool {
     pub fn new(worker_count: usize, queue_capacity: usize) -> Self {
         let worker_count = worker_count.max(1);
-        let queue_capacity = queue_capacity.max(1);
+        // 至少保留一个槽位给 Finish/Flush 控制命令。
+        let queue_capacity = queue_capacity.max(2);
         let mut workers = Vec::with_capacity(worker_count);
         for worker_index in 0..worker_count {
             let (sender, receiver) = std::sync::mpsc::sync_channel(queue_capacity);
@@ -218,7 +219,7 @@ impl RecordingPool {
         session: Arc<RecordingSessionInfo>,
         packet: RecordedRtpPacket,
     ) -> io::Result<bool> {
-        self.try_send(session.id, RecordingCommand::Packet { session, packet })?;
+        self.try_send_packet(session.id, RecordingCommand::Packet { session, packet })?;
         Ok(true)
     }
 
@@ -239,6 +240,49 @@ impl RecordingPool {
 
     pub fn finish(&self, session_id: u64) {
         let _ = self.try_send(session_id, RecordingCommand::Finish { session_id });
+    }
+
+    /// 投递 RTP 数据包时为 Finish/Flush 控制命令保留一个队列槽位。
+    /// 多个 RTP 接收任务并发写入时，使用 CAS 预留计数，发送失败再回滚。
+    fn try_send_packet(&self, session_id: u64, command: RecordingCommand) -> io::Result<()> {
+        let worker = self.worker(session_id)?;
+        let packet_limit = self.queue_capacity.saturating_sub(1);
+        let mut pending = worker.pending_commands.load(Ordering::Acquire);
+        loop {
+            if pending >= packet_limit {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "recording queue reserved for control command",
+                ));
+            }
+            match worker.pending_commands.compare_exchange(
+                pending,
+                pending + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(current) => pending = current,
+            }
+        }
+
+        match worker.sender.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                worker.pending_commands.fetch_sub(1, Ordering::AcqRel);
+                Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "recording queue is full",
+                ))
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                worker.pending_commands.fetch_sub(1, Ordering::AcqRel);
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "recording worker is stopped",
+                ))
+            }
+        }
     }
 
     fn try_send(&self, session_id: u64, command: RecordingCommand) -> io::Result<()> {
