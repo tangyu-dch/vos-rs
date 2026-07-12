@@ -96,6 +96,30 @@
     }
 
     #[tokio::test]
+    async fn initial_ok_after_early_media_establishes_call() {
+        let edge_state = state_with_default_route();
+        let call_id = "invite-early-media-ok@example.com";
+        send_invite(&edge_state, call_id).await;
+
+        // A 183 response with SDP allocates this relay before the initial INVITE's 200 OK.
+        let mut transaction = edge_state
+            .inbound_transactions
+            .get_mut(call_id)
+            .expect("transaction should be remembered");
+        transaction.caller_relay_rtp = Some(RtpEndpoint::new("192.0.2.20", 40_000));
+        drop(transaction);
+
+        send_gateway_ok(&edge_state, call_id).await;
+
+        let call = edge_state
+            .call_manager
+            .get(&CallId::new(call_id))
+            .expect("call should still be tracked");
+        assert_eq!(call.state, CallState::Established);
+        assert!(call.answered_at.is_some());
+    }
+
+    #[tokio::test]
     async fn pairs_rtp_relay_ports_after_sdp_offer_answer() {
         let edge_state = state_with_default_route();
         let offer_body = concat!(

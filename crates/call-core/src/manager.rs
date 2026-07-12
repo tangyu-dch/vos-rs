@@ -452,7 +452,14 @@ impl CallManager {
     pub fn terminate_call_with_reason(&self, call_id: &str, reason: &str) {
         let cid = crate::CallId::new(call_id.to_string());
         if let Some(mut call) = self.calls.get_mut(&cid) {
-            let _ = call.fail(None, reason.to_string());
+            let result = if call.answered_at.is_some() {
+                call.terminate()
+            } else {
+                call.fail(None, reason.to_string())
+            };
+            if result.is_err() {
+                return;
+            }
             if let Some(cdr) = crate::cdr::CallCdr::from_completed_call(&call) {
                 self.push_cdr(cdr);
             }

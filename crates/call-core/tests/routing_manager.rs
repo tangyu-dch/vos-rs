@@ -215,6 +215,50 @@ fn inbound_cancel_before_answer_generates_canceled_cdr() {
     assert!(cdr.billable_duration.is_zero());
 }
 
+#[test]
+fn watchdog_termination_after_answer_generates_answered_cdr() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = routed_manager_with_call("call-watchdog-answered@example.com", tx);
+    let response = outbound_response(200, "OK", "call-watchdog-answered@example.com");
+    manager
+        .handle_outbound_response(&response)
+        .expect("response should establish call");
+
+    manager.terminate_call_with_reason(
+        "call-watchdog-answered@example.com",
+        "session timer expired",
+    );
+
+    let call = manager
+        .get(&CallId::new("call-watchdog-answered@example.com"))
+        .expect("call should remain available for inspection");
+    assert_eq!(call.state, CallState::Terminated);
+    let cdr = rx.try_recv().expect("CDR should exist");
+    assert_eq!(cdr.status, CdrStatus::Answered);
+    assert!(cdr.answered_at.is_some());
+}
+
+#[test]
+fn watchdog_termination_before_answer_generates_failed_cdr() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = routed_manager_with_call("call-watchdog-failed@example.com", tx);
+
+    manager.terminate_call_with_reason("call-watchdog-failed@example.com", "session timer expired");
+
+    let call = manager
+        .get(&CallId::new("call-watchdog-failed@example.com"))
+        .expect("call should remain available for inspection");
+    assert_eq!(call.state, CallState::Failed);
+    let cdr = rx.try_recv().expect("CDR should exist");
+    assert_eq!(cdr.status, CdrStatus::Failed);
+    assert_eq!(
+        cdr.failure_cause
+            .as_ref()
+            .map(|cause| cause.reason.as_str()),
+        Some("session timer expired")
+    );
+}
+
 fn test_routes() -> RouteTable {
     RouteTable::new(vec![Route::new(
         "default",

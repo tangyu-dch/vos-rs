@@ -724,11 +724,12 @@ pub(crate) async fn handle_datagram(
                 .map(|cseq| cseq.as_str().contains("INVITE"))
                 .unwrap_or(false);
 
-            // Check if this is a Re-INVITE response (call already established - has caller_relay_rtp set)
+            // Early-media responses can allocate caller RTP before the initial INVITE is answered.
+            // Use the dialog establishment marker so the final 200 OK is not mistaken for a re-INVITE.
             let is_reinvite_response = is_invite
                 && transaction
                     .as_ref()
-                    .map(|t| t.caller_relay_rtp.is_some())
+                    .map(|t| t.established_at.is_some())
                     .unwrap_or(false);
 
             let outbound_response_outcome = if is_invite && !is_reinvite_response {
