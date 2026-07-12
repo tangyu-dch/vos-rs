@@ -181,6 +181,10 @@ async fn main() -> Result<(), AnyError> {
             .fetch_optional(db.pool())
             .await?
             .is_some();
+        let has_routes = sqlx::query("SELECT 1 FROM sip_routes LIMIT 1")
+            .fetch_optional(db.pool())
+            .await?
+            .is_some();
         if !has_gateways {
             if let Ok(raw_gateway) = env::var("VOS_RS_SIP_DEFAULT_GATEWAY") {
                 let raw_gateway = raw_gateway.trim();
@@ -194,6 +198,14 @@ async fn main() -> Result<(), AnyError> {
                             "seeded default gateway and route into database"
                         );
                     }
+                }
+            }
+        } else if !has_routes {
+            if let Ok(raw_gateway) = env::var("VOS_RS_SIP_DEFAULT_GATEWAY") {
+                let raw_gateway = raw_gateway.trim();
+                if !raw_gateway.is_empty() {
+                    db.insert_route("default", "", 100, "default").await?;
+                    info!("seeded default route into database (gateway already exists)");
                 }
             }
         }

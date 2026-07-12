@@ -60,6 +60,13 @@ if [[ ! -f "$WAV_FILE" ]]; then
   exit 1
 fi
 
+DB_URL="${VOS_RS_DATABASE_URL:-postgres://vos_rs:vos_rs@127.0.0.1:5432/vos_rs}"
+if command -v psql &>/dev/null; then
+  echo "Resetting gateway health and ensuring default route..."
+  psql "$DB_URL" -c "UPDATE gateway_health_status SET circuit_open = false, consecutive_failures = 0, state = 'closed', half_open_successes = 0;" 2>/dev/null || true
+  psql "$DB_URL" -c "INSERT INTO sip_routes (id, prefix, priority, gateway_id, cost, weight) VALUES ('default', '', 100, 'default', 0.0, 100) ON CONFLICT (id) DO UPDATE SET prefix = EXCLUDED.prefix, gateway_id = EXCLUDED.gateway_id;" 2>/dev/null || true
+fi
+
 echo "Building sip-edge (release)..."
 cargo build --release -p sip-edge 2>&1 | tail -5
 
@@ -104,6 +111,8 @@ VOS_RS_NATS_CDR_SUBJECT="${VOS_RS_NATS_CDR_SUBJECT:-vos-rs.cdrs}" \
 VOS_RS_INTERNAL_SECRET="${VOS_RS_INTERNAL_SECRET:-dev-internal-secret}" \
 VOS_RS_ANTI_FRAUD_ENABLED="false" \
 VOS_RS_SIP_AUTH_USERS=1001:secret,1002:secret \
+VOS_RS_SESSION_EXPIRES_GATEWAY=7200 \
+VOS_RS_SESSION_EXPIRES_CALLER=7200 \
 RUST_LOG="${RUST_LOG:-sip_edge=info,media=info}" \
   "$ROOT_DIR/target/release/sip-edge" >"$LOG_DIR/sip-edge.log" 2>&1 &
 EDGE_PID=$!
