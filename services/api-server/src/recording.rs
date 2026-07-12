@@ -21,6 +21,23 @@ pub async fn sync_local_recordings(
     directory: &FsPath,
     uploaded_sizes: &mut HashMap<String, u64>,
 ) -> usize {
+    sync_local_recordings_with_policy(
+        storage,
+        directory,
+        uploaded_sizes,
+        Duration::from_secs(10),
+        storage.backend_name() == "oss",
+    )
+    .await
+}
+
+async fn sync_local_recordings_with_policy(
+    storage: &dyn StorageBackend,
+    directory: &FsPath,
+    uploaded_sizes: &mut HashMap<String, u64>,
+    minimum_age: Duration,
+    delete_after_upload: bool,
+) -> usize {
     let Ok(mut entries) = tokio::fs::read_dir(directory).await else {
         return 0;
     };
@@ -38,7 +55,7 @@ pub async fn sync_local_recordings(
             .modified()
             .ok()
             .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-            .is_some_and(|age| age < Duration::from_secs(10));
+            .is_some_and(|age| age < minimum_age);
         if recently_modified {
             continue;
         }
@@ -56,7 +73,27 @@ pub async fn sync_local_recordings(
         if let Err(error) = storage.put(file_name, data.into(), Some("audio/wav")).await {
             tracing::warn!(file_name, %error, "录音归档到对象存储失败，稍后重试");
         } else {
-            uploaded_sizes.insert(file_name.to_string(), size);
+            if delete_after_upload {
+                match storage.exists(file_name).await {
+                    Ok(true) => {
+                        if let Err(error) = tokio::fs::remove_file(&path).await {
+                            tracing::warn!(file_name, %error, "录音已归档，但删除本地文件失败");
+                            continue;
+                        }
+                        tracing::info!(file_name, "录音已归档并删除本地文件");
+                    }
+                    Ok(false) => {
+                        tracing::warn!(file_name, "录音上传后未能在对象存储中确认，保留本地文件");
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::warn!(file_name, %error, "无法确认对象存储中的录音，保留本地文件");
+                        continue;
+                    }
+                }
+            } else {
+                uploaded_sizes.insert(file_name.to_string(), size);
+            }
             uploaded += 1;
         }
     }
@@ -147,4 +184,86 @@ pub async fn get_recording_audio(
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "音频长度无效".into()))?,
     );
     Ok((StatusCode::OK, headers, bytes).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use storage_core::local::LocalStorage;
+
+    #[tokio::test]
+    async fn successful_archive_deletes_local_source_when_enabled() {
+        let test_root = std::env::temp_dir().join(format!(
+            "vos-rs-recording-archive-{}",
+            std::process::id()
+        ));
+        let source_dir = test_root.join("source");
+        let archive_dir = test_root.join("archive");
+        tokio::fs::create_dir_all(&source_dir)
+            .await
+            .expect("source directory should be created");
+        let source_path = source_dir.join("call-1.wav");
+        tokio::fs::write(&source_path, b"RIFF-test")
+            .await
+            .expect("source recording should be written");
+        let storage = LocalStorage::new(
+            archive_dir
+                .to_str()
+                .expect("archive path should be valid UTF-8"),
+        )
+        .expect("archive storage should be created");
+        let mut uploaded_sizes = HashMap::new();
+
+        let uploaded = sync_local_recordings_with_policy(
+            &storage,
+            &source_dir,
+            &mut uploaded_sizes,
+            Duration::ZERO,
+            true,
+        )
+        .await;
+
+        assert_eq!(uploaded, 1);
+        assert!(!source_path.exists());
+        assert!(archive_dir.join("call-1.wav").exists());
+        let _ = tokio::fs::remove_dir_all(test_root).await;
+    }
+
+    #[tokio::test]
+    async fn successful_archive_keeps_local_source_when_cleanup_is_disabled() {
+        let test_root = std::env::temp_dir().join(format!(
+            "vos-rs-recording-dual-{}",
+            std::process::id()
+        ));
+        let source_dir = test_root.join("source");
+        let archive_dir = test_root.join("archive");
+        tokio::fs::create_dir_all(&source_dir)
+            .await
+            .expect("source directory should be created");
+        let source_path = source_dir.join("call-2.wav");
+        tokio::fs::write(&source_path, b"RIFF-test")
+            .await
+            .expect("source recording should be written");
+        let storage = LocalStorage::new(
+            archive_dir
+                .to_str()
+                .expect("archive path should be valid UTF-8"),
+        )
+        .expect("archive storage should be created");
+        let mut uploaded_sizes = HashMap::new();
+
+        let uploaded = sync_local_recordings_with_policy(
+            &storage,
+            &source_dir,
+            &mut uploaded_sizes,
+            Duration::ZERO,
+            false,
+        )
+        .await;
+
+        assert_eq!(uploaded, 1);
+        assert!(source_path.exists());
+        assert!(archive_dir.join("call-2.wav").exists());
+        let _ = tokio::fs::remove_dir_all(test_root).await;
+    }
 }

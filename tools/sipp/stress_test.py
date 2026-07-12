@@ -192,6 +192,47 @@ def parse_sdp_endpoint(message):
     return conn, port
 
 
+def build_in_dialog_ok(request):
+    """Build a minimal 200 response for an in-dialog re-INVITE or UPDATE."""
+    headers = {}
+    for line in request.split('\r\n')[1:]:
+        if not line:
+            break
+        name, separator, value = line.partition(':')
+        if separator:
+            headers.setdefault(name.strip().lower(), []).append(value.strip())
+    required = ('via', 'from', 'to', 'call-id', 'cseq')
+    if any(name not in headers for name in required):
+        return None
+    response_headers = []
+    for via in headers['via']:
+        response_headers.append(f'Via: {via}')
+    response_headers.extend([
+        f"From: {headers['from'][0]}",
+        f"To: {headers['to'][0]}",
+        f"Call-ID: {headers['call-id'][0]}",
+        f"CSeq: {headers['cseq'][0]}",
+        'Content-Length: 0',
+    ])
+    return 'SIP/2.0 200 OK\r\n' + '\r\n'.join(response_headers) + '\r\n\r\n'
+
+
+def reply_to_in_dialog_refreshes(sip_sock):
+    """Drain pending SIP requests and acknowledge session refreshes."""
+    while True:
+        try:
+            data, peer = sip_sock.recvfrom(65535)
+        except (BlockingIOError, socket.timeout):
+            return
+        message = data.decode('utf-8', errors='replace')
+        method = message.split(' ', 1)[0]
+        if method not in ('INVITE', 'UPDATE'):
+            continue
+        response = build_in_dialog_ok(message)
+        if response is not None:
+            sip_sock.sendto(response.encode('utf-8'), peer)
+
+
 def build_invite(call_id, caller_tag, from_user, local_ip, local_port, media_port,
                  edge_ip, edge_port, destination, cseq=1, direction='outbound'):
     sdp = (
@@ -480,6 +521,7 @@ def make_call_answered(call_id, edge_ip, edge_port, destination, duration_sec, s
         ack = build_ack(call_id, caller_tag, to_tag, from_user, local_ip,
                         local_sip_port, edge_ip, edge_port, destination, 1)
         sip_sock.sendto(ack.encode('utf-8'), edge_addr)
+        sip_sock.setblocking(False)
 
         target_addr = (relay_addr or edge_ip, relay_port)
         ssrc = random.randint(10000, 99999)
@@ -503,6 +545,8 @@ def make_call_answered(call_id, edge_ip, edge_port, destination, duration_sec, s
             now = time.time()
             if now >= bye_deadline:
                 break
+
+            reply_to_in_dialog_refreshes(sip_sock)
 
             # Send BYE after duration_sec but while RTP is still flowing
             if not bye_sent and now >= rtp_phase_deadline:

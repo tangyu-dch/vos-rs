@@ -178,6 +178,16 @@ VOS_RS_OSS_KEY_PREFIX=vos-rs/recordings/
 VOS_RS_RECORDING_DIR=/var/lib/vos-rs/recordings
 ```
 
+Docker Compose 中 `VOS_RS_OSS_ENDPOINT` 是容器内部地址，不可直接用于浏览器。
+宿主机默认使用以下入口：
+
+- S3 API / 健康检查：`http://127.0.0.1:9000`
+- RustFS 管理控制台：`http://127.0.0.1:9001/rustfs/console/index.html`
+
+如需修改宿主机端口，请设置 `RUSTFS_API_PORT` 和 `RUSTFS_CONSOLE_PORT`；容器内部
+endpoint 仍保持 `http://rustfs:9000`。纯 `oss` 后端确认上传成功后会删除本地录音，
+`dual` 后端会保留本地副本作为回退。
+
 ### 1.9 NAT 穿越
 
 | 环境变量 | 默认值 | 说明 |
