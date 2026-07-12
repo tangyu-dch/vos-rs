@@ -9,7 +9,7 @@ use std::{
     path::Path as FsPath,
     time::{Duration, SystemTime},
 };
-use storage_core::StorageBackend;
+use storage_core::{StorageBackend, StorageError};
 
 /// 将已经停止写入的本地 WAV 归档到对象存储。
 ///
@@ -84,24 +84,57 @@ pub async fn get_recording_audio(
 ) -> Result<axum::response::Response, (StatusCode, String)> {
     let storage = &state.recording_storage;
     let prefix = sanitize_call_id(&call_id);
+    tracing::info!(
+        call_id,
+        prefix,
+        backend = storage.backend_name(),
+        "录音查询"
+    );
 
     // 优先按确定的对象 key 读取，避免依赖 S3 ListObjects 权限；分段录音再回退到列表查询。
     let bytes = match storage.get(&(prefix.clone() + ".wav")).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            let files = storage
-                .list("")
-                .await
-                .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+        Ok(bytes) => {
+            tracing::info!(prefix, "直接匹配录音成功");
+            bytes
+        }
+        Err(error @ StorageError::NotFound(_)) => {
+            tracing::info!(prefix, %error, "直接匹配失败，尝试列表查询");
+            // sip-edge 文件名格式: {sanitized_call_id}-{timestamp_ms}.wav
+            // 只查询当前 call_id 前缀，避免在大 bucket 中扫描全部录音。
+            let files = storage.list(&prefix).await.map_err(|e| {
+                tracing::error!(%e, "列表查询失败");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "录音存储暂时不可用".to_string(),
+                )
+            })?;
+            tracing::info!(count = files.len(), "列表查询返回文件数");
             let wav_key = files
                 .iter()
-                .find(|f| f.key.ends_with(".wav") && f.key.trim_end_matches(".wav") == prefix)
-                .map(|f| f.key.clone())
-                .ok_or_else(|| (StatusCode::NOT_FOUND, "未找到该通话的录音".into()))?;
+                .filter(|f| f.key.ends_with(".wav"))
+                .find(|f| {
+                    let stem = f.key.trim_end_matches(".wav");
+                    stem == prefix || stem.starts_with(&format!("{prefix}-"))
+                })
+                .map(|f| {
+                    tracing::info!(key = %f.key, "找到匹配录音");
+                    f.key.clone()
+                })
+                .ok_or_else(|| {
+                    tracing::warn!(prefix, "未找到匹配的录音文件");
+                    (StatusCode::NOT_FOUND, "未找到该通话的录音".into())
+                })?;
             storage
                 .get(&wav_key)
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        }
+        Err(error) => {
+            tracing::error!(%error, "读取录音存储失败");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "录音存储暂时不可用".to_string(),
+            ));
         }
     };
 
