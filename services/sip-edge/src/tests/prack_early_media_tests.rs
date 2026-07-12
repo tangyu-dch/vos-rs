@@ -377,6 +377,13 @@
             Some("198.51.100.20:49202".parse().unwrap()),
             "caller relay target must be updated to final media port from 200 OK"
         );
+
+        let call = edge_state
+            .call_manager
+            .get(&CallId::new(call_id))
+            .expect("call should remain tracked after final 200 OK");
+        assert_eq!(call.state, CallState::Established);
+        assert!(call.answered_at.is_some());
     }
 
     /// Verify that a 183 WITHOUT SDP is forwarded as-is (no relay allocation needed).
