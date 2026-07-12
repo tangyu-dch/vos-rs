@@ -633,7 +633,6 @@ pub(crate) async fn handle_datagram(
                         return datagrams;
                     }
                 }
-                return Vec::new();
             }
 
             if let Some(call_id) = call_id.as_deref() {

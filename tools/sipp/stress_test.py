@@ -428,7 +428,7 @@ def make_call_answered(call_id, edge_ip, edge_port, destination, duration_sec, s
                 data, _ = sip_sock.recvfrom(65535)
             except socket.timeout:
                 now = time.time()
-                if now - last_retrans >= 0.5 and not got_200:
+                if now - last_retrans >= 0.5 and not got_200 and not got_180:
                     try:
                         sip_sock.sendto(invite_bytes, edge_addr)
                         last_retrans = now

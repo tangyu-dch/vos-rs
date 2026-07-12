@@ -23,7 +23,7 @@
   <pause milliseconds="200"/>
 
   <!-- 183 Session Progress with SDP (early media) -->
-  <send retrans="500">
+  <send>
     <![CDATA[
 
       SIP/2.0 183 Session Progress
