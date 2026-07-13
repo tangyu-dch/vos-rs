@@ -16,10 +16,10 @@
 | 场景 | 条件 | 当前结果 |
 |------|------|----------|
 | SIP + RTP relay，录音关闭 | 20k RTP pps，2048 个 relay RTP 端口扫发 | 400 target CPS / 2200 calls / 0 failed 通过；450 target CPS / 2400 calls 出现失败 |
-| SIP + RTP relay + 录音开启 | 1000 RTP pps，1024 个 relay RTP 端口扫发，`VOS_RS_RECORDING_WORKERS=4` | 300 target CPS / 1800 calls / 0 failed 通过 |
-| SIP + RTP relay + 录音开启 | 5k RTP pps，512 个 relay RTP 端口扫发，`VOS_RS_RECORDING_WORKERS=4` | 80 target CPS / 500 calls / 0 failed 通过；100 target CPS / 600 calls 出现 5 failed |
-| SIP + RTP relay + 录音开启 | 5k RTP pps，512 个 relay RTP 端口扫发，`VOS_RS_RECORDING_WORKERS=8` | 100 target CPS / 600 calls / 0 failed；录音丢包 207 |
-| SIP + RTP relay + 录音开启 | 5k RTP pps，512 个 relay RTP 端口扫发，`VOS_RS_RECORDING_WORKERS=16` | 100 target CPS / 600 calls / 5 failed；录音丢包 1，不建议无 CPU 余量时继续增加 worker |
+| SIP + RTP relay + 录音开启 | 1000 RTP pps，1024 个 relay RTP 端口扫发，`recording_workers=4` | 300 target CPS / 1800 calls / 0 failed 通过 |
+| SIP + RTP relay + 录音开启 | 5k RTP pps，512 个 relay RTP 端口扫发，`recording_workers=4` | 80 target CPS / 500 calls / 0 failed 通过；100 target CPS / 600 calls 出现 5 failed |
+| SIP + RTP relay + 录音开启 | 5k RTP pps，512 个 relay RTP 端口扫发，`recording_workers=8` | 100 target CPS / 600 calls / 0 failed；录音丢包 207 |
+| SIP + RTP relay + 录音开启 | 5k RTP pps，512 个 relay RTP 端口扫发，`recording_workers=16` | 100 target CPS / 600 calls / 5 failed；录音丢包 1，不建议无 CPU 余量时继续增加 worker |
 
 已做的相关优化：
 
@@ -34,9 +34,9 @@
 仍需优化的性能风险：
 
 - 当前录音已经使用固定 worker pool，但仍和 `sip-edge` 同进程竞争 CPU/磁盘；生产目标建议拆成专用媒体录音进程或独立媒体节点。
-- WAV 混音已改为内存缓冲和顺序写，录音队列容量可通过 `VOS_RS_RECORDING_QUEUE_CAPACITY` 调整，但高 pps 下仍受本地磁盘、worker 数、channel backpressure 和 SIPp 本机 UDP buffer 影响。
-- 录音已支持 `VOS_RS_RECORDING_RETENTION_SECS` 自动清理过期 WAV/JSON，并通过 `VOS_RS_RECORDING_MIN_FREE_BYTES` 在启动和写入期间保护磁盘空间；录音目录为活动会话保留文件，不会被清理任务删除。
-- 录音支持按 `VOS_RS_RECORDING_MAX_FILE_BYTES` 或 `VOS_RS_RECORDING_MAX_DURATION_SECS` 自动分段；首段保持原始 WAV 文件名，后续分段使用 `-part-0001` 后缀，所有文件地址写入通话 CDR。
+- WAV 混音已改为内存缓冲和顺序写，录音队列容量可通过数据库参数 `recording_queue_capacity` 调整，但高 pps 下仍受本地磁盘、worker 数、channel backpressure 和 SIPp 本机 UDP buffer 影响。
+- 录音已支持数据库参数 `recording_retention_secs` 自动清理过期 WAV/JSON，并通过数据库参数 `recording_min_free_bytes` 在启动和写入期间保护磁盘空间；录音目录为活动会话保留文件，不会被清理任务删除。
+- 录音支持按数据库参数 `recording_max_file_bytes` 或 `recording_max_duration_secs` 自动分段；首段保持原始 WAV 文件名，后续分段使用 `-part-0001` 后缀，所有文件地址写入通话 CDR。
 - 高 CPS 失败档会出现 INVITE/BYE client transaction timeout，需继续优化 SIP 事务调度、UDP socket buffer、SIPp 多实例压测方式和本机内核 UDP buffer。
 
 ## SIP 协议覆盖范围
@@ -95,16 +95,16 @@
 - 将首个音频 RTP 的 `c=` 和 `m=` 行重写为中继端点。
 - SDP 负载修剪，保留兼容的 PCMU/PCMA 负载和 `telephone-event/8000` DTMF 动态负载，并移除不支持的负载特定属性。
 - `sdp-core` 已结构化解析 ICE username fragment/password、host/srflx candidate、`end-of-candidates`、DTLS fingerprint 和 setup role；SIP Edge 在转发 SDP 前校验这些属性的成对关系与基本格式。
-- 可通过 `VOS_RS_RTP_ADVERTISED_ADDR`、`VOS_RS_RTP_PORT_MIN` 和 `VOS_RS_RTP_PORT_MAX` 配置 RTP 通告地址和偶数 RTP 端口范围。
+- 可通过数据库参数 `rtp_advertised_addr`、`rtp_port_min` 和 `rtp_port_max` 配置 RTP 通告地址和偶数 RTP 端口范围。
 - RTP 端口租用分配，自动跳过活动中继端口，在配置的端口范围耗尽时返回 SIP 503，并在呼叫拆线或出局呼叫失败时释放租期。
 - 绑定在所配偶数端口上的 UDP RTP 监听器，以及绑定在相邻奇数端口上的 RTCP 监听器。
-- 支持在主叫和网关段上从 SDP 学习 RTP/RTCP 目标。
-- 配对中继端口之间的对称 RTP/RTCP 源学习，默认通过 `VOS_RS_RTP_SYMMETRIC_LEARNING=true` 启用。
+- 支持在主叫 and 网关段上从 SDP 学习 RTP/RTCP 目标。
+- 配对中继端口之间的对称 RTP/RTCP 源学习，默认通过数据库参数 `rtp_symmetric_learning`（默认值为 `true`）启用。
 - 基础的单端口 RTP/RTCP 计数器，以及关于丢包、抖动和估算 RTT 的最新/最大 RTCP 质量数据快照。
 - RTP relay 每 5 秒按接收统计生成 Receiver Report，并通过 RTCP 对端口转发；支持 60 秒滚动质量窗口、平均丢包/jitter/RTT、MOS、R-factor 与 Prometheus 指标。
-- RTP 源地址绑定、反欺骗丢包计数和超时重新学习，可通过 `VOS_RS_RTP_ANTI_SPOOFING` 与 `VOS_RS_RTP_SOURCE_RELEARN_SECS` 配置。
+- RTP 源地址绑定、反欺骗丢包计数和超时重新学习，可通过数据库参数 `rtp_anti_spoofing` 与 `rtp_source_relearn_secs` 配置。
 - RFC 2833/4733 `telephone-event` RTP DTMF 中继、按 RTP timestamp 去重后的按键重建、CDR `dtmf_digits` 写入以及 `dtmf_events` 媒体指标计数。
-- 可选的呼叫录音（通过 `VOS_RS_RECORDING_ENABLED=true`），将中继的 PCMU/PCMA RTP 解码为单呼叫双声道 WAV 文件，并把 `local:` 录音地址写入通话 CDR。
+- 可选的呼叫录音（通过数据库参数 `recording_enabled`（默认值为 `true`）），将中继的 PCMU/PCMA RTP 解码为单呼叫双声道 WAV 文件，并把 `local:` 录音地址写入通话 CDR。
 
 未完成：
 

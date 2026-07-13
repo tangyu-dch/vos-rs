@@ -371,11 +371,10 @@ balance_after = balance_before - amount
 
 ### 6.3 存储后端
 
-| 后端 | 环境变量 | 说明 |
-|------|----------|------|
-| Local | `VOS_RS_STORAGE_BACKEND=local` | 本地文件系统 |
-| OSS | `VOS_RS_STORAGE_BACKEND=oss` | S3 兼容对象存储 |
-| Dual | `VOS_RS_STORAGE_BACKEND=dual` | 先 OSS 后本地 |
+| 后端 | config.yaml 映射 (connections.s3) | 说明 |
+|------|-----------------------------------|------|
+| Local | `backend: "local"` | 本地文件系统 |
+| OSS / S3 | `backend: "s3"` | S3 兼容对象存储 |
 
 ### 6.4 录音 API
 
@@ -390,13 +389,13 @@ GET  /api/recordings/:call_id/audio → 下载音频 (WAV)
 
 ### 7.1 功能列表
 
-| 功能 | 实现 | 配置 |
-|------|------|------|
-| IP ACL (白名单) | `VOS_RS_SBC_ALLOW` | 逗号分隔的 CIDR |
-| IP ACL (黑名单) | `VOS_RS_SBC_BLOCK` | 逗号分隔的 CIDR |
-| 令牌桶限速 | `VOS_RS_SBC_LIMIT_CAPACITY` | 桶容量 (默认100) |
-| 令牌桶填充率 | `VOS_RS_SBC_LIMIT_FILL_RATE` | 每秒填充 (默认10) |
-| 用户并发限制 | `VOS_RS_SBC_MAX_CONCURRENCY` | 每用户最大并发 (默认10) |
+| 功能 | 实现 / system_configs | 说明 |
+|------|----------------------|------|
+| IP ACL (白名单) | 数据库/系统设置中配置白名单字段 | 逗号分隔的 CIDR |
+| IP ACL (黑名单) | 数据库/系统设置中配置黑名单字段 | 逗号分隔的 CIDR |
+| 令牌桶限速 | `sbc_rate_limit_capacity` | 桶容量 (默认2000.0) |
+| 令牌桶填充率 | `sbc_rate_limit_fill_rate` | 每秒填充 (默认500.0) |
+| 用户并发限制 | `sbc_max_concurrency` | 用户最大并发 (默认2000) |
 
 ### 7.2 检查顺序
 
@@ -428,10 +427,9 @@ GET  /api/recordings/:call_id/audio → 下载音频 (WAV)
 
 ### 8.2 认证配置
 
-- **环境变量**: `VOS_RS_SIP_AUTH_USERS=user1:pass1,user2:pass2`
-- **数据库**: `sip_users` 表
-- **Realm**: `VOS_RS_SIP_AUTH_REALM` (默认 "vos-rs")
-- **Secret Key**: 启动时随机生成
+- **账户存储**：数据库 `sip_users` 表
+- **Realm**：默认使用 `"vos-rs"`
+- **Secret Key**：启动时随机生成
 
 ---
 
@@ -471,24 +469,24 @@ edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
 
 ### 10.1 STUN
 
-- **配置**: `VOS_RS_STUN_SERVER`
-- **功能**: 发现公网 IP 地址
-- **Keepalive**: 每 30s 发送 STUN Binding Request
+- **配置**：`config.yaml` 中配置 `sip_edge.nat_traversal.stun_server`
+- **功能**：发现公网 IP 地址
+- **Keepalive**：每 30s 发送 STUN Binding Request
 
 ### 10.2 UPnP
 
-- **配置**: `services/sip-edge/src/upnp.rs`
-- **功能**: 自动端口映射
+- **配置**：`services/sip-edge/src/upnp.rs`
+- **功能**：自动端口映射
 
 ### 10.3 TURN
 
-- **配置**: `services/sip-edge/src/turn.rs`
-- **功能**: 中继穿越对称 NAT
+- **配置**：`services/sip-edge/src/turn.rs`
+- **功能**：中继穿越对称 NAT
 
 ### 10.4 Symmetric RTP
 
-- **配置**: `VOS_RS_RTP_SYMMETRIC_LEARNING=true`
-- **功能**: 从收到的第一个 RTP 包学习对端实际地址
+- **配置**：数据库 `system_configs` 表中配置 `rtp_symmetric_learning` (默认值为 `true`)
+- **功能**：从收到的第一个 RTP 包学习对端实际地址
 
 ---
 
@@ -818,36 +816,11 @@ let caller = match gateway.caller_id_mode {
 
 ---
 
-## 附录 B: 环境变量清单
+## 附录 B: 统一配置文件与配置字段清单
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `VOS_RS_SIP_UDP_BIND` | `0.0.0.0:5060` | SIP UDP 绑定地址 |
-| `VOS_RS_SIP_ADVERTISED_ADDR` | `127.0.0.1:5060` | SIP 公告地址 |
-| `VOS_RS_SIP_DEFAULT_GATEWAY` | - | 默认网关 |
-| `VOS_RS_SIP_TLS_BIND` | - | SIP TLS 绑定地址 |
-| `VOS_RS_SIP_TLS_CERT_PATH` | - | TLS 证书路径 |
-| `VOS_RS_SIP_TLS_KEY_PATH` | - | TLS 私钥路径 |
-| `VOS_RS_SIP_AUTH_USERS` | - | 认证用户 (user:pass,...) |
-| `VOS_RS_SIP_AUTH_REALM` | `vos-rs` | Digest Realm |
-| `VOS_RS_SBC_ALLOW` | - | IP 白名单 (CIDR,...) |
-| `VOS_RS_SBC_BLOCK` | - | IP 黑名单 (CIDR,...) |
-| `VOS_RS_SBC_LIMIT_CAPACITY` | `100` | 令牌桶容量 |
-| `VOS_RS_SBC_LIMIT_FILL_RATE` | `10` | 令牌桶填充率 |
-| `VOS_RS_SBC_MAX_CONCURRENCY` | `10` | 用户最大并发 |
-| `VOS_RS_RTP_ADVERTISED_ADDR` | `127.0.0.1` | RTP 公告地址 |
-| `VOS_RS_RTP_PORT_MIN` | `40000` | RTP 端口最小值 |
-| `VOS_RS_RTP_PORT_MAX` | `40100` | RTP 端口最大值 |
-| `VOS_RS_RTP_SYMMETRIC_LEARNING` | `true` | 对称 RTP 学习 |
-| `VOS_RS_RECORDING_ENABLED` | `false` | 录音开关 |
-| `VOS_RS_RECORDING_DIR` | `target/recordings` | 录音目录 |
-| `VOS_RS_STORAGE_BACKEND` | `local` | 存储后端 (local/oss/dual) |
-| `VOS_RS_STUN_SERVER` | - | STUN 服务器 |
-| `VOS_RS_SESSION_EXPIRES_GATEWAY` | `600` | 网关侧 Session-Expires |
-| `VOS_RS_SESSION_EXPIRES_CALLER` | `1800` | 呼叫方侧 Session-Expires |
-| `DATABASE_URL` | `postgres://localhost/vos_rs` | PostgreSQL 连接 |
-| `VOS_RS_NATS_URL` | - | NATS 地址 |
-| `API_PORT` | `8080` | API 端口 |
+详见 [`docs/development/ENV_VARS.md`](file:///docs/development/ENV_VARS.md)。
+
+本项目已废弃所有零散的环境变量，仅保留 `VOS_RS_CONFIG_FILE` 变量用于引导 `config.yaml`。所有关于基础设施的连接设置（PostgreSQL, Redis, NATS, S3）以及信令/媒体相关的设置均已整理并收拢到单一主配置文件及高动态数据库表 `system_configs` 中。
 
 ---
 

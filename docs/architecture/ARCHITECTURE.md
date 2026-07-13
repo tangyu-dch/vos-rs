@@ -296,17 +296,11 @@ sip-edge → CallManager.completed_cdrs → flush_completed_cdrs → PostgreSQL
 
 ---
 
-## 七、环境变量配置一览
+## 七、配置文件与引导规范
 
-详见 `docs/ENV_VARS.md`（496 行完整参考）。
+详见 [`docs/development/ENV_VARS.md`](file:///Users/tangyu/Projects/vos-rs/docs/development/ENV_VARS.md)。
 
-关键配置：
-- `VOS_RS_SIP_UDP_BIND` — SIP 监听地址
-- `VOS_RS_SIP_DEFAULT_GATEWAY` — 默认网关
-- `VOS_RS_DATABASE_URL` — PostgreSQL 连接
-- `VOS_RS_RECORDING_ENABLED` — 录音开关
-- `VOS_RS_STORAGE_BACKEND` — 存储后端（local/oss/dual）
-- `VOS_RS_SBC_*` — SBC 安全配置
+系统已删除所有分散的环境变量，统一通过唯一环境变量 `VOS_RS_CONFIG_FILE` 指定引导配置文件（默认路径为 `config.yaml`），在其中配置连接池、数据库与 Redis 端口、S3 对象存储以及 sip-edge 网络和路由选项。
 
 ---
 
