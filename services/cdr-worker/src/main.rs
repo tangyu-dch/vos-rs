@@ -60,51 +60,151 @@ const DEFAULT_DB_RETRY_ATTEMPTS: u32 = 3;
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
+#[derive(serde::Deserialize, Debug, Default)]
+struct CdrWorkerConfig {
+    connections: Option<ConnectionsSection>,
+    cdr_worker: Option<CdrWorkerSection>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct ConnectionsSection {
+    database: Option<DatabaseSection>,
+    redis: Option<RedisSection>,
+    nats: Option<NatsSection>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct RedisSection {
+    host: Option<String>,
+    port: Option<u16>,
+    password: Option<String>,
+    database: Option<u16>,
+    max_connections: Option<u32>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct DatabaseSection {
+    host: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    database: Option<String>,
+    max_connections: Option<u32>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct NatsSection {
+    url: Option<String>,
+    cdr_stream: Option<String>,
+    cdr_subject: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct CdrWorkerSection {
+    queue: Option<QueueSection>,
+    batch_settings: Option<BatchSettingsSection>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct QueueSection {
+    nats_cdr_consumer: Option<String>,
+    nats_cdr_dlq_subject: Option<String>,
+    nats_cdr_dlq_stream: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct BatchSettingsSection {
+    max_batch_size: Option<usize>,
+    batch_timeout_ms: Option<u64>,
+    max_deliveries: Option<u32>,
+    nak_delay_ms: Option<u64>,
+    db_retry_attempts: Option<u32>,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), AnyError> {
     init_tracing();
 
-    let database_url = env::var(DATABASE_URL_ENV).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{DATABASE_URL_ENV} is required"),
-        )
-    })?;
-    let nats_url = env::var(NATS_URL_ENV).unwrap_or_else(|_| DEFAULT_NATS_URL.to_string());
-    let stream_name =
-        env::var(NATS_CDR_STREAM_ENV).unwrap_or_else(|_| DEFAULT_CDR_STREAM.to_string());
-    let subject =
-        env::var(NATS_CDR_SUBJECT_ENV).unwrap_or_else(|_| DEFAULT_CDR_SUBJECT.to_string());
-    let consumer_name =
-        env::var(NATS_CDR_CONSUMER_ENV).unwrap_or_else(|_| DEFAULT_CDR_CONSUMER.to_string());
-    let dlq_subject =
-        env::var(NATS_CDR_DLQ_SUBJECT_ENV).unwrap_or_else(|_| DEFAULT_CDR_DLQ_SUBJECT.to_string());
-    let dlq_stream_name =
-        env::var(NATS_CDR_DLQ_STREAM_ENV).unwrap_or_else(|_| DEFAULT_CDR_DLQ_STREAM.to_string());
+    let config_file_path = env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    let config_content = std::fs::read_to_string(&config_file_path).unwrap_or_default();
+    let config: CdrWorkerConfig = serde_yaml::from_str(&config_content).unwrap_or_default();
 
-    let max_batch_size: usize = env::var(CDR_BATCH_SIZE_ENV)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_BATCH_SIZE);
-    let batch_timeout_ms: u64 = env::var(CDR_BATCH_TIMEOUT_MS_ENV)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_BATCH_TIMEOUT_MS);
+    let conn_section = config.connections.unwrap_or_default();
+    let db_section = conn_section.database.unwrap_or_default();
+    let nats_section = conn_section.nats.unwrap_or_default();
+    let worker_section = config.cdr_worker.unwrap_or_default();
+    let queue_section = worker_section.queue.unwrap_or_default();
+    let batch_section = worker_section.batch_settings.unwrap_or_default();
+
+    let database_url = if let (Some(host), Some(port), Some(username), Some(database)) = (
+        db_section.host.clone(),
+        db_section.port,
+        db_section.username.clone(),
+        db_section.database.clone(),
+    ) {
+        let password = db_section.password.clone().unwrap_or_default();
+        if password.is_empty() {
+            format!("postgres://{}@{}:{}/{}", username, host, port, database)
+        } else {
+            format!("postgres://{}:{}@{}:{}/{}", username, password, host, port, database)
+        }
+    } else {
+        return Err("PostgreSQL 数据库连接配置缺失，请检查 config.yaml".into());
+    };
+
+    let redis_section = conn_section.redis.unwrap_or_default();
+    let redis_url = if let (Some(host), Some(port)) = (redis_section.host.clone(), redis_section.port) {
+        let password = redis_section.password.clone().unwrap_or_default();
+        let db = redis_section.database.unwrap_or(0);
+        if password.is_empty() {
+            format!("redis://{}:{}/{}", host, port, db)
+        } else {
+            format!("redis://:{}@{}:{}/{}", password, host, port, db)
+        }
+    } else {
+        "redis://127.0.0.1:6379".to_string()
+    };
+    let nats_url = nats_section.url.unwrap_or_else(|| DEFAULT_NATS_URL.to_string());
+    let stream_name = nats_section.cdr_stream.unwrap_or_else(|| DEFAULT_CDR_STREAM.to_string());
+    let subject = nats_section.cdr_subject.unwrap_or_else(|| DEFAULT_CDR_SUBJECT.to_string());
+    let consumer_name = queue_section.nats_cdr_consumer.unwrap_or_else(|| DEFAULT_CDR_CONSUMER.to_string());
+    let dlq_subject = queue_section.nats_cdr_dlq_subject.unwrap_or_else(|| DEFAULT_CDR_DLQ_SUBJECT.to_string());
+    let dlq_stream_name = queue_section.nats_cdr_dlq_stream.unwrap_or_else(|| DEFAULT_CDR_DLQ_STREAM.to_string());
+
+    let max_batch_size = batch_section.max_batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
+    let batch_timeout_ms = batch_section.batch_timeout_ms.unwrap_or(DEFAULT_BATCH_TIMEOUT_MS);
     let batch_timeout = Duration::from_millis(batch_timeout_ms);
-    let max_deliveries: u32 = env::var(CDR_MAX_DELIVERIES_ENV)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_MAX_DELIVERIES);
-    let nak_delay_ms: u64 = env::var(CDR_NAK_DELAY_MS_ENV)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_NAK_DELAY_MS);
-    let db_retry_attempts: u32 = env::var(CDR_DB_RETRY_ATTEMPTS_ENV)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_DB_RETRY_ATTEMPTS);
+    let max_deliveries = batch_section.max_deliveries.unwrap_or(DEFAULT_MAX_DELIVERIES);
+    let nak_delay_ms = batch_section.nak_delay_ms.unwrap_or(DEFAULT_NAK_DELAY_MS);
+    let db_retry_attempts = batch_section.db_retry_attempts.unwrap_or(DEFAULT_DB_RETRY_ATTEMPTS);
 
-    let store = PostgresCdrStore::connect(&database_url).await?;
+    // 强制校验 PostgreSQL
+    let max_connections = db_section.max_connections.unwrap_or(10);
+    let store = match PostgresCdrStore::connect(&database_url, max_connections).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!(database_url, error = %e, "PostgreSQL 数据库连接失败。VOS-RS 必须有 PostgreSQL 运行！");
+            return Err(e.into());
+        }
+    };
+
+    // 强制校验 Redis
+    let redis_client = match redis::Client::open(redis_url.clone()) {
+        Ok(c) => c,
+        Err(e) => {
+            error!(redis_url, error = %e, "Redis 客户端打开失败。VOS-RS 必须有 Redis 运行！");
+            return Err(e.into());
+        }
+    };
+    let _redis_conn = match redis_client.get_multiplexed_tokio_connection().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
+            return Err(e.into());
+        }
+    };
+    info!("Redis 存储连接成功 (必须要求)");
+
     let (jetstream, consumer) = connect_consumer(
         &nats_url,
         &stream_name,

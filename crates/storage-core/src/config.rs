@@ -84,39 +84,53 @@ fn default_presign_ttl() -> u64 {
     3600
 }
 
+#[derive(serde::Deserialize, Debug, Default)]
+struct UnifiedYamlConfigForStorage {
+    connections: Option<ConnectionsSectionForStorage>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct ConnectionsSectionForStorage {
+    s3: Option<RustFsSection>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct RustFsSection {
+    backend: Option<String>,
+    local_dir: Option<String>,
+    endpoint: Option<String>,
+    bucket: Option<String>,
+    access_key: Option<String>,
+    secret_key: Option<String>,
+    region: Option<String>,
+    key_prefix: Option<String>,
+}
+
 impl StorageConfig {
-    /// 从环境变量加载配置。
-    pub fn from_env() -> Self {
-        let backend = std::env::var("VOS_RS_STORAGE_BACKEND")
-            .unwrap_or_else(|_| "local".to_string())
-            .parse()
-            .unwrap_or(StorageBackendKind::Local);
-
-        let rules = serde_json::from_str(
-            &std::env::var("VOS_RS_STORAGE_RULES").unwrap_or_else(|_| "[]".to_string()),
-        )
-        .unwrap_or_default();
-
+    pub fn load() -> Self {
+        let config_file_path = std::env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+        let content = std::fs::read_to_string(&config_file_path).unwrap_or_default();
+        let u_config: UnifiedYamlConfigForStorage = serde_yaml::from_str(&content).unwrap_or_default();
+        let s3 = u_config.connections.and_then(|c| c.s3).unwrap_or_default();
+        let backend = s3.backend.unwrap_or_else(|| "local".to_string()).parse().unwrap_or(StorageBackendKind::Local);
         Self {
             backend,
-            local_dir: std::env::var("VOS_RS_RECORDING_DIR")
-                .unwrap_or_else(|_| default_local_dir()),
-            oss_endpoint: std::env::var("VOS_RS_OSS_ENDPOINT").ok(),
-            oss_bucket: std::env::var("VOS_RS_OSS_BUCKET").ok(),
-            oss_access_key: std::env::var("VOS_RS_OSS_ACCESS_KEY").ok(),
-            oss_secret_key: std::env::var("VOS_RS_OSS_SECRET_KEY").ok(),
-            oss_key_prefix: std::env::var("VOS_RS_OSS_KEY_PREFIX").ok(),
-            oss_region: std::env::var("VOS_RS_OSS_REGION").ok(),
-            rules,
-            max_upload_size: std::env::var("VOS_RS_STORAGE_MAX_UPLOAD_SIZE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
-            presign_ttl_secs: std::env::var("VOS_RS_STORAGE_PRESIGN_TTL")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default_presign_ttl()),
+            local_dir: s3.local_dir.unwrap_or_else(|| default_local_dir()),
+            oss_endpoint: s3.endpoint,
+            oss_bucket: s3.bucket,
+            oss_access_key: s3.access_key,
+            oss_secret_key: s3.secret_key,
+            oss_region: s3.region,
+            oss_key_prefix: s3.key_prefix,
+            rules: Vec::new(),
+            max_upload_size: 0,
+            presign_ttl_secs: default_presign_ttl(),
         }
+    }
+
+    /// 从环境变量/配置文件加载配置。
+    pub fn from_env() -> Self {
+        Self::load()
     }
 }
 
@@ -126,9 +140,9 @@ impl std::str::FromStr for StorageBackendKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "local" => Ok(StorageBackendKind::Local),
-            "oss" => Ok(StorageBackendKind::Oss),
+            "oss" | "s3" => Ok(StorageBackendKind::Oss),
             "dual" => Ok(StorageBackendKind::Dual),
-            _ => Err(format!("未知的存储后端: {s}，可选: local, oss, dual")),
+            _ => Err(format!("未知的存储后端: {s}，可选: local, oss, s3, dual")),
         }
     }
 }

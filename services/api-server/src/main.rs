@@ -59,7 +59,7 @@ use dashboard::{dashboard_events, get_dashboard_stats, get_dashboard_trend};
 use gateways::{create_gateway, delete_gateway, list_gateways, update_gateway};
 use registrations::list_registrations;
 use routes::{create_route, delete_route, list_routes, update_route};
-use system::{health, prometheus_metrics, ready};
+use system::{health, prometheus_metrics, ready, get_system_configs, update_system_configs};
 use users::{create_user, delete_user, list_users, update_user};
 
 /// 应用状态：所有处理器共享的状态。
@@ -71,6 +71,10 @@ pub(crate) struct AppState {
     pub(crate) internal_client: reqwest::Client,
     pub(crate) nats_client: Option<async_nats::Client>,
     pub(crate) jwt_secret: Vec<u8>,
+    pub(crate) admin_password: String,
+    pub(crate) operator_password: String,
+    pub(crate) financier_password: String,
+    pub(crate) internal_secret: String,
 }
 
 /// 管理列表统一分页参数；服务端限制单页最大 100 条，避免大响应拖慢 API。
@@ -346,10 +350,122 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let database_url = env::var("VOS_RS_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://localhost/vos_rs".to_string());
+    let config_file_path = env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    let config_content = std::fs::read_to_string(&config_file_path).unwrap_or_default();
+    
+    #[derive(serde::Deserialize, Debug, Default)]
+    struct ApiServerConfig {
+        connections: Option<ConnectionsSection>,
+        api_server: Option<ApiServerSection>,
+        sip_edge: Option<SipEdgeConfigSection>,
+    }
 
-    let store = PostgresCdrStore::connect(&database_url).await?;
+    #[derive(serde::Deserialize, Debug, Default, Clone)]
+    struct ConnectionsSection {
+        database: Option<DatabaseSection>,
+        redis: Option<RedisSection>,
+        nats: Option<NatsSection>,
+    }
+
+    #[derive(serde::Deserialize, Debug, Default, Clone)]
+    struct RedisSection {
+        host: Option<String>,
+        port: Option<u16>,
+        password: Option<String>,
+        database: Option<u16>,
+        max_connections: Option<u32>,
+    }
+
+    #[derive(serde::Deserialize, Debug, Default, Clone)]
+    struct DatabaseSection {
+        host: Option<String>,
+        port: Option<u16>,
+        username: Option<String>,
+        password: Option<String>,
+        database: Option<String>,
+        max_connections: Option<u32>,
+    }
+
+    #[derive(serde::Deserialize, Debug, Default, Clone)]
+    struct NatsSection {
+        url: Option<String>,
+    }
+
+    #[derive(serde::Deserialize, Debug, Default)]
+    struct ApiServerSection {
+        port: Option<u16>,
+        allowed_origins: Option<String>,
+        jwt_secret: Option<String>,
+        internal_secret: Option<String>,
+        admin_password: Option<String>,
+        operator_password: Option<String>,
+        financier_password: Option<String>,
+    }
+
+    #[derive(serde::Deserialize, Debug, Default)]
+    struct SipEdgeConfigSection {
+        manage_bind: Option<String>,
+    }
+
+    let config: ApiServerConfig = serde_yaml::from_str(&config_content).unwrap_or_default();
+    let conn_section = config.connections.unwrap_or_default();
+    let db_section = conn_section.database.unwrap_or_default();
+    let api_section = config.api_server.unwrap_or_default();
+
+    let database_url = if let (Some(host), Some(port), Some(username), Some(database)) = (
+        db_section.host.clone(),
+        db_section.port,
+        db_section.username.clone(),
+        db_section.database.clone(),
+    ) {
+        let password = db_section.password.clone().unwrap_or_default();
+        if password.is_empty() {
+            format!("postgres://{}@{}:{}/{}", username, host, port, database)
+        } else {
+            format!("postgres://{}:{}@{}:{}/{}", username, password, host, port, database)
+        }
+    } else {
+        "postgres://tangyu@127.0.0.1:5432/vos_rs".to_string()
+    };
+
+    let max_connections = db_section.max_connections.unwrap_or(10);
+    let store = match PostgresCdrStore::connect(&database_url, max_connections).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(database_url, error = %e, "PostgreSQL 数据库连接失败，请检查连接配置。VOS-RS 必须有 PostgreSQL 运行！");
+            return Err(e.into());
+        }
+    };
+
+    let redis_section = conn_section.redis.clone().unwrap_or_default();
+    let redis_url = if let (Some(host), Some(port)) = (redis_section.host.clone(), redis_section.port) {
+        let password = redis_section.password.clone().unwrap_or_default();
+        let db = redis_section.database.unwrap_or(0);
+        if password.is_empty() {
+            format!("redis://{}:{}/{}", host, port, db)
+        } else {
+            format!("redis://:{}@{}:{}/{}", password, host, port, db)
+        }
+    } else {
+        "redis://127.0.0.1:6379".to_string()
+    };
+    let redis_client = match redis::Client::open(redis_url.clone()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(redis_url, error = %e, "Redis 客户端打开失败。VOS-RS 必须有 Redis 运行！");
+            return Err(e.into());
+        }
+    };
+    let _redis_conn = match redis_client.get_multiplexed_tokio_connection().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
+            return Err(e.into());
+        }
+    };
+    tracing::info!("Redis 存储连接成功 (必须要求)");
+
+    // 使用数据库配置直接读取本地录音配置默认值
     let storage_config = storage_core::StorageConfig::from_env();
     let recording_storage: Arc<dyn storage_core::StorageBackend> =
         storage_core::create_storage(&storage_config).await?.into();
@@ -362,9 +478,9 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 interval.tick().await;
                 let uploaded = crate::recording::sync_local_recordings(
-                    storage.as_ref(),
-                    std::path::Path::new(&recording_dir),
-                    &mut uploaded_sizes,
+                     storage.as_ref(),
+                     std::path::Path::new(&recording_dir),
+                     &mut uploaded_sizes,
                 )
                 .await;
                 if uploaded > 0 {
@@ -373,29 +489,31 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
-    let nats_url =
-        env::var("VOS_RS_NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string());
+
+    let nats_url = conn_section
+        .nats
+        .clone()
+        .and_then(|n| n.url)
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "nats://127.0.0.1:4222".to_string());
     let nats_client = async_nats::connect(&nats_url).await.ok();
-    let sip_manage_base =
-        env::var("VOS_RS_MANAGE_BASE").unwrap_or_else(|_| "http://127.0.0.1:8082".to_string());
+    
+    let sip_edge_section = config.sip_edge.unwrap_or_default();
+    let sip_manage_base = format!("http://{}", sip_edge_section.manage_bind.unwrap_or_else(|| "127.0.0.1:8082".to_string()));
+    
     let internal_client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(1))
         .timeout(std::time::Duration::from_secs(3))
         .build()?;
 
-    let jwt_secret = match env::var("VOS_RS_API_JWT_SECRET") {
-        Ok(val) if !val.trim().is_empty() => val.into_bytes(),
-        _ => {
-            if env::var("VOS_RS_ENV").unwrap_or_default() == "production" {
-                panic!("致命安全错误: 生产环境下必须配置 VOS_RS_API_JWT_SECRET 密钥！");
-            } else {
-                tracing::warn!(
-                    "警告: 未配置 VOS_RS_API_JWT_SECRET，将回退为默认不安全密钥进行开发调试"
-                );
-                b"vos-rs-secret-key-change-in-production".to_vec()
-            }
-        }
-    };
+    let jwt_secret = api_section.jwt_secret.clone()
+        .unwrap_or_else(|| "vos-rs-secret-key-change-in-production".to_string())
+        .into_bytes();
+
+    let admin_password = api_section.admin_password.unwrap_or_else(|| "admin".to_string());
+    let operator_password = api_section.operator_password.unwrap_or_else(|| "operator".to_string());
+    let financier_password = api_section.financier_password.unwrap_or_else(|| "financier".to_string());
+    let internal_secret = api_section.internal_secret.unwrap_or_else(|| "internal-dev-secret".to_string());
 
     let state = AppState {
         store: Arc::new(store),
@@ -404,9 +522,13 @@ async fn main() -> anyhow::Result<()> {
         internal_client,
         nats_client,
         jwt_secret,
+        admin_password,
+        operator_password,
+        financier_password,
+        internal_secret,
     };
 
-    let cors_origins_raw = env::var("VOS_RS_API_ALLOWED_ORIGINS").unwrap_or_default();
+    let cors_origins_raw = api_section.allowed_origins.clone().unwrap_or_default();
     let cors = CorsLayer::new();
     let cors = if !cors_origins_raw.trim().is_empty() {
         let mut origins = Vec::new();
@@ -417,7 +539,7 @@ async fn main() -> anyhow::Result<()> {
         }
         cors.allow_origin(origins)
     } else {
-        tracing::warn!("警告: 未配置 VOS_RS_API_ALLOWED_ORIGINS，默认只允许 localhost:3000 和 localhost:8080 开发域名跨域访问");
+        tracing::warn!("警告: 未配置 allowed_origins，默认只允许 localhost:3000 和 localhost:8080 开发域名跨域访问");
         cors.allow_origin([
             "http://localhost:3000".parse().unwrap(),
             "http://localhost:8080".parse().unwrap(),
@@ -442,6 +564,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/login", post(login));
 
     let protected_routes = Router::new()
+        .route("/api/system/configs", get(get_system_configs).post(update_system_configs))
         .route("/api/dashboard/stats", get(get_dashboard_stats))
         .route("/api/dashboard/trend", get(get_dashboard_trend))
         .route("/api/cdrs", get(list_cdrs))
@@ -503,10 +626,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
-    let port: u16 = env::var("API_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8080);
+    let port: u16 = api_section.port.unwrap_or(8080);
     let addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
     tracing::info!("API server listening on {}", addr);
 

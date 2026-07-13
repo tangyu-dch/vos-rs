@@ -25,11 +25,19 @@ pub const DEFAULT_UDP_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EdgeConfig {
+    pub sip_udp_bind: String,
     pub advertised_addr: String,
+    pub default_gateway: String,
+    pub manage_bind: String,
+    pub stun_server: Option<String>,
+    pub upnp_enabled: bool,
     pub database_url: Option<String>,
+    pub database_max_connections: u32,
+    pub redis_max_connections: u32,
     pub nats_url: Option<String>,
     pub nats_cdr_stream: Option<String>,
     pub nats_cdr_subject: Option<String>,
+    pub redis_url: Option<String>,
     pub media: media::MediaConfig,
     pub auth: AuthConfig,
     pub session_expires_gateway: u32,
@@ -54,38 +62,66 @@ pub struct EdgeConfig {
 
 #[derive(serde::Deserialize, Debug, Default)]
 struct MainFileConfig {
-    advertised_addr: Option<String>,
-    database_url: Option<String>,
-    nats_url: Option<String>,
-    nats_cdr_stream: Option<String>,
-    nats_cdr_subject: Option<String>,
-    session_expires_gateway: Option<u32>,
-    session_expires_caller: Option<u32>,
-    tls_cert_path: Option<String>,
-    tls_key_path: Option<String>,
-    tls_bind_addr: Option<String>,
-    tls_allow_test_certificate: Option<bool>,
-    tls_ca_path: Option<String>,
-    tls_insecure_skip_verify: Option<bool>,
-    tls_server_name: Option<String>,
-    udp_workers: Option<usize>,
-    udp_workers_auto: Option<bool>,
-    udp_receive_buffer_bytes: Option<usize>,
-    udp_send_buffer_bytes: Option<usize>,
-
-    // Sub-config paths
-    media_config_path: Option<String>,
-    auth_config_path: Option<String>,
-    sbc_config_path: Option<String>,
+    connections: Option<ConnectionsSection>,
+    sip_edge: Option<SipEdgeConfigSection>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
-struct SbcFileConfig {
-    sbc_allow: Option<Vec<String>>,
-    sbc_block: Option<Vec<String>>,
-    sbc_rate_limit_capacity: Option<f64>,
-    sbc_rate_limit_fill_rate: Option<f64>,
-    sbc_max_concurrency: Option<u32>,
+struct ConnectionsSection {
+    database: Option<DatabaseSection>,
+    redis: Option<RedisSection>,
+    nats: Option<NatsSection>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct RedisSection {
+    host: Option<String>,
+    port: Option<u16>,
+    password: Option<String>,
+    database: Option<u16>,
+    max_connections: Option<u32>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct DatabaseSection {
+    host: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    database: Option<String>,
+    max_connections: Option<u32>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct NatsSection {
+    url: Option<String>,
+    cdr_stream: Option<String>,
+    cdr_subject: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct SipEdgeConfigSection {
+    network: Option<NetworkSection>,
+    routing: Option<RoutingSection>,
+    nat_traversal: Option<NatTraversalSection>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct NetworkSection {
+    sip_udp_bind: Option<String>,
+    advertised_addr: Option<String>,
+    manage_bind: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct RoutingSection {
+    default_gateway: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct NatTraversalSection {
+    stun_server: Option<String>,
+    upnp_enabled: Option<bool>,
 }
 
 pub fn interpolate_env_vars(content: &str) -> String {
@@ -122,19 +158,35 @@ fn load_file_content_with_interpolation<P: AsRef<Path>>(path: P) -> Option<Strin
     Some(interpolate_env_vars(&content))
 }
 
+fn find_config_file() -> String {
+    if let Ok(val) = env::var("VOS_RS_CONFIG_FILE") {
+        return val;
+    }
+    let mut path = std::env::current_dir().unwrap_or_default();
+    loop {
+        let config_path = path.join("config.yaml");
+        if config_path.exists() {
+            return config_path.to_string_lossy().into_owned();
+        }
+        if !path.pop() {
+            break;
+        }
+    }
+    "config.yaml".to_string()
+}
+
 impl EdgeConfig {
     pub fn from_env() -> Self {
         Self::load()
     }
 
     pub fn load() -> Self {
-        let config_file_path =
-            env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+        let config_file_path = find_config_file();
         Self::load_from_file(config_file_path)
     }
 
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Self {
-        // 1. Locate and read main config
+        // 1. 读取主引导（Bootstrap）配置文件
         let main_config: MainFileConfig =
             if let Some(interpolated) = load_file_content_with_interpolation(path) {
                 serde_yaml::from_str(&interpolated).unwrap_or_default()
@@ -142,150 +194,207 @@ impl EdgeConfig {
                 MainFileConfig::default()
             };
 
-        // 2. Load sub-configs or fallback to defaults
-        let media_path = main_config
-            .media_config_path
-            .clone()
-            .unwrap_or_else(|| "media.yaml".to_string());
-        let media: media::MediaConfig = if let Some(interpolated) =
-            load_file_content_with_interpolation(&media_path)
-        {
-            serde_yaml::from_str(&interpolated).unwrap_or_else(|_| media::MediaConfig::from_env())
+        let conn_section = main_config.connections.unwrap_or_default();
+        let db_section = conn_section.database.unwrap_or_default();
+        let nats_section = conn_section.nats.unwrap_or_default();
+        let edge_section = main_config.sip_edge.unwrap_or_default();
+
+        let database_url = if let (Some(host), Some(port), Some(username), Some(database)) = (
+            db_section.host,
+            db_section.port,
+            db_section.username,
+            db_section.database,
+        ) {
+            let password = db_section.password.unwrap_or_default();
+            let url = if password.is_empty() {
+                format!("postgres://{}@{}:{}/{}", username, host, port, database)
+            } else {
+                format!("postgres://{}:{}@{}:{}/{}", username, password, host, port, database)
+            };
+            Some(url)
         } else {
-            media::MediaConfig::from_env()
+            None
         };
 
-        let auth_path = main_config
-            .auth_config_path
-            .clone()
-            .unwrap_or_else(|| "auth.yaml".to_string());
-        let auth: AuthConfig =
-            if let Some(interpolated) = load_file_content_with_interpolation(&auth_path) {
-                serde_yaml::from_str(&interpolated).unwrap_or_else(|_| AuthConfig::from_env())
+        let redis_section = conn_section.redis.unwrap_or_default();
+        let redis_url = if let (Some(host), Some(port)) = (redis_section.host, redis_section.port) {
+            let password = redis_section.password.unwrap_or_default();
+            let db = redis_section.database.unwrap_or(0);
+            let url = if password.is_empty() {
+                format!("redis://{}:{}/{}", host, port, db)
             } else {
-                AuthConfig::from_env()
+                format!("redis://:{}@{}:{}/{}", password, host, port, db)
             };
+            Some(url)
+        } else {
+            None
+        };
 
-        let sbc_path = main_config
-            .sbc_config_path
-            .clone()
-            .unwrap_or_else(|| "sbc.yaml".to_string());
-        let sbc: SbcFileConfig =
-            if let Some(interpolated) = load_file_content_with_interpolation(&sbc_path) {
-                serde_yaml::from_str(&interpolated).unwrap_or_default()
-            } else {
-                SbcFileConfig::default()
-            };
+        let net_section = edge_section.network.unwrap_or_default();
+        let route_section = edge_section.routing.unwrap_or_default();
+        let nat_section = edge_section.nat_traversal.unwrap_or_default();
 
-        let sbc_allow_rules = sbc.sbc_allow.unwrap_or_else(|| {
-            env::var("VOS_RS_SBC_ALLOW")
-                .unwrap_or_default()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        });
-
-        let sbc_block_rules = sbc.sbc_block.unwrap_or_else(|| {
-            env::var("VOS_RS_SBC_BLOCK")
-                .unwrap_or_default()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        });
-
-        let sbc_rate_limit_capacity = sbc.sbc_rate_limit_capacity.unwrap_or_else(|| {
-            env::var("VOS_RS_SBC_LIMIT_CAPACITY")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2000.0)
-        });
-
-        let sbc_rate_limit_fill_rate = sbc.sbc_rate_limit_fill_rate.unwrap_or_else(|| {
-            env::var("VOS_RS_SBC_LIMIT_FILL_RATE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(500.0)
-        });
-
-        let sbc_max_concurrency = sbc.sbc_max_concurrency.unwrap_or_else(|| {
-            env::var("VOS_RS_SBC_MAX_CONCURRENCY")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2000)
-        });
-
+        // 2. 初始化核心结构，其余所有业务与媒体配置将全部由数据库中的 system_configs 表覆盖
         Self {
-            advertised_addr: main_config.advertised_addr.unwrap_or_else(|| {
-                env::var(ADVERTISED_ADDR_ENV)
-                    .unwrap_or_else(|_| DEFAULT_ADVERTISED_ADDR.to_string())
-            }),
-            database_url: main_config
-                .database_url
-                .or_else(|| env_non_empty(DATABASE_URL_ENV)),
-            nats_url: main_config.nats_url.or_else(|| env_non_empty(NATS_URL_ENV)),
-            nats_cdr_stream: main_config
-                .nats_cdr_stream
-                .or_else(|| env_non_empty(NATS_CDR_STREAM_ENV)),
-            nats_cdr_subject: main_config
-                .nats_cdr_subject
-                .or_else(|| env_non_empty(NATS_CDR_SUBJECT_ENV)),
-            media,
-            auth,
-            session_expires_gateway: main_config.session_expires_gateway.unwrap_or_else(|| {
-                env::var("VOS_RS_SESSION_EXPIRES_GATEWAY")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(600)
-            }),
-            session_expires_caller: main_config.session_expires_caller.unwrap_or_else(|| {
-                env::var("VOS_RS_SESSION_EXPIRES_CALLER")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(1800)
-            }),
-            sbc_allow_rules,
-            sbc_block_rules,
-            sbc_rate_limit_capacity,
-            sbc_rate_limit_fill_rate,
-            sbc_max_concurrency,
-            tls_cert_path: main_config
-                .tls_cert_path
-                .or_else(|| env_non_empty(TLS_CERT_PATH_ENV)),
-            tls_key_path: main_config
-                .tls_key_path
-                .or_else(|| env_non_empty(TLS_KEY_PATH_ENV)),
-            tls_bind_addr: main_config
-                .tls_bind_addr
-                .or_else(|| env_non_empty(TLS_BIND_ENV)),
-            tls_allow_test_certificate: main_config
-                .tls_allow_test_certificate
-                .unwrap_or_else(|| env_bool(TLS_ALLOW_TEST_CERT_ENV).unwrap_or(false)),
-            tls_ca_path: main_config
-                .tls_ca_path
-                .or_else(|| env_non_empty(TLS_CA_PATH_ENV)),
-            tls_insecure_skip_verify: main_config
-                .tls_insecure_skip_verify
-                .unwrap_or_else(|| env_bool(TLS_INSECURE_SKIP_VERIFY_ENV).unwrap_or(false)),
-            tls_server_name: main_config
-                .tls_server_name
-                .or_else(|| env_non_empty(TLS_SERVER_NAME_ENV)),
-            udp_workers: main_config.udp_workers.unwrap_or_else(|| {
-                env::var("VOS_RS_UDP_WORKERS")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or_else(|| num_cpus::get().max(1))
-            }),
-            udp_workers_auto: main_config
-                .udp_workers_auto
-                .unwrap_or_else(|| env_bool("VOS_RS_UDP_WORKERS_AUTO").unwrap_or(false)),
-            udp_receive_buffer_bytes: main_config.udp_receive_buffer_bytes.unwrap_or_else(|| {
-                env_usize_or_default(UDP_RECEIVE_BUFFER_ENV, DEFAULT_UDP_BUFFER_BYTES)
-            }),
-            udp_send_buffer_bytes: main_config.udp_send_buffer_bytes.unwrap_or_else(|| {
-                env_usize_or_default(UDP_SEND_BUFFER_ENV, DEFAULT_UDP_BUFFER_BYTES)
-            }),
+            sip_udp_bind: net_section.sip_udp_bind.unwrap_or_else(|| "0.0.0.0:5060".to_string()),
+            advertised_addr: net_section.advertised_addr.unwrap_or_else(|| "127.0.0.1:5060".to_string()),
+            default_gateway: route_section.default_gateway.unwrap_or_default(),
+            manage_bind: net_section.manage_bind.unwrap_or_else(|| "127.0.0.1:8082".to_string()),
+            stun_server: nat_section.stun_server,
+            upnp_enabled: nat_section.upnp_enabled.unwrap_or(false),
+            database_url,
+            database_max_connections: db_section.max_connections.unwrap_or(10),
+            redis_max_connections: redis_section.max_connections.unwrap_or(10),
+            nats_url: nats_section.url,
+            nats_cdr_stream: Some(nats_section.cdr_stream.unwrap_or_else(|| "VOS_RS_CDR".to_string())),
+            nats_cdr_subject: Some(nats_section.cdr_subject.unwrap_or_else(|| "vos_rs.cdr".to_string())),
+            redis_url,
+            media: media::MediaConfig::new_with_symmetric_learning("127.0.0.1", 40000, 40100, true),
+            auth: AuthConfig::disabled(),
+            session_expires_gateway: 600,
+            session_expires_caller: 1800,
+            sbc_allow_rules: Vec::new(),
+            sbc_block_rules: Vec::new(),
+            sbc_rate_limit_capacity: 2000.0,
+            sbc_rate_limit_fill_rate: 500.0,
+            sbc_max_concurrency: 2000,
+            tls_cert_path: None,
+            tls_key_path: None,
+            tls_bind_addr: None,
+            tls_allow_test_certificate: false,
+            tls_ca_path: None,
+            tls_insecure_skip_verify: false,
+            tls_server_name: None,
+            udp_workers: num_cpus::get().max(1),
+            udp_workers_auto: false,
+            udp_receive_buffer_bytes: DEFAULT_UDP_BUFFER_BYTES,
+            udp_send_buffer_bytes: DEFAULT_UDP_BUFFER_BYTES,
+        }
+    }
+
+    pub async fn override_from_db(&mut self, db: &cdr_core::PostgresCdrStore) {
+        // Try reading from Redis first
+        let mut redis_configs = std::collections::HashMap::new();
+        let redis_url = self.redis_url.clone().unwrap_or_else(|| {
+            "redis://127.0.0.1:6379".to_string()
+        });
+
+        if let Ok(client) = redis::Client::open(redis_url) {
+            if let Ok(mut con) = client.get_multiplexed_tokio_connection().await {
+                let res: Result<std::collections::HashMap<String, String>, redis::RedisError> = redis::cmd("HGETALL")
+                    .arg("vos_rs:system_configs")
+                    .query_async(&mut con)
+                    .await;
+                if let Ok(hash) = res {
+                    redis_configs = hash;
+                    tracing::info!("Successfully loaded system configs from Redis");
+                }
+            }
+        }
+
+        // Helper macro to get config either from Redis or fallback to PostgreSQL
+        macro_rules! get_val {
+            ($key:expr) => {
+                get_config_val(&redis_configs, db, $key)
+            };
+        }
+
+        if let Some(val) = get_val!("session_expires_gateway").await {
+            if let Ok(v) = val.parse() { self.session_expires_gateway = v; }
+        }
+        if let Some(val) = get_val!("session_expires_caller").await {
+            if let Ok(v) = val.parse() { self.session_expires_caller = v; }
+        }
+        if let Some(val) = get_val!("sbc_rate_limit_capacity").await {
+            if let Ok(v) = val.parse() { self.sbc_rate_limit_capacity = v; }
+        }
+        if let Some(val) = get_val!("sbc_rate_limit_fill_rate").await {
+            if let Ok(v) = val.parse() { self.sbc_rate_limit_fill_rate = v; }
+        }
+        if let Some(val) = get_val!("sbc_max_concurrency").await {
+            if let Ok(v) = val.parse() { self.sbc_max_concurrency = v; }
+        }
+        if let Some(val) = get_val!("tls_cert_path").await {
+            self.tls_cert_path = Some(val);
+        }
+        if let Some(val) = get_val!("tls_key_path").await {
+            self.tls_key_path = Some(val);
+        }
+        if let Some(val) = get_val!("tls_bind_addr").await {
+            self.tls_bind_addr = Some(val);
+        }
+        if let Some(val) = get_val!("tls_allow_test_certificate").await {
+            self.tls_allow_test_certificate = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("tls_ca_path").await {
+            self.tls_ca_path = Some(val);
+        }
+        if let Some(val) = get_val!("tls_insecure_skip_verify").await {
+            self.tls_insecure_skip_verify = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("tls_server_name").await {
+            self.tls_server_name = Some(val);
+        }
+        if let Some(val) = get_val!("udp_workers").await {
+            if let Ok(v) = val.parse() { self.udp_workers = v; }
+        }
+        if let Some(val) = get_val!("udp_workers_auto").await {
+            self.udp_workers_auto = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("udp_receive_buffer_bytes").await {
+            if let Ok(v) = val.parse() { self.udp_receive_buffer_bytes = v; }
+        }
+        if let Some(val) = get_val!("udp_send_buffer_bytes").await {
+            if let Ok(v) = val.parse() { self.udp_send_buffer_bytes = v; }
+        }
+
+        // 覆盖 Media Config 中的相关属性
+        if let Some(val) = get_val!("rtp_advertised_addr").await {
+            self.media.advertised_addr = val;
+        }
+        if let Some(val) = get_val!("rtp_port_min").await {
+            if let Ok(v) = val.parse() { self.media.port_min = v; }
+        }
+        if let Some(val) = get_val!("rtp_port_max").await {
+            if let Ok(v) = val.parse() { self.media.port_max = v; }
+        }
+        if let Some(val) = get_val!("rtp_symmetric_learning").await {
+            self.media.symmetric_rtp_learning = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("rtp_anti_spoofing").await {
+            self.media.anti_spoofing = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("rtp_source_relearn_secs").await {
+            if let Ok(v) = val.parse() { self.media.source_relearn_after_secs = v; }
+        }
+        if let Some(val) = get_val!("recording_enabled").await {
+            self.media.recording_enabled = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("recording_dir").await {
+            self.media.recording_dir = std::path::PathBuf::from(val);
+        }
+        if let Some(val) = get_val!("recording_retention_secs").await {
+            if let Ok(v) = val.parse() { self.media.recording_retention_secs = v; }
+        }
+        if let Some(val) = get_val!("recording_min_free_bytes").await {
+            if let Ok(v) = val.parse() { self.media.recording_min_free_bytes = v; }
+        }
+        if let Some(val) = get_val!("recording_max_file_bytes").await {
+            if let Ok(v) = val.parse() { self.media.recording_max_file_bytes = v; }
+        }
+        if let Some(val) = get_val!("recording_max_duration_secs").await {
+            if let Ok(v) = val.parse() { self.media.recording_max_duration_secs = v; }
+        }
+
+        // 覆盖 Auth Config 中的相关属性
+        if let Some(val) = get_val!("realm").await {
+            self.auth.realm = val;
+        }
+        if let Some(val) = get_val!("nonce").await {
+            self.auth.nonce = val;
+        }
+        if let Some(val) = get_val!("secret_key").await {
+            self.auth.secret_key = val;
         }
     }
 }
@@ -312,4 +421,60 @@ fn env_usize_or_default(name: &str, default: usize) -> usize {
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(default)
+}
+
+async fn get_config_val(
+    redis_configs: &std::collections::HashMap<String, String>,
+    db: &cdr_core::PostgresCdrStore,
+    key: &str,
+) -> Option<String> {
+    if let Some(val) = redis_configs.get(key) {
+        if !val.is_empty() {
+            return Some(val.clone());
+        }
+    }
+    if let Ok(Some(val)) = db.get_system_config(key).await {
+        return Some(val);
+    }
+    None
+}
+
+impl Default for EdgeConfig {
+    fn default() -> Self {
+        Self {
+            sip_udp_bind: "0.0.0.0:5060".to_string(),
+            advertised_addr: "127.0.0.1:5060".to_string(),
+            default_gateway: String::new(),
+            manage_bind: "127.0.0.1:8082".to_string(),
+            stun_server: None,
+            upnp_enabled: false,
+            database_url: None,
+            database_max_connections: 10,
+            redis_max_connections: 10,
+            nats_url: None,
+            nats_cdr_stream: None,
+            nats_cdr_subject: None,
+            redis_url: None,
+            media: media::MediaConfig::new_with_symmetric_learning("127.0.0.1", 40000, 40100, true),
+            auth: AuthConfig::disabled(),
+            session_expires_gateway: 600,
+            session_expires_caller: 1800,
+            sbc_allow_rules: Vec::new(),
+            sbc_block_rules: Vec::new(),
+            sbc_rate_limit_capacity: 2000.0,
+            sbc_rate_limit_fill_rate: 500.0,
+            sbc_max_concurrency: 2000,
+            tls_cert_path: None,
+            tls_key_path: None,
+            tls_bind_addr: None,
+            tls_allow_test_certificate: false,
+            tls_ca_path: None,
+            tls_insecure_skip_verify: false,
+            tls_server_name: None,
+            udp_workers: 1,
+            udp_workers_auto: false,
+            udp_receive_buffer_bytes: DEFAULT_UDP_BUFFER_BYTES,
+            udp_send_buffer_bytes: DEFAULT_UDP_BUFFER_BYTES,
+        }
+    }
 }

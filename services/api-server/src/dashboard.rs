@@ -14,20 +14,19 @@ pub async fn get_dashboard_stats(
 ) -> Result<Json<DashboardStats>, ApiError> {
     let active_calls = {
         let url = format!("{}/manage/active-calls", state.sip_manage_base);
-        let token = env::var("VOS_RS_INTERNAL_SECRET");
+        let token = &state.internal_secret;
         let request = state.internal_client.get(&url);
-        let request = match token {
-            Ok(token) if !token.is_empty() => request.header("X-VOS-Token", token),
-            _ => {
-                return state
-                    .store
-                    .get_dashboard_stats(0)
-                    .await
-                    .map(Json)
-                    .map_err(|e| ApiError {
-                        error: e.to_string(),
-                    })
-            }
+        let request = if !token.is_empty() {
+            request.header("X-VOS-Token", token)
+        } else {
+            return state
+                .store
+                .get_dashboard_stats(0)
+                .await
+                .map(Json)
+                .map_err(|e| ApiError {
+                    error: e.to_string(),
+                });
         };
         match request.send().await {
             Ok(resp) => resp
@@ -73,9 +72,9 @@ pub async fn dashboard_events(
         |(state, mut interval)| async move {
             interval.tick().await;
 
-            let token = env::var("VOS_RS_INTERNAL_SECRET").ok();
-            let active_calls = match token {
-                Some(token) if !token.is_empty() => match state
+            let token = &state.internal_secret;
+            let active_calls = if !token.is_empty() {
+                match state
                     .internal_client
                     .get(format!("{}/manage/active-calls", state.sip_manage_base))
                     .header("X-VOS-Token", token)
@@ -88,8 +87,9 @@ pub async fn dashboard_events(
                         .map(|v| v.len() as u32)
                         .unwrap_or(0),
                     Err(_) => 0,
-                },
-                _ => 0,
+                }
+            } else {
+                0
             };
 
             let trunk_online_count = match state.store.list_gateways_full().await {

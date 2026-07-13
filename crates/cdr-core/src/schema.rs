@@ -315,3 +315,46 @@ CREATE TABLE IF NOT EXISTS api_audit_logs (
 
 pub(super) const CREATE_AUDIT_LOGS_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_api_audit_logs_created_at ON api_audit_logs (created_at DESC)";
+
+pub const CREATE_SYSTEM_CONFIGS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS system_configs (
+    config_key TEXT PRIMARY KEY,
+    config_value TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+pub const SEED_SYSTEM_CONFIGS_SQL: &str = r#"
+INSERT INTO system_configs (config_key, config_value, description) VALUES
+    ('session_expires_gateway', '600', '网关会话超时时长'),
+    ('session_expires_caller', '1800', '呼叫方会话超时时长'),
+    ('sbc_rate_limit_capacity', '2000.0', 'SBC 限速令牌桶容量'),
+    ('sbc_rate_limit_fill_rate', '500.0', 'SBC 限速令牌填充速率'),
+    ('sbc_max_concurrency', '2000', '每个分机最大并发数'),
+    ('tls_allow_test_certificate', 'false', '允许自签名/测试证书'),
+    ('tls_insecure_skip_verify', 'false', '跳过 TLS 校验'),
+    ('udp_workers', '4', 'UDP工作线程数'),
+    ('udp_workers_auto', 'false', '自动调整工作线程数'),
+    ('udp_receive_buffer_bytes', '4194304', 'UDP接收缓冲区字节数'),
+    ('udp_send_buffer_bytes', '4194304', 'UDP发送缓冲区字节数'),
+    ('rtp_advertised_addr', '127.0.0.1', 'SDP 通告 RTP IP'),
+    ('rtp_port_min', '40000', '中继端口最小值'),
+    ('rtp_port_max', '40100', '中继端口最大值'),
+    ('rtp_symmetric_learning', 'true', '启用对称 RTP 学习'),
+    ('rtp_anti_spoofing', 'true', 'RTP 源地址欺骗防护'),
+    ('rtp_source_relearn_secs', '30', 'RTP 重新学习周期'),
+    ('recording_enabled', 'false', '全局录音开关'),
+    ('recording_dir', 'target/recordings', '本地录音保存路径'),
+    ('recording_workers', '4', '录音独立线程数'),
+    ('recording_queue_capacity', '4096', '录音管道深度'),
+    ('recording_retention_secs', '604800', '本地录音留存期'),
+    ('recording_min_free_bytes', '536870912', '录音磁盘保护大小阀值'),
+    ('recording_max_file_bytes', '134217728', '单 WAV 录音文件最大字节数'),
+    ('recording_max_duration_secs', '3600', '单录音最长时长限制'),
+    ('storage_backend', 'local', '录音存储后端类型 (local/oss/dual)'),
+    ('realm', 'vos-rs', 'SIP 挑战认证 Realm'),
+    ('nonce', 'vos-rs-dev-nonce', 'SIP 静态 Nonce'),
+    ('secret_key', 'default-fallback-secret-key-12345', 'SIP 鉴权密钥')
+ON CONFLICT (config_key) DO NOTHING
+"#;

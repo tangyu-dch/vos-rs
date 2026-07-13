@@ -34,18 +34,15 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
-    let admin_password = env::var("VOS_RS_ADMIN_PASSWORD")
-        .map_err(|_| ApiError::internal("VOS_RS_ADMIN_PASSWORD 未配置，无法登录"))?;
-    let operator_password = env::var("VOS_RS_OPERATOR_PASSWORD")
-        .map_err(|_| ApiError::internal("VOS_RS_OPERATOR_PASSWORD 未配置，无法登录"))?;
-    let financier_password = env::var("VOS_RS_FINANCIER_PASSWORD")
-        .map_err(|_| ApiError::internal("VOS_RS_FINANCIER_PASSWORD 未配置，无法登录"))?;
+    let admin_password = &state.admin_password;
+    let operator_password = &state.operator_password;
+    let financier_password = &state.financier_password;
 
-    let role = if req.username == "admin" && req.password == admin_password {
+    let role = if req.username == "admin" && req.password == *admin_password {
         "admin".to_string()
-    } else if req.username == "operator" && req.password == operator_password {
+    } else if req.username == "operator" && req.password == *operator_password {
         "operator".to_string()
-    } else if req.username == "financier" && req.password == financier_password {
+    } else if req.username == "financier" && req.password == *financier_password {
         "financier".to_string()
     } else {
         tracing::warn!(username = %req.username, "登录失败：用户名或密码错误");

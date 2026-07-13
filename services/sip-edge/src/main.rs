@@ -38,7 +38,7 @@ pub(crate) use sip::{AuthDecision, ClientTransactionKey, RequestTransactionKey};
 
 // Constants re-exported for tests
 pub(crate) use config::{
-    DATABASE_URL_ENV, DEFAULT_GATEWAY_ENV, NATS_URL_ENV, TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
+    DEFAULT_GATEWAY_ENV, NATS_URL_ENV, TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
 };
 #[allow(unused_imports)]
 pub(crate) use timers::{
@@ -72,26 +72,61 @@ type AnyError = Box<dyn std::error::Error + Send + Sync>;
 async fn main() -> Result<(), AnyError> {
     init_tracing();
 
-    let bind_addr = env::var("VOS_RS_SIP_UDP_BIND").unwrap_or_else(|_| "0.0.0.0:5060".to_string());
-    let route_table = route_table_from_env()?;
+    let mut edge_config = EdgeConfig::from_env();
+    let bind_addr = edge_config.sip_udp_bind.clone();
+    let route_table = route_table_from_config(&edge_config)?;
     if route_table.is_empty() {
         warn!("no outbound route configured; INVITE requests will receive 404");
     }
-    let mut edge_config = EdgeConfig::from_env();
+
+    // 先用 bootstrap 的 db url 连接数据库以运行 migration 结构
+    let cdr_sinks = match cdr_sinks_from_config(&edge_config).await {
+        Ok(sinks) => sinks,
+        Err(e) => {
+            tracing::error!(error = %e, "PostgreSQL 数据库初始化失败，请检查连接参数。VOS-RS 必须有 PostgreSQL 运行！");
+            return Err(e);
+        }
+    };
+    let db_store = cdr_sinks.postgres.clone();
+    if db_store.is_none() {
+        tracing::error!("数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接！");
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, "数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接").into());
+    }
+
+    // 检查并强制校验 Redis 连接
+    let redis_url = edge_config.redis_url.clone().unwrap_or_else(|| {
+        "redis://127.0.0.1:6379".to_string()
+    });
+    let redis_client = match redis::Client::open(redis_url.clone()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(redis_url, error = %e, "Redis 客户端打开失败。VOS-RS 必须有 Redis 运行！");
+            return Err(e.into());
+        }
+    };
+    let _redis_conn = match redis_client.get_multiplexed_tokio_connection().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
+            return Err(e.into());
+        }
+    };
+    info!("Redis 存储连接成功 (必须要求)");
+
+    // 运行数据库配置覆盖：系统配置加载
+    if let Some(ref db) = db_store {
+        edge_config.override_from_db(db).await;
+    }
 
     // STUN: discover public address for media relay if configured
-    if let Ok(stun_server) = env::var("VOS_RS_STUN_SERVER") {
+    if let Some(stun_server) = edge_config.stun_server.clone() {
         if !stun_server.is_empty() {
             net::run_stun_discovery(&stun_server, &mut edge_config).await;
         }
     }
 
     // UPnP: auto-discover router and add port mappings if enabled
-    let upnp_enabled = env::var("VOS_RS_UPNP_ENABLED")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false);
-
-    if upnp_enabled {
+    if edge_config.upnp_enabled {
         net::run_upnp_port_mapping(&bind_addr, &edge_config);
     }
 
@@ -99,8 +134,6 @@ async fn main() -> Result<(), AnyError> {
     let edge_config = Arc::new(edge_config);
 
     let media_relay = MediaRelayState::new();
-    let cdr_sinks = cdr_sinks_from_config(&edge_config).await?;
-    let db_store = cdr_sinks.postgres.clone();
     let cdr_sinks = std::sync::Arc::new(cdr_sinks);
 
     // 使用有界队列防止数据库/NATS 故障时 CDR 无限堆积。
@@ -565,7 +598,7 @@ async fn cdr_sinks_from_config(config: &EdgeConfig) -> Result<CdrSinks, AnyError
 
     let postgres = match &config.database_url {
         Some(database_url) if !database_url.trim().is_empty() => {
-            let store = PostgresCdrStore::connect(database_url).await?;
+            let store = PostgresCdrStore::connect(database_url, config.database_max_connections).await?;
             if nats.is_some() {
                 info!("PostgreSQL direct CDR persistence disabled because NATS CDR queue is enabled (database connection will still be used for configuration and registration store)");
             } else {
@@ -574,11 +607,7 @@ async fn cdr_sinks_from_config(config: &EdgeConfig) -> Result<CdrSinks, AnyError
             Some(store)
         }
         _ => {
-            info!(
-                env = DATABASE_URL_ENV,
-                "PostgreSQL database connection disabled; set config / env var to enable"
-            );
-            None
+            return Err("PostgreSQL 数据库连接未配置，数据库为系统运行的必须依赖项".into());
         }
     };
 
@@ -772,12 +801,12 @@ fn spawn_periodic_route_refresh(edge_state: Arc<EdgeState>, db: PostgresCdrStore
     });
 }
 
-fn route_table_from_env() -> Result<RouteTable, AnyError> {
-    let Ok(gateway) = env::var(DEFAULT_GATEWAY_ENV) else {
+fn route_table_from_config(config: &EdgeConfig) -> Result<RouteTable, AnyError> {
+    if config.default_gateway.is_empty() {
         return Ok(RouteTable::default());
-    };
+    }
 
-    let target = parse_gateway_target("default", &gateway)?;
+    let target = parse_gateway_target("default", &config.default_gateway)?;
     Ok(RouteTable::new(vec![Route::new(
         "default", "", 100, target,
     )]))
@@ -840,4 +869,6 @@ mod tests {
     include!("tests/dtmf_cdr_tests.rs");
     include!("tests/gateway_health_probe_tests.rs");
     include!("tests/realtime_billing_tests.rs");
+    include!("tests/media_control_tests.rs");
+    include!("tests/connection_check_tests.rs");
 }

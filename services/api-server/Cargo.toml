@@ -30,3 +30,5 @@ md5 = "0.7"
 async-nats = "0.38"
 futures = "0.3"
 uuid = { version = "1", features = ["v4"] }
+redis = { version = "0.26.0", features = ["tokio-comp"] }
+serde_yaml = "0.9"

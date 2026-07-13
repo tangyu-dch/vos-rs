@@ -59,9 +59,9 @@ pub struct PostgresCdrStore {
 }
 
 impl PostgresCdrStore {
-    pub async fn connect(database_url: &str) -> Result<Self, sqlx::Error> {
+    pub async fn connect(database_url: &str, max_connections: u32) -> Result<Self, sqlx::Error> {
         let pool = PgPoolOptions::new()
-            .max_connections(10)
+            .max_connections(max_connections)
             .connect(database_url)
             .await?;
         let store = Self { pool };
@@ -211,6 +211,12 @@ impl PostgresCdrStore {
         sqlx::query("ALTER TABLE api_audit_logs ADD COLUMN IF NOT EXISTS request_body TEXT")
             .execute(&self.pool)
             .await?;
+        sqlx::query(CREATE_SYSTEM_CONFIGS_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(SEED_SYSTEM_CONFIGS_SQL)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -224,6 +230,18 @@ impl PostgresCdrStore {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// 获取系统配置值。
+    pub async fn get_system_config(&self, key: &str) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query("SELECT config_value FROM system_configs WHERE config_key = $1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| {
+            use sqlx::Row;
+            r.get::<String, _>("config_value")
+        }))
     }
 }
 

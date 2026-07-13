@@ -1,0 +1,76 @@
+# VOS-RS 全局引导与基础服务多级配置文件
+
+# ==========================================
+# 1. 基础设施连接配置 (Connections)
+# ==========================================
+connections:
+  database:
+    host: "127.0.0.1"
+    port: 5432
+    username: "tangyu"
+    password: ""
+    database: "vos_rs"
+    max_connections: 50
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+    database: 0
+    max_connections: 50
+  nats:
+    url: "nats://127.0.0.1:4222"
+    cdr_stream: "VOS_RS_CDR"
+    cdr_subject: "vos_rs.cdr"
+  s3:
+    backend: "s3"
+    local_dir: "recordings"
+    endpoint: "https://s3.amazonaws.com"
+    bucket: "vos-rs-recordings"
+    access_key: "my-access-key"
+    secret_key: "my-secret-key"
+    region: "us-east-1"
+    key_prefix: "recordings/"
+
+# ==========================================
+# 2. sip-edge 信令边缘网关服务配置
+# ==========================================
+sip_edge:
+  network:
+    sip_udp_bind: "0.0.0.0:5060"
+    advertised_addr: "127.0.0.1:5060"
+    manage_bind: "127.0.0.1:8082"
+  routing:
+    default_gateway: ""
+  nat_traversal:
+    stun_server: ""
+    upnp_enabled: false
+
+# ==========================================
+# 3. api-server 管理控制台后端服务配置
+# ==========================================
+api_server:
+  network:
+    port: 8081
+    allowed_origins: ""
+  security:
+    jwt_secret: "secret"
+    internal_secret: "internal-dev-secret"
+  admin_credentials:
+    admin_password: "admin"
+    operator_password: "operator"
+    financier_password: "financier"
+
+# ==========================================
+# 4. cdr-worker 话单入库消费者服务配置
+# ==========================================
+cdr_worker:
+  queue:
+    nats_cdr_consumer: "vos_rs_cdr_worker"
+    nats_cdr_dlq_subject: "vos_rs.cdr.dlq"
+    nats_cdr_dlq_stream: "VOS_RS_CDR_DLQ"
+  batch_settings:
+    max_batch_size: 100
+    batch_timeout_ms: 1000
+    max_deliveries: 3
+    nak_delay_ms: 5000
+    db_retry_attempts: 5
