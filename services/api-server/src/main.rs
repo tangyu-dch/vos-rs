@@ -1,55 +1,32 @@
 //! # api-server：REST API 服务
 //!
-//! 本服务提供 VoIP 软交换平台的 RESTful API，包括：
+//! 本服务提供 VoIP 软交换平台的 RESTful API。
 //!
-//! - **认证与授权**：JWT Token + RBAC（admin/operator/financier）
-//! - **仪表盘**：实时统计、趋势图表
-//! - **CDR 管理**：通话详单查询、导出
-//! - **用户管理**：SIP 用户 CRUD
-//! - **网关管理**：网关配置、健康状态
-//! - **路由管理**：路由规则 CRUD、试算
-//! - **计费管理**：费率、账户、账本、对账
-//! - **录音管理**：通过 CDR 详情播放和下载
-//! - **号码管理**：号码库存 CRUD
-//! - **反欺诈**：规则配置
-//! - **Prometheus 指标**：/metrics 端点
-//!
-//! ## API 端点
-//!
-//! | 路径 | 方法 | 说明 | 权限 |
-//! |------|------|------|------|
-//! | `/api/auth/login` | POST | 登录 | 公开 |
-//! | `/health` | GET | 健康检查 | 公开 |
-//! | `/metrics` | GET | Prometheus 指标 | 公开 |
-//! | `/api/dashboard/stats` | GET | 仪表盘统计 | operator/admin |
-//! | `/api/cdrs` | GET | CDR 列表 | 所有角色 |
-//! | `/api/users` | CRUD | 用户管理 | admin |
-//! | `/api/gateways` | CRUD | 网关管理 | admin/operator |
-//! | `/api/routes` | CRUD | 路由管理 | admin/operator |
-//! | `/api/rates` | CRUD | 费率管理 | admin/financier |
-//! | `/api/accounts` | GET | 账户列表 | admin/financier |
-//! | `/api/recordings/:call_id/audio` | GET | CDR 录音播放/下载 | 所有角色 |
-//! | `/api/numbers` | CRUD | 号码管理 | admin/operator |
-//! | `/api/anti-fraud/rules` | CRUD | 反欺诈规则 | admin/operator |
 
+mod anti_fraud;
+mod audit;
+mod auth;
 mod billing;
 mod calls;
+mod cdr;
+mod dashboard;
+mod gateways;
 mod metrics;
 mod numbers;
 mod recording;
+mod registrations;
 mod report;
+mod routes;
+mod system;
+mod users;
 
 use axum::{
-    extract::{Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        IntoResponse,
-    },
+    extract::State,
+    http::{HeaderValue, StatusCode},
+    response::IntoResponse,
     routing::{get, post, put},
     Json, Router,
 };
-use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
@@ -63,78 +40,37 @@ use billing::{
     reconcile as billing_reconcile, update_rate,
 };
 use calls::{list_active, media_metrics, route_preview, terminate_call as calls_terminate};
-use cdr_core::{
-    AntiFraudRule, AuditLogInput, CdrEvent, DashboardStats, DtmfEventRecord, HourlyTrend,
-    PostgresCdrStore, SipGateway, SipRegistration, SipRoute, SipUser,
-};
-use metrics::{MediaMetricsSnapshot, Metrics};
+use cdr_core::PostgresCdrStore;
 use numbers::{create_number, delete_number, list_numbers, update_number};
 use recording::get_recording_audio;
 use report::{export_cdrs_csv, get_report_summary};
 
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, DecodingKey, Validation};
 use uuid::Uuid;
 
-/// JWT 声明：包含用户身份和权限信息。
-///
-/// 用于认证中间件验证请求身份。
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Claims {
-    /// 用户名（subject）
-    pub sub: String,
-    /// 角色（admin/operator/financier）
-    pub role: String,
-    /// 过期时间戳（Unix 秒）
-    pub exp: usize,
-}
-
-/// 登录请求
-#[derive(Debug, Deserialize)]
-struct LoginRequest {
-    username: String,
-    password: String,
-}
-
-/// 登录响应
-#[derive(Debug, Serialize)]
-struct LoginResponse {
-    /// JWT Token
-    token: String,
-    /// 用户名
-    username: String,
-    /// 角色
-    role: String,
-}
+use anti_fraud::{
+    create_anti_fraud_rule, delete_anti_fraud_rule, list_anti_fraud_config, list_anti_fraud_rules,
+    update_anti_fraud_config, update_anti_fraud_rule,
+};
+use audit::list_audit_logs;
+use auth::{login, role_allows, Claims};
+use cdr::{get_cdr, get_dtmf_events, list_cdrs};
+use dashboard::{dashboard_events, get_dashboard_stats, get_dashboard_trend};
+use gateways::{create_gateway, delete_gateway, list_gateways, update_gateway};
+use registrations::list_registrations;
+use routes::{create_route, delete_route, list_routes, update_route};
+use system::{health, prometheus_metrics, ready};
+use users::{create_user, delete_user, list_users, update_user};
 
 /// 应用状态：所有处理器共享的状态。
-///
-/// 包含数据库连接、存储后端、NATS 客户端和 JWT 密钥。
 #[derive(Clone)]
 pub(crate) struct AppState {
-    /// 数据库存储
-    store: Arc<PostgresCdrStore>,
-    /// 录音存储后端
-    recording_storage: Arc<dyn storage_core::StorageBackend>,
-    /// sip-edge 管理 API 地址
-    sip_manage_base: String,
-    /// 调用 sip-edge 管理 API 的共享 HTTP 客户端，统一连接池和超时。
-    internal_client: reqwest::Client,
-    /// NATS 客户端（用于路由热加载广播）
-    nats_client: Option<async_nats::Client>,
-    /// JWT 签名密钥
-    jwt_secret: Vec<u8>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ListCdrsQuery {
-    page: Option<i64>,
-    page_size: Option<i64>,
-    status: Option<String>,
-    call_id: Option<String>,
-    caller: Option<String>,
-    callee: Option<String>,
-    start_time: Option<String>,
-    end_time: Option<String>,
+    pub(crate) store: Arc<PostgresCdrStore>,
+    pub(crate) recording_storage: Arc<dyn storage_core::StorageBackend>,
+    pub(crate) sip_manage_base: String,
+    pub(crate) internal_client: reqwest::Client,
+    pub(crate) nats_client: Option<async_nats::Client>,
+    pub(crate) jwt_secret: Vec<u8>,
 }
 
 /// 管理列表统一分页参数；服务端限制单页最大 100 条，避免大响应拖慢 API。
@@ -160,92 +96,21 @@ pub(crate) struct PaginatedResponse<T> {
     pub(crate) page_size: i64,
 }
 
-#[derive(Debug, Deserialize)]
-struct CreateUserRequest {
-    username: String,
-    password: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct UpdateUserRequest {
-    password: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CreateGatewayRequest {
-    id: String,
-    host: String,
-    port: Option<u16>,
-    transport: String,
-    max_capacity: Option<u32>,
-    gateway_type: Option<String>,
-    prefix_rules: Option<String>,
-    supports_registration: Option<bool>,
-    reg_auth_type: Option<String>,
-    reg_username: Option<String>,
-    caller_id_mode: Option<String>,
-    virtual_caller: Option<String>,
-    max_concurrent: Option<i32>,
-    account_id: Option<i64>,
-    enabled: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-struct UpdateGatewayRequest {
-    host: String,
-    port: Option<u16>,
-    transport: String,
-    max_capacity: Option<u32>,
-    gateway_type: Option<String>,
-    prefix_rules: Option<String>,
-    supports_registration: Option<bool>,
-    reg_auth_type: Option<String>,
-    reg_username: Option<String>,
-    caller_id_mode: Option<String>,
-    virtual_caller: Option<String>,
-    max_concurrent: Option<i32>,
-    account_id: Option<i64>,
-    enabled: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CreateRouteRequest {
-    id: String,
-    prefix: String,
-    priority: i32,
-    gateway_id: String,
-    cost: f64,
-    weight: Option<i32>,
-    time_start: Option<String>,
-    time_end: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct UpdateRouteRequest {
-    prefix: String,
-    priority: i32,
-    gateway_id: String,
-    cost: f64,
-    weight: Option<i32>,
-    time_start: Option<String>,
-    time_end: Option<String>,
-}
-
 #[derive(Debug, Serialize)]
-struct ApiError {
-    error: String,
+pub(crate) struct ApiError {
+    pub(crate) error: String,
 }
 
 impl ApiError {
-    fn internal(msg: impl Into<String>) -> Self {
+    pub(crate) fn internal(msg: impl Into<String>) -> Self {
         Self { error: msg.into() }
     }
 
-    fn unauthorized(msg: impl Into<String>) -> Self {
+    pub(crate) fn unauthorized(msg: impl Into<String>) -> Self {
         Self { error: msg.into() }
     }
 
-    fn forbidden(msg: impl Into<String>) -> Self {
+    pub(crate) fn forbidden(msg: impl Into<String>) -> Self {
         Self { error: msg.into() }
     }
 }
@@ -270,800 +135,11 @@ impl IntoResponse for ApiError {
     }
 }
 
-// ===== 路由处理器 =====
-
-async fn health() -> &'static str {
-    "OK"
-}
-
-/// 就绪探针：进程存活不代表数据库可用，只有依赖检查通过才返回 200。
-async fn ready(State(state): State<AppState>) -> StatusCode {
-    match state.store.ping().await {
-        Ok(()) => StatusCode::OK,
-        Err(error) => {
-            tracing::warn!(%error, "API 就绪检查失败");
-            StatusCode::SERVICE_UNAVAILABLE
-        }
-    }
-}
-
-async fn get_dashboard_stats(
-    State(state): State<AppState>,
-) -> Result<Json<DashboardStats>, ApiError> {
-    let active_calls = {
-        let url = format!("{}/manage/active-calls", state.sip_manage_base);
-        let token = env::var("VOS_RS_INTERNAL_SECRET");
-        let request = state.internal_client.get(&url);
-        let request = match token {
-            Ok(token) if !token.is_empty() => request.header("X-VOS-Token", token),
-            _ => {
-                return state
-                    .store
-                    .get_dashboard_stats(0)
-                    .await
-                    .map(Json)
-                    .map_err(|e| ApiError {
-                        error: e.to_string(),
-                    })
-            }
-        };
-        match request.send().await {
-            Ok(resp) => resp
-                .json::<Vec<serde_json::Value>>()
-                .await
-                .map(|calls| calls.len() as i64)
-                .unwrap_or(0),
-            Err(_) => 0,
-        }
-    };
-    state
-        .store
-        .get_dashboard_stats(active_calls)
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
-}
-
-async fn get_dashboard_trend(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<HourlyTrend>>, ApiError> {
-    state
-        .store
-        .get_hourly_trend()
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
-}
-
-async fn list_cdrs(
-    State(state): State<AppState>,
-    Query(query): Query<ListCdrsQuery>,
-) -> Result<Json<PaginatedResponse<CdrEvent>>, ApiError> {
-    let page = query.page.unwrap_or(1);
-    let page_size = query.page_size.unwrap_or(20).min(100);
-
-    let start = query.start_time.as_deref().and_then(parse_dt);
-    let end = query.end_time.as_deref().and_then(parse_dt);
-
-    let (items, total) = state
-        .store
-        .list_cdrs(
-            page,
-            page_size,
-            query.status.as_deref(),
-            query.call_id.as_deref(),
-            query.caller.as_deref(),
-            query.callee.as_deref(),
-            start,
-            end,
-        )
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-
-    Ok(Json(PaginatedResponse {
-        items,
-        total,
-        page,
-        page_size,
-    }))
-}
-
 pub(crate) fn parse_dt(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
 }
 
-async fn get_cdr(
-    State(state): State<AppState>,
-    Path(call_id): Path<String>,
-) -> Result<Json<Option<CdrEvent>>, ApiError> {
-    state
-        .store
-        .get_cdr(&call_id)
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
-}
-
-async fn get_dtmf_events(
-    State(state): State<AppState>,
-    Path(call_id): Path<String>,
-) -> Result<Json<Vec<DtmfEventRecord>>, ApiError> {
-    state
-        .store
-        .get_dtmf_events(&call_id)
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
-}
-
-async fn list_users(
-    State(state): State<AppState>,
-    Query(query): Query<PageQuery>,
-) -> Result<Json<PaginatedResponse<SipUser>>, ApiError> {
-    let (page, page_size, offset) = normalize_page(&query);
-    let (items, total) = tokio::try_join!(
-        state.store.list_users_page(page_size, offset),
-        state.store.count_users(),
-    )
-    .map_err(|e| ApiError {
-        error: e.to_string(),
-    })?;
-    Ok(Json(PaginatedResponse {
-        items,
-        total,
-        page,
-        page_size,
-    }))
-}
-
-async fn create_user(
-    State(state): State<AppState>,
-    Json(req): Json<CreateUserRequest>,
-) -> Result<StatusCode, ApiError> {
-    // 强制转换为 HA1 哈希，防止明文存储
-    let ha1 = format!(
-        "{:x}",
-        md5::compute(format!("{}:{}:{}", req.username, "vos-rs", req.password).as_bytes())
-    );
-    state
-        .store
-        .insert_user(&req.username, &ha1)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    Ok(StatusCode::CREATED)
-}
-
-async fn update_user(
-    State(state): State<AppState>,
-    Path(username): Path<String>,
-    Json(req): Json<UpdateUserRequest>,
-) -> Result<StatusCode, ApiError> {
-    // 强制转换为 HA1 哈希，防止明文存储
-    let ha1 = format!(
-        "{:x}",
-        md5::compute(format!("{}:{}:{}", username, "vos-rs", req.password).as_bytes())
-    );
-    state
-        .store
-        .insert_user(&username, &ha1)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    Ok(StatusCode::OK)
-}
-
-async fn delete_user(
-    State(state): State<AppState>,
-    Path(username): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    let deleted = state
-        .store
-        .delete_user(&username)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    if deleted {
-        Ok(StatusCode::OK)
-    } else {
-        Ok(StatusCode::NOT_FOUND)
-    }
-}
-
-async fn list_gateways(
-    State(state): State<AppState>,
-    Query(query): Query<PageQuery>,
-) -> Result<Json<PaginatedResponse<SipGateway>>, ApiError> {
-    let (page, page_size, offset) = normalize_page(&query);
-    let (items, total) = tokio::try_join!(
-        state
-            .store
-            .list_gateways_page(page_size, offset, query.gateway_type.as_deref()),
-        state.store.count_gateways(query.gateway_type.as_deref()),
-    )
-    .map_err(|e| ApiError {
-        error: e.to_string(),
-    })?;
-    Ok(Json(PaginatedResponse {
-        items,
-        total,
-        page,
-        page_size,
-    }))
-}
-
-async fn create_gateway(
-    State(state): State<AppState>,
-    Json(req): Json<CreateGatewayRequest>,
-) -> Result<StatusCode, ApiError> {
-    let gw = SipGateway {
-        id: req.id,
-        host: req.host,
-        port: req.port,
-        transport: req.transport,
-        max_capacity: req.max_capacity,
-        gateway_type: req.gateway_type,
-        prefix_rules: req.prefix_rules,
-        supports_registration: req.supports_registration,
-        reg_auth_type: req.reg_auth_type,
-        reg_username: req.reg_username,
-        reg_password: None,
-        parent_gateway_id: None,
-        caller_id_mode: req.caller_id_mode,
-        virtual_caller: req.virtual_caller,
-        current_concurrent: Some(0),
-        circuit_state: Some("closed".to_string()),
-        account_id: req.account_id,
-        max_concurrent: req.max_concurrent,
-        enabled: req.enabled,
-        created_at: None,
-    };
-    state
-        .store
-        .upsert_gateway_full(&gw)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    Ok(StatusCode::CREATED)
-}
-
-async fn update_gateway(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(req): Json<UpdateGatewayRequest>,
-) -> Result<StatusCode, ApiError> {
-    let existing = state
-        .store
-        .list_gateways_full()
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    let old = existing
-        .iter()
-        .find(|g| g.id == id)
-        .ok_or_else(|| ApiError {
-            error: "网关不存在".into(),
-        })?;
-    let gw = SipGateway {
-        id: id.clone(),
-        host: req.host,
-        port: req.port,
-        transport: req.transport,
-        max_capacity: req.max_capacity,
-        gateway_type: req.gateway_type.or_else(|| old.gateway_type.clone()),
-        prefix_rules: req.prefix_rules.or_else(|| old.prefix_rules.clone()),
-        supports_registration: req.supports_registration.or(old.supports_registration),
-        reg_auth_type: req.reg_auth_type.or_else(|| old.reg_auth_type.clone()),
-        reg_username: req.reg_username.or_else(|| old.reg_username.clone()),
-        reg_password: None,
-        parent_gateway_id: old.parent_gateway_id.clone(),
-        caller_id_mode: req.caller_id_mode.or_else(|| old.caller_id_mode.clone()),
-        virtual_caller: req.virtual_caller.or_else(|| old.virtual_caller.clone()),
-        current_concurrent: old.current_concurrent,
-        circuit_state: old.circuit_state.clone(),
-        account_id: req.account_id.or(old.account_id),
-        max_concurrent: req.max_concurrent.or(old.max_concurrent),
-        enabled: req.enabled.or(old.enabled),
-        created_at: old.created_at,
-    };
-    state
-        .store
-        .upsert_gateway_full(&gw)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    Ok(StatusCode::OK)
-}
-
-async fn delete_gateway(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    let deleted = state
-        .store
-        .delete_gateway(&id)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    if deleted {
-        Ok(StatusCode::OK)
-    } else {
-        Ok(StatusCode::NOT_FOUND)
-    }
-}
-
-async fn publish_route_reload(nats: &Option<async_nats::Client>) {
-    if let Some(client) = nats {
-        if let Err(e) = client
-            .publish("vos_rs.routing.reload", axum::body::Bytes::from("reload"))
-            .await
-        {
-            tracing::warn!(error = %e, "NATS 路由重载广播发布失败");
-        }
-    }
-}
-
-async fn list_routes(
-    State(state): State<AppState>,
-    Query(query): Query<PageQuery>,
-) -> Result<Json<PaginatedResponse<SipRoute>>, ApiError> {
-    let (page, page_size, offset) = normalize_page(&query);
-    let (items, total) = tokio::try_join!(
-        state.store.list_routes_page(page_size, offset),
-        state.store.count_routes(),
-    )
-    .map_err(|e| ApiError {
-        error: e.to_string(),
-    })?;
-    Ok(Json(PaginatedResponse {
-        items,
-        total,
-        page,
-        page_size,
-    }))
-}
-
-async fn create_route(
-    State(state): State<AppState>,
-    Json(req): Json<CreateRouteRequest>,
-) -> Result<StatusCode, ApiError> {
-    let weight = req.weight.unwrap_or(100).clamp(1, 10000);
-    state
-        .store
-        .insert_route_with_cost(
-            &req.id,
-            &req.prefix,
-            req.priority,
-            &req.gateway_id,
-            req.cost,
-            weight,
-            req.time_start.as_deref(),
-            req.time_end.as_deref(),
-        )
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    publish_route_reload(&state.nats_client).await;
-    Ok(StatusCode::CREATED)
-}
-
-async fn update_route(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(req): Json<UpdateRouteRequest>,
-) -> Result<StatusCode, ApiError> {
-    let weight = req.weight.unwrap_or(100).clamp(1, 10000);
-    state
-        .store
-        .insert_route_with_cost(
-            &id,
-            &req.prefix,
-            req.priority,
-            &req.gateway_id,
-            req.cost,
-            weight,
-            req.time_start.as_deref(),
-            req.time_end.as_deref(),
-        )
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    publish_route_reload(&state.nats_client).await;
-    Ok(StatusCode::OK)
-}
-
-async fn delete_route(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    let deleted = state.store.delete_route(&id).await.map_err(|e| ApiError {
-        error: e.to_string(),
-    })?;
-    if deleted {
-        publish_route_reload(&state.nats_client).await;
-        Ok(StatusCode::OK)
-    } else {
-        Ok(StatusCode::NOT_FOUND)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct RegistrationQuery {
-    page: Option<i64>,
-    page_size: Option<i64>,
-    keyword: Option<String>,
-}
-
-async fn list_registrations(
-    State(state): State<AppState>,
-    Query(query): Query<RegistrationQuery>,
-) -> Result<Json<PaginatedResponse<SipRegistration>>, ApiError> {
-    let page_query = PageQuery {
-        page: query.page,
-        page_size: query.page_size,
-        gateway_type: None,
-    };
-    let (page, page_size, offset) = normalize_page(&page_query);
-    let (items, total) = tokio::try_join!(
-        state
-            .store
-            .list_registrations_page(query.keyword.as_deref(), page_size, offset),
-        state.store.count_registrations(query.keyword.as_deref()),
-    )
-    .map_err(|e| ApiError {
-        error: e.to_string(),
-    })?;
-    Ok(Json(PaginatedResponse {
-        items,
-        total,
-        page,
-        page_size,
-    }))
-}
-
-#[derive(Deserialize)]
-struct CreateAntiFraudRuleRequest {
-    id: String,
-    rule_type: String,
-    target_value: String,
-    limit_number: Option<i32>,
-    enabled: bool,
-}
-
-#[derive(Deserialize)]
-struct UpdateAntiFraudRuleRequest {
-    rule_type: String,
-    target_value: String,
-    limit_number: Option<i32>,
-    enabled: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct UpdateAntiFraudConfigRequest {
-    config_value: String,
-}
-
-async fn list_anti_fraud_rules(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<AntiFraudRule>>, ApiError> {
-    state
-        .store
-        .list_anti_fraud_rules()
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
-}
-
-async fn create_anti_fraud_rule(
-    State(state): State<AppState>,
-    Json(req): Json<CreateAntiFraudRuleRequest>,
-) -> Result<StatusCode, ApiError> {
-    let rule = AntiFraudRule {
-        id: req.id,
-        rule_type: req.rule_type,
-        target_value: req.target_value,
-        limit_number: req.limit_number,
-        enabled: req.enabled,
-    };
-    state
-        .store
-        .insert_anti_fraud_rule(&rule)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    Ok(StatusCode::CREATED)
-}
-
-async fn update_anti_fraud_rule(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(req): Json<UpdateAntiFraudRuleRequest>,
-) -> Result<StatusCode, ApiError> {
-    let rule = AntiFraudRule {
-        id,
-        rule_type: req.rule_type,
-        target_value: req.target_value,
-        limit_number: req.limit_number,
-        enabled: req.enabled,
-    };
-    state
-        .store
-        .insert_anti_fraud_rule(&rule)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    Ok(StatusCode::OK)
-}
-
-async fn delete_anti_fraud_rule(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    let deleted = state
-        .store
-        .delete_anti_fraud_rule(&id)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    if deleted {
-        Ok(StatusCode::OK)
-    } else {
-        Ok(StatusCode::NOT_FOUND)
-    }
-}
-
-async fn list_anti_fraud_config(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<cdr_core::AntiFraudConfigItem>>, ApiError> {
-    state
-        .store
-        .list_anti_fraud_configs()
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
-}
-
-#[derive(Debug, Deserialize)]
-struct AuditLogQuery {
-    page: Option<i64>,
-    page_size: Option<i64>,
-}
-
-/// 查询管理 API 审计日志，仅管理员可访问。
-async fn list_audit_logs(
-    State(state): State<AppState>,
-    Query(query): Query<AuditLogQuery>,
-) -> Result<Json<PaginatedResponse<cdr_core::AuditLog>>, ApiError> {
-    let page = query.page.unwrap_or(1).max(1);
-    let page_size = query.page_size.unwrap_or(50).clamp(1, 200);
-    let offset = (page - 1).saturating_mul(page_size);
-    let (items, total) = tokio::try_join!(
-        state.store.list_audit_logs(page_size, offset),
-        state.store.count_audit_logs(),
-    )
-    .map_err(|e| ApiError {
-        error: e.to_string(),
-    })?;
-    Ok(Json(PaginatedResponse {
-        items,
-        total,
-        page,
-        page_size,
-    }))
-}
-
-async fn update_anti_fraud_config(
-    State(state): State<AppState>,
-    Path(key): Path<String>,
-    Json(req): Json<UpdateAntiFraudConfigRequest>,
-) -> Result<StatusCode, ApiError> {
-    if req.config_value.len() > 1024 {
-        return Err(ApiError::internal("防盗打配置值长度不能超过 1024 个字符"));
-    }
-
-    let updated = state
-        .store
-        .update_anti_fraud_config(&key, &req.config_value)
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-
-    if updated {
-        Ok(StatusCode::OK)
-    } else {
-        Err(ApiError::internal("防盗打配置项不存在"))
-    }
-}
-
-async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse {
-    let url = format!("{}/manage/media-metrics", state.sip_manage_base);
-    let secret = match env::var("VOS_RS_INTERNAL_SECRET") {
-        Ok(val) => val,
-        Err(_) => {
-            tracing::warn!("VOS_RS_INTERNAL_SECRET 未配置，跳过 sip-edge 指标拉取");
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
-            );
-            return (headers, Metrics::encode_metrics());
-        }
-    };
-    match state
-        .internal_client
-        .get(&url)
-        .header("X-VOS-Token", secret)
-        .send()
-        .await
-    {
-        Ok(response) => match response.json::<MediaMetricsSnapshot>().await {
-            Ok(snapshot) => Metrics::update_media_metrics(&snapshot),
-            Err(error) => tracing::debug!(%error, "failed to decode sip-edge media metrics"),
-        },
-        Err(error) => tracing::debug!(%error, "failed to fetch sip-edge media metrics"),
-    }
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
-    );
-    (headers, Metrics::encode_metrics())
-}
-
-use std::time::SystemTime;
-
-/// 用户登录：验证凭据并返回 JWT Token。
-///
-/// 支持三种角色：
-/// - `admin`：管理员，可访问所有端点
-/// - `operator`：运维，可访问运维和只读端点
-/// - `financier`：财务，可访问计费和只读端点
-///
-/// 密码通过环境变量配置（`VOS_RS_ADMIN_PASSWORD` 等），
-/// 未配置时返回错误（生产环境禁止默认密码）。
-///
-/// 成功返回 24 小时有效期的 JWT Token。
-async fn login(
-    State(state): State<AppState>,
-    Json(req): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, ApiError> {
-    let admin_password = env::var("VOS_RS_ADMIN_PASSWORD")
-        .map_err(|_| ApiError::internal("VOS_RS_ADMIN_PASSWORD 未配置，无法登录"))?;
-    let operator_password = env::var("VOS_RS_OPERATOR_PASSWORD")
-        .map_err(|_| ApiError::internal("VOS_RS_OPERATOR_PASSWORD 未配置，无法登录"))?;
-    let financier_password = env::var("VOS_RS_FINANCIER_PASSWORD")
-        .map_err(|_| ApiError::internal("VOS_RS_FINANCIER_PASSWORD 未配置，无法登录"))?;
-
-    let role = if req.username == "admin" && req.password == admin_password {
-        "admin".to_string()
-    } else if req.username == "operator" && req.password == operator_password {
-        "operator".to_string()
-    } else if req.username == "financier" && req.password == financier_password {
-        "financier".to_string()
-    } else {
-        tracing::warn!(username = %req.username, "登录失败：用户名或密码错误");
-        return Err(ApiError::unauthorized("用户名或密码错误".to_string()));
-    };
-
-    tracing::info!(username = %req.username, role = %role, "登录成功");
-
-    let exp = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as usize
-        + 24 * 3600;
-
-    let claims = Claims {
-        sub: req.username,
-        role,
-        exp,
-    };
-
-    let token = encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(&state.jwt_secret),
-    )
-    .map_err(|e| ApiError::internal(format!("JWT 签名失败: {}", e)))?;
-
-    Ok(Json(LoginResponse {
-        token,
-        username: claims.sub,
-        role: claims.role,
-    }))
-}
-
-/// RBAC 权限检查：根据角色、HTTP 方法和路径判断是否允许访问。
-///
-/// 角色权限矩阵：
-/// - **admin**：所有端点
-/// - **operator**：运维端点（网关、路由、号码、反欺诈）+ 只读端点
-/// - **financier**：计费端点（费率、账户、账本）+ 只读端点
-///
-/// 安全规则：
-/// - `/api/users` 始终仅限 admin（SIP 用户凭证安全敏感）
-/// - 只读端点（CDR、录音、仪表盘）对所有角色开放
-fn role_allows(role: &str, method: &str, path: &str) -> bool {
-    if role == "admin" {
-        return true;
-    }
-
-    // SIP user credentials are security-sensitive and remain administrator-only.
-    if path.starts_with("/api/users") {
-        return false;
-    }
-
-    let finance_path = path.starts_with("/api/rates")
-        || path.starts_with("/api/accounts")
-        || path.starts_with("/api/ledger")
-        || path.starts_with("/api/billing");
-    if finance_path {
-        return role == "financier";
-    }
-
-    let operations_path = path.starts_with("/api/gateways")
-        || path.starts_with("/api/routes")
-        || path.starts_with("/api/numbers")
-        || path.starts_with("/api/anti-fraud")
-        || (path.starts_with("/api/calls/") && method == "POST");
-    if operations_path {
-        return role == "operator";
-    }
-
-    let read_only_path = path.starts_with("/api/dashboard")
-        || path.starts_with("/api/cdrs")
-        || path.starts_with("/api/registrations")
-        || path.starts_with("/api/recordings")
-        || path.starts_with("/api/reports")
-        || path == "/api/calls/active"
-        || path == "/api/route-preview"
-        || path == "/api/media/metrics";
-    if read_only_path {
-        return role == "operator" || role == "financier";
-    }
-
-    false
-}
-
 /// JWT 认证中间件：验证请求中的 Bearer Token 并检查 RBAC 权限。
-///
-/// 流程：
-/// 1. 从 Authorization 头提取 Bearer Token
-/// 2. 验证 Token 签名和有效期
-/// 3. 检查角色是否有权访问目标端点
-/// 4. 将 Claims 注入请求扩展，供后续处理器使用
-///
-/// 错误响应：
-/// - 401：缺少凭证、Token 无效或过期
-/// - 403：角色无权访问
 async fn jwt_auth(
     State(state): State<AppState>,
     mut req: axum::extract::Request,
@@ -1107,9 +183,6 @@ async fn jwt_auth(
 }
 
 /// 对审计请求体中的敏感字段做递归脱敏。
-///
-/// 审计日志用于追踪操作，不应成为凭据泄露的新渠道。无法解析为 JSON
-/// 时不记录原文，只保留固定提示，避免把表单或未知格式直接落库。
 fn sanitize_audit_json(body: &[u8]) -> String {
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
         return "[已省略无法解析的 JSON 请求体]".to_string();
@@ -1231,7 +304,7 @@ async fn audit_log(
     let audit_request_body = request_body.clone();
     let audit_source_ip = source_ip.clone();
     tokio::spawn(async move {
-        let input = AuditLogInput {
+        let input = cdr_core::AuditLogInput {
             request_id: &audit_request_id,
             username: &audit_username,
             role: &audit_role,
@@ -1261,60 +334,6 @@ async fn audit_log(
         response.headers_mut().insert("X-Request-ID", value);
     }
     response
-}
-
-async fn dashboard_events(
-    State(state): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let state_clone = state.clone();
-    let stream = stream::unfold(
-        (
-            state_clone,
-            tokio::time::interval(std::time::Duration::from_secs(2)),
-        ),
-        |(state, mut interval)| async move {
-            interval.tick().await;
-
-            let token = env::var("VOS_RS_INTERNAL_SECRET").ok();
-            let active_calls = match token {
-                Some(token) if !token.is_empty() => match state
-                    .internal_client
-                    .get(format!("{}/manage/active-calls", state.sip_manage_base))
-                    .header("X-VOS-Token", token)
-                    .send()
-                    .await
-                {
-                    Ok(resp) => resp
-                        .json::<Vec<serde_json::Value>>()
-                        .await
-                        .map(|v| v.len() as u32)
-                        .unwrap_or(0),
-                    Err(_) => 0,
-                },
-                _ => 0,
-            };
-
-            let trunk_online_count = match state.store.list_gateways_full().await {
-                Ok(gateways) => gateways
-                    .iter()
-                    .filter(|gateway| gateway.enabled != Some(false))
-                    .filter(|gateway| gateway.circuit_state.as_deref() != Some("open"))
-                    .count() as u32,
-                Err(_) => 0,
-            };
-
-            let data = serde_json::json!({
-                "active_calls": active_calls,
-                "trunk_online_count": trunk_online_count,
-                "timestamp": time::OffsetDateTime::now_utc().unix_timestamp(),
-            });
-
-            let event = Event::default().data(data.to_string());
-            Some((Ok(event), (state, interval)))
-        },
-    );
-
-    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 #[tokio::main]
@@ -1499,147 +518,8 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        normalize_page, redact_sensitive_json_value, role_allows, sanitize_audit_json, PageQuery,
-    };
+    use super::{normalize_page, redact_sensitive_json_value, sanitize_audit_json, PageQuery};
     use serde_json::json;
-
-    // ===== Unit tests for role_allows =====
-
-    #[test]
-    fn admin_can_access_every_protected_route() {
-        assert!(role_allows("admin", "POST", "/api/accounts/alice/credit"));
-        assert!(role_allows("admin", "DELETE", "/api/users/alice"));
-    }
-
-    #[test]
-    fn operator_cannot_access_finance_or_user_credentials() {
-        assert!(!role_allows(
-            "operator",
-            "POST",
-            "/api/accounts/alice/credit"
-        ));
-        assert!(!role_allows("operator", "PUT", "/api/users/alice"));
-        assert!(role_allows("operator", "POST", "/api/routes"));
-        assert!(role_allows("operator", "POST", "/api/calls/id/terminate"));
-    }
-
-    #[test]
-    fn financier_cannot_change_operations_configuration() {
-        assert!(!role_allows("financier", "POST", "/api/routes"));
-        assert!(!role_allows("financier", "POST", "/api/gateways"));
-        assert!(role_allows("financier", "POST", "/api/billing/reconcile"));
-        assert!(role_allows("financier", "GET", "/api/cdrs"));
-    }
-
-    #[test]
-    fn operator_can_read_cdrs_and_recordings() {
-        assert!(role_allows("operator", "GET", "/api/cdrs"));
-        assert!(role_allows(
-            "operator",
-            "GET",
-            "/api/recordings/call-1/audio"
-        ));
-        assert!(role_allows("operator", "GET", "/api/dashboard/stats"));
-        assert!(role_allows("operator", "GET", "/api/registrations"));
-    }
-
-    #[test]
-    fn operator_can_access_operations_endpoints() {
-        assert!(role_allows("operator", "POST", "/api/routes"));
-        assert!(role_allows("operator", "POST", "/api/gateways"));
-        assert!(role_allows("operator", "POST", "/api/numbers"));
-        assert!(role_allows("operator", "POST", "/api/anti-fraud/rules"));
-        assert!(role_allows("operator", "POST", "/api/calls/id/terminate"));
-    }
-
-    #[test]
-    fn operator_cannot_access_finance_endpoints() {
-        assert!(!role_allows("operator", "GET", "/api/accounts"));
-        assert!(!role_allows("operator", "POST", "/api/rates"));
-        assert!(!role_allows("operator", "POST", "/api/billing/reconcile"));
-        assert!(!role_allows("operator", "GET", "/api/ledger"));
-    }
-
-    #[test]
-    fn operator_cannot_access_user_credentials() {
-        assert!(!role_allows("operator", "GET", "/api/users"));
-        assert!(!role_allows("operator", "POST", "/api/users"));
-        assert!(!role_allows("operator", "PUT", "/api/users/alice"));
-        assert!(!role_allows("operator", "DELETE", "/api/users/alice"));
-    }
-
-    #[test]
-    fn financier_can_access_billing_endpoints() {
-        assert!(role_allows("financier", "GET", "/api/cdrs"));
-        assert!(role_allows("financier", "GET", "/api/rates"));
-        assert!(role_allows("financier", "POST", "/api/rates"));
-        assert!(role_allows("financier", "GET", "/api/accounts"));
-        assert!(role_allows("financier", "POST", "/api/billing/reconcile"));
-        assert!(role_allows("financier", "GET", "/api/ledger"));
-    }
-
-    #[test]
-    fn financier_cannot_access_operations_endpoints() {
-        assert!(!role_allows("financier", "POST", "/api/routes"));
-        assert!(!role_allows("financier", "POST", "/api/gateways"));
-        assert!(!role_allows("financier", "POST", "/api/numbers"));
-        assert!(!role_allows("financier", "POST", "/api/anti-fraud/rules"));
-    }
-
-    #[test]
-    fn financier_cannot_access_user_credentials() {
-        assert!(!role_allows("financier", "GET", "/api/users"));
-        assert!(!role_allows("financier", "POST", "/api/users"));
-    }
-
-    #[test]
-    fn no_role_cannot_access_anything() {
-        assert!(!role_allows("unknown", "GET", "/api/cdrs"));
-        assert!(!role_allows("unknown", "POST", "/api/routes"));
-        assert!(!role_allows("unknown", "GET", "/api/accounts"));
-        assert!(!role_allows("", "GET", "/api/cdrs"));
-    }
-
-    #[test]
-    fn admin_can_access_all_read_only_endpoints() {
-        assert!(role_allows("admin", "GET", "/api/cdrs"));
-        assert!(role_allows("admin", "GET", "/api/recordings/call-1/audio"));
-        assert!(role_allows("admin", "GET", "/api/dashboard/stats"));
-        assert!(role_allows("admin", "GET", "/api/registrations"));
-        assert!(role_allows("admin", "GET", "/api/media/metrics"));
-        assert!(role_allows("admin", "GET", "/api/route-preview"));
-    }
-
-    #[test]
-    fn admin_can_access_all_write_endpoints() {
-        assert!(role_allows("admin", "POST", "/api/routes"));
-        assert!(role_allows("admin", "POST", "/api/gateways"));
-        assert!(role_allows("admin", "POST", "/api/users"));
-        assert!(role_allows("admin", "POST", "/api/rates"));
-        assert!(role_allows("admin", "POST", "/api/billing/reconcile"));
-        assert!(role_allows("admin", "POST", "/api/anti-fraud/rules"));
-        assert!(role_allows("admin", "DELETE", "/api/routes/r1"));
-        assert!(role_allows("admin", "DELETE", "/api/gateways/gw1"));
-        assert!(role_allows("admin", "DELETE", "/api/users/alice"));
-    }
-
-    #[test]
-    fn operator_can_access_route_preview_and_media_metrics() {
-        assert!(role_allows("operator", "GET", "/api/route-preview"));
-        assert!(role_allows("operator", "GET", "/api/media/metrics"));
-    }
-
-    #[test]
-    fn financier_can_read_cdrs_and_registrations() {
-        assert!(role_allows("financier", "GET", "/api/cdrs"));
-        assert!(role_allows("financier", "GET", "/api/registrations"));
-        assert!(role_allows(
-            "financier",
-            "GET",
-            "/api/recordings/call-1/audio"
-        ));
-    }
 
     #[test]
     fn audit_json_redacts_nested_credentials() {

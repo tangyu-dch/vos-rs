@@ -296,3 +296,22 @@ fn compatible_audio_payloads(session: &SessionDescription) -> Result<Vec<String>
 
     Ok(payloads)
 }
+
+pub fn negotiated_audio_codec(body: &[u8]) -> Option<AudioCodec> {
+    let input = str::from_utf8(body).ok()?;
+    let session = SessionDescription::parse(input).ok()?;
+    let formats = session.first_audio_rtp_formats().ok()?;
+    for format in &formats {
+        if let Some(codec) = match (format.encoding_name.as_deref(), format.clock_rate) {
+            (Some(name), Some(rate)) => AudioCodec::from_rtpmap(name, rate),
+            _ => format
+                .payload_type
+                .parse::<u8>()
+                .ok()
+                .and_then(AudioCodec::from_static_payload_type),
+        } {
+            return Some(codec);
+        }
+    }
+    None
+}

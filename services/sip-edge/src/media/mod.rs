@@ -30,15 +30,18 @@ pub(crate) mod dtmf;
 pub(crate) mod metrics;
 pub(crate) mod recording;
 pub(crate) mod relay;
+pub(crate) mod rtcp_processor;
 pub(crate) mod sdp;
+pub(crate) mod transcode;
 pub(crate) mod utils;
 
 pub use self::config::MediaConfig;
 pub use self::metrics::RtcpQualitySnapshot;
 pub use self::recording::MediaError;
 pub use self::relay::MediaRelayState;
-#[allow(unused_imports)]
+#[cfg(test)]
+pub use self::sdp::rewrite_sdp_body;
 pub use self::sdp::{
-    is_sdp_body, parse_sdp_dtmf_payload_type, parse_sdp_rtp_endpoint,
-    rewrite_sdp_and_extract_endpoint, rewrite_sdp_body, validate_media_negotiation,
+    is_sdp_body, negotiated_audio_codec, parse_sdp_dtmf_payload_type, parse_sdp_rtp_endpoint,
+    rewrite_sdp_and_extract_endpoint, validate_media_negotiation,
 };

@@ -50,7 +50,7 @@ pub const DEFAULT_RECORDING_MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_RECORDING_MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 pub const DEFAULT_RECORDING_MAX_DURATION_SECS: u64 = 60 * 60;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MediaConfig {
     pub advertised_addr: String,
     pub port_min: u16,

@@ -388,7 +388,9 @@ pub(crate) fn spawn_session_timer_watchdog(
                         .unwrap_or_else(|e| e.into_inner())
                         .decrement_active(&gw_id);
                 }
-                edge_state.call_manager.terminate_call_with_reason(&call_id, &reason);
+                edge_state
+                    .call_manager
+                    .terminate_call_with_reason(&call_id, &reason);
 
                 // Real-time billing: settle the call on timeout.
                 if let Some(ref db) = edge_state.db_store {

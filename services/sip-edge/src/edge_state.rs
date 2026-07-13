@@ -300,7 +300,7 @@ impl EdgeState {
         Self {
             call_manager: std::sync::Arc::new(call_manager),
             gateway_health: std::sync::Mutex::new(GatewayHealthTracker::new(
-                call_core::HealthThresholds::from_env()
+                call_core::HealthThresholds::from_env(),
             )),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay,
@@ -430,6 +430,20 @@ impl EdgeState {
         let start = s.find("sip:").map(|i| i + 4)?;
         let end = s[start..].find('@')?;
         Some(s[start..start + end].to_string())
+    }
+
+    /// 从 SIP 请求的 From 头中提取域名作为租户标识
+    pub(crate) fn domain_from_request(request: &SipRequest) -> Option<String> {
+        let from = request.headers.get("from")?;
+        let s = from.as_str();
+        let start = s.find("sip:").map(|i| i + 4)?;
+        let rest = &s[start..];
+        let at_pos = rest.find('@')?;
+        let domain_part = &rest[at_pos + 1..];
+        let end_pos = domain_part
+            .find(|c: char| !c.is_alphanumeric() && c != '.' && c != '-')
+            .unwrap_or(domain_part.len());
+        Some(domain_part[..end_pos].to_string())
     }
 
     pub(crate) fn get_socket(&self) -> Option<Arc<UdpSocket>> {

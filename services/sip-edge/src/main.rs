@@ -38,8 +38,7 @@ pub(crate) use sip::{AuthDecision, ClientTransactionKey, RequestTransactionKey};
 
 // Constants re-exported for tests
 pub(crate) use config::{
-    DATABASE_URL_ENV, DEFAULT_GATEWAY_ENV, NATS_CDR_STREAM_ENV, NATS_CDR_SUBJECT_ENV, NATS_URL_ENV,
-    TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
+    DATABASE_URL_ENV, DEFAULT_GATEWAY_ENV, NATS_URL_ENV, TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
 };
 #[allow(unused_imports)]
 pub(crate) use timers::{
@@ -100,7 +99,7 @@ async fn main() -> Result<(), AnyError> {
     let edge_config = Arc::new(edge_config);
 
     let media_relay = MediaRelayState::new();
-    let cdr_sinks = cdr_sinks_from_env().await?;
+    let cdr_sinks = cdr_sinks_from_config(&edge_config).await?;
     let db_store = cdr_sinks.postgres.clone();
     let cdr_sinks = std::sync::Arc::new(cdr_sinks);
 
@@ -217,8 +216,12 @@ async fn main() -> Result<(), AnyError> {
             }
         }
 
-        if let Ok(nats_url) = env::var(NATS_URL_ENV) {
-            spawn_route_reload_listener(nats_url, Arc::clone(&edge_state), db_store.clone());
+        if let Some(ref nats_url) = edge_config.nats_url {
+            spawn_route_reload_listener(
+                nats_url.clone(),
+                Arc::clone(&edge_state),
+                db_store.clone(),
+            );
         }
 
         if let Some(ref db) = db_store {
@@ -535,30 +538,34 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
-async fn cdr_sinks_from_env() -> Result<CdrSinks, AnyError> {
-    let nats = match env::var(NATS_URL_ENV) {
-        Ok(nats_url) if !nats_url.trim().is_empty() => {
-            let subject =
-                env::var(NATS_CDR_SUBJECT_ENV).unwrap_or_else(|_| DEFAULT_CDR_SUBJECT.to_string());
-            let stream =
-                env::var(NATS_CDR_STREAM_ENV).unwrap_or_else(|_| DEFAULT_CDR_STREAM.to_string());
+async fn cdr_sinks_from_config(config: &EdgeConfig) -> Result<CdrSinks, AnyError> {
+    let nats = match &config.nats_url {
+        Some(nats_url) if !nats_url.trim().is_empty() => {
+            let subject = config
+                .nats_cdr_subject
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CDR_SUBJECT.to_string());
+            let stream = config
+                .nats_cdr_stream
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CDR_STREAM.to_string());
             let publisher =
-                NatsCdrPublisher::connect(&nats_url, subject.clone(), stream.clone()).await?;
+                NatsCdrPublisher::connect(nats_url, subject.clone(), stream.clone()).await?;
             info!(subject, stream, "NATS JetStream CDR queue enabled");
             Some(publisher)
         }
         _ => {
             info!(
                 env = NATS_URL_ENV,
-                "NATS CDR queue disabled; set env var to enable"
+                "NATS CDR queue disabled; set config / env var to enable"
             );
             None
         }
     };
 
-    let postgres = match env::var(DATABASE_URL_ENV) {
-        Ok(database_url) if !database_url.trim().is_empty() => {
-            let store = PostgresCdrStore::connect(&database_url).await?;
+    let postgres = match &config.database_url {
+        Some(database_url) if !database_url.trim().is_empty() => {
+            let store = PostgresCdrStore::connect(database_url).await?;
             if nats.is_some() {
                 info!("PostgreSQL direct CDR persistence disabled because NATS CDR queue is enabled (database connection will still be used for configuration and registration store)");
             } else {
@@ -569,7 +576,7 @@ async fn cdr_sinks_from_env() -> Result<CdrSinks, AnyError> {
         _ => {
             info!(
                 env = DATABASE_URL_ENV,
-                "PostgreSQL database connection disabled; set env var to enable"
+                "PostgreSQL database connection disabled; set config / env var to enable"
             );
             None
         }
@@ -808,7 +815,13 @@ mod tests {
     use call_core::{CallId, CallManager, CallState, Route, RouteTable, RouteTarget};
     use sdp_core::RtpEndpoint;
     use sip_core::{parse_message, SipMessage, SipUri};
-    use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+    use std::{
+        collections::HashMap,
+        net::SocketAddr,
+        str::FromStr,
+        sync::Arc,
+        time::{Duration, SystemTime},
+    };
     use tokio::net::UdpSocket;
 
     include!("tests/helpers.rs");

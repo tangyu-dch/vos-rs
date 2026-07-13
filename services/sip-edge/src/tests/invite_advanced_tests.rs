@@ -47,7 +47,6 @@
             .expect("call should still be tracked");
         assert_eq!(call.state, CallState::Ringing);
     }
-
     #[tokio::test]
     async fn forwards_gateway_ok_with_sdp_and_establishes_call() {
         let edge_state = state_with_default_route();
@@ -1134,4 +1133,151 @@
             assert_eq!(health.health(winning_gw).map(|h| h.active_calls()).unwrap_or(0), 1);
             assert_eq!(health.health(canceled_gw).map(|h| h.active_calls()).unwrap_or(0), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn test_tenant_domain_isolation() {
+        let edge_state = state_with_default_route();
+
+        // Register 1002@tenant2.com
+        let contact_update_body = concat!(
+            "v=0\r\n",
+            "o=callee 1 1 IN IP4 192.0.2.11\r\n",
+            "s=callee\r\n",
+            "c=IN IP4 192.0.2.11\r\n",
+            "t=0 0\r\n",
+            "m=audio 49170 RTP/AVP 0 101\r\n"
+        );
+        let mut registrar = edge_state.registrar.write().await;
+        let register_req = String::from(
+            "REGISTER sip:tenant2.com SIP/2.0\r\n\
+             Via: SIP/2.0/UDP 192.0.2.11:5060;branch=z9hG4bK-reg\r\n\
+             From: <sip:1002@tenant2.com>;tag=tag1\r\n\
+             To: <sip:1002@tenant2.com>\r\n\
+             Call-ID: reg-call-id\r\n\
+             CSeq: 1 REGISTER\r\n\
+             Contact: <sip:1002@192.0.2.11:5060>\r\n\
+             Expires: 3600\r\n\
+             Content-Length: 0\r\n\r\n"
+        );
+        let req = sip_core::parse_message(register_req.as_bytes()).unwrap();
+        let sip_req = match req {
+            sip_core::SipMessage::Request(r) => r,
+            _ => panic!("expected request"),
+        };
+        registrar.handle_register(&sip_req, "192.0.2.11:5060".parse().unwrap(), SystemTime::now(), None).await.unwrap();
+        drop(registrar);
+
+        // Send invite from 1001@tenant1.com to 1002@tenant2.com
+        let invite_body = contact_update_body;
+        let cross_invite = format!(
+            "INVITE sip:1002@tenant2.com SIP/2.0\r\n\
+             Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-cross\r\n\
+             From: <sip:1001@tenant1.com>;tag=from-tag\r\n\
+             To: <sip:1002@tenant2.com>\r\n\
+             Call-ID: cross-tenant@example.com\r\n\
+             CSeq: 1 INVITE\r\n\
+             Content-Type: application/sdp\r\n\
+             Content-Length: {}\r\n\
+             \r\n\
+             {}",
+            invite_body.len(),
+            invite_body
+        );
+
+        let datagrams = handle_datagram(
+            cross_invite.as_bytes(),
+            peer(),
+            &edge_state,
+            &edge_config(),
+        )
+        .await;
+
+        assert_eq!(datagrams.len(), 1);
+        let response = datagram_text(&datagrams[0]);
+        assert!(response.contains("SIP/2.0 403 Forbidden"));
+        assert!(response.contains("X-VOS-RS-Error: Cross-tenant calling is disabled"));
+    }
+
+    #[tokio::test]
+    async fn test_modular_config_loading_and_interpolation() {
+        use std::fs;
+        use crate::config::{EdgeConfig, interpolate_env_vars};
+
+        // Test interpolate_env_vars directly
+        std::env::set_var("TEST_ENV_VAR_1", "env_value_1");
+        std::env::remove_var("TEST_ENV_VAR_2");
+
+        let input = "key1: ${TEST_ENV_VAR_1:default1}\nkey2: ${TEST_ENV_VAR_2:default2}\nkey3: ${TEST_ENV_VAR_2}";
+        let output = interpolate_env_vars(input);
+        assert_eq!(output, "key1: env_value_1\nkey2: default2\nkey3: ");
+
+        // Create temporary config yaml files
+        let main_yaml = r#"
+advertised_addr: ${TEST_SIP_ADDR:10.0.0.1:5060}
+session_expires_gateway: 120
+media_config_path: "test_media.yaml"
+auth_config_path: "test_auth.yaml"
+sbc_config_path: "test_sbc.yaml"
+"#;
+        let media_yaml = r#"
+advertised_addr: ${TEST_RTP_ADDR:10.0.0.2}
+port_min: 20000
+port_max: 20100
+symmetric_rtp_learning: true
+anti_spoofing: true
+source_relearn_after_secs: 30
+recording_enabled: false
+recording_dir: "target/test_recordings"
+recording_retention_secs: 3600
+recording_min_free_bytes: 1048576
+recording_max_file_bytes: 1048576
+recording_max_duration_secs: 60
+"#;
+        let auth_yaml = r#"
+realm: "test-realm"
+nonce: "test-nonce"
+users:
+  admin: "password123"
+"#;
+        let sbc_yaml = r#"
+sbc_allow:
+  - "192.168.1.1"
+sbc_block:
+  - "192.168.1.2"
+sbc_rate_limit_capacity: 50.0
+sbc_rate_limit_fill_rate: 10.0
+sbc_max_concurrency: 100
+"#;
+
+        fs::write("test_config.yaml", main_yaml).unwrap();
+        fs::write("test_media.yaml", media_yaml).unwrap();
+        fs::write("test_auth.yaml", auth_yaml).unwrap();
+        fs::write("test_sbc.yaml", sbc_yaml).unwrap();
+
+        std::env::set_var("TEST_SIP_ADDR", "127.0.0.1:5070");
+        std::env::set_var("TEST_RTP_ADDR", "127.0.0.1");
+
+        let config = EdgeConfig::load_from_file("test_config.yaml");
+
+        // Clean up
+        let _ = fs::remove_file("test_config.yaml");
+        let _ = fs::remove_file("test_media.yaml");
+        let _ = fs::remove_file("test_auth.yaml");
+        let _ = fs::remove_file("test_sbc.yaml");
+        std::env::remove_var("TEST_SIP_ADDR");
+        std::env::remove_var("TEST_RTP_ADDR");
+        std::env::remove_var("TEST_ENV_VAR_1");
+
+        assert_eq!(config.advertised_addr, "127.0.0.1:5070");
+        assert_eq!(config.session_expires_gateway, 120);
+        assert_eq!(config.media.advertised_addr, "127.0.0.1");
+        assert_eq!(config.media.port_min, 20000);
+        assert_eq!(config.auth.realm, "test-realm");
+        assert_eq!(config.auth.users.get("admin").unwrap(), "password123");
+        assert_eq!(config.sbc_allow_rules, vec!["192.168.1.1".to_string()]);
+        assert_eq!(config.sbc_block_rules, vec!["192.168.1.2".to_string()]);
+        assert_eq!(config.sbc_rate_limit_capacity, 50.0);
+        assert_eq!(config.sbc_rate_limit_fill_rate, 10.0);
+        assert_eq!(config.sbc_max_concurrency, 100);
     }

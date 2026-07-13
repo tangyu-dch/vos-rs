@@ -33,12 +33,20 @@ const DEFAULT_REALM: &str = "vos-rs";
 const DEFAULT_NONCE: &str = "vos-rs-dev-nonce";
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AuthConfig {
-    realm: String,
-    nonce: String,
-    users: HashMap<String, String>,
+    pub(crate) realm: String,
+    pub(crate) nonce: String,
+    pub(crate) users: HashMap<String, String>,
+    #[serde(default = "default_secret_key")]
     pub secret_key: String,
+}
+
+fn default_secret_key() -> String {
+    format!(
+        "{:x}",
+        md5::compute(format!("{:?}", std::time::SystemTime::now()).as_bytes())
+    )
 }
 
 impl AuthConfig {

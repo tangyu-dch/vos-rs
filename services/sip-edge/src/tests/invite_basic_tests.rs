@@ -239,6 +239,10 @@
         let edge_state = state_with_default_route();
         let edge_config = EdgeConfig {
             advertised_addr: "edge.example.com:5060".to_string(),
+            database_url: None,
+            nats_url: None,
+            nats_cdr_stream: None,
+            nats_cdr_subject: None,
             media: MediaConfig::new("203.0.113.10", 31_000, 31_000),
             auth: AuthConfig::disabled(),
             session_expires_gateway: 600,
@@ -322,6 +326,10 @@
         let edge_state = state_with_default_route();
         let edge_config = EdgeConfig {
             advertised_addr: "edge.example.com:5060".to_string(),
+            database_url: None,
+            nats_url: None,
+            nats_cdr_stream: None,
+            nats_cdr_subject: None,
             media: MediaConfig::new("203.0.113.10", 32_000, 32_000),
             auth: AuthConfig::disabled(),
             session_expires_gateway: 600,

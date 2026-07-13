@@ -52,7 +52,7 @@
   </send>
 
   <!-- Ring duration: 2s gateway pause + caller adds 3-18s random = 5-20s total -->
-  <pause milliseconds="2000"/>
+  <pause milliseconds="200"/>
 
   <!-- 200 OK (answer) -->
   <send retrans="500">

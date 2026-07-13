@@ -193,10 +193,8 @@ mod tests {
 
     #[tokio::test]
     async fn successful_archive_deletes_local_source_when_enabled() {
-        let test_root = std::env::temp_dir().join(format!(
-            "vos-rs-recording-archive-{}",
-            std::process::id()
-        ));
+        let test_root =
+            std::env::temp_dir().join(format!("vos-rs-recording-archive-{}", std::process::id()));
         let source_dir = test_root.join("source");
         let archive_dir = test_root.join("archive");
         tokio::fs::create_dir_all(&source_dir)
@@ -231,10 +229,8 @@ mod tests {
 
     #[tokio::test]
     async fn successful_archive_keeps_local_source_when_cleanup_is_disabled() {
-        let test_root = std::env::temp_dir().join(format!(
-            "vos-rs-recording-dual-{}",
-            std::process::id()
-        ));
+        let test_root =
+            std::env::temp_dir().join(format!("vos-rs-recording-dual-{}", std::process::id()));
         let source_dir = test_root.join("source");
         let archive_dir = test_root.join("archive");
         tokio::fs::create_dir_all(&source_dir)
