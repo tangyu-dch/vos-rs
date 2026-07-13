@@ -377,6 +377,15 @@ export const apiService = {
   async deleteAntiFraudRule(id: string): Promise<void> {
     await api.delete(`/anti-fraud/rules/${id}`);
   },
+
+  // ===== 系统配置 API =====
+  async getSystemConfigs(): Promise<Record<string, string>> {
+    const response = await api.get<{ configs: Record<string, string> }>('/system/configs');
+    return response.data.configs;
+  },
+  async updateSystemConfigs(configs: Record<string, string>): Promise<void> {
+    await api.post('/system/configs', configs);
+  },
 };
 
 export default api;
