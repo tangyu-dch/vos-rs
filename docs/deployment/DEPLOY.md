@@ -35,13 +35,13 @@ docker run -d --name nats-dev -p 4222:4222 -p 8222:8222 nats:latest -js
 ```
 
 ### 3. 一键开发脚本启动
-我们提供了一键启动开发链的脚本，它会自动配置环境变量并跑起所有服务：
+我们提供了一键启动开发链的脚本，它会自动读取 `config.yaml` 配置并跑起所有服务：
 ```bash
 # 执行一键开发脚本 (自动编译并拉起前端、后端、以及 sip-edge)
 ./scripts/dev.sh
 ```
-*   **管理后台**: http://localhost:3001
-*   **REST API**: http://localhost:8081
+*   **管理后台**: http://localhost:3000
+*   **REST API**: http://localhost:8080
 *   **sip-edge 控制接口**: http://localhost:8082
 
 ### 4. 手动独立终端调试
@@ -49,55 +49,38 @@ docker run -d --name nats-dev -p 4222:4222 -p 8222:8222 nats:latest -js
 
 ```bash
 # 终端 1: 启动信令/媒体网关 sip-edge
-VOS_RS_SIP_UDP_BIND=127.0.0.1:5090 \
-VOS_RS_SIP_DEFAULT_GATEWAY=127.0.0.1:5070 \
-VOS_RS_DATABASE_URL=postgres://tangyu@127.0.0.1:5432/vos_rs \
-VOS_RS_REDIS_URL=redis://127.0.0.1:6379 \
-VOS_RS_MANAGE_BIND=127.0.0.1:8082 \
-VOS_RS_RECORDING_ENABLED=true \
-VOS_RS_RECORDING_DIR=target/recordings \
-VOS_RS_NATS_URL=nats://127.0.0.1:4222 \
-  cargo run -p sip-edge
+VOS_RS_CONFIG_FILE=config.yaml cargo run -p sip-edge
 
 # 终端 2: 启动 API 控制台后端 api-server
-API_PORT=8081 \
-VOS_RS_DATABASE_URL=postgres://tangyu@127.0.0.1:5432/vos_rs \
-VOS_RS_REDIS_URL=redis://127.0.0.1:6379 \
-VOS_RS_RECORDING_DIR=target/recordings \
-VOS_RS_MANAGE_BASE=http://127.0.0.1:8082 \
-VOS_RS_NATS_URL=nats://127.0.0.1:4222 \
-  cargo run -p api-server
+VOS_RS_CONFIG_FILE=config.yaml cargo run -p api-server
 
 # 终端 3: 启动异步 CDR 话单入库组件 cdr-worker
-VOS_RS_DATABASE_URL=postgres://tangyu@127.0.0.1:5432/vos_rs \
-VOS_RS_REDIS_URL=redis://127.0.0.1:6379 \
-VOS_RS_NATS_URL=nats://127.0.0.1:4222 \
-  cargo run -p cdr-worker
+VOS_RS_CONFIG_FILE=config.yaml cargo run -p cdr-worker
 
 # 终端 4: 启动前端 Web 控制台
 cd web
-VITE_API_TARGET=http://localhost:8081 npm run dev
+npm run dev
 ```
 
 ---
 
 ## 三、Docker Compose 生产环境部署
 
-生产环境下推荐使用 Docker 容器化编排，可隔离组件并便于横向扩展：
+生产环境下推荐使用 Docker 容器化编排，各容器的编排配置文件与 `Dockerfile` 集中管理在 `deploy/docker/` 目录下：
 
 ```bash
 # 1. 编译并启动所有服务 (以 daemon 模式后台运行)
-docker compose up -d --build
+docker compose -f deploy/docker/docker-compose.yml up -d --build
 
 # 2. 检查各容器健康状态
-docker compose ps
+docker compose -f deploy/docker/docker-compose.yml ps
 
 # 3. 监控特定服务的日志 (如 sip-edge)
-docker compose logs -f sip-edge
+docker compose -f deploy/docker/docker-compose.yml logs -f sip-edge
 ```
 
 容器化编排中的核心端口分布及调整点：
-*   **SIP 信令端口**: 默认宿主机映射 UDP/TCP `5060` 端口。如果在公网或云端部署，需要显式指定容器环境变量 `VOS_RS_SIP_ADVERTISED_ADDR` 为公网 IP。
+*   **SIP 信令端口**: 默认宿主机映射 UDP/TCP `5060` 端口。如果在公网或云端部署，需要在 `config.yaml` 中配置 `sip_edge.network.advertised_addr` 为公网 IP。
 *   **管理后台端口**: http://localhost:3000。
 *   **RTP 中继端口范围**: 默认范围为 `40000` 到 `40100`。生产环境大量通话时，请在 `docker-compose.yml` 中适当放开范围（例如 `40000-45000`），并确保云防火墙同时放行该范围的 UDP 流量。
 
