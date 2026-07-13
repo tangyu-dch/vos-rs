@@ -204,7 +204,7 @@ SELECT status, count(*) as 数量,
        CASE WHEN recording_path IS NOT NULL THEN '有录音' ELSE '无录音' END as 录音状态,
        round(avg(duration_ms)/1000.0, 1) as 平均时长秒
 FROM call_cdrs
-WHERE started_at_ms > (extract(epoch from now()) * 1000 - ${TOTAL_DURATION}000)::bigint
+WHERE started_at > now() - interval '2 minutes'
 GROUP BY status, recording_path IS NOT NULL
 ORDER BY status;
 " 2>/dev/null || echo "  (无法连接数据库查询 CDR)"

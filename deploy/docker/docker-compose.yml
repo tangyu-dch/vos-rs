@@ -100,8 +100,8 @@ services:
 
   sip-edge:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
     container_name: vos-rs-sip-edge
     command: ["./sip-edge"]
     environment:
@@ -172,8 +172,8 @@ services:
 
   api-server:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
     container_name: vos-rs-api-server
     command: ["./api-server"]
     environment:
@@ -239,8 +239,8 @@ services:
 
   cdr-worker:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
     container_name: vos-rs-cdr-worker
     command: ["./cdr-worker"]
     environment:
@@ -274,7 +274,7 @@ services:
 
   web:
     build:
-      context: .
+      context: ../..
       dockerfile: web/Dockerfile
     container_name: vos-rs-web
     ports:

@@ -134,6 +134,10 @@
    - **意义**：提供运营商级音质故障诊断与服务水平协议（SLA）指标分析。
 5. **[已完成] 方案 5：RFC 2833 带外 DTMF 中继与计费支持**
    - **核心目标**：支持 `telephone-event` 负载解析与转发，并对 DTMF 按键事件进行记录和审计。
+6. **[已完成] 方案 6：高性能无锁 (Lock-free) 媒体端口分配重构**
+   - **核心目标**：解除 UDP 端口分配时底层 bind 调用对全局 Mutex 锁的占用，利用 Atomic 原子量实现极致并发吞吐。
+7. **[已完成] 方案 7：软件定义媒体控制 API 与智能 AI 音频注入平滑同步**
+   - **核心目标**：提供 `/play`、`/mute`、`/status` 等 REST API 并在切换音源时确保 Marker Bit 与 SSRC 序列号/时间戳平滑过渡。
 
 ---
-*注：当前主线已经覆盖 UDP/TCP/TLS/WS 传输、事务与服务端重传状态机、SDP 重写、RTP/RTCP 中继、RTCP Receiver Report 生成、60 秒质量窗口与告警、RTP 源绑定、PRACK 校验、呼叫保持、SBC 安全防御、Path/Service-Route 路由、PCMU/PCMA 协商、RTP/SIP INFO DTMF + `dtmf_events` 审计明细表、录音 worker pool、录音保留/磁盘保护/分段轮转、CDR、PostgreSQL 与 NATS 队列化（含 DLQ 与有毒消息策略）。DTLS-SRTP 握手、完整 ICE/TURN、多媒体段和 HA 集群仍未完成。路由侧已补齐 LCR + 网关健康熔断 + 容量控制。*
+*注：当前主线已经覆盖 UDP/TCP/TLS/WS 传输、事务与服务端重传状态机、SDP 重写、RTP/RTCP 中继（无锁端口池）、RTCP Receiver Report 生成、60 秒质量窗口与告警、RTP 源绑定、PRACK 校验、呼叫保持、SBC 安全防御、Path/Service-Route 路由、PCMU/PCMA 协商、RTP/SIP INFO DTMF + `dtmf_events` 审计明细表、录音 worker pool、录音保留/磁盘保护/分段轮转、可编程媒体注入（/play, /mute, /status）、WAV 自动重采样、SSRC 时间戳序列号平滑对齐、CDR、PostgreSQL 与 NATS 队列化（含 DLQ 与有毒消息策略）。DTLS-SRTP 握手、完整 ICE/TURN、多媒体段和 HA 集群仍未完成。*
