@@ -243,6 +243,7 @@
             nats_url: None,
             nats_cdr_stream: None,
             nats_cdr_subject: None,
+            redis_url: None,
             media: MediaConfig::new("203.0.113.10", 31_000, 31_000),
             auth: AuthConfig::disabled(),
             session_expires_gateway: 600,
@@ -263,6 +264,7 @@
             udp_workers_auto: false,
             udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
             udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+            ..Default::default()
         };
         let body = concat!(
             "v=0\r\n",
@@ -330,6 +332,7 @@
             nats_url: None,
             nats_cdr_stream: None,
             nats_cdr_subject: None,
+            redis_url: None,
             media: MediaConfig::new("203.0.113.10", 32_000, 32_000),
             auth: AuthConfig::disabled(),
             session_expires_gateway: 600,
@@ -350,6 +353,7 @@
             udp_workers_auto: false,
             udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
             udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+            ..Default::default()
         };
         let body = concat!(
             "v=0\r\n",

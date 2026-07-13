@@ -50,7 +50,6 @@ fn default_secret_key() -> String {
 }
 
 impl AuthConfig {
-    #[cfg(test)]
     pub fn disabled() -> Self {
         Self {
             realm: DEFAULT_REALM.to_string(),

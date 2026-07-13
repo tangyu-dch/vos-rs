@@ -1214,70 +1214,52 @@
 
         // Create temporary config yaml files
         let main_yaml = r#"
-advertised_addr: ${TEST_SIP_ADDR:10.0.0.1:5060}
-session_expires_gateway: 120
-media_config_path: "test_media.yaml"
-auth_config_path: "test_auth.yaml"
-sbc_config_path: "test_sbc.yaml"
-"#;
-        let media_yaml = r#"
-advertised_addr: ${TEST_RTP_ADDR:10.0.0.2}
-port_min: 20000
-port_max: 20100
-symmetric_rtp_learning: true
-anti_spoofing: true
-source_relearn_after_secs: 30
-recording_enabled: false
-recording_dir: "target/test_recordings"
-recording_retention_secs: 3600
-recording_min_free_bytes: 1048576
-recording_max_file_bytes: 1048576
-recording_max_duration_secs: 60
-"#;
-        let auth_yaml = r#"
-realm: "test-realm"
-nonce: "test-nonce"
-users:
-  admin: "password123"
-"#;
-        let sbc_yaml = r#"
-sbc_allow:
-  - "192.168.1.1"
-sbc_block:
-  - "192.168.1.2"
-sbc_rate_limit_capacity: 50.0
-sbc_rate_limit_fill_rate: 10.0
-sbc_max_concurrency: 100
+connections:
+  database:
+    host: "127.0.0.1"
+    port: 5432
+    username: "tangyu"
+    password: ""
+    database: "vos_rs"
+  nats:
+    url: ${TEST_NATS_URL:nats://localhost:4222}
+    cdr_stream: ${TEST_STREAM:STREAM_A}
+    cdr_subject: ${TEST_SUBJECT:SUB_A}
+sip_edge:
+  network:
+    advertised_addr: ${TEST_SIP_ADDR:10.0.0.1:5060}
 "#;
 
         fs::write("test_config.yaml", main_yaml).unwrap();
-        fs::write("test_media.yaml", media_yaml).unwrap();
-        fs::write("test_auth.yaml", auth_yaml).unwrap();
-        fs::write("test_sbc.yaml", sbc_yaml).unwrap();
 
         std::env::set_var("TEST_SIP_ADDR", "127.0.0.1:5070");
-        std::env::set_var("TEST_RTP_ADDR", "127.0.0.1");
+        std::env::set_var("TEST_NATS_URL", "nats://127.0.0.1:4222");
 
-        let config = EdgeConfig::load_from_file("test_config.yaml");
+        let mut config = EdgeConfig::load_from_file("test_config.yaml");
 
         // Clean up
         let _ = fs::remove_file("test_config.yaml");
-        let _ = fs::remove_file("test_media.yaml");
-        let _ = fs::remove_file("test_auth.yaml");
-        let _ = fs::remove_file("test_sbc.yaml");
         std::env::remove_var("TEST_SIP_ADDR");
-        std::env::remove_var("TEST_RTP_ADDR");
+        std::env::remove_var("TEST_NATS_URL");
         std::env::remove_var("TEST_ENV_VAR_1");
 
         assert_eq!(config.advertised_addr, "127.0.0.1:5070");
-        assert_eq!(config.session_expires_gateway, 120);
-        assert_eq!(config.media.advertised_addr, "127.0.0.1");
-        assert_eq!(config.media.port_min, 20000);
-        assert_eq!(config.auth.realm, "test-realm");
-        assert_eq!(config.auth.users.get("admin").unwrap(), "password123");
-        assert_eq!(config.sbc_allow_rules, vec!["192.168.1.1".to_string()]);
-        assert_eq!(config.sbc_block_rules, vec!["192.168.1.2".to_string()]);
-        assert_eq!(config.sbc_rate_limit_capacity, 50.0);
-        assert_eq!(config.sbc_rate_limit_fill_rate, 10.0);
-        assert_eq!(config.sbc_max_concurrency, 100);
+        assert_eq!(config.database_url, Some("postgres://tangyu@127.0.0.1:5432/vos_rs".to_string()));
+        assert_eq!(config.nats_url, Some("nats://127.0.0.1:4222".to_string()));
+        assert_eq!(config.nats_cdr_stream, Some("STREAM_A".to_string()));
+        assert_eq!(config.nats_cdr_subject, Some("SUB_A".to_string()));
+
+        // Test database override logic if VOS_RS_DATABASE_URL is set in environment
+        if let Ok(db_url) = std::env::var("VOS_RS_DATABASE_URL") {
+            if let Ok(db) = cdr_core::PostgresCdrStore::connect(&db_url, 10).await {
+                // Ensure system_configs exists and seed a test config value
+                sqlx::query("INSERT INTO system_configs (config_key, config_value, description) VALUES ('sbc_max_concurrency', '999', 'test') ON CONFLICT (config_key) DO UPDATE SET config_value = '999'")
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+
+                config.override_from_db(&db).await;
+                assert_eq!(config.sbc_max_concurrency, 999);
+            }
+        }
     }

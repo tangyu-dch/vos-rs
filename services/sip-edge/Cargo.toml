@@ -35,3 +35,5 @@ toml = "0.8"
 stun = "0.17.1"
 libc = "0.2.186"
 num_cpus = "1"
+redis = { version = "0.26.0", features = ["tokio-comp"] }
+storage-core = { path = "../../crates/storage-core" }
