@@ -32,14 +32,7 @@ services:
 
   sip-edge:
     environment:
-      # 生产环境必须修改的密钥
-      VOS_RS_INTERNAL_SECRET: ${INTERNAL_SECRET:?请设置 INTERNAL_SECRET}
-      # 生产环境禁用默认密码
-      VOS_RS_SIP_AUTH_USERS: ${SIP_AUTH_USERS:?请设置 SIP_AUTH_USERS}
-      # 生产环境使用真实网关
-      VOS_RS_SIP_DEFAULT_GATEWAY: ${SIP_DEFAULT_GATEWAY:?请设置 SIP_DEFAULT_GATEWAY}
-      VOS_RS_SIP_ADVERTISED_ADDR: ${SIP_ADVERTISED_ADDR:?请设置 SIP_ADVERTISED_ADDR}
-      VOS_RS_RTP_ADVERTISED_ADDR: ${RTP_ADVERTISED_ADDR:?请设置 RTP_ADVERTISED_ADDR}
+      VOS_RS_CONFIG_FILE: /etc/vos-rs/config.yaml
     deploy:
       resources:
         limits:
@@ -51,15 +44,7 @@ services:
 
   api-server:
     environment:
-      # 生产环境必须修改的密钥
-      VOS_RS_API_JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
-      VOS_RS_INTERNAL_SECRET: ${INTERNAL_SECRET:?请设置 INTERNAL_SECRET}
-      # 生产环境必须修改密码
-      VOS_RS_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请设置 ADMIN_PASSWORD}
-      VOS_RS_OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:?请设置 OPERATOR_PASSWORD}
-      VOS_RS_FINANCIER_PASSWORD: ${FINANCIER_PASSWORD:?请设置 FINANCIER_PASSWORD}
-      # 生产环境限制 CORS
-      VOS_RS_API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:?请设置 API_ALLOWED_ORIGINS}
+      VOS_RS_CONFIG_FILE: /etc/vos-rs/config.yaml
     deploy:
       resources:
         limits:

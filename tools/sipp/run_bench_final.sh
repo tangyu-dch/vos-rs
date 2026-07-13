@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-ROOT="/Users/tangyu/Projects/vos-rs"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG="$ROOT/target/sipp_bench"
 SCEN="$ROOT/tools/sipp/scenarios"
 EP=5160; GP=5170; CP=5164
@@ -15,12 +15,7 @@ run_one() {
   local tag=$1 total=$2 rate=$3 conc=$4 timeout_sec=${5:-60}
   kill_all; sleep 1
 
-  VOS_RS_SIP_UDP_BIND="127.0.0.1:$EP" \
-  VOS_RS_SIP_DEFAULT_GATEWAY="127.0.0.1:$GP" \
-  VOS_RS_SIP_ADVERTISED_ADDR="127.0.0.1:$EP" \
-  VOS_RS_RTP_PORT_MIN=40000 VOS_RS_RTP_PORT_MAX=60000 \
-  VOS_RS_SBC_ALLOW=127.0.0.1 VOS_RS_SBC_LIMIT_CAPACITY=1000000 \
-  VOS_RS_SBC_LIMIT_FILL_RATE=100000 VOS_RS_SBC_MAX_CONCURRENCY=10000 \
+  VOS_RS_CONFIG_FILE="${VOS_RS_CONFIG_FILE:-$ROOT/tools/sipp/configs/performance.yaml}" \
     $ROOT/target/release/sip-edge >"$LOG/${tag}_edge.log" 2>&1 &
   local edge_pid=$!
   sleep 2
@@ -69,13 +64,28 @@ echo "       VOS-RS SIPp Benchmark"
 echo "============================================================"
 echo ""
 
-run_one "50cps"     500    50   25   30
-run_one "100cps"   1000   100   50   30
-run_one "200cps"   2000   200  100   30
-run_one "500cps"   3000   500  250   30
-run_one "800cps"   5000   800  400   30
-run_one "1000cps"  5000  1000  500   30
-run_one "2000cps"  5000  2000 1000   30
+case "${PERF_PROFILE:-standard}" in
+  quick)
+    run_one "50cps" 500 50 25 30
+    run_one "100cps" 1000 100 50 30
+    run_one "200cps" 2000 200 100 30
+    ;;
+  standard)
+    run_one "500cps" 3000 500 250 30
+    run_one "800cps" 5000 800 400 30
+    run_one "1000cps" 5000 1000 500 30
+    ;;
+  all)
+    run_one "50cps" 500 50 25 30
+    run_one "100cps" 1000 100 50 30
+    run_one "200cps" 2000 200 100 30
+    run_one "500cps" 3000 500 250 30
+    run_one "800cps" 5000 800 400 30
+    run_one "1000cps" 5000 1000 500 30
+    run_one "2000cps" 5000 2000 1000 30
+    ;;
+  *) echo "Unknown PERF_PROFILE: $PERF_PROFILE" >&2; exit 2 ;;
+esac
 
 echo ""
 echo "============================================================"

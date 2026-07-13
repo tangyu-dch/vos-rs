@@ -9,28 +9,28 @@ endif
 CARGO ?= cargo
 PYTHON ?= python3
 SIPP_BIN ?= sipp
+CONFIG_FILE ?= $(CURDIR)/config.yaml
+SMOKE_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/smoke.yaml
+FULL_FLOW_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/full_flow.yaml
+STUN_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/stun.yaml
+PERF_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/performance.yaml
 
 DEV_LOG_DIR ?= target/dev
 SMOKE_LOG_DIR ?= target/sipp
 FULL_FLOW_LOG_DIR ?= target/full-flow
-PERF_LOG_DIR ?= target/sipp_perf
-
-PERF_TOTAL ?= 5000
-PERF_RATE ?= 1000
-PERF_CONC ?= 500
-PERF_TIMEOUT ?= 60
+PERF_LOG_DIR ?= target/sipp_bench
 
 .PHONY: help env fmt fmt-check check lint test test-unit test-integration test-bench \
         clippy build build-release build-debug quick verify smoke full-flow \
         web-lint web-test web-build web-verify \
         perf perf-media perf-quick perf-all perf-report bench doc \
-        run-sip-edge run-cdr-worker logs clean test-stun
+        run-sip-edge run-api-server run-cdr-worker logs clean test-stun
 
 help:
 	@printf '\n  VOS-RS 开发构建目标\n'
 	@printf '  ─────────────────────────────────────────────\n'
 	@printf '  开发工作流:\n'
-	@printf '    make env             显示当前环境变量\n'
+	@printf '    make env             显示统一配置文件路径\n'
 	@printf '    make fmt             格式化代码\n'
 	@printf '    make fmt-check       检查格式\n'
 	@printf '    make check           语法检查\n'
@@ -57,36 +57,20 @@ help:
 	@printf '    make perf-report     生成测试报告\n'
 	@printf '  运行:\n'
 	@printf '    make run-sip-edge    启动 sip-edge\n'
+	@printf '    make run-api-server  启动 api-server\n'
 	@printf '    make run-cdr-worker  启动 cdr-worker\n'
+	@printf '    CONFIG_FILE=...      指定 config.yaml（默认仓库根目录）\n'
 	@printf '  其他:\n'
 	@printf '    make doc             生成文档\n'
 	@printf '    make logs            显示日志目录\n'
 	@printf '    make clean           清理构建产物\n'
 
 env:
-	@printf '%s\n' '当前生效的 VOS-RS 环境变量:'
-	@printf '  %-38s %s\n' 'VOS_RS_SIP_UDP_BIND'          "$${VOS_RS_SIP_UDP_BIND:-0.0.0.0:5060}"
-	@printf '  %-38s %s\n' 'VOS_RS_SIP_ADVERTISED_ADDR'   "$${VOS_RS_SIP_ADVERTISED_ADDR:-127.0.0.1:5060}"
-	@printf '  %-38s %s\n' 'VOS_RS_SIP_DEFAULT_GATEWAY'   "$${VOS_RS_SIP_DEFAULT_GATEWAY:-<未设置>}"
-	@printf '  %-38s %s\n' 'VOS_RS_SIP_UDP_RECEIVE_BUFFER' "$${VOS_RS_SIP_UDP_RECEIVE_BUFFER:-4194304}"
-	@printf '  %-38s %s\n' 'VOS_RS_SIP_UDP_SEND_BUFFER'    "$${VOS_RS_SIP_UDP_SEND_BUFFER:-4194304}"
-	@printf '  %-38s %s\n' 'VOS_RS_SIP_AUTH_USERS'        "$${VOS_RS_SIP_AUTH_USERS:-<未设置>}"
-	@printf '  %-38s %s\n' 'VOS_RS_RTP_ADVERTISED_ADDR'   "$${VOS_RS_RTP_ADVERTISED_ADDR:-127.0.0.1}"
-	@printf '  %-38s %s\n' 'VOS_RS_RTP_PORT_MIN'          "$${VOS_RS_RTP_PORT_MIN:-40000}"
-	@printf '  %-38s %s\n' 'VOS_RS_RTP_PORT_MAX'          "$${VOS_RS_RTP_PORT_MAX:-40100}"
-	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_ENABLED'     "$${VOS_RS_RECORDING_ENABLED:-false}"
-	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_DIR'         "$${VOS_RS_RECORDING_DIR:-target/recordings}"
-	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_WORKERS'     "$${VOS_RS_RECORDING_WORKERS:-4}"
-	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_QUEUE_CAPACITY' "$${VOS_RS_RECORDING_QUEUE_CAPACITY:-4096}"
-	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_RETENTION_SECS' "$${VOS_RS_RECORDING_RETENTION_SECS:-604800}"
-	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_MIN_FREE_BYTES' "$${VOS_RS_RECORDING_MIN_FREE_BYTES:-536870912}"
-	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_MAX_FILE_BYTES' "$${VOS_RS_RECORDING_MAX_FILE_BYTES:-134217728}"
-	@printf '  %-38s %s\n' 'VOS_RS_RECORDING_MAX_DURATION_SECS' "$${VOS_RS_RECORDING_MAX_DURATION_SECS:-3600}"
-	@printf '  %-38s %s\n' 'VOS_RS_DATABASE_URL'          "$${VOS_RS_DATABASE_URL:-<未设置>}"
-	@printf '  %-38s %s\n' 'VOS_RS_NATS_URL'              "$${VOS_RS_NATS_URL:-<未设置>}"
-	@printf '  %-38s %s\n' 'VOS_RS_STUN_SERVER'           "$${VOS_RS_STUN_SERVER:-<未设置>}"
-	@printf '  %-38s %s\n' 'VOS_RS_UPNP_ENABLED'          "$${VOS_RS_UPNP_ENABLED:-false}"
-	@printf '  %-38s %s\n' 'RUST_LOG'                     "$${RUST_LOG:-info}"
+	@test -f "$(CONFIG_FILE)" || { printf '配置文件不存在: %s\n' "$(CONFIG_FILE)"; exit 2; }
+	@printf '统一配置文件: %s\n' "$(CONFIG_FILE)"
+	@printf '日志过滤级别: %s\n' "$${RUST_LOG:-info}"
+	@printf '配置顶级分组:\n'
+	@sed -n 's/^\([a-z_][a-z_]*\):.*/  - \1/p' "$(CONFIG_FILE)"
 
 fmt:
 	@$(CARGO) fmt
@@ -104,7 +88,7 @@ clippy:
 
 doc:
 	@$(CARGO) doc --workspace --no-deps
-	@printf '文档已生成: target/doc/%s/index.html\n' $(CARGO)
+	@printf '文档已生成: target/doc/index.html\n'
 
 # ─── 测试 ──────────────────────────────────────────────
 
@@ -122,8 +106,7 @@ test-bench:
 
 test-stun:
 	@printf 'Testing STUN discovery...\n'
-	@RUST_LOG=info VOS_RS_STUN_SERVER=stun.l.google.com:19302 \
-		VOS_RS_SIP_UDP_BIND=127.0.0.1:5160 VOS_RS_SIP_ADVERTISED_ADDR=127.0.0.1:5160 \
+	@RUST_LOG=info VOS_RS_CONFIG_FILE="$(STUN_CONFIG_FILE)" \
 		timeout 10 $(CARGO) run -p sip-edge 2>&1 | grep -E "STUN.*discovered|STUN.*failed|STUN.*all retries"
 	@printf 'STUN test complete.\n'
 
@@ -150,10 +133,10 @@ web-verify: web-lint web-test web-build
 build: build-debug
 
 build-debug:
-	@$(CARGO) build -p sip-edge -p cdr-worker
+	@$(CARGO) build -p sip-edge -p api-server -p cdr-worker
 
 build-release:
-	@$(CARGO) build --release -p sip-edge -p cdr-worker
+	@$(CARGO) build --release -p sip-edge -p api-server -p cdr-worker
 
 # ─── 集成验证 ──────────────────────────────────────────
 
@@ -163,13 +146,7 @@ smoke:
 	@printf 'Smoke test: running SIPp basic call flow...\n'
 	@$(CARGO) build --release -p sip-edge 2>/dev/null
 	@mkdir -p "$(SMOKE_LOG_DIR)"
-	@VOS_RS_SIP_UDP_BIND="127.0.0.1:5160" \
-	VOS_RS_SIP_DEFAULT_GATEWAY="127.0.0.1:5170" \
-	VOS_RS_SIP_ADVERTISED_ADDR="127.0.0.1:5160" \
-	VOS_RS_RTP_PORT_MIN=40000 VOS_RS_RTP_PORT_MAX=60010 \
-	VOS_RS_SIP_UDP_RECEIVE_BUFFER="$${VOS_RS_SIP_UDP_RECEIVE_BUFFER:-4194304}" \
-	VOS_RS_SIP_UDP_SEND_BUFFER="$${VOS_RS_SIP_UDP_SEND_BUFFER:-4194304}" \
-	VOS_RS_SBC_ALLOW=127.0.0.1 \
+	@VOS_RS_CONFIG_FILE="$(SMOKE_CONFIG_FILE)" \
 	target/release/sip-edge >"$(SMOKE_LOG_DIR)/edge.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 2; \
 	$(SIPP_BIN) 127.0.0.1:5160 -sf tools/sipp/scenarios/gateway_uas.xml \
@@ -193,16 +170,7 @@ full-flow:
 	@$(CARGO) build --release -p sip-edge 2>/dev/null
 	@mkdir -p "$(FULL_FLOW_LOG_DIR)" target/test_recordings
 	@rm -f target/test_recordings/*.wav
-	@VOS_RS_SIP_UDP_BIND="127.0.0.1:5160" \
-	VOS_RS_SIP_DEFAULT_GATEWAY="127.0.0.1:5170" \
-	VOS_RS_SIP_ADVERTISED_ADDR="127.0.0.1:5160" \
-	VOS_RS_RTP_PORT_MIN=40000 VOS_RS_RTP_PORT_MAX=60010 \
-	VOS_RS_SIP_UDP_RECEIVE_BUFFER="$${VOS_RS_SIP_UDP_RECEIVE_BUFFER:-4194304}" \
-	VOS_RS_SIP_UDP_SEND_BUFFER="$${VOS_RS_SIP_UDP_SEND_BUFFER:-4194304}" \
-	VOS_RS_SBC_ALLOW=127.0.0.1 VOS_RS_SBC_LIMIT_CAPACITY=1000000 \
-	VOS_RS_SBC_LIMIT_FILL_RATE=100000 VOS_RS_SBC_MAX_CONCURRENCY=10000 \
-	VOS_RS_RECORDING_ENABLED=true VOS_RS_RECORDING_DIR=$$(pwd)/target/test_recordings \
-	VOS_RS_RECORDING_WORKERS="$${VOS_RS_RECORDING_WORKERS:-4}" VOS_RS_RECORDING_QUEUE_CAPACITY="$${VOS_RS_RECORDING_QUEUE_CAPACITY:-4096}" \
+	@VOS_RS_CONFIG_FILE="$(FULL_FLOW_CONFIG_FILE)" \
 	RUST_LOG=info \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/edge.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 3; \
@@ -229,16 +197,16 @@ full-flow:
 # ─── 性能测试 ──────────────────────────────────────────
 
 perf: build-release
-	@bash tools/sipp/run_bench_final.sh
+	@VOS_RS_CONFIG_FILE="$(PERF_CONFIG_FILE)" PERF_PROFILE=standard bash tools/sipp/run_bench_final.sh
 
 perf-media: build-release
-	@bash tools/sipp/run_bench_media.sh
+	@VOS_RS_CONFIG_FILE="$(PERF_CONFIG_FILE)" bash tools/sipp/run_bench_media.sh
 
 perf-quick: build-release
-	@bash tools/sipp/run_bench_final.sh
+	@VOS_RS_CONFIG_FILE="$(PERF_CONFIG_FILE)" PERF_PROFILE=quick bash tools/sipp/run_bench_final.sh
 
 perf-all: build-release
-	@bash tools/sipp/run_bench_final.sh
+	@VOS_RS_CONFIG_FILE="$(PERF_CONFIG_FILE)" PERF_PROFILE=all bash tools/sipp/run_bench_final.sh
 
 perf-report: perf-all
 	@printf '\n========================================\n'
@@ -262,11 +230,13 @@ perf-report: perf-all
 
 run-sip-edge: build-debug
 	@mkdir -p "$(DEV_LOG_DIR)"
-	@$(CARGO) run -p sip-edge
+	@VOS_RS_CONFIG_FILE="$(CONFIG_FILE)" $(CARGO) run -p sip-edge
+
+run-api-server:
+	@VOS_RS_CONFIG_FILE="$(CONFIG_FILE)" $(CARGO) run -p api-server
 
 run-cdr-worker: build-debug
-	@if [[ -z "$${VOS_RS_DATABASE_URL:-}" ]]; then printf 'Error: VOS_RS_DATABASE_URL not set\n'; exit 2; fi
-	@$(CARGO) run -p cdr-worker
+	@VOS_RS_CONFIG_FILE="$(CONFIG_FILE)" $(CARGO) run -p cdr-worker
 
 logs:
 	@printf 'SIPp 冒烟测试日志:     %s\n' "$(SMOKE_LOG_DIR)"

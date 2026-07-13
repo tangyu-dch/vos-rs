@@ -1,0 +1,28 @@
+connections:
+  database:
+    host: "127.0.0.1"
+    port: 5432
+    username: "tangyu"
+    password: ""
+    database: "vos_rs"
+    max_connections: 5
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+    database: 0
+    max_connections: 5
+
+sip_edge:
+  network:
+    sip_udp_bind: "127.0.0.1:5160"
+    advertised_addr: "127.0.0.1:5160"
+    manage_bind: "127.0.0.1:5182"
+    ws_bind: "127.0.0.1:5183"
+  routing:
+    default_gateway: ""
+  nat_traversal:
+    stun_server: "stun.l.google.com:19302"
+    upnp_enabled: false
+  security:
+    internal_secret: "stun-test-secret"

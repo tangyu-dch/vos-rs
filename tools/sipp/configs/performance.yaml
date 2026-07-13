@@ -1,0 +1,44 @@
+connections:
+  database:
+    host: "127.0.0.1"
+    port: 5432
+    username: "tangyu"
+    password: ""
+    database: "vos_rs"
+    max_connections: 20
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+    database: 0
+    max_connections: 20
+
+sip_edge:
+  network:
+    sip_udp_bind: "127.0.0.1:5160"
+    advertised_addr: "127.0.0.1:5160"
+    manage_bind: "127.0.0.1:5182"
+    ws_bind: "127.0.0.1:5183"
+  routing:
+    default_gateway: "127.0.0.1:5170"
+  security:
+    internal_secret: "sipp-performance-secret"
+  media:
+    advertised_addr: "127.0.0.1"
+    port_min: 40000
+    port_max: 65000
+    symmetric_learning: true
+    anti_spoofing: true
+    source_relearn_secs: 30
+    metrics_log: true
+  recording:
+    enabled: false
+    directory: "target/sipp_bench_media_recordings"
+    workers: 4
+    queue_capacity: 4096
+  performance:
+    cdr_queue_capacity: 100000
+    udp_workers: 4
+    udp_workers_auto: true
+    udp_receive_buffer_bytes: 4194304
+    udp_send_buffer_bytes: 4194304
