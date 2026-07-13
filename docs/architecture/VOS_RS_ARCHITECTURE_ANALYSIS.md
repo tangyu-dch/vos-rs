@@ -675,7 +675,7 @@ number_inventory (number TEXT PK, username TEXT, status TEXT)
 | **DTMF** | ✅ RFC 2833 + SIP INFO | ✅ RFC 2833 + SIP INFO + Inband |
 | **编解码转码** | ⚠️ 框架已搭建 | ✅ 完整 (G.711/G.729/Opus) |
 | **会议桥** | ❌ 未实现 | ✅ 支持 |
-| **SRTP** | ❌ 未实现 | ✅ 支持 |
+| **SRTP** | ⚠️ 部分 (SDES-SRTP 加解密已实现，pending_srtp 集成待完善) | ✅ 支持 |
 | **Video** | ❌ 未实现 | ⚠️ 有限支持 |
 
 ### 13.4 路由与计费对比
@@ -683,9 +683,9 @@ number_inventory (number TEXT PK, username TEXT, status TEXT)
 | 特性 | VOS-RS | 昆石 VOS |
 |------|--------|----------|
 | **LCR (最低成本路由)** | ✅ 前缀+优先级+成本 | ✅ 完整 LCR + 时间路由 |
-| **时间路由** | ⚠️ 字段已定义未实现 | ✅ 完整 (时间段路由) |
+| **时间路由** | ✅ 已支持 (支持时段过滤) | ✅ 完整 (时间段路由) |
 | **费率表** | ✅ 基础 | ✅ 多维费率 (时段/目的地/账户) |
-| **实时计费** | ✅ 基础 (余额扣减) | ✅ 完整 (预付费/后付费) |
+| **实时计费** | ✅ 基础 (已支持余额审计与降级) | ✅ 完整 (预付费/后付费) |
 | **网关健康追踪** | ✅ Circuit Breaker | ✅ 多维度健康检查 |
 | **故障转移** | ✅ 自动 failover | ✅ 自动 failover + 手动切换 |
 
@@ -697,10 +697,10 @@ number_inventory (number TEXT PK, username TEXT, status TEXT)
 | **IP ACL** | ✅ 白名单+黑名单 | ✅ 完整 |
 | **令牌桶限速** | ✅ 实现 | ✅ 多维度限速 |
 | **用户并发控制** | ✅ 实现 | ✅ 完整 |
-| **反欺诈** | ⚠️ UI 空壳 | ✅ 完整 (异常检测/黑名单) |
+| **反欺诈** | ✅ 已实现 (黑名单/白名单/被叫拦截，CRUD API + invite-handler 执行) | ✅ 完整 (异常检测/黑名单) |
 | **TLS** | ✅ 支持 | ✅ 支持 |
-| **SRTP** | ❌ 未实现 | ✅ 支持 |
-| **防暴力破解** | ⚠️ 基础 nonce | ✅ 完整 (锁定/IP封禁) |
+| **SRTP** | ⚠️ 部分 (SDES-SRTP 加解密模块已实现，媒体层集成中) | ✅ 支持 |
+| **防暴力破解** | ⚠️ nonce 动态验证 + replay cache (DashMap，缺 IP 锁定机制) | ✅ 完整 (锁定/IP封禁) |
 
 ### 13.6 管理界面对比
 
@@ -722,25 +722,24 @@ number_inventory (number TEXT PK, username TEXT, status TEXT)
 
 | # | 问题 | 影响 | 建议 |
 |---|------|------|------|
-| 1 | **main.rs 9138行单文件** | 可维护性极差，难以定位和修改 | 拆分为独立模块: invite_handler.rs, bye_handler.rs, response_handler.rs, dialog_manager.rs |
+| 1 | **main.rs 超大单文件** | 可维护性极差，难以定位和修改 | 已持续拆分，当前已完成子模块分离，继续减小 main.rs 体量 |
 | 2 | **注册存储纯内存** | 重启丢失所有注册，无法集群 | 改为 PostgreSQL 持久化 (已有部分实现) |
 | 3 | **CDR 双写无事务** | 可能重复或丢失 | 统一写入路径，移除 NATS→cdr-worker 链路 |
-| 4 | **无 TLS-SRTP** | 媒体流明文传输 | 实现 SRTP 加密 |
+| 4 | **SRTP 未完整集成** | 媒体流明文传输 | SDES-SRTP 加解密已完成，需打通 offer/answer 协商完整路径 |
 | 5 | **无 ACL 动态更新** | 需重启才能更新白名单/黑名单 | API 热更新 SBC 规则 |
 
 ### 14.2 功能缺失 (需补充)
 
 | # | 功能 | 优先级 | 说明 |
 |---|------|--------|------|
-| 1 | **时间路由** | 高 | sip_routes 表已有 time_start/time_end 字段，但路由算法未使用 |
-| 2 | **编解码转码** | 高 | transcode.rs 框架已搭建，需实现 G.711→G.729 等 |
-| 3 | **会议桥** | 中 | 多方通话支持 |
-| 4 | **SRTP** | 中 | 安全媒体传输 |
-| 5 | **PUBLISH** | 低 | 状态发布 |
-| 6 | **BLF (忙灯)** | 低 | 多个设备状态同步 |
-| 7 | **权限控制 (RBAC)** | 高 | 管理界面多用户权限 |
-| 8 | **多租户** | 中 | tenant.rs 框架已搭建 |
-| 9 | **反欺诈实现** | 中 | AntiFraud 页面已有 UI，后端为空壳 |
+| 1 | **编解码转码** | 高 | transcode.rs 框架已搭建，需实现 G.711→G.729/Opus 等 |
+| 2 | **会议桥** | 中 | 多方通话支持，需混音算法 |
+| 3 | **SRTP 完整集成** | 中 | SDES-SRTP 加解密已实现，需打通 SDP offer/answer 完整流程 |
+| 4 | **PUBLISH** | 低 | SIP PUBLISH 方法，用于状态发布 (Presence) |
+| 5 | **BLF/SUBSCRIBE** | 低 | 完整的 SUBSCRIBE 处理器，支持忙灯 (BLF) 订阅 |
+| 6 | **权限控制 (RBAC)** | 高 | 管理界面多用户权限，目前无任何鉴权 |
+| 7 | **多租户隔离** | 中 | tenant.rs 框架已搭建，需完善资源配额与域隔离 |
+| 8 | **防暴力破解 IP 锁定** | 中 | 已有 nonce replay cache，缺 IP 自动封禁与失败计数 |
 
 ### 14.3 设计不合理项
 
