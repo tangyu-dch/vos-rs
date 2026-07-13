@@ -22,7 +22,7 @@
 //!
 //! | 环境变量 | 说明 | 默认值 |
 //! |---------|------|--------|
-//! | `VOS_RS_SIP_AUTH_USERS` | 认证用户列表 | 空 |
+//! | `sip_edge.auth.users` | 认证用户列表 | 空 |
 
 use cdr_core::PostgresCdrStore;
 use sip_core::{SipRequest, SipUri};

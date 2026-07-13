@@ -20,8 +20,7 @@
 //!
 //! | 环境变量 | 说明 | 默认值 |
 //! |---------|------|--------|
-//! | `VOS_RS_DATABASE_URL` | PostgreSQL 连接 | postgres://localhost/vos_rs |
-//! | `VOS_RS_NATS_URL` | NATS 地址 | nats://127.0.0.1:4222 |
+//! PostgreSQL、Redis、NATS 及批处理参数统一从 `config.yaml` 读取。
 //! | `VOS_RS_CDR_BATCH_SIZE` | 批量大小 | 50 |
 //! | `VOS_RS_CDR_BATCH_TIMEOUT_MS` | 超时刷新 | 100ms |
 //! | `VOS_RS_CDR_MAX_DELIVERIES` | 最大投递次数 | 5 |
@@ -34,19 +33,6 @@ use std::env;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
-
-const DATABASE_URL_ENV: &str = "VOS_RS_DATABASE_URL";
-const NATS_URL_ENV: &str = "VOS_RS_NATS_URL";
-const NATS_CDR_STREAM_ENV: &str = "VOS_RS_NATS_CDR_STREAM";
-const NATS_CDR_SUBJECT_ENV: &str = "VOS_RS_NATS_CDR_SUBJECT";
-const NATS_CDR_CONSUMER_ENV: &str = "VOS_RS_NATS_CDR_CONSUMER";
-const NATS_CDR_DLQ_SUBJECT_ENV: &str = "VOS_RS_NATS_CDR_DLQ_SUBJECT";
-const NATS_CDR_DLQ_STREAM_ENV: &str = "VOS_RS_NATS_CDR_DLQ_STREAM";
-const CDR_BATCH_SIZE_ENV: &str = "VOS_RS_CDR_BATCH_SIZE";
-const CDR_BATCH_TIMEOUT_MS_ENV: &str = "VOS_RS_CDR_BATCH_TIMEOUT_MS";
-const CDR_MAX_DELIVERIES_ENV: &str = "VOS_RS_CDR_MAX_DELIVERIES";
-const CDR_NAK_DELAY_MS_ENV: &str = "VOS_RS_CDR_NAK_DELAY_MS";
-const CDR_DB_RETRY_ATTEMPTS_ENV: &str = "VOS_RS_CDR_DB_RETRY_ATTEMPTS";
 
 const DEFAULT_NATS_URL: &str = "nats://127.0.0.1:4222";
 const DEFAULT_CDR_CONSUMER: &str = "vos-rs-cdr-worker";
@@ -79,7 +65,6 @@ struct RedisSection {
     port: Option<u16>,
     password: Option<String>,
     database: Option<u16>,
-    max_connections: Option<u32>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -125,7 +110,8 @@ struct BatchSettingsSection {
 async fn main() -> Result<(), AnyError> {
     init_tracing();
 
-    let config_file_path = env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    let config_file_path =
+        env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
     let config_content = std::fs::read_to_string(&config_file_path).unwrap_or_default();
     let config: CdrWorkerConfig = serde_yaml::from_str(&config_content).unwrap_or_default();
 
@@ -146,37 +132,59 @@ async fn main() -> Result<(), AnyError> {
         if password.is_empty() {
             format!("postgres://{}@{}:{}/{}", username, host, port, database)
         } else {
-            format!("postgres://{}:{}@{}:{}/{}", username, password, host, port, database)
+            format!(
+                "postgres://{}:{}@{}:{}/{}",
+                username, password, host, port, database
+            )
         }
     } else {
         return Err("PostgreSQL 数据库连接配置缺失，请检查 config.yaml".into());
     };
 
     let redis_section = conn_section.redis.unwrap_or_default();
-    let redis_url = if let (Some(host), Some(port)) = (redis_section.host.clone(), redis_section.port) {
-        let password = redis_section.password.clone().unwrap_or_default();
-        let db = redis_section.database.unwrap_or(0);
-        if password.is_empty() {
-            format!("redis://{}:{}/{}", host, port, db)
+    let redis_url =
+        if let (Some(host), Some(port)) = (redis_section.host.clone(), redis_section.port) {
+            let password = redis_section.password.clone().unwrap_or_default();
+            let db = redis_section.database.unwrap_or(0);
+            if password.is_empty() {
+                format!("redis://{}:{}/{}", host, port, db)
+            } else {
+                format!("redis://:{}@{}:{}/{}", password, host, port, db)
+            }
         } else {
-            format!("redis://:{}@{}:{}/{}", password, host, port, db)
-        }
-    } else {
-        "redis://127.0.0.1:6379".to_string()
-    };
-    let nats_url = nats_section.url.unwrap_or_else(|| DEFAULT_NATS_URL.to_string());
-    let stream_name = nats_section.cdr_stream.unwrap_or_else(|| DEFAULT_CDR_STREAM.to_string());
-    let subject = nats_section.cdr_subject.unwrap_or_else(|| DEFAULT_CDR_SUBJECT.to_string());
-    let consumer_name = queue_section.nats_cdr_consumer.unwrap_or_else(|| DEFAULT_CDR_CONSUMER.to_string());
-    let dlq_subject = queue_section.nats_cdr_dlq_subject.unwrap_or_else(|| DEFAULT_CDR_DLQ_SUBJECT.to_string());
-    let dlq_stream_name = queue_section.nats_cdr_dlq_stream.unwrap_or_else(|| DEFAULT_CDR_DLQ_STREAM.to_string());
+            "redis://127.0.0.1:6379".to_string()
+        };
+    let nats_url = nats_section
+        .url
+        .unwrap_or_else(|| DEFAULT_NATS_URL.to_string());
+    let stream_name = nats_section
+        .cdr_stream
+        .unwrap_or_else(|| DEFAULT_CDR_STREAM.to_string());
+    let subject = nats_section
+        .cdr_subject
+        .unwrap_or_else(|| DEFAULT_CDR_SUBJECT.to_string());
+    let consumer_name = queue_section
+        .nats_cdr_consumer
+        .unwrap_or_else(|| DEFAULT_CDR_CONSUMER.to_string());
+    let dlq_subject = queue_section
+        .nats_cdr_dlq_subject
+        .unwrap_or_else(|| DEFAULT_CDR_DLQ_SUBJECT.to_string());
+    let dlq_stream_name = queue_section
+        .nats_cdr_dlq_stream
+        .unwrap_or_else(|| DEFAULT_CDR_DLQ_STREAM.to_string());
 
     let max_batch_size = batch_section.max_batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
-    let batch_timeout_ms = batch_section.batch_timeout_ms.unwrap_or(DEFAULT_BATCH_TIMEOUT_MS);
+    let batch_timeout_ms = batch_section
+        .batch_timeout_ms
+        .unwrap_or(DEFAULT_BATCH_TIMEOUT_MS);
     let batch_timeout = Duration::from_millis(batch_timeout_ms);
-    let max_deliveries = batch_section.max_deliveries.unwrap_or(DEFAULT_MAX_DELIVERIES);
+    let max_deliveries = batch_section
+        .max_deliveries
+        .unwrap_or(DEFAULT_MAX_DELIVERIES);
     let nak_delay_ms = batch_section.nak_delay_ms.unwrap_or(DEFAULT_NAK_DELAY_MS);
-    let db_retry_attempts = batch_section.db_retry_attempts.unwrap_or(DEFAULT_DB_RETRY_ATTEMPTS);
+    let db_retry_attempts = batch_section
+        .db_retry_attempts
+        .unwrap_or(DEFAULT_DB_RETRY_ATTEMPTS);
 
     // 强制校验 PostgreSQL
     let max_connections = db_section.max_connections.unwrap_or(10);
@@ -524,11 +532,5 @@ mod tests {
         assert_eq!(DEFAULT_MAX_DELIVERIES, 5);
         assert_eq!(DEFAULT_NAK_DELAY_MS, 1000);
         assert_eq!(DEFAULT_DB_RETRY_ATTEMPTS, 3);
-        assert_eq!(CDR_BATCH_SIZE_ENV, "VOS_RS_CDR_BATCH_SIZE");
-        assert_eq!(CDR_BATCH_TIMEOUT_MS_ENV, "VOS_RS_CDR_BATCH_TIMEOUT_MS");
-        assert_eq!(CDR_MAX_DELIVERIES_ENV, "VOS_RS_CDR_MAX_DELIVERIES");
-        assert_eq!(CDR_NAK_DELAY_MS_ENV, "VOS_RS_CDR_NAK_DELAY_MS");
-        assert_eq!(CDR_DB_RETRY_ATTEMPTS_ENV, "VOS_RS_CDR_DB_RETRY_ATTEMPTS");
-        assert_eq!(NATS_CDR_DLQ_STREAM_ENV, "VOS_RS_NATS_CDR_DLQ_STREAM");
     }
 }

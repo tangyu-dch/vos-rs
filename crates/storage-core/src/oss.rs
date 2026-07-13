@@ -15,6 +15,7 @@ pub struct OssStorage {
     access_key: String,
     secret_key: String,
     key_prefix: String,
+    region: String,
 }
 
 impl OssStorage {
@@ -24,6 +25,7 @@ impl OssStorage {
         access_key: &str,
         secret_key: &str,
         key_prefix: String,
+        region: String,
     ) -> Result<Self, StorageError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -38,6 +40,7 @@ impl OssStorage {
             access_key: access_key.to_string(),
             secret_key: secret_key.to_string(),
             key_prefix,
+            region,
         })
     }
 
@@ -81,7 +84,7 @@ impl OssStorage {
         payload_hash: &str,
         content_type: &str,
     ) -> String {
-        let region = std::env::var("VOS_RS_OSS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+        let region = self.region.as_str();
         let credential_scope = format!("{}/{}/s3/aws4_request", date, region);
         let host = self.host();
 
@@ -248,7 +251,7 @@ impl StorageBackend for OssStorage {
         let date_full = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let empty_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-        let region = std::env::var("VOS_RS_OSS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+        let region = self.region.as_str();
         let credential_scope = format!("{}/{}/s3/aws4_request", date, region);
         let host = self.host();
         let encoded_prefix = percent_encode_query(&full_prefix);
@@ -346,8 +349,7 @@ impl StorageBackend for OssStorage {
     async fn presign_get(&self, key: &str, expires_secs: u64) -> Result<String, StorageError> {
         let now = Utc::now();
         let date = now.format("%Y%m%d").to_string();
-        let region =
-            std::env::var("VOS_RS_OSS_REGION").unwrap_or_else(|_| "cn-hangzhou".to_string());
+        let region = self.region.as_str();
 
         let full_key = self.full_key(key);
         let credential_scope = format!("{}/{}/s3/aws4_request", date, region);

@@ -39,11 +39,42 @@ sip_edge:
     sip_udp_bind: "0.0.0.0:5060"
     advertised_addr: "127.0.0.1:5060"
     manage_bind: "127.0.0.1:8082"
+    ws_bind: "0.0.0.0:5062"
   routing:
     default_gateway: ""
   nat_traversal:
     stun_server: ""
     upnp_enabled: false
+  security:
+    internal_secret: "internal-dev-secret"
+  auth:
+    users: ""
+    realm: "vos-rs"
+    nonce: "vos-rs-dev-nonce"
+    secret_key: "change-me"
+  media:
+    advertised_addr: "127.0.0.1"
+    port_min: 40000
+    port_max: 40100
+    symmetric_learning: true
+    anti_spoofing: true
+    source_relearn_secs: 30
+    metrics_log: false
+  recording:
+    enabled: false
+    directory: "target/recordings"
+    retention_secs: 604800
+    min_free_bytes: 536870912
+    max_file_bytes: 134217728
+    max_duration_secs: 3600
+    workers: 4
+    queue_capacity: 10000
+  performance:
+    cdr_queue_capacity: 4096
+    udp_workers: 4
+    udp_workers_auto: true
+    udp_receive_buffer_bytes: 4194304
+    udp_send_buffer_bytes: 4194304
 
 # ==========================================
 # 3. api-server 管理控制台后端服务配置

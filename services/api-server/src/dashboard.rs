@@ -5,7 +5,6 @@ use axum::{
 };
 use cdr_core::{DashboardStats, HourlyTrend};
 use futures::stream::{self, Stream};
-use std::env;
 
 use crate::{ApiError, AppState};
 

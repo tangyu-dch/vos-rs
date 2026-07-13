@@ -4,15 +4,7 @@
 //!
 //! - **Digest 计算**：MD5(username:realm:password) + nonce + method + uri
 //! - **Nonce 管理**：动态 nonce 生成和防重放保护
-//! - **用户管理**：从环境变量或数据库加载用户凭据
-//!
-//! ## 配置
-//!
-//! | 环境变量 | 说明 | 默认值 |
-//! |---------|------|--------|
-//! | `VOS_RS_SIP_AUTH_USERS` | 用户列表（user:password, 格式） | 空 |
-//! | `VOS_RS_SIP_AUTH_REALM` | Digest Realm | vos-rs |
-//! | `VOS_RS_SIP_AUTH_NONCE` | 开发环境固定 nonce | vos-rs-dev-nonce |
+//! - **用户管理**：从统一配置文件或数据库加载用户凭据
 //!
 //! ## 安全机制
 //!
@@ -23,12 +15,8 @@
 use cdr_core::PostgresCdrStore;
 use dashmap::DashMap;
 use sip_core::SipRequest;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{collections::HashMap, env};
-
-const AUTH_USERS_ENV: &str = "VOS_RS_SIP_AUTH_USERS";
-const AUTH_REALM_ENV: &str = "VOS_RS_SIP_AUTH_REALM";
-const AUTH_NONCE_ENV: &str = "VOS_RS_SIP_AUTH_NONCE";
 const DEFAULT_REALM: &str = "vos-rs";
 const DEFAULT_NONCE: &str = "vos-rs-dev-nonce";
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -70,23 +58,6 @@ impl AuthConfig {
             nonce: nonce.into(),
             users,
             secret_key: "test-secret-key".to_string(),
-        }
-    }
-
-    pub fn from_env() -> Self {
-        let users = env::var(AUTH_USERS_ENV)
-            .ok()
-            .map(|raw| parse_users(&raw))
-            .unwrap_or_default();
-        let secret_key = format!(
-            "{:x}",
-            md5::compute(format!("{:?}", std::time::SystemTime::now()).as_bytes())
-        );
-        Self {
-            realm: env::var(AUTH_REALM_ENV).unwrap_or_else(|_| DEFAULT_REALM.to_string()),
-            nonce: env::var(AUTH_NONCE_ENV).unwrap_or_else(|_| DEFAULT_NONCE.to_string()),
-            users,
-            secret_key,
         }
     }
 

@@ -1200,18 +1200,9 @@
     }
 
     #[tokio::test]
-    async fn test_modular_config_loading_and_interpolation() {
+    async fn test_modular_config_loading() {
+        use crate::config::EdgeConfig;
         use std::fs;
-        use crate::config::{EdgeConfig, interpolate_env_vars};
-
-        // Test interpolate_env_vars directly
-        std::env::set_var("TEST_ENV_VAR_1", "env_value_1");
-        std::env::remove_var("TEST_ENV_VAR_2");
-
-        let input = "key1: ${TEST_ENV_VAR_1:default1}\nkey2: ${TEST_ENV_VAR_2:default2}\nkey3: ${TEST_ENV_VAR_2}";
-        let output = interpolate_env_vars(input);
-        assert_eq!(output, "key1: env_value_1\nkey2: default2\nkey3: ");
-
         // Create temporary config yaml files
         let main_yaml = r#"
 connections:
@@ -1222,44 +1213,24 @@ connections:
     password: ""
     database: "vos_rs"
   nats:
-    url: ${TEST_NATS_URL:nats://localhost:4222}
-    cdr_stream: ${TEST_STREAM:STREAM_A}
-    cdr_subject: ${TEST_SUBJECT:SUB_A}
+    url: "nats://127.0.0.1:4222"
+    cdr_stream: "STREAM_A"
+    cdr_subject: "SUB_A"
 sip_edge:
   network:
-    advertised_addr: ${TEST_SIP_ADDR:10.0.0.1:5060}
+    advertised_addr: "127.0.0.1:5070"
 "#;
 
         fs::write("test_config.yaml", main_yaml).unwrap();
 
-        std::env::set_var("TEST_SIP_ADDR", "127.0.0.1:5070");
-        std::env::set_var("TEST_NATS_URL", "nats://127.0.0.1:4222");
-
-        let mut config = EdgeConfig::load_from_file("test_config.yaml");
+        let config = EdgeConfig::load_from_file("test_config.yaml");
 
         // Clean up
         let _ = fs::remove_file("test_config.yaml");
-        std::env::remove_var("TEST_SIP_ADDR");
-        std::env::remove_var("TEST_NATS_URL");
-        std::env::remove_var("TEST_ENV_VAR_1");
 
         assert_eq!(config.advertised_addr, "127.0.0.1:5070");
         assert_eq!(config.database_url, Some("postgres://tangyu@127.0.0.1:5432/vos_rs".to_string()));
         assert_eq!(config.nats_url, Some("nats://127.0.0.1:4222".to_string()));
         assert_eq!(config.nats_cdr_stream, Some("STREAM_A".to_string()));
         assert_eq!(config.nats_cdr_subject, Some("SUB_A".to_string()));
-
-        // Test database override logic if VOS_RS_DATABASE_URL is set in environment
-        if let Ok(db_url) = std::env::var("VOS_RS_DATABASE_URL") {
-            if let Ok(db) = cdr_core::PostgresCdrStore::connect(&db_url, 10).await {
-                // Ensure system_configs exists and seed a test config value
-                sqlx::query("INSERT INTO system_configs (config_key, config_value, description) VALUES ('sbc_max_concurrency', '999', 'test') ON CONFLICT (config_key) DO UPDATE SET config_value = '999'")
-                    .execute(db.pool())
-                    .await
-                    .unwrap();
-
-                config.override_from_db(&db).await;
-                assert_eq!(config.sbc_max_concurrency, 999);
-            }
-        }
     }

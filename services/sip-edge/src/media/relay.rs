@@ -16,7 +16,6 @@ use tracing::{debug, warn};
 use super::rtcp_processor::{
     next_rtp_port, rtcp_port_for, rtp_port_for, MediaPacketKind, MediaPacketSummary,
 };
-use crate::media::config::{recording_queue_capacity, recording_worker_count};
 pub use crate::media::config::{MediaConfig, DEFAULT_RTP_PORT_MIN};
 pub use crate::media::crypto::MediaCryptoSession;
 pub use crate::media::dtmf::DtmfState;
@@ -40,7 +39,7 @@ pub(crate) struct PlaybackState {
     pub(crate) file_path: std::path::PathBuf,
     pub(crate) mode: PlaybackMode,
     pub(crate) loop_playback: bool,
-    pub(crate) samples: Vec<i16>,     // 解码后的 PCM 采样数据
+    pub(crate) samples: Vec<i16>, // 解码后的 PCM 采样数据
     pub(crate) current_sample_idx: usize,
     pub(crate) ssrc: u32,
     pub(crate) sequence_number: u16,
@@ -139,6 +138,10 @@ pub(crate) struct MediaRelayStateInner {
 
 impl MediaRelayState {
     pub fn new() -> Self {
+        Self::with_recording_pool(4, 10_000)
+    }
+
+    pub fn with_recording_pool(recording_workers: usize, recording_queue_capacity: usize) -> Self {
         Self {
             targets: Arc::new(DashMap::new()),
             peer_ports: Arc::new(DashMap::new()),
@@ -146,8 +149,8 @@ impl MediaRelayState {
             metrics: Arc::new(DashMap::new()),
             recordings: Arc::new(DashMap::new()),
             recording_pool: Arc::new(RecordingPool::new(
-                recording_worker_count(),
-                recording_queue_capacity(),
+                recording_workers,
+                recording_queue_capacity,
             )),
             dtmf_states: Arc::new(DashMap::new()),
             active_loops: Arc::new(DashMap::new()),
@@ -246,7 +249,8 @@ impl MediaRelayState {
                 let rtp_socket = Arc::new(rtp_socket);
                 let rtcp_socket = Arc::new(rtcp_socket);
                 self.active_sockets.insert(port, Arc::clone(&rtp_socket));
-                self.active_sockets.insert(rtcp_port, Arc::clone(&rtcp_socket));
+                self.active_sockets
+                    .insert(rtcp_port, Arc::clone(&rtcp_socket));
 
                 let relay_clone1 = self.clone();
                 let rtp_learning = config.symmetric_rtp_learning;
@@ -902,7 +906,11 @@ async fn relay_media_port(
         let mut rewritten_packet = None;
         if packet_kind == MediaPacketKind::Rtp {
             if let Ok(mut rtp) = rtp_core::RtpPacket::parse(packet) {
-                let local_was_blocked = relay.was_in_exclusive.remove(&local_port).map(|(_, val)| val).unwrap_or(false);
+                let local_was_blocked = relay
+                    .was_in_exclusive
+                    .remove(&local_port)
+                    .map(|(_, val)| val)
+                    .unwrap_or(false);
                 if local_was_blocked {
                     if let (Some(last_seq), Some(last_ts)) = (
                         relay.last_sent_seq.get(&local_port).map(|entry| *entry),
@@ -915,8 +923,16 @@ async fn relay_media_port(
                     }
                 }
 
-                let seq_offset = relay.seq_offsets.get(&local_port).map(|entry| *entry).unwrap_or(0);
-                let ts_offset = relay.ts_offsets.get(&local_port).map(|entry| *entry).unwrap_or(0);
+                let seq_offset = relay
+                    .seq_offsets
+                    .get(&local_port)
+                    .map(|entry| *entry)
+                    .unwrap_or(0);
+                let ts_offset = relay
+                    .ts_offsets
+                    .get(&local_port)
+                    .map(|entry| *entry)
+                    .unwrap_or(0);
 
                 if seq_offset != 0 || ts_offset != 0 {
                     rtp.sequence_number = rtp.sequence_number.wrapping_sub(seq_offset);

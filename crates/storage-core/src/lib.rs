@@ -120,9 +120,13 @@ pub async fn create_storage(
                 .as_ref()
                 .ok_or_else(|| StorageError::ConfigError("oss_secret_key 未配置".into()))?;
             let prefix = config.oss_key_prefix.clone().unwrap_or_default();
+            let region = config
+                .oss_region
+                .clone()
+                .unwrap_or_else(|| "us-east-1".to_string());
 
             Ok(Box::new(oss::OssStorage::new(
-                endpoint, bucket, access_key, secret_key, prefix,
+                endpoint, bucket, access_key, secret_key, prefix, region,
             )?))
         }
         StorageBackendKind::Dual => {
@@ -144,8 +148,12 @@ pub async fn create_storage(
                     .as_ref()
                     .ok_or_else(|| StorageError::ConfigError("oss_secret_key 未配置".into()))?;
                 let prefix = config.oss_key_prefix.clone().unwrap_or_default();
+                let region = config
+                    .oss_region
+                    .clone()
+                    .unwrap_or_else(|| "us-east-1".to_string());
                 Box::new(oss::OssStorage::new(
-                    endpoint, bucket, access_key, secret_key, prefix,
+                    endpoint, bucket, access_key, secret_key, prefix, region,
                 )?)
             };
             let fallback: Box<dyn StorageBackend> =

@@ -22,8 +22,6 @@ use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc, time::
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::{debug, error, info, warn};
 
-const MEDIA_METRICS_LOG_ENV: &str = "VOS_RS_MEDIA_METRICS_LOG";
-
 #[derive(Debug, Clone)]
 pub(crate) struct PendingDatagram {
     pub target: String,
@@ -263,6 +261,7 @@ pub(crate) struct EdgeState {
     /// 按用户名跟踪活跃并发通话数，O(1) 替代 O(n) iter 扫描
     pub(crate) user_concurrency: dashmap::DashMap<String, u32>,
     pub(crate) anti_fraud_rules: std::sync::RwLock<Vec<cdr_core::AntiFraudRule>>,
+    pub(crate) media_metrics_log: bool,
     /// Active gateway OPTIONS probes keyed by their SIP Call-ID.
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
     #[cfg(test)]
@@ -273,15 +272,20 @@ impl EdgeState {
     #[cfg(test)]
     #[cfg(test)]
     pub(crate) fn new(call_manager: CallManager) -> Self {
-        Self::with_media_relay_and_db(call_manager, MediaRelayState::new(), None)
+        Self::with_media_relay_and_db(
+            call_manager,
+            MediaRelayState::new(),
+            None,
+            &EdgeConfig::default(),
+        )
     }
 
     pub(crate) fn with_media_relay_and_db(
         call_manager: CallManager,
         media_relay: MediaRelayState,
         db_store: Option<PostgresCdrStore>,
+        config: &EdgeConfig,
     ) -> Self {
-        let config = EdgeConfig::from_env();
         let sbc_engine = sbc::SbcEngine::new(
             &config
                 .sbc_allow_rules
@@ -300,7 +304,7 @@ impl EdgeState {
         Self {
             call_manager: std::sync::Arc::new(call_manager),
             gateway_health: std::sync::Mutex::new(GatewayHealthTracker::new(
-                call_core::HealthThresholds::from_env(),
+                call_core::HealthThresholds::default(),
             )),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay,
@@ -321,6 +325,7 @@ impl EdgeState {
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
+            media_metrics_log: config.media_metrics_log,
             gateway_probes: dashmap::DashMap::new(),
             #[cfg(test)]
             test_gateways: std::sync::Mutex::new(Vec::new()),
@@ -367,6 +372,7 @@ impl EdgeState {
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
+            media_metrics_log: config.media_metrics_log,
             gateway_probes: dashmap::DashMap::new(),
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
@@ -879,7 +885,7 @@ impl EdgeState {
     }
 
     pub(crate) fn clear_media_targets(&self, transaction: &InboundTransaction) {
-        let metrics_log_enabled = media_metrics_log_enabled();
+        let metrics_log_enabled = self.media_metrics_log;
         if let Some(endpoint) = &transaction.gateway_relay_rtp {
             let metrics = self.media_relay.metrics_for_port(endpoint.port);
             log_media_target_metrics("gateway", endpoint.port, metrics, metrics_log_enabled);
@@ -906,17 +912,6 @@ impl EdgeState {
             "RTP relay metrics totals"
         );
     }
-}
-
-fn media_metrics_log_enabled() -> bool {
-    std::env::var(MEDIA_METRICS_LOG_ENV)
-        .map(|value| {
-            matches!(
-                value.trim(),
-                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
-            )
-        })
-        .unwrap_or(false)
 }
 
 fn log_media_target_metrics(

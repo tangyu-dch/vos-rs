@@ -36,10 +36,6 @@ pub(crate) use sip::transaction;
 #[allow(unused_imports)]
 pub(crate) use sip::{AuthDecision, ClientTransactionKey, RequestTransactionKey};
 
-// Constants re-exported for tests
-pub(crate) use config::{
-    DEFAULT_GATEWAY_ENV, NATS_URL_ENV, TLS_CERT_PATH_ENV, TLS_KEY_PATH_ENV,
-};
 #[allow(unused_imports)]
 pub(crate) use timers::{
     calculate_mos_for_legs, spawn_client_transaction_retransmission,
@@ -56,7 +52,7 @@ use net::{create_tls_acceptor, Transport};
 use sip_core::{parse_message, Method, SipMessage, SipUri};
 use std::{
     collections::HashMap,
-    env, io,
+    io,
     net::SocketAddr,
     str::FromStr,
     sync::{atomic::Ordering, Arc},
@@ -90,13 +86,18 @@ async fn main() -> Result<(), AnyError> {
     let db_store = cdr_sinks.postgres.clone();
     if db_store.is_none() {
         tracing::error!("数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接！");
-        return Err(std::io::Error::new(std::io::ErrorKind::Other, "数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接").into());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接",
+        )
+        .into());
     }
 
     // 检查并强制校验 Redis 连接
-    let redis_url = edge_config.redis_url.clone().unwrap_or_else(|| {
-        "redis://127.0.0.1:6379".to_string()
-    });
+    let redis_url = edge_config
+        .redis_url
+        .clone()
+        .unwrap_or_else(|| "redis://127.0.0.1:6379".to_string());
     let redis_client = match redis::Client::open(redis_url.clone()) {
         Ok(c) => c,
         Err(e) => {
@@ -133,15 +134,14 @@ async fn main() -> Result<(), AnyError> {
     // Wrap EdgeConfig in Arc — all mutations done, now read-only shared access
     let edge_config = Arc::new(edge_config);
 
-    let media_relay = MediaRelayState::new();
+    let media_relay = MediaRelayState::with_recording_pool(
+        edge_config.recording_workers,
+        edge_config.recording_queue_capacity,
+    );
     let cdr_sinks = std::sync::Arc::new(cdr_sinks);
 
     // 使用有界队列防止数据库/NATS 故障时 CDR 无限堆积。
-    let cdr_queue_capacity = env::var("VOS_RS_CDR_QUEUE_CAPACITY")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(4096);
+    let cdr_queue_capacity = edge_config.cdr_queue_capacity;
     let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
     let call_manager = CallManager::new(route_table, cdr_tx);
 
@@ -149,6 +149,7 @@ async fn main() -> Result<(), AnyError> {
         call_manager,
         media_relay.clone(),
         db_store.clone(),
+        &edge_config,
     ));
 
     // Start background task to flush CDRs in batches (every 100ms or 100 entries)
@@ -176,13 +177,13 @@ async fn main() -> Result<(), AnyError> {
     });
 
     // 启动管理 API（活跃呼叫查询 / 强制拆线）
-    let manage_addr =
-        env::var("VOS_RS_MANAGE_BIND").unwrap_or_else(|_| "127.0.0.1:8082".to_string());
+    let manage_addr = edge_config.manage_bind.clone();
     {
         let manage_state = Arc::clone(&edge_state);
         let addr = manage_addr.clone();
+        let internal_secret = edge_config.internal_secret.clone();
         tokio::spawn(async move {
-            manage::serve(addr, manage_state).await;
+            manage::serve(addr, manage_state, internal_secret).await;
         });
     }
 
@@ -192,7 +193,7 @@ async fn main() -> Result<(), AnyError> {
             .await?
             .is_some();
         if !has_users {
-            if let Ok(raw_users) = env::var("VOS_RS_SIP_AUTH_USERS") {
+            if let Some(raw_users) = edge_config.bootstrap_auth_users.as_deref() {
                 for entry in raw_users.split(',') {
                     let entry = entry.trim();
                     if let Some((username, password)) =
@@ -218,7 +219,8 @@ async fn main() -> Result<(), AnyError> {
             .await?
             .is_some();
         if !has_gateways {
-            if let Ok(raw_gateway) = env::var("VOS_RS_SIP_DEFAULT_GATEWAY") {
+            if !edge_config.default_gateway.trim().is_empty() {
+                let raw_gateway = &edge_config.default_gateway;
                 let raw_gateway = raw_gateway.trim();
                 if !raw_gateway.is_empty() {
                     if let Ok(target) = parse_gateway_target("default", raw_gateway) {
@@ -233,7 +235,8 @@ async fn main() -> Result<(), AnyError> {
                 }
             }
         } else if !has_routes {
-            if let Ok(raw_gateway) = env::var("VOS_RS_SIP_DEFAULT_GATEWAY") {
+            if !edge_config.default_gateway.trim().is_empty() {
+                let raw_gateway = &edge_config.default_gateway;
                 let raw_gateway = raw_gateway.trim();
                 if !raw_gateway.is_empty() {
                     db.insert_route("default", "", 100, "default").await?;
@@ -386,11 +389,7 @@ async fn main() -> Result<(), AnyError> {
             }
         }
         Ok(None) => {
-            info!(
-                cert_env = TLS_CERT_PATH_ENV,
-                key_env = TLS_KEY_PATH_ENV,
-                "SIP TLS listener disabled; configure cert/key paths to enable"
-            );
+            info!("SIP TLS listener disabled; configure TLS cert/key paths in config.yaml");
         }
         Err(e) => {
             warn!(error = %e, "failed to create TLS acceptor; TLS listener disabled");
@@ -398,7 +397,7 @@ async fn main() -> Result<(), AnyError> {
     }
 
     // Start WebSocket listener
-    let ws_bind_addr = env::var("VOS_RS_SIP_WS_BIND").unwrap_or_else(|_| {
+    let ws_bind_addr = edge_config.ws_bind_addr.clone().unwrap_or_else(|| {
         if let Ok(addr) = bind_addr.parse::<SocketAddr>() {
             let mut ws_addr = addr;
             ws_addr.set_port(5062);
@@ -588,17 +587,15 @@ async fn cdr_sinks_from_config(config: &EdgeConfig) -> Result<CdrSinks, AnyError
             Some(publisher)
         }
         _ => {
-            info!(
-                env = NATS_URL_ENV,
-                "NATS CDR queue disabled; set config / env var to enable"
-            );
+            info!("NATS CDR queue disabled; set connections.nats in config.yaml to enable");
             None
         }
     };
 
     let postgres = match &config.database_url {
         Some(database_url) if !database_url.trim().is_empty() => {
-            let store = PostgresCdrStore::connect(database_url, config.database_max_connections).await?;
+            let store =
+                PostgresCdrStore::connect(database_url, config.database_max_connections).await?;
             if nats.is_some() {
                 info!("PostgreSQL direct CDR persistence disabled because NATS CDR queue is enabled (database connection will still be used for configuration and registration store)");
             } else {
@@ -817,7 +814,7 @@ fn parse_gateway_target(gateway_id: &str, raw: &str) -> Result<RouteTarget, AnyE
     if value.is_empty() {
         return Err(Box::new(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("{DEFAULT_GATEWAY_ENV} must not be empty"),
+            "sip_edge.routing.default_gateway must not be empty",
         )));
     }
 

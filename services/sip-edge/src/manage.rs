@@ -14,24 +14,20 @@ use sip_core::SipUri;
 use crate::media::relay::MediaRelayMetrics;
 use crate::EdgeState;
 
+#[derive(Clone)]
+struct ManageAuthSecret(String);
+
 async fn internal_auth(
+    State(secret): State<ManageAuthSecret>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
-    let secret = match std::env::var("VOS_RS_INTERNAL_SECRET") {
-        Ok(val) => val,
-        Err(_) => {
-            tracing::error!("VOS_RS_INTERNAL_SECRET 未配置，管理接口拒绝所有请求");
-            return Err(StatusCode::UNAUTHORIZED);
-        }
-    };
-
     let token = req
         .headers()
         .get("X-VOS-Token")
         .and_then(|h| h.to_str().ok());
     if let Some(t) = token {
-        if t == secret {
+        if t == secret.0 {
             return Ok(next.run(req).await);
         }
     }
@@ -39,7 +35,7 @@ async fn internal_auth(
 }
 
 /// 启动管理 API（活跃呼叫查询 / 强制拆线）。
-pub async fn serve(addr: String, state: Arc<EdgeState>) {
+pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String) {
     let app = Router::new()
         .route("/manage/active-calls", get(active_calls))
         .route("/manage/calls/:call_id/terminate", post(terminate))
@@ -50,7 +46,10 @@ pub async fn serve(addr: String, state: Arc<EdgeState>) {
         .route("/manage/calls/:call_id/mute", post(mute))
         .route("/manage/calls/:call_id/unmute", post(unmute))
         .route("/manage/calls/:call_id/status", get(call_status))
-        .route_layer(axum::middleware::from_fn(internal_auth))
+        .route_layer(axum::middleware::from_fn_with_state(
+            ManageAuthSecret(internal_secret),
+            internal_auth,
+        ))
         .with_state(state)
         .layer(
             CorsLayer::new()
@@ -182,7 +181,6 @@ async fn route_preview(
     }
 }
 
-
 /// 播放音频请求负载
 #[derive(Deserialize)]
 struct PlayRequest {
@@ -213,19 +211,36 @@ async fn play(
     // 获取当前活跃通话的事务会话信息
     let tx = match state.inbound_transactions.get(&call_id) {
         Some(t) => t,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "call not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "call not found"})),
+            )
+        }
     };
 
     // 校验并解析播放模式
     let mode = match payload.mode.as_str() {
         "exclusive" => crate::media::relay::PlaybackMode::Exclusive,
         "background" => crate::media::relay::PlaybackMode::Background,
-        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid mode, must be 'exclusive' or 'background'"}))),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": "invalid mode, must be 'exclusive' or 'background'"}),
+                ),
+            )
+        }
     };
 
     let file_path = std::path::PathBuf::from(&payload.file_path);
     if !file_path.exists() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("file does not exist: {}", payload.file_path)})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({"error": format!("file does not exist: {}", payload.file_path)}),
+            ),
+        );
     }
 
     let mut play_caller = false;
@@ -237,14 +252,29 @@ async fn play(
             play_caller = true;
             play_callee = true;
         }
-        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid leg, must be 'caller', 'callee', or 'both'"}))),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": "invalid leg, must be 'caller', 'callee', or 'both'"}),
+                ),
+            )
+        }
     }
 
     // 向主叫分支注入音频 RTP 包
     if play_caller {
         if let Some(ref rtp) = tx.caller_relay_rtp {
-            if let Err(e) = state.media_relay.start_playback(rtp.port, file_path.clone(), mode, payload.loop_playback) {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("failed to play to caller: {}", e)})));
+            if let Err(e) = state.media_relay.start_playback(
+                rtp.port,
+                file_path.clone(),
+                mode,
+                payload.loop_playback,
+            ) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("failed to play to caller: {}", e)})),
+                );
             }
         }
     }
@@ -252,13 +282,23 @@ async fn play(
     // 向被叫分支注入音频 RTP 包
     if play_callee {
         if let Some(ref rtp) = tx.gateway_relay_rtp {
-            if let Err(e) = state.media_relay.start_playback(rtp.port, file_path, mode, payload.loop_playback) {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("failed to play to callee: {}", e)})));
+            if let Err(e) =
+                state
+                    .media_relay
+                    .start_playback(rtp.port, file_path, mode, payload.loop_playback)
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("failed to play to callee: {}", e)})),
+                );
             }
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({"status": "success"})))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "success"})),
+    )
 }
 
 /// 停止指定通话分支音频播放接口
@@ -269,7 +309,12 @@ async fn stop_play(
 ) -> (StatusCode, Json<serde_json::Value>) {
     let tx = match state.inbound_transactions.get(&call_id) {
         Some(t) => t,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "call not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "call not found"})),
+            )
+        }
     };
 
     let mut stop_caller = false;
@@ -281,7 +326,14 @@ async fn stop_play(
             stop_caller = true;
             stop_callee = true;
         }
-        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid leg, must be 'caller', 'callee', or 'both'"}))),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": "invalid leg, must be 'caller', 'callee', or 'both'"}),
+                ),
+            )
+        }
     }
 
     if stop_caller {
@@ -296,7 +348,10 @@ async fn stop_play(
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({"status": "success"})))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "success"})),
+    )
 }
 
 /// 静音接口：将指定分支的声音拦截（不转发到对端）
@@ -307,7 +362,12 @@ async fn mute(
 ) -> (StatusCode, Json<serde_json::Value>) {
     let tx = match state.inbound_transactions.get(&call_id) {
         Some(t) => t,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "call not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "call not found"})),
+            )
+        }
     };
 
     let mut mute_caller = false;
@@ -319,7 +379,14 @@ async fn mute(
             mute_caller = true;
             mute_callee = true;
         }
-        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid leg, must be 'caller', 'callee', or 'both'"}))),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": "invalid leg, must be 'caller', 'callee', or 'both'"}),
+                ),
+            )
+        }
     }
 
     if mute_caller {
@@ -334,7 +401,10 @@ async fn mute(
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({"status": "success"})))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "success"})),
+    )
 }
 
 /// 取消静音接口：恢复指定分支的声音传输
@@ -345,7 +415,12 @@ async fn unmute(
 ) -> (StatusCode, Json<serde_json::Value>) {
     let tx = match state.inbound_transactions.get(&call_id) {
         Some(t) => t,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "call not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "call not found"})),
+            )
+        }
     };
 
     let mut unmute_caller = false;
@@ -357,7 +432,14 @@ async fn unmute(
             unmute_caller = true;
             unmute_callee = true;
         }
-        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid leg, must be 'caller', 'callee', or 'both'"}))),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": "invalid leg, must be 'caller', 'callee', or 'both'"}),
+                ),
+            )
+        }
     }
 
     if unmute_caller {
@@ -372,7 +454,10 @@ async fn unmute(
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({"status": "success"})))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "success"})),
+    )
 }
 
 /// 获取指定通话的媒体与控制状态
@@ -383,7 +468,12 @@ async fn call_status(
     // 获取活跃呼叫事务
     let tx = match state.inbound_transactions.get(&call_id) {
         Some(t) => t,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "call not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "call not found"})),
+            )
+        }
     };
 
     let mut caller_playback = serde_json::json!(null);
@@ -421,15 +511,18 @@ async fn call_status(
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({
-        "call_id": call_id,
-        "caller": {
-            "muted": caller_muted,
-            "playback": caller_playback,
-        },
-        "callee": {
-            "muted": callee_muted,
-            "playback": callee_playback,
-        }
-    })))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "call_id": call_id,
+            "caller": {
+                "muted": caller_muted,
+                "playback": caller_playback,
+            },
+            "callee": {
+                "muted": callee_muted,
+                "playback": callee_playback,
+            }
+        })),
+    )
 }

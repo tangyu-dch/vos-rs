@@ -85,30 +85,11 @@
             auth: AuthConfig::disabled(),
             session_expires_gateway: 600,
             session_expires_caller: 1800,
-            sbc_allow_rules: std::env::var("VOS_RS_SBC_ALLOW")
-                .unwrap_or_default()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
-            sbc_block_rules: std::env::var("VOS_RS_SBC_BLOCK")
-                .unwrap_or_default()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
-            sbc_rate_limit_capacity: std::env::var("VOS_RS_SBC_LIMIT_CAPACITY")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(100.0),
-            sbc_rate_limit_fill_rate: std::env::var("VOS_RS_SBC_LIMIT_FILL_RATE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10.0),
-            sbc_max_concurrency: std::env::var("VOS_RS_SBC_MAX_CONCURRENCY")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10),
+            sbc_allow_rules: Vec::new(),
+            sbc_block_rules: Vec::new(),
+            sbc_rate_limit_capacity: 100.0,
+            sbc_rate_limit_fill_rate: 10.0,
+            sbc_max_concurrency: 10,
             tls_cert_path: None,
             tls_key_path: None,
             tls_bind_addr: None,

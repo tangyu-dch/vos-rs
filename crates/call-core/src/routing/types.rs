@@ -304,28 +304,4 @@ impl Default for HealthThresholds {
     }
 }
 
-impl HealthThresholds {
-    /// Create thresholds from environment variables with fallback to defaults.
-    pub fn from_env() -> Self {
-        Self {
-            failure_threshold: std::env::var("VOS_RS_CIRCUIT_BREAKER_FAILURE_THRESHOLD")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(5),
-            recovery_interval: Duration::from_secs(
-                std::env::var("VOS_RS_CIRCUIT_BREAKER_RECOVERY_SECS")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(30),
-            ),
-            min_success_rate: std::env::var("VOS_RS_CIRCUIT_BREAKER_MIN_SUCCESS_RATE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0.3),
-            min_samples: std::env::var("VOS_RS_CIRCUIT_BREAKER_MIN_SAMPLES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10),
-        }
-    }
-}
+impl HealthThresholds {}

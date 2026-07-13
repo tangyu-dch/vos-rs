@@ -1,7 +1,6 @@
 use axum::{extract::State, Json};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::time::SystemTime;
 
 use crate::{ApiError, AppState};

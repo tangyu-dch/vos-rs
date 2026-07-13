@@ -108,14 +108,20 @@ struct RustFsSection {
 
 impl StorageConfig {
     pub fn load() -> Self {
-        let config_file_path = std::env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+        let config_file_path =
+            std::env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
         let content = std::fs::read_to_string(&config_file_path).unwrap_or_default();
-        let u_config: UnifiedYamlConfigForStorage = serde_yaml::from_str(&content).unwrap_or_default();
+        let u_config: UnifiedYamlConfigForStorage =
+            serde_yaml::from_str(&content).unwrap_or_default();
         let s3 = u_config.connections.and_then(|c| c.s3).unwrap_or_default();
-        let backend = s3.backend.unwrap_or_else(|| "local".to_string()).parse().unwrap_or(StorageBackendKind::Local);
+        let backend = s3
+            .backend
+            .unwrap_or_else(|| "local".to_string())
+            .parse()
+            .unwrap_or(StorageBackendKind::Local);
         Self {
             backend,
-            local_dir: s3.local_dir.unwrap_or_else(|| default_local_dir()),
+            local_dir: s3.local_dir.unwrap_or_else(default_local_dir),
             oss_endpoint: s3.endpoint,
             oss_bucket: s3.bucket,
             oss_access_key: s3.access_key,
