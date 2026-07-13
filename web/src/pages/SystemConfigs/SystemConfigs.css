@@ -1,0 +1,11 @@
+.system-configs__notice { margin-bottom: var(--space-lg); }
+.system-configs__summary { display: flex; gap: var(--space-sm); flex-wrap: wrap; margin-bottom: var(--space-lg); }
+.system-configs__panel { padding: var(--space-lg) 0; }
+.system-configs__intro { margin-bottom: var(--space-xl); }
+.system-configs__intro h2 { color: var(--text-primary); font-size: var(--fs-h2); margin-bottom: var(--space-xs); }
+.system-configs__intro p { color: var(--text-secondary); font-size: var(--fs-small); }
+.system-configs__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px var(--space-xl); max-width: 980px; }
+.system-configs__field--wide { grid-column: 1 / -1; }
+.system-configs__field-help { color: var(--text-muted); display: block; font-size: 12px; line-height: 1.45; margin-top: 5px; }
+.system-configs__switch { min-height: 32px; display: flex; align-items: center; }
+@media (max-width: 800px) { .system-configs__grid { grid-template-columns: 1fr; } .system-configs__field--wide { grid-column: auto; } }
