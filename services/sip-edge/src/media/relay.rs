@@ -28,6 +28,25 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 pub const MAX_RTP_DATAGRAM_SIZE: usize = 65_535;
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PlaybackMode {
+    Exclusive,  // 独占替换模式：只播放音频，拦截来自另一侧的原始声音
+    Background, // 背景混音模式：将本地音频与来自另一侧的原始声音混合
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PlaybackState {
+    pub(crate) file_path: std::path::PathBuf,
+    pub(crate) mode: PlaybackMode,
+    pub(crate) loop_playback: bool,
+    pub(crate) samples: Vec<i16>,     // 解码后的 PCM 采样数据
+    pub(crate) current_sample_idx: usize,
+    pub(crate) ssrc: u32,
+    pub(crate) sequence_number: u16,
+    pub(crate) timestamp: u32,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PendingSrtpConfig {
     pub(crate) suite: String,
@@ -56,6 +75,15 @@ pub struct MediaRelayState {
     pub(crate) leased_rtp_ports: Arc<dashmap::DashSet<u16>>,
     pub(crate) next_port: Arc<AtomicU32>,
     pub(crate) state: Arc<Mutex<MediaRelayStateInner>>,
+    pub(crate) active_sockets: Arc<DashMap<u16, Arc<UdpSocket>>>,
+    pub(crate) playbacks: Arc<DashMap<u16, Arc<std::sync::Mutex<PlaybackState>>>>,
+    pub(crate) playback_loops: Arc<DashMap<u16, tokio::sync::oneshot::Sender<()>>>,
+    pub(crate) muted_ports: Arc<dashmap::DashSet<u16>>,
+    pub(crate) last_sent_seq: Arc<DashMap<u16, u16>>,
+    pub(crate) last_sent_ts: Arc<DashMap<u16, u32>>,
+    pub(crate) seq_offsets: Arc<DashMap<u16, u16>>,
+    pub(crate) ts_offsets: Arc<DashMap<u16, u32>>,
+    pub(crate) was_in_exclusive: Arc<DashMap<u16, bool>>,
 }
 
 impl Clone for MediaRelayState {
@@ -76,6 +104,15 @@ impl Clone for MediaRelayState {
             leased_rtp_ports: Arc::clone(&self.leased_rtp_ports),
             next_port: Arc::clone(&self.next_port),
             state: Arc::clone(&self.state),
+            active_sockets: Arc::clone(&self.active_sockets),
+            playbacks: Arc::clone(&self.playbacks),
+            playback_loops: Arc::clone(&self.playback_loops),
+            muted_ports: Arc::clone(&self.muted_ports),
+            last_sent_seq: Arc::clone(&self.last_sent_seq),
+            last_sent_ts: Arc::clone(&self.last_sent_ts),
+            seq_offsets: Arc::clone(&self.seq_offsets),
+            ts_offsets: Arc::clone(&self.ts_offsets),
+            was_in_exclusive: Arc::clone(&self.was_in_exclusive),
         }
     }
 }
@@ -125,6 +162,15 @@ impl MediaRelayState {
                 dtmf_accumulators: HashMap::new(),
                 dtmf_event_log: HashMap::new(),
             })),
+            active_sockets: Arc::new(DashMap::new()),
+            playbacks: Arc::new(DashMap::new()),
+            playback_loops: Arc::new(DashMap::new()),
+            muted_ports: Arc::new(dashmap::DashSet::new()),
+            last_sent_seq: Arc::new(DashMap::new()),
+            last_sent_ts: Arc::new(DashMap::new()),
+            seq_offsets: Arc::new(DashMap::new()),
+            ts_offsets: Arc::new(DashMap::new()),
+            was_in_exclusive: Arc::new(DashMap::new()),
         }
     }
 
@@ -196,6 +242,11 @@ impl MediaRelayState {
                 // Spawn loops
                 let (rtp_tx, rtp_rx) = tokio::sync::oneshot::channel();
                 let (rtcp_tx, rtcp_rx) = tokio::sync::oneshot::channel();
+
+                let rtp_socket = Arc::new(rtp_socket);
+                let rtcp_socket = Arc::new(rtcp_socket);
+                self.active_sockets.insert(port, Arc::clone(&rtp_socket));
+                self.active_sockets.insert(rtcp_port, Arc::clone(&rtcp_socket));
 
                 let relay_clone1 = self.clone();
                 let rtp_learning = config.symmetric_rtp_learning;
@@ -311,6 +362,26 @@ impl MediaRelayState {
     pub fn clear_target(&self, relay_port: u16) {
         let rtp_port = rtp_port_for(relay_port).unwrap_or(relay_port);
         let peer_port = self.peer_ports.get(&rtp_port).map(|v| *v);
+
+        self.stop_playback(rtp_port);
+        self.active_sockets.remove(&rtp_port);
+        self.muted_ports.remove(&rtp_port);
+        self.last_sent_seq.remove(&rtp_port);
+        self.last_sent_ts.remove(&rtp_port);
+        self.seq_offsets.remove(&rtp_port);
+        self.ts_offsets.remove(&rtp_port);
+        self.was_in_exclusive.remove(&rtp_port);
+        if let Some(p_port) = peer_port {
+            self.stop_playback(p_port);
+            self.active_sockets.remove(&p_port);
+            self.muted_ports.remove(&p_port);
+            self.last_sent_seq.remove(&p_port);
+            self.last_sent_ts.remove(&p_port);
+            self.seq_offsets.remove(&p_port);
+            self.ts_offsets.remove(&p_port);
+            self.was_in_exclusive.remove(&p_port);
+        }
+
         self.targets.remove(&rtp_port);
         self.metrics.remove(&rtp_port);
         self.rtp_stats.remove(&rtp_port);
@@ -334,9 +405,11 @@ impl MediaRelayState {
         if let Some(rtcp_port) = rtcp_port_for(rtp_port) {
             self.targets.remove(&rtcp_port);
             self.metrics.remove(&rtcp_port);
+            self.active_sockets.remove(&rtcp_port);
             let rtcp_peer = self.peer_ports.get(&rtcp_port).map(|v| *v);
             self.peer_ports.remove(&rtcp_port);
             if let Some(rtcp_peer_port) = rtcp_peer {
+                self.active_sockets.remove(&rtcp_peer_port);
                 self.peer_ports.remove(&rtcp_peer_port);
             }
         }
@@ -344,6 +417,188 @@ impl MediaRelayState {
             for sender in senders {
                 let _ = sender.send(());
             }
+        }
+    }
+
+    pub fn start_playback(
+        &self,
+        port: u16,
+        file_path: std::path::PathBuf,
+        mode: PlaybackMode,
+        loop_playback: bool,
+    ) -> Result<(), String> {
+        let samples = crate::media::wav::load_wav_pcm(&file_path)
+            .map_err(|e| format!("加载音频文件失败: {e}"))?;
+
+        // 停止之前的播放
+        self.stop_playback(port);
+
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+        self.playback_loops.insert(port, cancel_tx);
+
+        let playback_state = Arc::new(std::sync::Mutex::new(PlaybackState {
+            file_path,
+            mode,
+            loop_playback,
+            samples,
+            current_sample_idx: 0,
+            ssrc: (unix_timestamp_millis() & 0xFFFFFFFF) as u32,
+            sequence_number: (unix_timestamp_millis() & 0xFFFF) as u16,
+            timestamp: ((unix_timestamp_millis() >> 16) & 0xFFFFFFFF) as u32,
+        }));
+
+        self.playbacks.insert(port, Arc::clone(&playback_state));
+
+        let socket = self
+            .active_sockets
+            .get(&port)
+            .map(|entry| Arc::clone(entry.value()));
+        let relay = self.clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(20));
+            interval.tick().await;
+            let mut is_first = true;
+
+            loop {
+                tokio::select! {
+                    _ = &mut cancel_rx => {
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        let (pcm_chunk, codec, ssrc, sequence_number, timestamp) = {
+                            let mut state = match playback_state.lock() {
+                                Ok(s) => s,
+                                Err(_) => break,
+                            };
+                            let codec = relay.codecs.get(&port).map(|v| *v).unwrap_or(rtp_core::AudioCodec::Pcma);
+                            let start = state.current_sample_idx;
+                            let end = (start + 160).min(state.samples.len());
+                            let chunk = if start >= state.samples.len() {
+                                if state.loop_playback {
+                                    state.current_sample_idx = 0;
+                                    let wrap_end = 160.min(state.samples.len());
+                                    state.current_sample_idx = wrap_end;
+                                    state.samples[0..wrap_end].to_vec()
+                                } else {
+                                    break; // 播放结束
+                                }
+                            } else {
+                                state.current_sample_idx = end;
+                                let mut chunk = state.samples[start..end].to_vec();
+                                if chunk.len() < 160 {
+                                    if state.loop_playback {
+                                        state.current_sample_idx = 160 - chunk.len();
+                                        let needed = 160 - chunk.len();
+                                        chunk.extend_from_slice(&state.samples[0..needed.min(state.samples.len())]);
+                                    } else {
+                                        chunk.resize(160, 0);
+                                    }
+                                }
+                                chunk
+                            };
+
+                            let ssrc = state.ssrc;
+                            let seq = state.sequence_number;
+                            let ts = state.timestamp;
+
+                            state.sequence_number = state.sequence_number.wrapping_add(1);
+                            state.timestamp = state.timestamp.wrapping_add(160);
+
+                            (chunk, codec, ssrc, seq, ts)
+                        };
+
+                        let target = match relay.target_for_port(port) {
+                            Some(t) => t,
+                            None => continue,
+                        };
+                        if target.ip().is_unspecified() || target.port() == 0 {
+                            continue;
+                        }
+
+                        let payload: Vec<u8> = match codec {
+                            rtp_core::AudioCodec::Pcma => pcm_chunk.iter().map(|&s| crate::media::transcode::linear_to_alaw(s)).collect(),
+                            rtp_core::AudioCodec::Pcmu => pcm_chunk.iter().map(|&s| crate::media::transcode::linear_to_ulaw(s)).collect(),
+                            _ => pcm_chunk.iter().map(|&s| crate::media::transcode::linear_to_alaw(s)).collect(),
+                        };
+
+                        let payload_type = codec.static_payload_type().unwrap_or(8);
+
+                        let rtp = rtp_core::RtpPacket {
+                            marker: is_first,
+                            payload_type,
+                            sequence_number,
+                            timestamp,
+                            ssrc,
+                            csrcs: Vec::new(),
+                            extension: None,
+                            payload,
+                            padding_len: 0,
+                        };
+
+                        if is_first {
+                            is_first = false;
+                        }
+
+                        let encoded = match rtp.encode() {
+                            Ok(bytes) => bytes,
+                            Err(_) => continue,
+                        };
+
+                        let mut final_packet = encoded;
+                        if let Some(peer_port) = relay.peer_ports.get(&port).map(|entry| *entry) {
+                            if let Some(session) = relay.crypto_sessions.get(&peer_port).map(|entry| entry.clone()) {
+                                let mut candidate = final_packet.clone();
+                                if session.lock().await.encrypt(&mut candidate).is_ok() {
+                                    final_packet = candidate;
+                                }
+                            }
+                        }
+
+                        if let Some(socket) = &socket {
+                            let _ = socket.send_to(&final_packet, target).await;
+                        }
+                    }
+                }
+            }
+
+            let is_exclusive = {
+                if let Ok(st) = playback_state.lock() {
+                    st.mode == PlaybackMode::Exclusive
+                } else {
+                    false
+                }
+            };
+            if is_exclusive {
+                if let Some(peer_port) = relay.peer_ports.get(&port).map(|entry| *entry) {
+                    relay.was_in_exclusive.insert(peer_port, true);
+                }
+            }
+
+            relay.playbacks.remove(&port);
+            relay.playback_loops.remove(&port);
+        });
+
+        Ok(())
+    }
+
+    pub fn stop_playback(&self, port: u16) {
+        if let Some((_, playback_state)) = self.playbacks.remove(&port) {
+            let is_exclusive = {
+                if let Ok(st) = playback_state.lock() {
+                    st.mode == PlaybackMode::Exclusive
+                } else {
+                    false
+                }
+            };
+            if is_exclusive {
+                if let Some(peer_port) = self.peer_ports.get(&port).map(|entry| *entry) {
+                    self.was_in_exclusive.insert(peer_port, true);
+                }
+            }
+        }
+        if let Some(cancel_tx) = self.playback_loops.remove(&port) {
+            let _ = cancel_tx.1.send(());
         }
     }
 
@@ -528,6 +783,8 @@ pub async fn spawn_rtp_relay_listeners(
     for (socket, port, packet_kind) in sockets {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let relay_clone = relay.clone();
+        let socket = Arc::new(socket);
+        relay.active_sockets.insert(port, Arc::clone(&socket));
         let handle = tokio::spawn(relay_media_port(
             socket,
             port,
@@ -549,7 +806,7 @@ pub async fn spawn_rtp_relay_listeners(
 
 #[allow(clippy::too_many_arguments)]
 async fn relay_media_port(
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
     local_port: u16,
     relay: MediaRelayState,
     symmetric_rtp_learning: bool,
@@ -581,6 +838,10 @@ async fn relay_media_port(
 
         if !relay.accept_rtp_source(local_port, source, anti_spoofing, source_relearn_after_secs) {
             warn!(%source, local_port, packet_kind = packet_kind.label(), "dropping media packet from unbound source");
+            continue;
+        }
+
+        if relay.muted_ports.contains(&local_port) {
             continue;
         }
 
@@ -638,6 +899,39 @@ async fn relay_media_port(
             continue;
         }
 
+        let mut rewritten_packet = None;
+        if packet_kind == MediaPacketKind::Rtp {
+            if let Ok(mut rtp) = rtp_core::RtpPacket::parse(packet) {
+                let local_was_blocked = relay.was_in_exclusive.remove(&local_port).map(|(_, val)| val).unwrap_or(false);
+                if local_was_blocked {
+                    if let (Some(last_seq), Some(last_ts)) = (
+                        relay.last_sent_seq.get(&local_port).map(|entry| *entry),
+                        relay.last_sent_ts.get(&local_port).map(|entry| *entry),
+                    ) {
+                        let seq_offset = rtp.sequence_number.wrapping_sub(last_seq.wrapping_add(1));
+                        let ts_offset = rtp.timestamp.wrapping_sub(last_ts.wrapping_add(160));
+                        relay.seq_offsets.insert(local_port, seq_offset);
+                        relay.ts_offsets.insert(local_port, ts_offset);
+                    }
+                }
+
+                let seq_offset = relay.seq_offsets.get(&local_port).map(|entry| *entry).unwrap_or(0);
+                let ts_offset = relay.ts_offsets.get(&local_port).map(|entry| *entry).unwrap_or(0);
+
+                if seq_offset != 0 || ts_offset != 0 {
+                    rtp.sequence_number = rtp.sequence_number.wrapping_sub(seq_offset);
+                    rtp.timestamp = rtp.timestamp.wrapping_sub(ts_offset);
+                    if let Ok(encoded) = rtp.encode() {
+                        rewritten_packet = Some(encoded);
+                    }
+                }
+
+                relay.last_sent_seq.insert(local_port, rtp.sequence_number);
+                relay.last_sent_ts.insert(local_port, rtp.timestamp);
+            }
+        }
+        let packet = rewritten_packet.as_deref().unwrap_or(packet);
+
         let first_byte = packet[0];
         let is_pass_through = (0..=3).contains(&first_byte) || (20..=63).contains(&first_byte);
 
@@ -677,6 +971,15 @@ async fn relay_media_port(
                     packet_kind = packet_kind.label(),
                     "learned symmetric media source"
                 );
+            }
+        }
+
+        let peer_port = relay.peer_ports.get(&local_port).map(|entry| *entry);
+        if let Some(p_port) = peer_port {
+            if let Some(playback) = relay.playbacks.get(&p_port) {
+                if playback.lock().unwrap().mode == PlaybackMode::Exclusive {
+                    continue;
+                }
             }
         }
 

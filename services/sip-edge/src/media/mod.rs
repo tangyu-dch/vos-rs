@@ -34,6 +34,7 @@ pub(crate) mod rtcp_processor;
 pub(crate) mod sdp;
 pub(crate) mod transcode;
 pub(crate) mod utils;
+pub(crate) mod wav;
 
 pub use self::config::MediaConfig;
 pub use self::metrics::RtcpQualitySnapshot;
