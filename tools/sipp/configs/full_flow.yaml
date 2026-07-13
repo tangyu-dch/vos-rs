@@ -16,6 +16,8 @@ connections:
 sip_edge:
   dynamic_config:
     enabled: false
+  billing:
+    balance_enforcement_enabled: false
   network:
     sip_udp_bind: "127.0.0.1:5160"
     advertised_addr: "127.0.0.1:5160"

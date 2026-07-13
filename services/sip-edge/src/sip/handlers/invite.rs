@@ -285,7 +285,7 @@ pub(crate) async fn handle_invite_request(
         .and_then(|v| v.as_str().trim().parse::<u32>().ok());
 
     // Pre-call balance check: reject if caller has no balance.
-    if let Some(ref _plan) = outbound_invite {
+    if edge_config.balance_enforcement_enabled && outbound_invite.is_some() {
         if let Some(ref db) = edge_state.db_store {
             let caller_user =
                 crate::edge_state::EdgeState::username_from_request(&request).unwrap_or_default();

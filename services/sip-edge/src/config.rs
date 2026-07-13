@@ -51,6 +51,7 @@ pub struct EdgeConfig {
     pub recording_queue_capacity: usize,
     pub media_metrics_log: bool,
     pub dynamic_config_enabled: bool,
+    pub balance_enforcement_enabled: bool,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -103,6 +104,7 @@ struct SipEdgeConfigSection {
     security: Option<SecuritySection>,
     performance: Option<PerformanceSection>,
     dynamic_config: Option<DynamicConfigSection>,
+    billing: Option<BillingSection>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -161,6 +163,11 @@ struct PerformanceSection {
 #[derive(serde::Deserialize, Debug, Default)]
 struct DynamicConfigSection {
     enabled: Option<bool>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct BillingSection {
+    balance_enforcement_enabled: Option<bool>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -261,6 +268,7 @@ impl EdgeConfig {
         let security_section = edge_section.security.unwrap_or_default();
         let performance_section = edge_section.performance.unwrap_or_default();
         let dynamic_config_section = edge_section.dynamic_config.unwrap_or_default();
+        let billing_section = edge_section.billing.unwrap_or_default();
         let mut media = media::MediaConfig::new_with_symmetric_learning(
             media_section
                 .advertised_addr
@@ -364,6 +372,9 @@ impl EdgeConfig {
             recording_queue_capacity: recording_section.queue_capacity.unwrap_or(10_000).max(1),
             media_metrics_log: media_section.metrics_log.unwrap_or(false),
             dynamic_config_enabled: dynamic_config_section.enabled.unwrap_or(true),
+            balance_enforcement_enabled: billing_section
+                .balance_enforcement_enabled
+                .unwrap_or(true),
         }
     }
 
@@ -612,6 +623,7 @@ impl Default for EdgeConfig {
             recording_queue_capacity: 10_000,
             media_metrics_log: false,
             dynamic_config_enabled: true,
+            balance_enforcement_enabled: true,
         }
     }
 }
