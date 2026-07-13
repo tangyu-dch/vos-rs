@@ -50,6 +50,7 @@ pub struct EdgeConfig {
     pub recording_workers: usize,
     pub recording_queue_capacity: usize,
     pub media_metrics_log: bool,
+    pub dynamic_config_enabled: bool,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -101,6 +102,7 @@ struct SipEdgeConfigSection {
     auth: Option<AuthSection>,
     security: Option<SecuritySection>,
     performance: Option<PerformanceSection>,
+    dynamic_config: Option<DynamicConfigSection>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -154,6 +156,11 @@ struct PerformanceSection {
     udp_workers_auto: Option<bool>,
     udp_receive_buffer_bytes: Option<usize>,
     udp_send_buffer_bytes: Option<usize>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct DynamicConfigSection {
+    enabled: Option<bool>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -253,6 +260,7 @@ impl EdgeConfig {
         let auth_section = edge_section.auth.unwrap_or_default();
         let security_section = edge_section.security.unwrap_or_default();
         let performance_section = edge_section.performance.unwrap_or_default();
+        let dynamic_config_section = edge_section.dynamic_config.unwrap_or_default();
         let mut media = media::MediaConfig::new_with_symmetric_learning(
             media_section
                 .advertised_addr
@@ -355,6 +363,7 @@ impl EdgeConfig {
             recording_workers: recording_section.workers.unwrap_or(4).max(1),
             recording_queue_capacity: recording_section.queue_capacity.unwrap_or(10_000).max(1),
             media_metrics_log: media_section.metrics_log.unwrap_or(false),
+            dynamic_config_enabled: dynamic_config_section.enabled.unwrap_or(true),
         }
     }
 
@@ -602,6 +611,7 @@ impl Default for EdgeConfig {
             recording_workers: 4,
             recording_queue_capacity: 10_000,
             media_metrics_log: false,
+            dynamic_config_enabled: true,
         }
     }
 }

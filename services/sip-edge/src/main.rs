@@ -115,8 +115,12 @@ async fn main() -> Result<(), AnyError> {
     info!("Redis 存储连接成功 (必须要求)");
 
     // 运行数据库配置覆盖：系统配置加载
-    if let Some(ref db) = db_store {
-        edge_config.override_from_db(db).await;
+    if edge_config.dynamic_config_enabled {
+        if let Some(ref db) = db_store {
+            edge_config.override_from_db(db).await;
+        }
+    } else {
+        info!("dynamic Redis/PostgreSQL configuration override is disabled");
     }
 
     // STUN: discover public address for media relay if configured

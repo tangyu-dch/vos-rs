@@ -23,7 +23,8 @@ PERF_LOG_DIR ?= target/sipp_bench
 .PHONY: help env fmt fmt-check check lint test test-unit test-integration test-bench \
         clippy build build-release build-debug quick verify smoke full-flow \
         web-lint web-test web-build web-verify \
-        perf perf-media perf-quick perf-all perf-report bench doc \
+        perf perf-media perf-quick perf-all perf-report bench bench-concurrency \
+        bench-concurrency-quick bench-concurrency-media bench-concurrency-recording doc \
         run-sip-edge run-api-server run-cdr-worker logs clean test-stun
 
 help:
@@ -55,6 +56,10 @@ help:
 	@printf '    make perf-all        全级别测试\n'
 	@printf '    make perf-media      带 RTP 媒体的性能测试\n'
 	@printf '    make perf-report     生成测试报告\n'
+	@printf '    make bench-concurrency          持续并发全场景测试\n'
+	@printf '    make bench-concurrency-quick    快速持续并发测试\n'
+	@printf '    make bench-concurrency-media    RTP 中继并发测试\n'
+	@printf '    make bench-concurrency-recording 录音并发测试\n'
 	@printf '  运行:\n'
 	@printf '    make run-sip-edge    启动 sip-edge\n'
 	@printf '    make run-api-server  启动 api-server\n'
@@ -225,6 +230,18 @@ perf-report: perf-all
 	done
 	@printf '\n日志目录: %s\n' "$(PERF_LOG_DIR)"
 	@pkill -9 -f sip-edge 2>/dev/null; pkill -9 -f sipp 2>/dev/null
+
+bench-concurrency: build-release
+	@$(PYTHON) tools/benchmark/bench.py --scenario all --total 500 --cps 100 --duration 35 --sustain 30
+
+bench-concurrency-quick: build-release
+	@$(PYTHON) tools/benchmark/bench.py --scenario signaling --total 50 --cps 10 --duration 15 --sustain 10
+
+bench-concurrency-media: build-release
+	@$(PYTHON) tools/benchmark/bench.py --scenario media_relay --total 500 --cps 100 --duration 35 --sustain 30
+
+bench-concurrency-recording: build-release
+	@$(PYTHON) tools/benchmark/bench.py --scenario recording --total 500 --cps 100 --duration 35 --sustain 30
 
 # ─── 运行 ──────────────────────────────────────────────
 
