@@ -8,7 +8,8 @@ use crate::{
     media::{MediaConfig, MediaRelayState},
     net::{handle_stream_connection, SipStream, Transport},
     sip::{
-        dialog, transaction, ClientTransactionKey, DialogValidationError, RequestTransactionKey,
+        dialog, transaction, ClientTransactionKey, DialogValidationError, InviteAckKey,
+        RequestTransactionKey,
     },
 };
 use call_core::{CallId, CallManager, GatewayHealthTracker};
@@ -17,7 +18,13 @@ use dashmap::DashMap;
 use rustls_pki_types::ServerName;
 use sdp_core::RtpEndpoint;
 use sip_core::{parse_message, Method, SipRequest, SipUri};
-use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::{debug, error, info, warn};
 
@@ -58,6 +65,23 @@ struct InviteResponseMetadata {
     cseq: Option<u32>,
     status_code: u16,
 }
+
+#[derive(Debug, Clone)]
+struct CachedRegistrationLookup {
+    contact: Option<crate::sip::registrar::RegistrationContact>,
+    expires_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RedisBalanceCheck {
+    pub(crate) has_balance: bool,
+    pub(crate) balance: f64,
+    pub(crate) rate: f64,
+}
+
+const POSITIVE_REGISTRATION_CACHE_TTL: Duration = Duration::from_secs(5);
+const NEGATIVE_REGISTRATION_CACHE_TTL: Duration = Duration::from_secs(1);
+const MAX_REGISTRATION_CACHE_ENTRIES: usize = 10_000;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CdrSinks {
@@ -297,8 +321,9 @@ pub(crate) struct EdgeState {
     /// Active gateway OPTIONS probes keyed by their SIP Call-ID.
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
     /// Redis 多路复用连接，用于集群模式下的跨节点注册状态共享。可选，单节点部署不设置。
-    pub(crate) redis_conn:
-        std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>>,
+    pub(crate) redis_conn: std::sync::OnceLock<redis::aio::MultiplexedConnection>,
+    registration_lookup_cache: dashmap::DashMap<String, CachedRegistrationLookup>,
+    registration_lookup_locks: dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     #[cfg(test)]
     pub(crate) test_gateways: std::sync::Mutex<Vec<String>>,
 }
@@ -365,6 +390,8 @@ impl EdgeState {
             gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
+            registration_lookup_cache: dashmap::DashMap::new(),
+            registration_lookup_locks: dashmap::DashMap::new(),
             #[cfg(test)]
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
@@ -415,67 +442,181 @@ impl EdgeState {
             gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
+            registration_lookup_cache: dashmap::DashMap::new(),
+            registration_lookup_locks: dashmap::DashMap::new(),
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
     }
 
     /// 设置 Redis 连接（仅在启动阶段调用一次）。
     pub(crate) fn set_redis(&self, conn: redis::aio::MultiplexedConnection) {
-        let _ = self
-            .redis_conn
-            .set(std::sync::Arc::new(tokio::sync::Mutex::new(conn)));
+        let _ = self.redis_conn.set(conn);
     }
 
-    /// 获取克隆的 Redis Mutex Arc 连接，适用于跨线程/异步闭包。
-    pub(crate) fn get_redis_arc(
-        &self,
-    ) -> Option<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>> {
+    /// 获取 Redis 多路复用连接的克隆，各请求可并发发送命令。
+    pub(crate) fn redis_connection(&self) -> Option<redis::aio::MultiplexedConnection> {
         self.redis_conn.get().cloned()
     }
 
-    /// 查找注册绑定的 Contact 地址。首先尝试本地缓存，若未命中则回退查找 Redis，实现跨节点集群共享。
+    /// 从 Redis 读取 SIP 鉴权凭据，不回退查询 PostgreSQL。
+    pub(crate) async fn redis_auth_password(&self, username: &str) -> Option<String> {
+        let mut connection = self.redis_connection()?;
+        redis::cmd("HGET")
+            .arg("vos_rs:auth_users")
+            .arg(username)
+            .query_async(&mut connection)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// 使用 Redis 凭据执行 SIP Digest 鉴权，不访问 PostgreSQL。
+    pub(crate) async fn verify_sip_auth(
+        &self,
+        auth: &crate::sip::AuthConfig,
+        request: &SipRequest,
+    ) -> crate::sip::AuthDecision {
+        let username = auth.authorization_username(request);
+        let password = if let Some(username) = username.as_deref() {
+            self.redis_auth_password(username)
+                .await
+                .or_else(|| auth.configured_password(username))
+        } else {
+            None
+        };
+        auth.verify_request_with_password(
+            request,
+            password,
+            auth.is_enabled() || self.redis_connection().is_some(),
+            Some(&self.nonce_replay_cache),
+        )
+    }
+
+    /// 从 Redis 一次读取账户余额与最长前缀费率。
+    pub(crate) async fn redis_balance_check(
+        &self,
+        username: &str,
+        callee: &str,
+    ) -> Option<RedisBalanceCheck> {
+        let mut balance_connection = self.redis_connection()?;
+        let mut rate_connection = balance_connection.clone();
+        let prefixes = (0..=callee.len())
+            .rev()
+            .filter(|index| callee.is_char_boundary(*index))
+            .map(|index| &callee[..index])
+            .collect::<Vec<_>>();
+
+        let mut balance_command = redis::cmd("HGET");
+        balance_command.arg("vos_rs:billing:balances").arg(username);
+        let mut rate_command = redis::cmd("HMGET");
+        rate_command.arg("vos_rs:billing:rates").arg(&prefixes);
+        let balance_future = balance_command.query_async::<Option<f64>>(&mut balance_connection);
+        let rate_future = rate_command.query_async::<Vec<Option<f64>>>(&mut rate_connection);
+        let (balance_result, rates_result) = tokio::join!(balance_future, rate_future);
+        let balance = balance_result.ok()?.unwrap_or(0.0);
+        let rate = rates_result
+            .ok()?
+            .into_iter()
+            .flatten()
+            .next()
+            .unwrap_or(0.0);
+        Some(RedisBalanceCheck {
+            has_balance: balance > 0.0 || rate == 0.0,
+            balance,
+            rate,
+        })
+    }
+
+    /// 查找注册绑定的 Contact 地址。先查本地注册表，未命中再查 Redis。
+    ///
+    /// SIP 请求热路径不访问 PostgreSQL，避免数据库池等待拖慢所有呼叫。
     pub(crate) async fn lookup_contact(
         &self,
         uri: &SipUri,
     ) -> Option<crate::sip::registrar::RegistrationContact> {
+        let aor = crate::sip::registrar::canonical_aor(uri).ok()?;
+        if let Some(cached) = self.cached_registration_lookup(&aor) {
+            return cached;
+        }
+
+        let lookup_lock = self
+            .registration_lookup_locks
+            .entry(aor.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let _guard = lookup_lock.lock().await;
+        if let Some(cached) = self.cached_registration_lookup(&aor) {
+            return cached;
+        }
+
         let now = std::time::SystemTime::now();
-        // 1. 尝试本地的 RegistrationStore 查找
-        let local_res = self
+        let mut result = self
             .registrar
             .read()
             .await
-            .lookup_contact(uri, now, self.db_store.as_ref())
+            .lookup_contact(uri, now, None)
             .await;
-        if local_res.is_some() {
-            return local_res;
-        }
 
-        // 2. 尝试从 Redis 集群查找
-        if let Some(arc) = self.get_redis_arc() {
-            if let Ok(aor) = crate::sip::registrar::canonical_aor(uri) {
-                let redis_key = format!("vos_rs:reg:{}", aor);
-                let mut conn = arc.lock().await;
+        if result.is_none() {
+            if let Some(mut conn) = self.redis_connection() {
+                let redis_key = format!("vos_rs:reg:{aor}");
                 let res: Result<String, redis::RedisError> = redis::cmd("GET")
                     .arg(&redis_key)
-                    .query_async(&mut *conn)
+                    .query_async(&mut conn)
                     .await;
                 if let Ok(json_str) = res {
                     if let Ok(contacts) = serde_json::from_str::<
                         Vec<crate::sip::registrar::RegistrationContact>,
                     >(&json_str)
                     {
-                        // 返回第一个还有效的联系人
-                        for contact in contacts {
-                            if contact.expires > 0 {
-                                return Some(contact);
-                            }
-                        }
+                        result = contacts.into_iter().find(|contact| contact.expires > 0);
                     }
                 }
             }
         }
 
+        let ttl = if result.is_some() {
+            POSITIVE_REGISTRATION_CACHE_TTL
+        } else {
+            NEGATIVE_REGISTRATION_CACHE_TTL
+        };
+        self.registration_lookup_cache.insert(
+            aor,
+            CachedRegistrationLookup {
+                contact: result.clone(),
+                expires_at: Instant::now() + ttl,
+            },
+        );
+        self.prune_registration_lookup_cache();
+        result
+    }
+
+    fn cached_registration_lookup(
+        &self,
+        aor: &str,
+    ) -> Option<Option<crate::sip::registrar::RegistrationContact>> {
+        let cached = self.registration_lookup_cache.get(aor)?;
+        if cached.expires_at > Instant::now() {
+            return Some(cached.contact.clone());
+        }
+        drop(cached);
+        self.registration_lookup_cache.remove(aor);
         None
+    }
+
+    fn prune_registration_lookup_cache(&self) {
+        if self.registration_lookup_cache.len() <= MAX_REGISTRATION_CACHE_ENTRIES {
+            return;
+        }
+        let now = Instant::now();
+        self.registration_lookup_cache
+            .retain(|_, cached| cached.expires_at > now);
+        self.registration_lookup_locks
+            .retain(|aor, _| self.registration_lookup_cache.contains_key(aor));
+    }
+
+    pub(crate) fn invalidate_registration_lookup(&self, aor: &str) {
+        self.registration_lookup_cache.remove(aor);
     }
 
     pub(crate) fn get_internal_call_id(&self, external_call_id: &str) -> Option<String> {
@@ -797,6 +938,19 @@ impl EdgeState {
         self.server_transactions.insert(key, tx);
     }
 
+    pub(crate) fn take_invite_ack_transaction(
+        &self,
+        key: &InviteAckKey,
+    ) -> Option<tokio::sync::mpsc::Sender<transaction::ServerTransactionEvent>> {
+        let transaction_key = self.server_transactions.iter().find_map(|entry| {
+            (entry.key().invite_ack_key().as_ref() == Some(key)).then(|| entry.key().clone())
+        })?;
+        self.server_transactions
+            .remove(&transaction_key)
+            .map(|(_, tx)| tx)
+            .filter(|tx| !tx.is_closed())
+    }
+
     pub(crate) fn get_server_transaction(
         &self,
         key: &RequestTransactionKey,
@@ -829,35 +983,31 @@ impl EdgeState {
             }
         }
 
-        // Check cached result first (TTL 60s)
-        {
-            let cache = self.gateway_cache.read().unwrap();
-            if let Some(entry) = cache.get(&peer_ip) {
-                if entry.1.elapsed().as_secs() < 60 {
-                    return entry.0;
-                }
-            }
-        }
+        self.gateway_cache
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&peer_ip)
+            .map(|entry| entry.0)
+            .unwrap_or(false)
+    }
 
-        let result = if let Some(ref db) = self.db_store {
-            if let Ok(gateways) = db.load_gateways().await {
-                gateways
-                    .iter()
-                    .any(|(_, host, _, _, _, _, _, _)| host == &peer_ip)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        // Update cache
-        {
-            let mut cache = self.gateway_cache.write().unwrap();
-            cache.insert(peer_ip, (result, std::time::Instant::now()));
-        }
-
-        result
+    /// 用已加载的路由网关替换网关 IP 缓存。
+    pub(crate) fn replace_gateway_cache<'a>(
+        &self,
+        gateway_hosts: impl IntoIterator<Item = &'a String>,
+    ) {
+        let now = std::time::Instant::now();
+        let mut cache = self
+            .gateway_cache
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        cache.clear();
+        cache.extend(
+            gateway_hosts
+                .into_iter()
+                .cloned()
+                .map(|host| (host, (true, now))),
+        );
     }
 
     pub(crate) fn cancel_client_transaction(&self, key: &ClientTransactionKey) {

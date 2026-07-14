@@ -11,7 +11,6 @@ use crate::config::EdgeConfig;
 use crate::edge_state::{EdgeState, PendingDatagram};
 use crate::media;
 use crate::sip::{outbound, response, transaction, ClientTransactionKey, RequestTransactionKey};
-use crate::timers;
 
 pub(crate) async fn dispatch_response(
     mut sip_response: SipResponse,
@@ -636,6 +635,7 @@ pub(crate) async fn dispatch_response(
             }
 
             if let (
+                true,
                 Some(db),
                 Some((
                     open,
@@ -646,6 +646,7 @@ pub(crate) async fn dispatch_response(
                     active_calls,
                 )),
             ) = (
+                edge_state.gateway_health_persistence_enabled,
                 edge_state.db_store.clone(),
                 health.get_gateway_status(&gateway_id),
             ) {
@@ -1037,6 +1038,27 @@ pub(crate) async fn dispatch_response(
 
     match transaction {
         Some(transaction) => {
+            let gateway_success_ack = if is_invite
+                && (200..300).contains(&sip_response.status_code)
+                && !raw_external_call_id.is_empty()
+            {
+                let request_uri = transaction
+                    .callee_contact
+                    .as_ref()
+                    .unwrap_or(&transaction.outbound_uri);
+                Some(PendingDatagram::new(
+                    peer.to_string(),
+                    outbound::build_success_response_ack(
+                        &sip_response,
+                        request_uri,
+                        &edge_config.advertised_addr,
+                        &raw_external_call_id,
+                        &transaction.outbound_route_set,
+                    ),
+                ))
+            } else {
+                None
+            };
             let forwarded_bytes = response::forward_response_to_inbound_with_body_and_call_id(
                 &sip_response,
                 &transaction.vias,
@@ -1071,45 +1093,7 @@ pub(crate) async fn dispatch_response(
                 }
             }
 
-            // 200 OK 接通时启动余额守护定时器（硬拆线保护）
-            if edge_config.balance_enforcement_enabled
-                && is_invite
-                && !is_reinvite_response
-                && (200..300).contains(&sip_response.status_code)
-            {
-                if let Some(cid) = call_id.as_deref() {
-                    let caller_user = transaction
-                        .original_request
-                        .as_ref()
-                        .and_then(|r| crate::edge_state::EdgeState::username_from_request(r))
-                        .unwrap_or_default();
-                    let callee_num = transaction
-                        .original_request
-                        .as_ref()
-                        .map(|r| r.uri.user.as_deref().unwrap_or("").to_string())
-                        .unwrap_or_default();
-                    if !caller_user.is_empty() && !callee_num.is_empty() {
-                        let sock_opt = edge_state.socket.get().cloned();
-                        let db_opt = edge_state.db_store.clone();
-                        if let (Some(sock), Some(db)) = (sock_opt, db_opt) {
-                            timers::spawn_billing_watchdog_simple(
-                                cid.to_string(),
-                                caller_user,
-                                callee_num,
-                                timers::BillingWatchdogContext {
-                                    db: std::sync::Arc::new(db),
-                                    socket: sock,
-                                    advertised_addr: edge_config.advertised_addr.clone(),
-                                    transactions: edge_state.inbound_transactions.clone(),
-                                    call_manager: std::sync::Arc::clone(&edge_state.call_manager),
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-
-            let mut datagrams = Vec::new();
+            let mut datagrams = gateway_success_ack.into_iter().collect::<Vec<_>>();
             if !delivered_by_server_transaction {
                 let caller_response = PendingDatagram::new(transaction.peer, forwarded_bytes);
                 let caller_response = match invite_response_order.as_ref() {

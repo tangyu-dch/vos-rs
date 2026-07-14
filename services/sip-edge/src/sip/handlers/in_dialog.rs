@@ -201,10 +201,13 @@ pub(crate) async fn handle_in_dialog_request(
                     count = dtmf_events.len(),
                     "collected DTMF audit events for call"
                 );
-                if let Some(ref db) = edge_state.db_store {
-                    if let Err(error) = db.insert_dtmf_events_batch(&dtmf_events).await {
-                        warn!(%error, call_id = cid, "failed to persist DTMF audit events");
-                    }
+                if let Some(db) = edge_state.db_store.clone() {
+                    let call_id = cid.to_string();
+                    tokio::spawn(async move {
+                        if let Err(error) = db.insert_dtmf_events_batch(&dtmf_events).await {
+                            warn!(%error, %call_id, "failed to persist DTMF audit events");
+                        }
+                    });
                 }
             } else {
                 edge_state.media_relay.clear_dtmf_events(cid);
@@ -274,11 +277,21 @@ pub(crate) async fn handle_in_dialog_request(
                             if let Some(user) = caller_user {
                                 let cid = outcome.call_id.as_str().to_string();
                                 let db = db.clone();
+                                let redis_connection = edge_state.redis_connection();
                                 let user = user.to_string();
                                 let callee = callee.to_string();
                                 tokio::spawn(async move {
                                     match db.settle_call(&cid, &user, &callee, duration_ms).await {
                                         Ok(Some(new_bal)) => {
+                                            if let Some(mut connection) = redis_connection {
+                                                let _: Result<(), redis::RedisError> =
+                                                    redis::cmd("HSET")
+                                                        .arg("vos_rs:billing:balances")
+                                                        .arg(&user)
+                                                        .arg(new_bal)
+                                                        .query_async(&mut connection)
+                                                        .await;
+                                            }
                                             tracing::info!(call_id = %cid, user = %user, new_bal, "实时计费结算完成");
                                         }
                                         Ok(None) => {}

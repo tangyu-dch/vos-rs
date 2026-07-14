@@ -331,14 +331,8 @@ pub(crate) async fn handle_invite_request(
 
     let from_gw = edge_state.is_peer_gateway(peer).await;
     if edge_config.balance_enforcement_enabled && !from_gw {
-        let db_store = edge_state.db_store.clone();
-        let auth_res = edge_config
-            .auth
-            .verify_request(
-                &request,
-                db_store.as_ref(),
-                Some(&edge_state.nonce_replay_cache),
-            )
+        let auth_res = edge_state
+            .verify_sip_auth(&edge_config.auth, &request)
             .await;
         match auth_res {
             AuthDecision::Challenge => {
@@ -387,55 +381,6 @@ pub(crate) async fn handle_invite_request(
             }
         }
     }
-    // ── 余额预检 ────────────────────────────────────────────────────────────
-    // 认证通过后、路由前，对非网关来源的呼叫进行实时余额审核。
-    // 若账户余额 <= 0 且费率 > 0，则立即拒绝并返回 402 Payment Required。
-    if !from_gw {
-        if let Some(ref db) = edge_state.db_store {
-            let caller_user = EdgeState::username_from_request(&request).unwrap_or_default();
-            let callee_num = {
-                let s = request.uri.user.as_deref().unwrap_or("");
-                s.to_string()
-            };
-            if !caller_user.is_empty() {
-                match db.check_balance(&caller_user, &callee_num).await {
-                    Ok((false, balance, rate)) => {
-                        warn!(
-                            caller = %caller_user,
-                            callee = %callee_num,
-                            balance,
-                            rate,
-                            "INVITE rejected: insufficient balance"
-                        );
-                        return vec![PendingDatagram::new(
-                            peer.to_string(),
-                            response::build_response_with_owned_headers(
-                                &request,
-                                402,
-                                "Payment Required - Insufficient Balance",
-                                &[
-                                    (
-                                        "X-VOS-RS-Error".to_string(),
-                                        "Insufficient account balance".to_string(),
-                                    ),
-                                    ("X-VOS-RS-Balance".to_string(), format!("{balance:.4}")),
-                                ],
-                                "",
-                            ),
-                        )];
-                    }
-                    Err(e) => {
-                        // DB 查询失败：记录警告但放行（避免因 DB 故障中断所有通话）
-                        warn!(error = %e, caller = %caller_user, "balance precheck DB error, allowing call");
-                    }
-                    Ok((true, _, _)) => {
-                        // 余额充足，继续处理
-                    }
-                }
-            }
-        }
-    }
-
     let registered_contact = edge_state.lookup_contact(&request.uri).await;
 
     let response::RequestHandling {
@@ -505,34 +450,28 @@ pub(crate) async fn handle_invite_request(
         .get("x-test-max-duration")
         .and_then(|v| v.as_str().trim().parse::<u32>().ok());
 
-    // Pre-call balance check: reject if caller has no balance.
-    if edge_config.balance_enforcement_enabled && outbound_invite.is_some() {
-        if let Some(ref db) = edge_state.db_store {
-            let caller_user =
-                crate::edge_state::EdgeState::username_from_request(&request).unwrap_or_default();
-            let callee = request.uri.user.as_deref().unwrap_or("");
-            if !caller_user.is_empty() {
-                match db.check_balance(&caller_user, callee).await {
-                    Ok((has_balance, balance, rate)) => {
-                        if !has_balance {
-                            warn!(caller = %caller_user, balance, rate, "pre-call balance check failed: insufficient balance");
-                            return vec![PendingDatagram::new(
-                                peer.to_string(),
-                                response::error_for_call_error(
-                                    &request,
-                                    &call_core::CallError::GatewayUnavailable(
-                                        "余额不足".to_string(),
-                                    ),
-                                ),
-                            )];
-                        }
-                        if rate > 0.0 {
-                            calculated_max_duration = Some(((balance / rate) * 60.0) as u32);
-                        }
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "pre-call balance check error, allowing call");
-                    }
+    // 呼叫热路径只从 Redis 读取余额和费率，不回退查询 PostgreSQL。
+    if edge_config.balance_enforcement_enabled && !from_gw && outbound_invite.is_some() {
+        let caller_user = EdgeState::username_from_request(&request).unwrap_or_default();
+        let callee = request.uri.user.as_deref().unwrap_or("");
+        if !caller_user.is_empty() {
+            match edge_state.redis_balance_check(&caller_user, callee).await {
+                Some(check) if !check.has_balance => {
+                    warn!(caller = %caller_user, balance = check.balance, rate = check.rate, "pre-call Redis balance check failed");
+                    return vec![PendingDatagram::new(
+                        peer.to_string(),
+                        response::error_for_call_error(
+                            &request,
+                            &call_core::CallError::GatewayUnavailable("余额不足".to_string()),
+                        ),
+                    )];
+                }
+                Some(check) if check.rate > 0.0 => {
+                    calculated_max_duration = Some(((check.balance / check.rate) * 60.0) as u32);
+                }
+                Some(_) => {}
+                None => {
+                    warn!(caller = %caller_user, "Redis balance check unavailable, allowing call");
                 }
             }
         }
@@ -613,17 +552,8 @@ pub(crate) async fn handle_invite_request(
         if forking_enabled && candidates.len() > 1 {
             let fork_candidates = candidates.iter().take(3).cloned().collect::<Vec<_>>();
             let mut forks_to_save = Vec::new();
-            for (i, candidate) in fork_candidates.iter().enumerate() {
-                let external_call_id = format!(
-                    "{}-f{}@{}",
-                    uuid::Uuid::new_v4(),
-                    i,
-                    edge_config
-                        .advertised_addr
-                        .split(':')
-                        .next()
-                        .unwrap_or("vos-rs")
-                );
+            for candidate in &fork_candidates {
+                let external_call_id = uuid::Uuid::new_v4().to_string();
                 edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
                 forks_to_save.push((
                     external_call_id.clone(),
@@ -663,15 +593,7 @@ pub(crate) async fn handle_invite_request(
                 t_mut.active_forks = forks_to_save;
             }
         } else {
-            let external_call_id = format!(
-                "{}@{}",
-                uuid::Uuid::new_v4(),
-                edge_config
-                    .advertised_addr
-                    .split(':')
-                    .next()
-                    .unwrap_or("vos-rs")
-            );
+            let external_call_id = uuid::Uuid::new_v4().to_string();
             edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
             debug!(
                 internal_call_id,

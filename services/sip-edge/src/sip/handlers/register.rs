@@ -14,15 +14,8 @@ pub(crate) async fn handle_register_request(
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
 ) -> Vec<PendingDatagram> {
-    let db_store = edge_state.db_store.clone();
-
-    let auth_res = edge_config
-        .auth
-        .verify_request(
-            &request,
-            db_store.as_ref(),
-            Some(&edge_state.nonce_replay_cache),
-        )
+    let auth_res = edge_state
+        .verify_sip_auth(&edge_config.auth, &request)
         .await;
     match auth_res {
         AuthDecision::Challenge => {
@@ -44,10 +37,11 @@ pub(crate) async fn handle_register_request(
     let response = {
         let mut registrar_guard = edge_state.registrar.write().await;
         match registrar_guard
-            .handle_register(&request, peer, SystemTime::now(), db_store.as_ref())
+            .handle_register(&request, peer, SystemTime::now(), None)
             .await
         {
             Ok(outcome) => {
+                edge_state.invalidate_registration_lookup(&outcome.aor);
                 // 将注册信息同步至 Redis（用于集群模式下的跨节点状态共享）
                 let max_expires = outcome
                     .contacts
@@ -57,12 +51,11 @@ pub(crate) async fn handle_register_request(
                     .unwrap_or(0);
                 let aor_key = outcome.aor.clone();
                 let contacts_clone = outcome.contacts.clone();
-                let redis_arc = edge_state.get_redis_arc();
+                let redis_connection = edge_state.redis_connection();
 
                 // 异步在后台执行 Redis 写入，防止阻塞 SIP 消息处理链路
                 tokio::spawn(async move {
-                    if let Some(arc) = redis_arc {
-                        let mut conn = arc.lock().await;
+                    if let Some(mut conn) = redis_connection {
                         let redis_key = format!("vos_rs:reg:{}", aor_key);
 
                         if max_expires > 0 {
@@ -72,14 +65,14 @@ pub(crate) async fn handle_register_request(
                                     .arg(json_val)
                                     .arg("EX")
                                     .arg(max_expires as u64)
-                                    .query_async(&mut *conn)
+                                    .query_async(&mut conn)
                                     .await;
                             }
                         } else {
                             // 注销，从 Redis 清除
                             let _: Result<(), redis::RedisError> = redis::cmd("DEL")
                                 .arg(&redis_key)
-                                .query_async(&mut *conn)
+                                .query_async(&mut conn)
                                 .await;
                         }
                     }

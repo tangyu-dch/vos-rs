@@ -157,6 +157,7 @@ async fn main() -> Result<(), AnyError> {
     if let Some(redis_conn) = redis_conn_for_state {
         edge_state.set_redis(redis_conn);
     }
+    warm_hot_path_redis_cache(&edge_state, db_store.as_ref()).await?;
 
     // Start background task to flush CDRs in batches (every 100ms or 100 entries)
     let cdr_sinks_bg = Arc::clone(&cdr_sinks);
@@ -532,8 +533,10 @@ async fn main() -> Result<(), AnyError> {
             Arc::clone(&edge_config),
         );
     }
-    if let Some(ref db) = db_store {
-        spawn_periodic_route_refresh(Arc::clone(&edge_state), db.clone());
+    if edge_config.dynamic_config_enabled {
+        if let Some(ref db) = db_store {
+            spawn_periodic_route_refresh(Arc::clone(&edge_state), db.clone());
+        }
     }
 
     let mut buffer = [0u8; 65_535];
@@ -716,6 +719,7 @@ async fn reload_routes_from_database(
         .into_iter()
         .map(|(id, host, port, transport, cap, _, _, _)| (id, (host, port, transport, cap)))
         .collect();
+    edge_state.replace_gateway_cache(gateway_map.values().map(|(host, _, _, _)| host));
 
     let mut routes = Vec::new();
     let now_hhmm = cdr_core::current_hhmm();
@@ -778,6 +782,51 @@ fn spawn_route_reload_listener(
             }
         }
     });
+}
+
+async fn warm_hot_path_redis_cache(
+    edge_state: &EdgeState,
+    db: Option<&PostgresCdrStore>,
+) -> Result<(), AnyError> {
+    let Some(db) = db else {
+        return Ok(());
+    };
+    let Some(mut connection) = edge_state.redis_connection() else {
+        return Err(std::io::Error::other("Redis connection is not initialized").into());
+    };
+    let (credentials, rates, accounts) = tokio::try_join!(
+        db.list_user_credentials(),
+        db.list_rates(),
+        db.list_accounts(),
+    )?;
+
+    let mut pipeline = redis::pipe();
+    pipeline
+        .atomic()
+        .del("vos_rs:auth_users")
+        .ignore()
+        .del("vos_rs:billing:rates")
+        .ignore()
+        .del("vos_rs:billing:balances")
+        .ignore();
+    for (username, password) in credentials {
+        pipeline
+            .hset("vos_rs:auth_users", username, password)
+            .ignore();
+    }
+    for rate in rates {
+        pipeline
+            .hset("vos_rs:billing:rates", rate.prefix, rate.rate_per_minute)
+            .ignore();
+    }
+    for account in accounts {
+        pipeline
+            .hset("vos_rs:billing:balances", account.username, account.balance)
+            .ignore();
+    }
+    pipeline.query_async::<()>(&mut connection).await?;
+    info!("Redis hot-path caches warmed from PostgreSQL");
+    Ok(())
 }
 
 /// Periodically reload routes from database to support time-based routing.
