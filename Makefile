@@ -202,34 +202,32 @@ full-flow:
 # ─── 性能测试 ──────────────────────────────────────────
 
 perf: build-release
-	@VOS_RS_CONFIG_FILE="$(PERF_CONFIG_FILE)" PERF_PROFILE=standard bash tools/sipp/run_bench_final.sh
+	@$(PYTHON) tools/benchmark/bench.py --scenario signaling --total 1000 --cps 200 --duration 35 --sustain 30
 
 perf-media: build-release
-	@VOS_RS_CONFIG_FILE="$(PERF_CONFIG_FILE)" bash tools/sipp/run_bench_media.sh
+	@$(PYTHON) tools/benchmark/bench.py --scenario media_relay --total 500 --cps 100 --duration 35 --sustain 30
 
 perf-quick: build-release
-	@VOS_RS_CONFIG_FILE="$(PERF_CONFIG_FILE)" PERF_PROFILE=quick bash tools/sipp/run_bench_final.sh
+	@$(PYTHON) tools/benchmark/bench.py --scenario all --total 50 --cps 10 --duration 15 --sustain 10
 
 perf-all: build-release
-	@VOS_RS_CONFIG_FILE="$(PERF_CONFIG_FILE)" PERF_PROFILE=all bash tools/sipp/run_bench_final.sh
+	@$(PYTHON) tools/benchmark/bench.py --scenario all --total 500 --cps 100 --duration 35 --sustain 30
 
-perf-report: perf-all
+perf-report:
 	@printf '\n========================================\n'
 	@printf '       VOS-RS 性能测试报告\n'
 	@printf '========================================\n'
-	@printf '%-10s | %-8s | %-8s | %-8s | %s\n' "目标CPS" "实际CPS" "成功" "失败" "日志"
-	@printf '%-10s-+-%-8s-+-%-8s-+-%-8s-+-%s\n' "----------" "--------" "--------" "--------" "--------"
-	@for rate in 50 100 200 500 800 1000 2000; do \
-		SUCC=$$(awk -F'|' '/Successful call/{print $$3}' "$(PERF_LOG_DIR)/$${rate}cps_caller.log" 2>/dev/null | tr -d ' '); \
-		FAIL=$$(awk -F'|' '/Failed call/{print $$3}' "$(PERF_LOG_DIR)/$${rate}cps_caller.log" 2>/dev/null | tr -d ' '); \
-		CPS=$$(awk -F'|' '/Call Rate/{print $$3}' "$(PERF_LOG_DIR)/$${rate}cps_caller.log" 2>/dev/null | tr -d ' cps' | tr -d ' '); \
-		[ -z "$$SUCC" ] && SUCC="超时"; \
-		[ -z "$$FAIL" ] && FAIL="-"; \
-		[ -z "$$CPS" ] && CPS="-"; \
-		printf '%-10s | %-8s | %-8s | %-8s | %s\n' "$${rate}cps" "$$CPS" "$$SUCC" "$$FAIL" "$(PERF_LOG_DIR)/$${rate}cps_caller.log"; \
-	done
-	@printf '\n日志目录: %s\n' "$(PERF_LOG_DIR)"
-	@pkill -9 -f sip-edge 2>/dev/null; pkill -9 -f sipp 2>/dev/null
+	@latest_run=$$(ls -td target/benchmark/* 2>/dev/null | head -n 1); \
+	if [ -n "$$latest_run" ]; then \
+		for report in $$latest_run/*/report.md; do \
+			if [ -f "$$report" ]; then \
+				cat "$$report"; \
+				printf '\n----------------------------------------\n'; \
+			fi; \
+			done; \
+	else \
+		printf '未找到任何测试报告。\n'; \
+	fi
 
 bench-concurrency: build-release
 	@$(PYTHON) tools/benchmark/bench.py --scenario all --total 500 --cps 100 --duration 35 --sustain 30
