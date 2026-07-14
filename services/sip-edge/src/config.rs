@@ -489,6 +489,9 @@ impl EdgeConfig {
         if let Some(val) = get_val!("media_metrics_log").await {
             self.media_metrics_log = val == "true" || val == "1";
         }
+        if let Some(val) = get_val!("balance_enforcement_enabled").await {
+            self.balance_enforcement_enabled = val == "true" || val == "1";
+        }
 
         // 覆盖 Media Config 中的相关属性
         if let Some(val) = get_val!("rtp_advertised_addr").await {

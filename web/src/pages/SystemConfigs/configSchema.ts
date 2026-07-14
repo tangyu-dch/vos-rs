@@ -83,6 +83,14 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
     ],
   },
   {
+    key: 'billing',
+    title: '实时计费',
+    description: '余额预检和余额耗尽后的强制拆线策略。关闭后仍生成 CDR 并执行正常结算。',
+    fields: [
+      { key: 'balance_enforcement_enabled', label: '启用余额强制策略', description: '呼叫前检查余额，并在余额耗尽时自动拆线。压测环境可关闭。', type: 'boolean' },
+    ],
+  },
+  {
     key: 'tls',
     title: 'SIP TLS',
     description: '证书校验和客户端 TLS 参数。跳过校验仅用于隔离测试环境。',

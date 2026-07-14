@@ -164,6 +164,7 @@ fn config_value_kind(key: &str) -> Option<&'static str> {
         "rtp_symmetric_learning"
         | "rtp_anti_spoofing"
         | "recording_enabled"
+        | "balance_enforcement_enabled"
         | "udp_workers_auto"
         | "media_metrics_log"
         | "tls_allow_test_certificate"
@@ -247,6 +248,10 @@ mod tests {
     fn accepts_supported_system_configs() {
         let configs = HashMap::from([
             ("recording_enabled".to_string(), "true".to_string()),
+            (
+                "balance_enforcement_enabled".to_string(),
+                "false".to_string(),
+            ),
             ("rtp_port_min".to_string(), "40000".to_string()),
             ("rtp_port_max".to_string(), "40100".to_string()),
         ]);
