@@ -96,11 +96,17 @@ vos-rs/
 │       └── src/               #   main.rs (单文件 392 行)
 │
 ├── web/                       # React 管理界面 (Vite + TypeScript, 14 页面)
-├── docs/                      # 架构文档
-│   ├── ARCHITECTURE.md
-│   ├── ENV_VARS.md
-│   ├── rtp-sip-completeness.md
-│   └── VOS_RS_ARCHITECTURE_ANALYSIS.md
+├── docs/                      # 文档目录
+│   ├── architecture/          # 架构与对比设计
+│   │   ├── ARCHITECTURE.md
+│   │   ├── VOS_RS_ARCHITECTURE_ANALYSIS.md
+│   │   └── rtp-sip-completeness.md
+│   ├── deployment/            # 部署指南
+│   │   └── DEPLOY.md
+│   ├── development/           # 开发与环境配置
+│   │   └── ENV_VARS.md
+│   └── user-guide/            # 用户操作指南
+│       └── WEB_GUIDE.md
 ├── scripts/                   # SQL 迁移 + 开发脚本
 ├── tools/                     # SIPp 测试工具
 ├── deploy/                    # 部署配置
@@ -787,12 +793,13 @@ VOS_RS_UDP_WORKERS_AUTO=true               # 自适应 worker 数量
 
 | 文档 | 位置 | 说明 |
 |------|------|------|
-| 架构分析 | `docs/VOS_RS_ARCHITECTURE_ANALYSIS.md` | 完整架构分析 + VOS 对比 |
-| 架构设计 | `docs/ARCHITECTURE.md` | 系统架构、模块关系 |
-| 环境变量 | `docs/ENV_VARS.md` | 配置项参考 |
-| SIP/RTP 完整性 | `docs/rtp-sip-completeness.md` | 功能覆盖度 |
-| 部署指南 | `DEPLOY.md` | Docker Compose + 手动部署 |
-| Web 界面指南 | `WEB_GUIDE.md` | 管理界面使用说明 |
+| 架构分析 | `docs/architecture/VOS_RS_ARCHITECTURE_ANALYSIS.md` | 完整架构分析 + VOS 对比 |
+| 架构设计 | `docs/architecture/ARCHITECTURE.md` | 系统架构、模块关系 |
+| 环境变量 | `docs/development/ENV_VARS.md` | 配置项参考 |
+| SIP/RTP 完整性 | `docs/architecture/rtp-sip-completeness.md` | 功能覆盖度 |
+| 部署指南 | `docs/deployment/DEPLOY.md` | Docker Compose + 手动部署 |
+| Web 界面指南 | `docs/user-guide/WEB_GUIDE.md` | 管理界面使用说明 |
+
 
 ---
 

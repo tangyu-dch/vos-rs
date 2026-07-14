@@ -11,10 +11,11 @@ cdr-core = { path = "../../crates/cdr-core" }
 call-core = { path = "../../crates/call-core" }
 dashmap = "6"
 md5 = "0.7"
+uuid = { version = "1", features = ["v4"] }
 rtp-core = { path = "../../crates/rtp-core" }
 sdp-core = { path = "../../crates/sdp-core" }
 sip-core = { path = "../../crates/sip-core" }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 time = "0.3"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "time"] }
 tracing = "0.1"

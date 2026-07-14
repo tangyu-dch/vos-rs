@@ -60,6 +60,7 @@ impl RecordingSession {
         max_file_bytes: u64,
         max_duration_secs: u64,
         pool: Arc<RecordingPool>,
+        format_str: String,
     ) -> Self {
         Self {
             info: Arc::new(RecordingSessionInfo {
@@ -69,6 +70,7 @@ impl RecordingSession {
                 max_file_bytes,
                 max_duration_secs,
                 last_disk_check_ms: AtomicU64::new(0),
+                format_str,
             }),
             pool,
         }
@@ -104,7 +106,11 @@ impl RecordingSession {
 
 impl Drop for RecordingSession {
     fn drop(&mut self) {
-        self.pool.finish(self.info.id);
+        self.pool.finish(
+            self.info.id,
+            self.info.wav_path.clone(),
+            self.info.format_str.clone(),
+        );
     }
 }
 
@@ -116,6 +122,8 @@ pub struct RecordingSessionInfo {
     pub max_file_bytes: u64,
     pub max_duration_secs: u64,
     pub last_disk_check_ms: AtomicU64,
+    /// 录音完成后的转码格式（"wav" / "opus" / "amr"）
+    pub format_str: String,
 }
 
 impl RecordingSessionInfo {
@@ -238,8 +246,15 @@ impl RecordingPool {
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "recording worker is stopped"))?
     }
 
-    pub fn finish(&self, session_id: u64) {
-        let _ = self.try_send(session_id, RecordingCommand::Finish { session_id });
+    pub fn finish(&self, session_id: u64, wav_path: std::path::PathBuf, format_str: String) {
+        let _ = self.try_send(
+            session_id,
+            RecordingCommand::Finish {
+                session_id,
+                wav_path,
+                format_str,
+            },
+        );
     }
 
     /// 投递 RTP 数据包时为 Finish/Flush 控制命令保留一个队列槽位。
@@ -417,12 +432,21 @@ fn handle_recording_command(
                 .and_then(|recording_file| recording_file.recorder.flush_recording());
             let _ = reply.send(result);
         }
-        RecordingCommand::Finish { session_id } => {
+        RecordingCommand::Finish {
+            session_id,
+            wav_path,
+            format_str,
+        } => {
             if let Some(mut recording_file) = recorders.remove(&session_id) {
                 if let Err(error) = recording_file.recorder.flush_recording() {
                     warn!(%error, session_id, "failed to finalize call recording");
                 }
             }
+            // 录音完成后异步转码（wav 格式无操作）
+            crate::media::transcode::transcode_recording_async(
+                wav_path,
+                crate::media::transcode::RecordingFormat::from_str(&format_str),
+            );
         }
     }
 }
@@ -489,6 +513,10 @@ pub enum RecordingCommand {
     },
     Finish {
         session_id: u64,
+        /// WAV 文件路径，用于录音完成后的转码后处理
+        wav_path: std::path::PathBuf,
+        /// 目标转码格式字符串（如 "opus"、"amr"、"wav"）
+        format_str: String,
     },
 }
 
@@ -893,6 +921,7 @@ impl MediaRelayState {
             config.recording_max_file_bytes,
             config.recording_max_duration_secs,
             Arc::clone(&self.recording_pool),
+            config.recording_format.clone(),
         ));
 
         self.recordings.insert(

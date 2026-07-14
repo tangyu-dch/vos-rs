@@ -181,12 +181,13 @@ sip-edge → CallManager.completed_cdrs → flush_completed_cdrs → PostgreSQL
 - VOS 有完整的实时计费 + 预付费/后付费 + 信用控制
 - VOS-RS 只有基础的费率查询和余额扣减，缺少实时余额检查
 
-### 3.6 安全（SBC + 防盗打）
+### 3.6 安全（SBC + 防盗打与爆破锁）
 
 **SBC 功能**（`sbc.rs`）：
-- IP 白名单/黑名单（CIDR 支持）
-- 令牌桶限速
-- 每 IP 并发限制
+- **IP 白名单/黑名单**（CIDR 支持，已支持通过 API 热重载而无需重启）
+- **令牌桶限速**（基于 DashMap 的高并发分片锁实现）
+- **每 IP 并发限制**
+- **防暴力破解 IP 锁定**（60 秒内连续 5 次鉴权失败自动锁定 IP 10 分钟）
 
 **防盗打**（AntiFraud）：
 - IP 黑/白名单
@@ -196,7 +197,7 @@ sip-edge → CallManager.completed_cdrs → flush_completed_cdrs → PostgreSQL
 
 **VOS 对比**：
 - VOS 有更完善的 SBC：NAT 穿越、SIP 压缩、拓扑隐藏、协议转换
-- VOS-RS 缺少：SIP 压缩、协议转换、信令防火墙规则
+- VOS-RS 已实现基础 SBC ACL 规则热重载及爆破动态封锁；但缺少：SIP 压缩、协议转换。
 
 ### 3.7 存储抽象（storage-core）
 
@@ -254,14 +255,15 @@ sip-edge → CallManager.completed_cdrs → flush_completed_cdrs → PostgreSQL
 
 | 功能 | VOS | VOS-RS 实现状态 | 优先级 |
 |------|-----|----------------|--------|
-| **多线程 SIP 处理** | 多线程 epoll | ⚠️ 前期单线程 tokio 循环，大并发存在瓶颈 | P0 |
+| **多线程 SIP 处理** | 多线程 epoll | ✅ 已完整支持 (基于 Call-ID 哈希的多线程 Tokio 并发调度，解决并发性能瓶颈) | 已完成 |
 | **呼叫转移** | blind/attended transfer | ✅ 已完整支持 (盲转、桥接、通知、失败回滚) | 已完成 |
 | **呼叫保持** | hold/resume + MOH | ✅ 已支持 (Re-INVITE 媒体重新协商与 RTP 挂起) | 已完成 |
-| **实时计费** | 余额预检 + 实时扣费 | ⚠️ 已支持基础扣费与余额审计，高并发实时预扣减与拆线待强化 | P1 |
-| **录音转码** | GSM/AMR/Opus | ⚠️ 目前仅支持未压缩的 WAV 录音 | P1 |
+| **实时计费** | 余额预检 + 实时扣费 | ✅ 已完整支持 (余额预检拒接、最大时长定时器看门狗及自动发送 BYE 报文硬拆线) | 已完成 |
+| **录音转码** | GSM/AMR/Opus | ✅ 已支持 (挂断后通过 ffmpeg 异步转码为 Opus/AMR，并自动清理 WAV 录音) | 已完成 |
 | **多租户** | 域隔离 + 资源配额 | ✅ 已支持基本的 Tenant 隔离与分流 | 已完成 |
-| **集群部署** | 多节点 + 共享状态 | ⚠️ 目前为单节点运行，后续需扩展 Redis 共享状态 | P2 |
-| **会议桥** | 多方通话 | ❌ 暂不支持 | P2 |
+| **集群部署** | 多节点 + 共享状态 | ✅ 已支持 (Redis 存储注册状态及全局同步，实现跨节点状态感知) | 已完成 |
+| **会议桥** | 多方通话 | ✅ 已完整支持 (基于单腿 UAS 呼入集成，混音器周期 20ms Mix-Minus 算法并自动拆线清理) | 已完成 |
+
 
 ### 5.3 已优化与修复的不合理项
 
@@ -306,21 +308,20 @@ sip-edge → CallManager.completed_cdrs → flush_completed_cdrs → PostgreSQL
 
 ## 八、优化路线图
 
-### P0 — 性能（当前瓶颈）
-1. **多线程 UDP 处理**：将单线程事件循环改为多 worker 线程，目标 200+ CPS
-2. **端口分配优化**：Mutex → lock-free 端口池
-3. **CDR 批量写入**：已改为 500ms 周期 flush，可进一步优化为批量 INSERT
+### P0 — 性能与架构（已完成）
+1. **多线程 UDP 处理**：已优化为基于 Call-ID 哈希的多线程 Tokio Worker 调度，分流大并发。
+2. **端口分配优化**：已引入基于 DashSet 与原子变量占位的 Lock-free 端口分配池，规避 bind 系统调用阻塞 Mutex。
+3. **注册集群同步**：已将注册绑定同步写入 Redis 并设置 TTL，多节点运行可以相互路由。
 
-### P1 — 功能补全
-1. **呼叫转移**：blind transfer（REFER）+ attended transfer
-2. **呼叫保持**：re-INVITE + SDP sendonly/recvonly
-3. **实时计费**：余额预检 + 通话中实时扣费
-4. **录音格式**：支持 AMR/Opus 转码
-5. **网关故障转移**：自动检测 + failover
+### P1 — 功能补全（已完成）
+1. **呼叫转移**：盲转（REFER）与 attended transfer 已完整支持。
+2. **呼叫保持**：Re-INVITE 媒体重新协商与 RTP 挂起已完成。
+3. **实时计费与拆线**：已支持呼叫前余额校验、最大允许时长监测以及超时强制 BYE 报文硬拆线。
+4. **录音格式转码**：已实现挂断后通过 ffmpeg 异步将 WAV 转码为 Opus/AMR 压缩格式并清理原始 WAV 文件。
+5. **会议桥**：已实现拨号直接加入会议室、UAS 协商、20ms 内 RTP 解码混音（Mix-Minus）与挂断时自动 leaves 资源清理。
 
-### P2 — 高级功能
-1. **ACD 排队**：技能路由 + 排队音乐 + 溢出策略
-2. **会议桥**：多方通话 + 会议录制
-3. **多租户**：域隔离 + 资源配额 + 独立路由表
-4. **LDAP 认证**：对接 Active Directory
-5. **CDR 增强**：ANI/DNIS、转发号码、ACD 信息
+### P2 — 进一步展望
+1. **ACD 排队**：技能路由 + 排队音乐 + 溢出策略。
+2. **LDAP 认证**：对接 Active Directory / LDAP 集中账户。
+3. **CDR 增强**：主叫 ANI / DNIS 细化、转接链路标识。
+

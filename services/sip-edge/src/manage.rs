@@ -5,7 +5,9 @@ use axum::{
     Json, Router,
 };
 use std::sync::Arc;
+use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};
+
 
 use call_core::ActiveCall;
 use serde::Deserialize;
@@ -47,11 +49,19 @@ pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String)
         .route("/manage/calls/:call_id/mute", post(mute))
         .route("/manage/calls/:call_id/unmute", post(unmute))
         .route("/manage/calls/:call_id/status", get(call_status))
+        .route("/manage/calls/:call_id/monitor", post(monitor_call))
+        .route("/manage/calls/:call_id/stop-monitor", post(stop_monitor_call))
+        .route("/manage/conferences/join", post(join_conference))
+        .route("/manage/conferences/leave", post(leave_conference))
+        .route("/manage/conferences/status", get(conference_status))
+        .route("/manage/conferences/mute-participant", post(mute_conference_participant))
+        .route("/manage/sbc/rules", post(update_sbc_rules))
         .route_layer(axum::middleware::from_fn_with_state(
             ManageAuthSecret(internal_secret),
             internal_auth,
         ))
         .with_state(state)
+
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -530,4 +540,281 @@ async fn call_status(
             }
         })),
     )
+}
+
+#[derive(Deserialize)]
+struct JoinConferenceRequest {
+    conference_id: String,
+    port: u16,
+    codec: String,
+    target_ip: String,
+    target_port: u16,
+}
+
+async fn join_conference(
+    State(state): State<Arc<EdgeState>>,
+    Json(payload): Json<JoinConferenceRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let socket = match state.media_relay.active_sockets.get(&payload.port) {
+        Some(s) => s.value().clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("No active socket found for port {}", payload.port)
+                })),
+            );
+        }
+    };
+
+    let target_addr = match format!("{}:{}", payload.target_ip, payload.target_port).parse::<SocketAddr>() {
+        Ok(addr) => addr,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("Invalid target address: {}", e)
+                })),
+            );
+        }
+    };
+
+    let codec = match payload.codec.to_lowercase().as_str() {
+        "pcmu" => rtp_core::AudioCodec::Pcmu,
+        _ => rtp_core::AudioCodec::Pcma,
+    };
+
+    state
+        .media_relay
+        .conference_manager
+        .join_conference(&payload.conference_id, payload.port, codec, target_addr, socket)
+        .await;
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "message": "Successfully joined conference",
+            "conference_id": payload.conference_id,
+            "port": payload.port,
+        })),
+    )
+}
+
+#[derive(Deserialize)]
+struct LeaveConferenceRequest {
+    port: u16,
+}
+
+async fn leave_conference(
+    State(state): State<Arc<EdgeState>>,
+    Json(payload): Json<LeaveConferenceRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    state
+        .media_relay
+        .conference_manager
+        .leave_conference(payload.port)
+        .await;
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "message": "Successfully left conference",
+            "port": payload.port,
+        })),
+    )
+}
+
+async fn conference_status(
+    State(state): State<Arc<EdgeState>>,
+) -> Json<serde_json::Value> {
+    let mut list = Vec::new();
+    for entry in state.media_relay.conference_manager.conferences.iter() {
+        let conf = entry.value().lock().await;
+        let mut participants = Vec::new();
+        for p in conf.participants.values() {
+            participants.push(serde_json::json!({
+                "port": p.port,
+                "codec": format!("{:?}", p.codec).to_lowercase(),
+                "target_addr": p.target_addr.to_string(),
+                "ssrc": p.ssrc,
+                "sequence": p.sequence,
+                "timestamp": p.timestamp,
+                "buffered_pcm_samples": p.pcm_buffer.len(),
+                "muted": p.muted,
+            }));
+        }
+        list.push(serde_json::json!({
+            "conference_id": conf.id,
+            "participants": participants,
+        }));
+    }
+    Json(serde_json::json!({
+        "conferences": list
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct UpdateSbcRulesRequest {
+    allow_rules: Vec<String>,
+    block_rules: Vec<String>,
+}
+
+async fn update_sbc_rules(
+    State(state): State<Arc<EdgeState>>,
+    Json(payload): Json<UpdateSbcRulesRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let allow_refs: Vec<&str> = payload.allow_rules.iter().map(|s| s.as_str()).collect();
+    let block_refs: Vec<&str> = payload.block_rules.iter().map(|s| s.as_str()).collect();
+    state.sbc_engine.update_rules(&allow_refs, &block_refs);
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "success",
+            "message": "SBC rules dynamically updated successfully"
+        })),
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct MonitorCallRequest {
+    supervisor_addr: String,
+}
+
+async fn monitor_call(
+    State(state): State<Arc<EdgeState>>,
+    Path(call_id): Path<String>,
+    Json(payload): Json<MonitorCallRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let Ok(supervisor_addr) = payload.supervisor_addr.parse::<SocketAddr>() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "Invalid supervisor_addr format"
+            })),
+        );
+    };
+
+    let tx_opt = state.inbound_transactions.get(&call_id);
+    let Some(tx) = tx_opt else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "Call not found"
+            })),
+        );
+    };
+
+    let mut ports_monitored = Vec::new();
+    if let Some(ref ep) = tx.caller_relay_rtp {
+        state.media_relay.start_monitoring(ep.port, supervisor_addr);
+        ports_monitored.push(ep.port);
+    }
+    if let Some(ref ep) = tx.gateway_relay_rtp {
+        state.media_relay.start_monitoring(ep.port, supervisor_addr);
+        ports_monitored.push(ep.port);
+    }
+
+    if ports_monitored.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "Call is active but media ports are not allocated yet"
+            })),
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "success",
+            "message": "Call monitoring started successfully",
+            "call_id": call_id,
+            "monitored_ports": ports_monitored,
+            "supervisor_addr": supervisor_addr.to_string()
+        })),
+    )
+}
+
+async fn stop_monitor_call(
+    State(state): State<Arc<EdgeState>>,
+    Path(call_id): Path<String>,
+    Json(payload): Json<MonitorCallRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let Ok(supervisor_addr) = payload.supervisor_addr.parse::<SocketAddr>() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "Invalid supervisor_addr format"
+            })),
+        );
+    };
+
+    let tx_opt = state.inbound_transactions.get(&call_id);
+    let Some(tx) = tx_opt else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "Call not found"
+            })),
+        );
+    };
+
+    if let Some(ref ep) = tx.caller_relay_rtp {
+        state.media_relay.stop_monitoring(ep.port, supervisor_addr);
+    }
+    if let Some(ref ep) = tx.gateway_relay_rtp {
+        state.media_relay.stop_monitoring(ep.port, supervisor_addr);
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "success",
+            "message": "Call monitoring stopped successfully",
+            "call_id": call_id,
+            "supervisor_addr": supervisor_addr.to_string()
+        })),
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct MuteConferenceParticipantRequest {
+    conference_id: String,
+    port: u16,
+    mute: bool,
+}
+
+async fn mute_conference_participant(
+    State(state): State<Arc<EdgeState>>,
+    Json(payload): Json<MuteConferenceParticipantRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let success = state
+        .media_relay
+        .conference_manager
+        .set_participant_mute(&payload.conference_id, payload.port, payload.mute)
+        .await;
+
+    if success {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "success",
+                "message": format!("Participant port {} mute status set to {}", payload.port, payload.mute)
+            })),
+        )
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "Conference or participant not found"
+            })),
+        )
+    }
 }

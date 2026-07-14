@@ -138,9 +138,11 @@ impl RateLimiter {
 
 #[derive(Debug)]
 pub struct SbcEngine {
-    allowlist: Vec<IpNet>,
-    blocklist: Vec<IpNet>,
+    allowlist: std::sync::RwLock<Vec<IpNet>>,
+    blocklist: std::sync::RwLock<Vec<IpNet>>,
     rate_limiter: RateLimiter,
+    auth_failures: DashMap<IpAddr, (u32, Instant)>,
+    locked_ips: DashMap<IpAddr, Instant>,
 }
 
 impl SbcEngine {
@@ -166,37 +168,111 @@ impl SbcEngine {
             })
             .collect();
         Self {
-            allowlist,
-            blocklist,
+            allowlist: std::sync::RwLock::new(allowlist),
+            blocklist: std::sync::RwLock::new(blocklist),
             rate_limiter: RateLimiter::new(capacity, fill_rate),
+            auth_failures: DashMap::new(),
+            locked_ips: DashMap::new(),
         }
     }
 
     pub fn is_allowed(&self, ip: IpAddr) -> bool {
-        for net in &self.blocklist {
-            if net.contains(&ip) {
+        // 1. 检查动态爆破锁定
+        if let Some(lock_time) = self.locked_ips.get(&ip) {
+            if Instant::now() < *lock_time {
                 return false;
             }
         }
-        if !self.allowlist.is_empty() {
-            let mut found = false;
-            for net in &self.allowlist {
+        self.locked_ips.remove(&ip); // 锁定过期，清理条目
+
+        // 2. 检查黑名单
+        if let Ok(blocklist) = self.blocklist.read() {
+            for net in &*blocklist {
                 if net.contains(&ip) {
-                    found = true;
-                    break;
+                    return false;
                 }
             }
-            if !found {
-                return false;
+        }
+
+        // 3. 检查白名单
+        if let Ok(allowlist) = self.allowlist.read() {
+            if !allowlist.is_empty() {
+                let mut found = false;
+                for net in &*allowlist {
+                    if net.contains(&ip) {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return false;
+                }
             }
         }
+
         true
+    }
+
+    pub fn register_auth_failure(&self, ip: IpAddr) {
+        let now = Instant::now();
+        let mut fail_count = 1;
+
+        self.auth_failures.entry(ip)
+            .and_modify(|(count, last_time)| {
+                // 如果上一次失败在 60 秒内，则累加计数
+                if now.duration_since(*last_time).as_secs() < 60 {
+                    *count += 1;
+                } else {
+                    // 超过 60 秒则重置计数
+                    *count = 1;
+                }
+                *last_time = now;
+                fail_count = *count;
+            })
+            .or_insert((1, now));
+
+        if fail_count >= 5 {
+            let lock_until = now + std::time::Duration::from_secs(600);
+            warn!(%ip, "SBC 防暴力破解机制：当前 IP 鉴权失败达到上限，执行动态封禁 10 分钟");
+            self.locked_ips.insert(ip, lock_until);
+        }
+    }
+
+    pub fn update_rules(&self, allow_rules: &[&str], block_rules: &[&str]) {
+        let allowlist: Vec<IpNet> = allow_rules
+            .iter()
+            .filter_map(|rule| match IpNet::parse(rule) {
+                Ok(net) => Some(net),
+                Err(error) => {
+                    warn!(rule, %error, "忽略无效 SBC allowlist CIDR 规则");
+                    None
+                }
+            })
+            .collect();
+        let blocklist: Vec<IpNet> = block_rules
+            .iter()
+            .filter_map(|rule| match IpNet::parse(rule) {
+                Ok(net) => Some(net),
+                Err(error) => {
+                    warn!(rule, %error, "忽略无效 SBC blocklist CIDR 规则");
+                    None
+                }
+            })
+            .collect();
+
+        if let Ok(mut w) = self.allowlist.write() {
+            *w = allowlist;
+        }
+        if let Ok(mut w) = self.blocklist.write() {
+            *w = blocklist;
+        }
     }
 
     pub fn check_rate(&self, ip: IpAddr) -> bool {
         self.rate_limiter.check_rate(ip)
     }
 }
+
 
 #[cfg(test)]
 mod tests {

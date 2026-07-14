@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use sip_core::{SipRequest, SipUri};
 use tracing::info;
@@ -30,16 +29,8 @@ pub(crate) async fn handle_out_of_dialog_message(
         }
     };
 
-    let target_contact = {
-        let registrar = edge_state.registrar.read().await;
-        registrar
-            .lookup_contact(
-                &request.uri,
-                SystemTime::now(),
-                edge_state.db_store.as_ref(),
-            )
-            .await
-    };
+    let target_contact = edge_state.lookup_contact(&request.uri).await;
+
 
     let outbound_uri = if let Some(ref contact) = target_contact {
         SipUri::from_str(&contact.uri).ok()

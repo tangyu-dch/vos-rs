@@ -1,6 +1,5 @@
 use crate::handle_datagram;
 use crate::media::relay::MediaRelayMetrics;
-use crate::nats_cdr::NatsCdrPublisher;
 use crate::net::create_tls_connector;
 use crate::sbc;
 use crate::sip::registrar::RegistrationStore;
@@ -40,7 +39,6 @@ impl PendingDatagram {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CdrSinks {
     pub(crate) postgres: Option<PostgresCdrStore>,
-    pub(crate) nats: Option<NatsCdrPublisher>,
 }
 
 #[allow(dead_code)]
@@ -264,9 +262,12 @@ pub(crate) struct EdgeState {
     pub(crate) media_metrics_log: bool,
     /// Active gateway OPTIONS probes keyed by their SIP Call-ID.
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
+    /// Redis 多路复用连接，用于集群模式下的跨节点注册状态共享。可选，单节点部署不设置。
+    pub(crate) redis_conn: std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>>,
     #[cfg(test)]
     pub(crate) test_gateways: std::sync::Mutex<Vec<String>>,
 }
+
 
 impl EdgeState {
     #[cfg(test)]
@@ -327,6 +328,7 @@ impl EdgeState {
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
             gateway_probes: dashmap::DashMap::new(),
+            redis_conn: std::sync::OnceLock::new(),
             #[cfg(test)]
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
@@ -374,9 +376,64 @@ impl EdgeState {
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
             gateway_probes: dashmap::DashMap::new(),
+            redis_conn: std::sync::OnceLock::new(),
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
     }
+
+    /// 设置 Redis 连接（仅在启动阶段调用一次）。
+    pub(crate) fn set_redis(&self, conn: redis::aio::MultiplexedConnection) {
+        let _ = self.redis_conn.set(std::sync::Arc::new(tokio::sync::Mutex::new(conn)));
+    }
+
+    /// 获取克隆的 Redis Mutex Arc 连接，适用于跨线程/异步闭包。
+    pub(crate) fn get_redis_arc(&self) -> Option<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>> {
+        self.redis_conn.get().cloned()
+    }
+
+    /// 查找注册绑定的 Contact 地址。首先尝试本地缓存，若未命中则回退查找 Redis，实现跨节点集群共享。
+    pub(crate) async fn lookup_contact(
+        &self,
+        uri: &SipUri,
+    ) -> Option<crate::sip::registrar::RegistrationContact> {
+        let now = std::time::SystemTime::now();
+        // 1. 尝试本地的 RegistrationStore 查找
+        let local_res = self
+            .registrar
+            .read()
+            .await
+            .lookup_contact(uri, now, self.db_store.as_ref())
+            .await;
+        if local_res.is_some() {
+            return local_res;
+        }
+
+        // 2. 尝试从 Redis 集群查找
+        if let Some(arc) = self.get_redis_arc() {
+            if let Ok(aor) = crate::sip::registrar::canonical_aor(uri) {
+                let redis_key = format!("vos_rs:reg:{}", aor);
+                let mut conn = arc.lock().await;
+                let res: Result<String, redis::RedisError> = redis::cmd("GET")
+                    .arg(&redis_key)
+                    .query_async(&mut *conn)
+                    .await;
+                if let Ok(json_str) = res {
+                    if let Ok(contacts) = serde_json::from_str::<Vec<crate::sip::registrar::RegistrationContact>>(&json_str) {
+                        // 返回第一个还有效的联系人
+                        for contact in contacts {
+                            if contact.expires > 0 {
+                                return Some(contact);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+
 
     pub(crate) fn get_internal_call_id(&self, external_call_id: &str) -> Option<String> {
         self.external_to_internal_call_ids
@@ -887,15 +944,32 @@ impl EdgeState {
     pub(crate) fn clear_media_targets(&self, transaction: &InboundTransaction) {
         let metrics_log_enabled = self.media_metrics_log;
         if let Some(endpoint) = &transaction.gateway_relay_rtp {
+            self.media_relay.clear_monitors(endpoint.port);
             let metrics = self.media_relay.metrics_for_port(endpoint.port);
             log_media_target_metrics("gateway", endpoint.port, metrics, metrics_log_enabled);
             self.media_relay.clear_target(endpoint.port);
+
+            // 如果是参会成员，清理出会议室
+            let mgr = self.media_relay.conference_manager.clone();
+            let port = endpoint.port;
+            tokio::spawn(async move {
+                mgr.leave_conference(port).await;
+            });
         }
         if let Some(endpoint) = &transaction.caller_relay_rtp {
+            self.media_relay.clear_monitors(endpoint.port);
             let metrics = self.media_relay.metrics_for_port(endpoint.port);
             log_media_target_metrics("caller", endpoint.port, metrics, metrics_log_enabled);
             self.media_relay.clear_target(endpoint.port);
+
+            // 如果是参会成员，清理出会议室
+            let mgr = self.media_relay.conference_manager.clone();
+            let port = endpoint.port;
+            tokio::spawn(async move {
+                mgr.leave_conference(port).await;
+            });
         }
+
         let totals = self.media_relay.metrics_totals();
         debug!(
             received_packets = totals.received_packets,

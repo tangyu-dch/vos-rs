@@ -16,21 +16,29 @@ pub(crate) async fn handle_register_request(
 ) -> Vec<PendingDatagram> {
     let db_store = edge_state.db_store.clone();
 
-    if matches!(
-        edge_config
-            .auth
-            .verify_request(
-                &request,
-                db_store.as_ref(),
-                Some(&edge_state.nonce_replay_cache)
-            )
-            .await,
-        AuthDecision::Challenge
-    ) {
-        return vec![PendingDatagram::new(
-            peer.to_string(),
-            unauthorized_for_request(&request, &edge_config.auth),
-        )];
+    let auth_res = edge_config
+        .auth
+        .verify_request(
+            &request,
+            db_store.as_ref(),
+            Some(&edge_state.nonce_replay_cache)
+        )
+        .await;
+    match auth_res {
+        AuthDecision::Challenge => {
+            return vec![PendingDatagram::new(
+                peer.to_string(),
+                unauthorized_for_request(&request, &edge_config.auth),
+            )];
+        }
+        AuthDecision::ChallengeWithFailure => {
+            edge_state.sbc_engine.register_auth_failure(peer.ip());
+            return vec![PendingDatagram::new(
+                peer.to_string(),
+                unauthorized_for_request(&request, &edge_config.auth),
+            )];
+        }
+        _ => {}
     }
 
     let response = {
@@ -40,6 +48,38 @@ pub(crate) async fn handle_register_request(
             .await
         {
             Ok(outcome) => {
+                // 将注册信息同步至 Redis（用于集群模式下的跨节点状态共享）
+                let max_expires = outcome.contacts.iter().map(|c| c.expires).max().unwrap_or(0);
+                let aor_key = outcome.aor.clone();
+                let contacts_clone = outcome.contacts.clone();
+                let redis_arc = edge_state.get_redis_arc();
+                
+                // 异步在后台执行 Redis 写入，防止阻塞 SIP 消息处理链路
+                tokio::spawn(async move {
+                    if let Some(arc) = redis_arc {
+                        let mut conn = arc.lock().await;
+                        let redis_key = format!("vos_rs:reg:{}", aor_key);
+
+                        if max_expires > 0 {
+                            if let Ok(json_val) = serde_json::to_string(&contacts_clone) {
+                                let _: Result<(), redis::RedisError> = redis::cmd("SET")
+                                    .arg(&redis_key)
+                                    .arg(json_val)
+                                    .arg("EX")
+                                    .arg(max_expires as u64)
+                                    .query_async(&mut *conn)
+                                    .await;
+                            }
+                        } else {
+                            // 注销，从 Redis 清除
+                            let _: Result<(), redis::RedisError> = redis::cmd("DEL")
+                                .arg(&redis_key)
+                                .query_async(&mut *conn)
+                                .await;
+                        }
+                    }
+                });
+
                 response_for_register_outcome(&request, &outcome, &edge_config.advertised_addr)
             }
             Err(error) => response::build_response_with_owned_headers(

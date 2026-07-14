@@ -151,31 +151,31 @@ impl AuthConfig {
 
         let Some(params) = parse_digest_authorization(raw_authorization.as_str()) else {
             tracing::debug!("failed to parse digest authorization");
-            return AuthDecision::Challenge;
+            return AuthDecision::ChallengeWithFailure;
         };
 
         let Some(nonce) = params.get("nonce") else {
             tracing::debug!("missing nonce in digest authorization");
-            return AuthDecision::Challenge;
+            return AuthDecision::ChallengeWithFailure;
         };
 
         if !self.verify_dynamic_nonce(nonce, 300) {
             tracing::warn!(nonce = %nonce, secret_key_len = self.secret_key.len(), "nonce verification failed");
-            return AuthDecision::Challenge;
+            return AuthDecision::ChallengeWithFailure;
         }
 
         // Check if nonce is in replay cache (already used)
         if let Some(cache) = replay_cache {
             let Some(cnonce) = params.get("cnonce") else {
-                return AuthDecision::Challenge;
+                return AuthDecision::ChallengeWithFailure;
             };
             let Some(nc) = params.get("nc") else {
-                return AuthDecision::Challenge;
+                return AuthDecision::ChallengeWithFailure;
             };
             let key = format!("{}:{}:{}", nonce, cnonce, nc);
             if cache.contains_key(&key) {
                 tracing::warn!(%key, "replay attack detected");
-                return AuthDecision::Challenge;
+                return AuthDecision::ChallengeWithFailure;
             }
         }
 
@@ -186,21 +186,21 @@ impl AuthConfig {
                 .as_secs();
 
             let Some(cnonce) = params.get("cnonce") else {
-                return AuthDecision::Challenge;
+                return AuthDecision::ChallengeWithFailure;
             };
             let Some(nc) = params.get("nc") else {
-                return AuthDecision::Challenge;
+                return AuthDecision::ChallengeWithFailure;
             };
             let key = format!("{}:{}:{}", nonce, cnonce, nc);
             if cache.contains_key(&key) {
                 tracing::warn!(%key, "replay attack detected");
-                return AuthDecision::Challenge;
+                return AuthDecision::ChallengeWithFailure;
             }
             cache.insert(key, now + 300);
         }
 
         let Some(username) = params.get("username") else {
-            return AuthDecision::Challenge;
+            return AuthDecision::ChallengeWithFailure;
         };
 
         let password_opt = if let Some(db) = db_store {
@@ -213,7 +213,7 @@ impl AuthConfig {
         };
 
         let Some(password) = password_opt else {
-            return AuthDecision::Challenge;
+            return AuthDecision::ChallengeWithFailure;
         };
 
         let expected = DigestExpectation {
@@ -229,7 +229,7 @@ impl AuthConfig {
                 username: username.clone(),
             }
         } else {
-            AuthDecision::Challenge
+            AuthDecision::ChallengeWithFailure
         }
     }
 }
@@ -239,6 +239,7 @@ pub enum AuthDecision {
     Disabled,
     Authorized { username: String },
     Challenge,
+    ChallengeWithFailure,
 }
 
 struct DigestExpectation<'a> {
@@ -473,7 +474,7 @@ mod tests {
 
         assert_eq!(
             auth_config().verify_request(&request, None, None).await,
-            AuthDecision::Challenge
+            AuthDecision::ChallengeWithFailure
         );
     }
 

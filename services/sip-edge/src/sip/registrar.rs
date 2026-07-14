@@ -39,13 +39,14 @@ use time::OffsetDateTime;
 const DEFAULT_EXPIRES_SECONDS: u32 = 3600;
 const MAX_EXPIRES_SECONDS: u32 = 86_400;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RegistrationContact {
     pub uri: String,
     pub expires: u32,
     pub received_from: String,
     pub path: Vec<String>,
 }
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterOutcome {
@@ -324,7 +325,7 @@ fn address_of_record(request: &SipRequest) -> Result<String, RegisterError> {
     canonical_aor(&uri)
 }
 
-fn canonical_aor(uri: &SipUri) -> Result<String, RegisterError> {
+pub(crate) fn canonical_aor(uri: &SipUri) -> Result<String, RegisterError> {
     let Some(user) = &uri.user else {
         return Err(RegisterError::InvalidAddressOfRecord(uri.to_string()));
     };

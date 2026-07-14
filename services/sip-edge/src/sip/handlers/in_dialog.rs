@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use call_core::CallError;
 use sip_core::{HeaderName, HeaderValue, Method, SipRequest, SipUri};
@@ -289,6 +289,26 @@ pub(crate) async fn handle_in_dialog_request(
                     }
 
                     edge_state.clear_media_targets(&transaction);
+
+                    // 如果是会议呼叫（单腿 UAS 呼叫），直接在本地终结并返回 200 OK，不转发给其他任何节点
+                    let out_user = transaction.outbound_uri.user.as_deref().unwrap_or("");
+                    if out_user.starts_with("conf_") || out_user.starts_with("room_") {
+                        let username = transaction
+                            .original_request
+                            .as_ref()
+                            .and_then(|req| crate::edge_state::EdgeState::username_from_request(req.as_ref()));
+                        if let Some(ref uname) = username {
+                            edge_state.decrement_user_concurrency(uname);
+                        }
+                        edge_state.inbound_transactions.remove(call_id.as_str());
+
+                        datagrams.push(PendingDatagram::new(
+                            peer.to_string(),
+                            response::ok_for_request(&mutable_request),
+                        ));
+                        return datagrams;
+                    }
+
                     if transaction.transfer_call_id.is_some() {
                         let transferee_port = if transaction.transferee_is_caller {
                             transaction.caller_relay_rtp.as_ref().map(|ep| ep.port)
@@ -414,26 +434,17 @@ pub(crate) async fn handle_in_dialog_request(
                 );
                 datagrams.push(PendingDatagram::new(peer.to_string(), notify));
 
-                let outbound_uri = {
-                    let registrar = edge_state.registrar.read().await;
-                    if let Some(contact) = registrar
-                        .lookup_contact(
-                            &target_uri,
-                            SystemTime::now(),
-                            edge_state.db_store.as_ref(),
-                        )
-                        .await
-                    {
-                        SipUri::from_str(&contact.uri).ok()
-                    } else {
-                        edge_state
-                            .call_manager
-                            .routes()
-                            .select(&target_uri)
-                            .ok()
-                            .map(|sr| sr.outbound_uri)
-                    }
+                let outbound_uri = if let Some(contact) = edge_state.lookup_contact(&target_uri).await {
+                    SipUri::from_str(&contact.uri).ok()
+                } else {
+                    edge_state
+                        .call_manager
+                        .routes()
+                        .select(&target_uri)
+                        .ok()
+                        .map(|sr| sr.outbound_uri)
                 };
+
 
                 if outbound_uri.is_none() {
                     let notify_404 = outbound::build_notify_sipfrag_with_state(

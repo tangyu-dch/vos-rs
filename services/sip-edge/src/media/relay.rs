@@ -58,6 +58,15 @@ pub(crate) struct SourceBinding {
     pub(crate) last_seen_unix_ms: u128,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct RtpContinuityState {
+    last_sequence: Option<u16>,
+    last_timestamp: Option<u32>,
+    sequence_offset: u16,
+    timestamp_offset: u32,
+    resume_after_exclusive: bool,
+}
+
 pub struct MediaRelayState {
     pub(crate) targets: Arc<DashMap<u16, SocketAddr>>,
     pub(crate) peer_ports: Arc<DashMap<u16, u16>>,
@@ -69,7 +78,6 @@ pub struct MediaRelayState {
     pub(crate) active_loops: Arc<DashMap<u16, Vec<tokio::sync::oneshot::Sender<()>>>>,
     pub(crate) crypto_sessions: Arc<DashMap<u16, Arc<tokio::sync::Mutex<MediaCryptoSession>>>>,
     pub(crate) pending_srtp: Arc<DashMap<u16, PendingSrtpConfig>>,
-    pub(crate) rtp_stats: Arc<DashMap<u16, RtpReceiveStats>>,
     pub(crate) source_bindings: Arc<DashMap<u16, SourceBinding>>,
     pub(crate) leased_rtp_ports: Arc<dashmap::DashSet<u16>>,
     pub(crate) next_port: Arc<AtomicU32>,
@@ -78,11 +86,9 @@ pub struct MediaRelayState {
     pub(crate) playbacks: Arc<DashMap<u16, Arc<std::sync::Mutex<PlaybackState>>>>,
     pub(crate) playback_loops: Arc<DashMap<u16, tokio::sync::oneshot::Sender<()>>>,
     pub(crate) muted_ports: Arc<dashmap::DashSet<u16>>,
-    pub(crate) last_sent_seq: Arc<DashMap<u16, u16>>,
-    pub(crate) last_sent_ts: Arc<DashMap<u16, u32>>,
-    pub(crate) seq_offsets: Arc<DashMap<u16, u16>>,
-    pub(crate) ts_offsets: Arc<DashMap<u16, u32>>,
-    pub(crate) was_in_exclusive: Arc<DashMap<u16, bool>>,
+    continuity: Arc<DashMap<u16, RtpContinuityState>>,
+    pub(crate) conference_manager: Arc<crate::media::conference::ConferenceManager>,
+    pub(crate) monitors: Arc<DashMap<u16, Vec<SocketAddr>>>,
 }
 
 impl Clone for MediaRelayState {
@@ -98,7 +104,6 @@ impl Clone for MediaRelayState {
             active_loops: Arc::clone(&self.active_loops),
             crypto_sessions: Arc::clone(&self.crypto_sessions),
             pending_srtp: Arc::clone(&self.pending_srtp),
-            rtp_stats: Arc::clone(&self.rtp_stats),
             source_bindings: Arc::clone(&self.source_bindings),
             leased_rtp_ports: Arc::clone(&self.leased_rtp_ports),
             next_port: Arc::clone(&self.next_port),
@@ -107,11 +112,9 @@ impl Clone for MediaRelayState {
             playbacks: Arc::clone(&self.playbacks),
             playback_loops: Arc::clone(&self.playback_loops),
             muted_ports: Arc::clone(&self.muted_ports),
-            last_sent_seq: Arc::clone(&self.last_sent_seq),
-            last_sent_ts: Arc::clone(&self.last_sent_ts),
-            seq_offsets: Arc::clone(&self.seq_offsets),
-            ts_offsets: Arc::clone(&self.ts_offsets),
-            was_in_exclusive: Arc::clone(&self.was_in_exclusive),
+            continuity: Arc::clone(&self.continuity),
+            conference_manager: Arc::clone(&self.conference_manager),
+            monitors: Arc::clone(&self.monitors),
         }
     }
 }
@@ -143,6 +146,9 @@ impl MediaRelayState {
     }
 
     pub fn with_recording_pool(recording_workers: usize, recording_queue_capacity: usize) -> Self {
+        let conference_manager = Arc::new(crate::media::conference::ConferenceManager::new());
+        crate::media::conference::start_mixer_loop(Arc::clone(&conference_manager));
+
         Self {
             targets: Arc::new(DashMap::new()),
             peer_ports: Arc::new(DashMap::new()),
@@ -157,7 +163,6 @@ impl MediaRelayState {
             active_loops: Arc::new(DashMap::new()),
             crypto_sessions: Arc::new(DashMap::new()),
             pending_srtp: Arc::new(DashMap::new()),
-            rtp_stats: Arc::new(DashMap::new()),
             source_bindings: Arc::new(DashMap::new()),
             leased_rtp_ports: Arc::new(dashmap::DashSet::new()),
             next_port: Arc::new(AtomicU32::new(DEFAULT_RTP_PORT_MIN as u32)),
@@ -170,12 +175,77 @@ impl MediaRelayState {
             playbacks: Arc::new(DashMap::new()),
             playback_loops: Arc::new(DashMap::new()),
             muted_ports: Arc::new(dashmap::DashSet::new()),
-            last_sent_seq: Arc::new(DashMap::new()),
-            last_sent_ts: Arc::new(DashMap::new()),
-            seq_offsets: Arc::new(DashMap::new()),
-            ts_offsets: Arc::new(DashMap::new()),
-            was_in_exclusive: Arc::new(DashMap::new()),
+            continuity: Arc::new(DashMap::new()),
+            conference_manager,
+            monitors: Arc::new(DashMap::new()),
         }
+    }
+
+    pub(crate) fn start_monitoring(&self, port: u16, supervisor: SocketAddr) {
+        self.monitors.entry(port).or_default().push(supervisor);
+        tracing::info!(port, %supervisor, "started monitoring port");
+    }
+
+    pub(crate) fn stop_monitoring(&self, port: u16, supervisor: SocketAddr) {
+        if let Some(mut entry) = self.monitors.get_mut(&port) {
+            entry.retain(|&x| x != supervisor);
+            tracing::info!(port, %supervisor, "stopped monitoring port");
+        }
+    }
+
+    pub(crate) fn clear_monitors(&self, port: u16) {
+        if self.monitors.remove(&port).is_some() {
+            tracing::info!(port, "cleared monitors for port");
+        }
+    }
+
+    fn mark_resume_after_exclusive(&self, port: u16) {
+        self.continuity
+            .entry(port)
+            .or_default()
+            .resume_after_exclusive = true;
+    }
+
+    fn continuity_offsets(&self, port: u16, sequence: u16, timestamp: u32) -> (u16, u32) {
+        let mut continuity = self.continuity.entry(port).or_default();
+        if continuity.resume_after_exclusive {
+            if let (Some(last_sequence), Some(last_timestamp)) =
+                (continuity.last_sequence, continuity.last_timestamp)
+            {
+                continuity.sequence_offset =
+                    sequence.wrapping_sub(last_sequence.wrapping_add(1));
+                continuity.timestamp_offset =
+                    timestamp.wrapping_sub(last_timestamp.wrapping_add(160));
+            }
+            continuity.resume_after_exclusive = false;
+        }
+
+        let offsets = (continuity.sequence_offset, continuity.timestamp_offset);
+        continuity.last_sequence = Some(sequence.wrapping_sub(offsets.0));
+        continuity.last_timestamp = Some(timestamp.wrapping_sub(offsets.1));
+        offsets
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_continuity_for_test(&self, port: u16, sequence: u16, timestamp: u32) {
+        let mut continuity = self.continuity.entry(port).or_default();
+        continuity.last_sequence = Some(sequence);
+        continuity.last_timestamp = Some(timestamp);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resume_continuity_for_test(&self, port: u16) {
+        self.mark_resume_after_exclusive(port);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn continuity_offsets_for_test(
+        &self,
+        port: u16,
+        sequence: u16,
+        timestamp: u32,
+    ) -> (u16, u32) {
+        self.continuity_offsets(port, sequence, timestamp)
     }
 
     pub fn allocate_endpoint(&self, config: &MediaConfig) -> Result<RtpEndpoint, MediaError> {
@@ -371,25 +441,16 @@ impl MediaRelayState {
         self.stop_playback(rtp_port);
         self.active_sockets.remove(&rtp_port);
         self.muted_ports.remove(&rtp_port);
-        self.last_sent_seq.remove(&rtp_port);
-        self.last_sent_ts.remove(&rtp_port);
-        self.seq_offsets.remove(&rtp_port);
-        self.ts_offsets.remove(&rtp_port);
-        self.was_in_exclusive.remove(&rtp_port);
+        self.continuity.remove(&rtp_port);
         if let Some(p_port) = peer_port {
             self.stop_playback(p_port);
             self.active_sockets.remove(&p_port);
             self.muted_ports.remove(&p_port);
-            self.last_sent_seq.remove(&p_port);
-            self.last_sent_ts.remove(&p_port);
-            self.seq_offsets.remove(&p_port);
-            self.ts_offsets.remove(&p_port);
-            self.was_in_exclusive.remove(&p_port);
+            self.continuity.remove(&p_port);
         }
 
         self.targets.remove(&rtp_port);
         self.metrics.remove(&rtp_port);
-        self.rtp_stats.remove(&rtp_port);
         self.source_bindings.remove(&rtp_port);
         self.peer_ports.remove(&rtp_port);
         self.codecs.remove(&rtp_port);
@@ -400,7 +461,6 @@ impl MediaRelayState {
         if let Some(peer_port) = peer_port {
             self.targets.remove(&peer_port);
             self.metrics.remove(&peer_port);
-            self.rtp_stats.remove(&peer_port);
             self.source_bindings.remove(&peer_port);
             self.peer_ports.remove(&peer_port);
             self.codecs.remove(&peer_port);
@@ -576,7 +636,7 @@ impl MediaRelayState {
             };
             if is_exclusive {
                 if let Some(peer_port) = relay.peer_ports.get(&port).map(|entry| *entry) {
-                    relay.was_in_exclusive.insert(peer_port, true);
+                    relay.mark_resume_after_exclusive(peer_port);
                 }
             }
 
@@ -598,7 +658,7 @@ impl MediaRelayState {
             };
             if is_exclusive {
                 if let Some(peer_port) = self.peer_ports.get(&port).map(|entry| *entry) {
-                    self.was_in_exclusive.insert(peer_port, true);
+                    self.mark_resume_after_exclusive(peer_port);
                 }
             }
         }
@@ -810,7 +870,7 @@ pub async fn spawn_rtp_relay_listeners(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn relay_media_port(
+pub(crate) async fn relay_media_port(
     socket: Arc<UdpSocket>,
     local_port: u16,
     relay: MediaRelayState,
@@ -821,6 +881,7 @@ async fn relay_media_port(
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut buffer = vec![0_u8; MAX_RTP_DATAGRAM_SIZE];
+    let mut rtp_stats = RtpReceiveStats::default();
 
     loop {
         let (size, source) = tokio::select! {
@@ -904,47 +965,44 @@ async fn relay_media_port(
             continue;
         }
 
+        let mut parsed_rtp = None;
         let mut rewritten_packet = None;
         if packet_kind == MediaPacketKind::Rtp {
-            if let Ok(mut rtp) = rtp_core::RtpPacket::parse(packet) {
-                let local_was_blocked = relay
-                    .was_in_exclusive
-                    .remove(&local_port)
-                    .map(|(_, val)| val)
-                    .unwrap_or(false);
-                if local_was_blocked {
-                    if let (Some(last_seq), Some(last_ts)) = (
-                        relay.last_sent_seq.get(&local_port).map(|entry| *entry),
-                        relay.last_sent_ts.get(&local_port).map(|entry| *entry),
-                    ) {
-                        let seq_offset = rtp.sequence_number.wrapping_sub(last_seq.wrapping_add(1));
-                        let ts_offset = rtp.timestamp.wrapping_sub(last_ts.wrapping_add(160));
-                        relay.seq_offsets.insert(local_port, seq_offset);
-                        relay.ts_offsets.insert(local_port, ts_offset);
-                    }
+            if let Ok(rtp) = RtpPacketView::parse(packet) {
+                parsed_rtp = Some(rtp);
+                // 如果当前端口属于活跃会议，将数据解包并路由至混音管理器，然后跳过单播转发
+                if relay
+                    .conference_manager
+                    .port_to_conference
+                    .contains_key(&local_port)
+                {
+                    let codec = relay
+                        .codecs
+                        .get(&local_port)
+                        .map(|v| *v)
+                        .unwrap_or(rtp_core::AudioCodec::Pcma);
+                    relay
+                        .conference_manager
+                        .handle_rtp_packet(local_port, rtp.payload, codec);
+
+                    // 如果开启了录音，我们依然执行录音包落盘
+                    let _ = relay.record_rtp_packet(local_port, rtp);
+                    continue;
                 }
 
-                let seq_offset = relay
-                    .seq_offsets
-                    .get(&local_port)
-                    .map(|entry| *entry)
-                    .unwrap_or(0);
-                let ts_offset = relay
-                    .ts_offsets
-                    .get(&local_port)
-                    .map(|entry| *entry)
-                    .unwrap_or(0);
+                let (seq_offset, ts_offset) =
+                    relay.continuity_offsets(local_port, rtp.sequence_number, rtp.timestamp);
 
                 if seq_offset != 0 || ts_offset != 0 {
-                    rtp.sequence_number = rtp.sequence_number.wrapping_sub(seq_offset);
-                    rtp.timestamp = rtp.timestamp.wrapping_sub(ts_offset);
-                    if let Ok(encoded) = rtp.encode() {
-                        rewritten_packet = Some(encoded);
+                    if let Ok(mut owned_rtp) = rtp_core::RtpPacket::parse(packet) {
+                        owned_rtp.sequence_number =
+                            owned_rtp.sequence_number.wrapping_sub(seq_offset);
+                        owned_rtp.timestamp = owned_rtp.timestamp.wrapping_sub(ts_offset);
+                        if let Ok(encoded) = owned_rtp.encode() {
+                            rewritten_packet = Some(encoded);
+                        }
                     }
                 }
-
-                relay.last_sent_seq.insert(local_port, rtp.sequence_number);
-                relay.last_sent_ts.insert(local_port, rtp.timestamp);
             }
         }
         let packet = rewritten_packet.as_deref().unwrap_or(packet);
@@ -954,6 +1012,23 @@ async fn relay_media_port(
 
         let summary = if is_pass_through {
             None
+        } else if rewritten_packet.is_none() {
+            match parsed_rtp {
+                Some(rtp_packet) => Some(MediaPacketSummary {
+                    rtp_packet: Some(rtp_packet),
+                    ..MediaPacketSummary::default()
+                }),
+                None => match packet_kind.inspect(packet) {
+                    Ok(summary) => Some(summary),
+                    Err(error) => {
+                        relay.record_metric(local_port, |metrics| {
+                            metrics.dropped_invalid_packets += 1
+                        });
+                        warn!(%error, %source, local_port, packet_kind = packet_kind.label(), "dropping invalid media packet");
+                        continue;
+                    }
+                },
+            }
         } else {
             match packet_kind.inspect(packet) {
                 Ok(summary) => Some(summary),
@@ -973,9 +1048,8 @@ async fn relay_media_port(
             .as_ref()
             .and_then(|summary| summary.rtp_packet)
             .and_then(|rtp_packet| {
-                let mut stats = relay.rtp_stats.entry(local_port).or_default();
-                stats.observe(rtp_packet);
-                stats.receiver_report()
+                rtp_stats.observe(rtp_packet);
+                rtp_stats.receiver_report()
             });
 
         if symmetric_rtp_learning {
@@ -1045,7 +1119,7 @@ async fn relay_media_port(
 
         let mut transcoded_packet = None;
         if packet_kind == MediaPacketKind::Rtp {
-            if let Some(peer_port) = relay.peer_ports.get(&local_port).map(|entry| *entry) {
+            if let Some(peer_port) = peer_port {
                 if let (Some(local_codec), Some(peer_codec)) = (
                     relay.codecs.get(&local_port).map(|v| *v),
                     relay.codecs.get(&peer_port).map(|v| *v),
@@ -1079,7 +1153,7 @@ async fn relay_media_port(
 
         let mut encrypted_packet = None;
         if packet_kind == MediaPacketKind::Rtp {
-            if let Some(peer_port) = relay.peer_ports.get(&local_port).map(|entry| *entry) {
+            if let Some(peer_port) = peer_port {
                 if let Some(session) = relay
                     .crypto_sessions
                     .get(&peer_port)
@@ -1095,6 +1169,14 @@ async fn relay_media_port(
                 }
             }
         }
+        // 旁听/监控：如果本端口配置了监控目标，复制 RTP 包发送给监控端
+        if let Some(monitors_list) = relay.monitors.get(&local_port) {
+            for &monitor_addr in monitors_list.iter() {
+                // 用 plain/decrypted packet，确保旁听者听到的是解密后的明文声音
+                let _ = socket.send_to(packet, monitor_addr).await;
+            }
+        }
+
         let outbound_packet = encrypted_packet.as_deref().unwrap_or(packet);
         if let Err(error) = socket.send_to(outbound_packet, target).await {
             relay.record_metric(local_port, |metrics| metrics.send_errors += 1);

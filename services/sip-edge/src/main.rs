@@ -2,7 +2,6 @@ pub(crate) mod config;
 pub(crate) mod edge_state;
 mod manage;
 pub(crate) mod media;
-pub(crate) mod nats_cdr;
 pub(crate) mod net;
 pub(crate) mod security;
 pub(crate) mod sip;
@@ -43,11 +42,10 @@ pub(crate) use timers::{
 };
 
 use call_core::{CallManager, Route, RouteTable, RouteTarget};
-use cdr_core::{PostgresCdrStore, DEFAULT_CDR_STREAM, DEFAULT_CDR_SUBJECT};
+use cdr_core::PostgresCdrStore;
 use config::EdgeConfig;
 use futures::StreamExt;
 use media::MediaRelayState;
-use nats_cdr::NatsCdrPublisher;
 use net::{create_tls_acceptor, Transport};
 use sip_core::{parse_message, Method, SipMessage, SipUri};
 use std::{
@@ -104,8 +102,8 @@ async fn main() -> Result<(), AnyError> {
             return Err(e.into());
         }
     };
-    let _redis_conn = match redis_client.get_multiplexed_tokio_connection().await {
-        Ok(conn) => conn,
+    let redis_conn_for_state = match redis_client.get_multiplexed_tokio_connection().await {
+        Ok(conn) => Some(conn),
         Err(e) => {
             tracing::error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
             return Err(e.into());
@@ -154,6 +152,11 @@ async fn main() -> Result<(), AnyError> {
         db_store.clone(),
         &edge_config,
     ));
+
+    // 将 Redis 连接注入 EdgeState（用于集群注册状态共享）
+    if let Some(redis_conn) = redis_conn_for_state {
+        edge_state.set_redis(redis_conn);
+    }
 
     // Start background task to flush CDRs in batches (every 100ms or 100 entries)
     let cdr_sinks_bg = Arc::clone(&cdr_sinks);
@@ -520,9 +523,15 @@ async fn main() -> Result<(), AnyError> {
                 let (size, peer) = result?;
                 let packet = buffer[..size].to_vec();
 
+                // 使用 Call-ID 哈希进行 worker 路由：确保同一 Dialog 的所有消息
+                // (INVITE/ACK/BYE/re-INVITE) 由同一 Worker 处理，消除跨 worker 竞态。
+                // 若解析失败则 fallback 到 peer-IP 哈希保证负载均衡。
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                peer.hash(&mut hasher);
+                match extract_call_id_fast(&packet) {
+                    Some(call_id) => call_id.hash(&mut hasher),
+                    None => peer.hash(&mut hasher),
+                }
                 let worker_idx = (hasher.finish() as usize) % num_workers;
 
                 if worker_txs[worker_idx].try_send((packet.clone(), peer)).is_err() {
@@ -568,36 +577,11 @@ fn init_tracing() {
 }
 
 async fn cdr_sinks_from_config(config: &EdgeConfig) -> Result<CdrSinks, AnyError> {
-    let nats = match &config.nats_url {
-        Some(nats_url) if !nats_url.trim().is_empty() => {
-            let subject = config
-                .nats_cdr_subject
-                .clone()
-                .unwrap_or_else(|| DEFAULT_CDR_SUBJECT.to_string());
-            let stream = config
-                .nats_cdr_stream
-                .clone()
-                .unwrap_or_else(|| DEFAULT_CDR_STREAM.to_string());
-            let publisher =
-                NatsCdrPublisher::connect(nats_url, subject.clone(), stream.clone()).await?;
-            info!(subject, stream, "NATS JetStream CDR queue enabled");
-            Some(publisher)
-        }
-        _ => {
-            info!("NATS CDR queue disabled; set connections.nats in config.yaml to enable");
-            None
-        }
-    };
-
     let postgres = match &config.database_url {
         Some(database_url) if !database_url.trim().is_empty() => {
             let store =
                 PostgresCdrStore::connect(database_url, config.database_max_connections).await?;
-            if nats.is_some() {
-                info!("PostgreSQL direct CDR persistence disabled because NATS CDR queue is enabled (database connection will still be used for configuration and registration store)");
-            } else {
-                info!("PostgreSQL CDR persistence enabled");
-            }
+            info!("PostgreSQL CDR persistence enabled");
             Some(store)
         }
         _ => {
@@ -605,7 +589,7 @@ async fn cdr_sinks_from_config(config: &EdgeConfig) -> Result<CdrSinks, AnyError
         }
     };
 
-    Ok(CdrSinks { postgres, nats })
+    Ok(CdrSinks { postgres })
 }
 
 async fn flush_cdr_batch(
@@ -613,14 +597,6 @@ async fn flush_cdr_batch(
     cdrs: &[call_core::CallCdr],
 ) -> Result<(), AnyError> {
     if cdrs.is_empty() {
-        return Ok(());
-    }
-
-    if let Some(nats) = &cdr_sinks.nats {
-        for cdr in cdrs {
-            nats.publish_cdr(cdr).await?;
-        }
-        debug!(count = cdrs.len(), "queued batch CDRs to NATS");
         return Ok(());
     }
 
@@ -825,6 +801,54 @@ fn parse_gateway_target(gateway_id: &str, raw: &str) -> Result<RouteTarget, AnyE
     Ok(RouteTarget::new(gateway_id, uri.host, uri.port))
 }
 
+/// 快速从原始 SIP 字节中提取 Call-ID 值（无需完整解析）。
+///
+/// 按行扫描报文头部，匹配 `Call-ID:` 或紧凑形式 `i:`，
+/// 提取其值用于 Worker 路由哈希，确保同一 Dialog 的所有消息
+/// 始终路由到同一个处理 Worker，避免并发竞态。
+///
+/// # 返回
+/// - `Some(call_id)` — 成功提取
+/// - `None` — 报文格式异常或不含 Call-ID（fallback 到 peer-IP 哈希）
+fn extract_call_id_fast(packet: &[u8]) -> Option<&[u8]> {
+    // SIP 消息头部为 ASCII，每行以 CRLF 或 LF 结尾
+    let text = std::str::from_utf8(packet).ok()?;
+
+    // 跳过请求行或状态行（第一行）
+    let headers_start = text.find('\n').map(|i| i + 1)?;
+    let headers = &text[headers_start..];
+
+    // 遍历每一行，匹配 Call-ID 头（大小写不敏感）
+    for line in headers.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            // 空行：头部结束
+            break;
+        }
+        // 匹配 "Call-ID:" 及紧凑形式 "i:"
+        let value = if trimmed.len() > 8 && trimmed[..8].eq_ignore_ascii_case("call-id:") {
+            trimmed[8..].trim()
+        } else if trimmed.len() > 2 && trimmed[..2].eq_ignore_ascii_case("i:") {
+            trimmed[2..].trim()
+        } else {
+            continue;
+        };
+
+        if value.is_empty() {
+            return None;
+        }
+        // 在原始 packet 中找到 value 的位置并返回字节切片（零拷贝）
+        if let Some(pos) = packet
+            .windows(value.len())
+            .position(|w| w == value.as_bytes())
+        {
+            return Some(&packet[pos..pos + value.len()]);
+        }
+        return None;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::auth::{digest_response, AuthConfig};
@@ -847,22 +871,5 @@ mod tests {
     };
     use tokio::net::UdpSocket;
 
-    include!("tests/helpers.rs");
-    include!("tests/register_tests.rs");
-    include!("tests/invite_basic_tests.rs");
-    include!("tests/invite_advanced_tests.rs");
-    include!("tests/media_tests.rs");
-    include!("tests/nat_transport_tests.rs");
-    include!("tests/sbc_tests.rs");
-    include!("tests/session_timer_tests.rs");
-    include!("tests/prack_early_media_tests.rs");
-    include!("tests/refer_transfer_tests.rs");
-    include!("tests/security_auth_tests.rs");
-    include!("tests/topology_hiding_tests.rs");
-    include!("tests/transaction_retransmit_tests.rs");
-    include!("tests/dtmf_cdr_tests.rs");
-    include!("tests/gateway_health_probe_tests.rs");
-    include!("tests/realtime_billing_tests.rs");
-    include!("tests/media_control_tests.rs");
-    include!("tests/connection_check_tests.rs");
+    include!("tests/unified_tests.rs");
 }

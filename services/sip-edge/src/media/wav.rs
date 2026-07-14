@@ -122,7 +122,8 @@ pub fn load_wav_pcm<P: AsRef<Path>>(path: P) -> io::Result<Vec<i16>> {
             let index_lower = src_index.floor() as usize;
             let index_upper = (index_lower + 1).min(mono_samples.len() - 1);
             let weight = src_index - index_lower as f64;
-            let val = (1.0 - weight) * f64::from(mono_samples[index_lower]) + weight * f64::from(mono_samples[index_upper]);
+            let val = (1.0 - weight) * f64::from(mono_samples[index_lower])
+                + weight * f64::from(mono_samples[index_upper]);
             resampled.push(val as i16);
         }
         mono_samples = resampled;

@@ -46,11 +46,12 @@ sustained_seconds = duration - ramp_seconds
 
 每次运行写入 `target/benchmark/<run-id>/`：
 
-- `metadata.json`：系统、Git commit、配置哈希；
-- `results.jsonl`：所有场景的机器可读结果；
-- `summary.csv`：表格汇总；
-- `<scenario>/samples.csv`：每秒资源与通话采样；
-- `<scenario>/result.json`、`report.md` 和各子进程日志。
+- `metadata.json`：中文字段的系统、Git 提交和配置哈希；
+- `results.jsonl`：所有场景的中文机器可读结果；
+- `summary.csv`：中文表头的场景汇总；
+- `<scenario>/samples.csv`：中文表头的每秒资源与通话采样；
+- `<scenario>/result.json`、`report.md`：完整中文结果和报告；
+- 子进程原始日志保留协议及程序原始输出，便于故障诊断。
 
 ## 前置条件
 
