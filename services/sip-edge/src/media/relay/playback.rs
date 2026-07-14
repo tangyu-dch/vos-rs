@@ -28,6 +28,7 @@ impl MediaRelayState {
         }));
 
         self.playbacks.insert(port, Arc::clone(&playback_state));
+        self.mark_port_and_peer_features_changed(port);
 
         let socket = self
             .active_sockets
@@ -147,13 +148,16 @@ impl MediaRelayState {
             }
             relay.playbacks.remove(&port);
             relay.playback_loops.remove(&port);
+            relay.mark_port_and_peer_features_changed(port);
         });
 
         Ok(())
     }
 
     pub fn stop_playback(&self, port: u16) {
+        let mut changed = false;
         if let Some((_, playback_state)) = self.playbacks.remove(&port) {
+            changed = true;
             let is_exclusive = playback_state
                 .lock()
                 .map(|state| state.mode == PlaybackMode::Exclusive)
@@ -166,6 +170,9 @@ impl MediaRelayState {
         }
         if let Some(cancel_tx) = self.playback_loops.remove(&port) {
             let _ = cancel_tx.1.send(());
+        }
+        if changed {
+            self.mark_port_and_peer_features_changed(port);
         }
     }
 }

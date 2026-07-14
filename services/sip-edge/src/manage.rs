@@ -407,12 +407,14 @@ async fn mute(
     if mute_caller {
         if let Some(ref rtp) = tx.caller_relay_rtp {
             state.media_relay.muted_ports.insert(rtp.port);
+            state.media_relay.mark_relay_features_changed(rtp.port);
         }
     }
 
     if mute_callee {
         if let Some(ref rtp) = tx.gateway_relay_rtp {
             state.media_relay.muted_ports.insert(rtp.port);
+            state.media_relay.mark_relay_features_changed(rtp.port);
         }
     }
 
@@ -460,12 +462,14 @@ async fn unmute(
     if unmute_caller {
         if let Some(ref rtp) = tx.caller_relay_rtp {
             state.media_relay.muted_ports.remove(&rtp.port);
+            state.media_relay.mark_relay_features_changed(rtp.port);
         }
     }
 
     if unmute_callee {
         if let Some(ref rtp) = tx.gateway_relay_rtp {
             state.media_relay.muted_ports.remove(&rtp.port);
+            state.media_relay.mark_relay_features_changed(rtp.port);
         }
     }
 
@@ -589,6 +593,9 @@ async fn join_conference(
         .conference_manager
         .join_conference(&payload.conference_id, payload.port, codec, target_addr, socket)
         .await;
+    state
+        .media_relay
+        .mark_relay_features_changed(payload.port);
 
     (
         StatusCode::OK,
@@ -614,6 +621,9 @@ async fn leave_conference(
         .conference_manager
         .leave_conference(payload.port)
         .await;
+    state
+        .media_relay
+        .mark_relay_features_changed(payload.port);
 
     (
         StatusCode::OK,

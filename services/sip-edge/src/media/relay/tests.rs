@@ -495,6 +495,11 @@ async fn rtp_relay_listener_learns_symmetric_source_for_paired_port() {
     .expect("gateway RTP should use learned caller source")
     .unwrap();
     assert_eq!(&caller_buffer[..caller_size], gateway_packet.as_slice());
+    let fast_metrics = wait_for_metrics(&relay, caller_bound_port, |metrics| {
+        metrics.fast_path_packets >= 1
+    })
+    .await;
+    assert_eq!(fast_metrics.dropped_invalid_packets, 0);
 
     for handle in handles {
         handle.abort();
@@ -726,4 +731,42 @@ fn test_recording_dir(name: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+#[test]
+fn relay_plan_uses_fast_path_for_same_codec_without_media_features() {
+    let relay = MediaRelayState::new();
+    relay.pair_ports(40_000, 40_002);
+    relay.register_port_codec(40_000, rtp_core::AudioCodec::Pcma);
+    relay.register_port_codec(40_002, rtp_core::AudioCodec::Pcma);
+    relay.set_target_addr(40_000, "127.0.0.1:9000".parse().unwrap());
+
+    assert_eq!(relay.relay_plan(40_000).path, RelayPath::Fast);
+}
+
+#[test]
+fn relay_plan_uses_processed_path_when_transcoding_is_required() {
+    let relay = MediaRelayState::new();
+    relay.pair_ports(40_000, 40_002);
+    relay.register_port_codec(40_000, rtp_core::AudioCodec::Pcma);
+    relay.register_port_codec(40_002, rtp_core::AudioCodec::Pcmu);
+    relay.set_target_addr(40_000, "127.0.0.1:9000".parse().unwrap());
+
+    assert_eq!(relay.relay_plan(40_000).path, RelayPath::Processed);
+}
+
+#[test]
+fn relay_plan_downgrades_and_restores_when_monitoring_changes() {
+    let relay = MediaRelayState::new();
+    let monitor: SocketAddr = "127.0.0.1:9100".parse().unwrap();
+    relay.pair_ports(40_000, 40_002);
+    relay.register_port_codec(40_000, rtp_core::AudioCodec::Pcma);
+    relay.register_port_codec(40_002, rtp_core::AudioCodec::Pcma);
+    relay.set_target_addr(40_000, "127.0.0.1:9000".parse().unwrap());
+
+    relay.start_monitoring(40_000, monitor);
+    assert_eq!(relay.relay_plan(40_000).path, RelayPath::Processed);
+
+    relay.stop_monitoring(40_000, monitor);
+    assert_eq!(relay.relay_plan(40_000).path, RelayPath::Fast);
 }

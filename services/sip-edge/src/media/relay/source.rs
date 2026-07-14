@@ -32,6 +32,7 @@ impl MediaRelayState {
             totals.recorded_packets += metrics.recorded_packets;
             totals.recording_dropped_packets += metrics.recording_dropped_packets;
             totals.recording_errors += metrics.recording_errors;
+            totals.fast_path_packets += metrics.fast_path_packets;
 
             if metrics.rtcp_quality.reports > 0 {
                 totals.rtcp_quality.merge(metrics.rtcp_quality);
@@ -56,6 +57,14 @@ impl MediaRelayState {
             self.peer_ports.insert(first_rtcp_port, second_rtcp_port);
             self.peer_ports.insert(second_rtcp_port, first_rtcp_port);
         }
+        self.mark_relay_features_changed(first_port);
+        self.mark_relay_features_changed(second_port);
+        if let Some(first_rtcp_port) = rtcp_port_for(first_port) {
+            self.mark_relay_features_changed(first_rtcp_port);
+        }
+        if let Some(second_rtcp_port) = rtcp_port_for(second_port) {
+            self.mark_relay_features_changed(second_rtcp_port);
+        }
     }
 
     pub fn peer_port_for(&self, relay_port: u16) -> Option<u16> {
@@ -72,6 +81,7 @@ impl MediaRelayState {
         if previous_target == Some(source) {
             return None;
         }
+        self.mark_relay_features_changed(peer_port);
 
         self.metrics
             .entry(relay_port)
@@ -84,41 +94,6 @@ impl MediaRelayState {
             previous_target,
             learned_target: source,
         })
-    }
-
-    pub(super) fn accept_rtp_source(
-        &self,
-        relay_port: u16,
-        source: SocketAddr,
-        anti_spoofing: bool,
-        relearn_after_secs: u64,
-    ) -> bool {
-        if !anti_spoofing {
-            return true;
-        }
-
-        let now = unix_timestamp_millis();
-        let mut binding = self
-            .source_bindings
-            .entry(relay_port)
-            .or_insert(SourceBinding {
-                address: source,
-                last_seen_unix_ms: now,
-            });
-        if binding.address == source {
-            binding.last_seen_unix_ms = now;
-            return true;
-        }
-
-        let elapsed = now.saturating_sub(binding.last_seen_unix_ms);
-        if elapsed >= u128::from(relearn_after_secs) * 1_000 {
-            binding.address = source;
-            binding.last_seen_unix_ms = now;
-            return true;
-        }
-
-        self.record_metric(relay_port, |metrics| metrics.dropped_spoofed_packets += 1);
-        false
     }
 
     pub(super) fn record_metric(

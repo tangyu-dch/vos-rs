@@ -124,6 +124,9 @@ pub(crate) async fn handle_invite_request(
             .conference_manager
             .join_conference(conf_id, local_ep.port, codec, client_addr, socket)
             .await;
+        edge_state
+            .media_relay
+            .mark_relay_features_changed(local_ep.port);
 
         let internal_call_id = request
             .headers

@@ -42,6 +42,7 @@ impl MediaRelayState {
                 last_timestamp: None,
             },
         );
+        self.mark_relay_features_changed(port);
     }
 
     pub fn get_dtmf_digits(&self, call_id: &str) -> Option<String> {

@@ -46,6 +46,8 @@ pub struct MediaRelayMetrics {
     pub recording_queue_capacity: u64,
     pub recording_workers: u64,
     pub dtmf_events: u64,
+    /// 通过轻量直转路径处理的 RTP 包数量。
+    pub fast_path_packets: u64,
 }
 
 /// Rolling RTCP quality aggregates for the current 60-second window.

@@ -938,6 +938,8 @@ impl MediaRelayState {
                 channel: RecordingChannel::Gateway,
             },
         );
+        self.mark_relay_features_changed(caller_relay_port);
+        self.mark_relay_features_changed(gateway_relay_port);
 
         Ok(Some(wav_path))
     }

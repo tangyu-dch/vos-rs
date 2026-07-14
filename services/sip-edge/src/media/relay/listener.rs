@@ -1,5 +1,10 @@
 use super::*;
 
+struct CachedSourceBinding {
+    address: SocketAddr,
+    last_seen: std::time::Instant,
+}
+
 #[allow(dead_code)]
 pub async fn spawn_rtp_relay_listeners(
     config: &MediaConfig,
@@ -56,6 +61,15 @@ pub(crate) async fn relay_media_port(
 ) {
     let mut buffer = vec![0_u8; MAX_RTP_DATAGRAM_SIZE];
     let mut rtp_stats = RtpReceiveStats::default();
+    let plan_version = relay.relay_features_version(local_port);
+    let mut plan_epoch = plan_version.load(Ordering::Acquire);
+    let mut plan = relay.relay_plan(local_port);
+    let mut fast_path_counters = FastPathCounters::default();
+    let mut metrics_flush_interval = tokio::time::interval(std::time::Duration::from_millis(100));
+    metrics_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    metrics_flush_interval.tick().await;
+    let mut source_binding = None;
+    let mut learned_symmetric_source = None;
 
     loop {
         let (size, source) = tokio::select! {
@@ -72,16 +86,88 @@ pub(crate) async fn relay_media_port(
                     }
                 }
             }
+            _ = metrics_flush_interval.tick() => {
+                fast_path_counters.flush(&relay, local_port);
+                continue;
+            }
         };
-        relay.record_metric(local_port, |metrics| metrics.received_packets += 1);
+        let current_epoch = plan_version.load(Ordering::Acquire);
+        if current_epoch != plan_epoch {
+            fast_path_counters.flush(&relay, local_port);
+            plan = relay.relay_plan(local_port);
+            plan_epoch = current_epoch;
+        }
+
+        let use_fast_path = packet_kind == MediaPacketKind::Rtp && plan.path == RelayPath::Fast;
+        if use_fast_path {
+            fast_path_counters.record_received();
+        } else {
+            relay.record_metric(local_port, |metrics| metrics.received_packets += 1);
+        }
         debug!(local_port, packet_kind = packet_kind.label(), size, %source, "received media packet");
 
-        if !relay.accept_rtp_source(local_port, source, anti_spoofing, source_relearn_after_secs) {
+        if !accept_media_source(
+            &relay,
+            local_port,
+            source,
+            anti_spoofing,
+            source_relearn_after_secs,
+            &mut source_binding,
+        ) {
             warn!(%source, local_port, packet_kind = packet_kind.label(), "dropping media packet from unbound source");
             continue;
         }
 
-        if relay.muted_ports.contains(&local_port) {
+        if !use_fast_path && relay.muted_ports.contains(&local_port) {
+            continue;
+        }
+
+        if use_fast_path {
+            let packet = &buffer[..size];
+            let is_pass_through = packet
+                .first()
+                .map(|first_byte| (0..=3).contains(first_byte) || (20..=63).contains(first_byte))
+                .unwrap_or(false);
+
+            if !is_pass_through {
+                let rtp = match RtpPacketView::parse(packet) {
+                    Ok(rtp) => rtp,
+                    Err(error) => {
+                        relay.record_metric(local_port, |metrics| {
+                            metrics.dropped_invalid_packets += 1
+                        });
+                        warn!(%error, %source, local_port, "dropping invalid RTP packet on fast path");
+                        fast_path_counters.flush_if_needed(&relay, local_port);
+                        continue;
+                    }
+                };
+                rtp_stats.observe(rtp);
+                if plan.dtmf_payload_type == Some(rtp.payload_type) {
+                    relay.process_dtmf_packet(local_port, rtp);
+                }
+            }
+
+            if symmetric_rtp_learning {
+                track_symmetric_source(
+                    &relay,
+                    local_port,
+                    source,
+                    packet_kind,
+                    &mut learned_symmetric_source,
+                );
+            }
+
+            let Some(target) = plan.target else {
+                fast_path_counters.flush(&relay, local_port);
+                continue;
+            };
+            if let Err(error) = socket.send_to(packet, target).await {
+                fast_path_counters.record_send_error();
+                warn!(%error, %source, %target, local_port, "failed to relay RTP packet on fast path");
+            } else {
+                fast_path_counters.record_forwarded();
+            }
+            fast_path_counters.flush_if_needed(&relay, local_port);
             continue;
         }
 
@@ -227,16 +313,13 @@ pub(crate) async fn relay_media_port(
             });
 
         if symmetric_rtp_learning {
-            if let Some(update) = relay.learn_symmetric_source(local_port, source) {
-                debug!(
-                    source_port = update.source_port,
-                    target_port = update.target_port,
-                    learned_target = %update.learned_target,
-                    previous_target = ?update.previous_target,
-                    packet_kind = packet_kind.label(),
-                    "learned symmetric media source"
-                );
-            }
+            track_symmetric_source(
+                &relay,
+                local_port,
+                source,
+                packet_kind,
+                &mut learned_symmetric_source,
+            );
         }
 
         let peer_port = relay.peer_ports.get(&local_port).map(|entry| *entry);
@@ -359,5 +442,68 @@ pub(crate) async fn relay_media_port(
         }
 
         relay.record_metric(local_port, |metrics| metrics.forwarded_packets += 1);
+    }
+
+    fast_path_counters.flush(&relay, local_port);
+}
+
+fn track_symmetric_source(
+    relay: &MediaRelayState,
+    local_port: u16,
+    source: SocketAddr,
+    packet_kind: MediaPacketKind,
+    learned_source: &mut Option<SocketAddr>,
+) {
+    if *learned_source == Some(source) {
+        return;
+    }
+    *learned_source = Some(source);
+    if let Some(update) = relay.learn_symmetric_source(local_port, source) {
+        debug!(
+            source_port = update.source_port,
+            target_port = update.target_port,
+            learned_target = %update.learned_target,
+            previous_target = ?update.previous_target,
+            packet_kind = packet_kind.label(),
+            "learned symmetric media source"
+        );
+    }
+}
+
+fn accept_media_source(
+    relay: &MediaRelayState,
+    local_port: u16,
+    source: SocketAddr,
+    anti_spoofing: bool,
+    relearn_after_secs: u64,
+    binding: &mut Option<CachedSourceBinding>,
+) -> bool {
+    if !anti_spoofing {
+        return true;
+    }
+
+    let now = std::time::Instant::now();
+    match binding {
+        Some(current) if current.address == source => {
+            current.last_seen = now;
+            true
+        }
+        Some(current)
+            if now.duration_since(current.last_seen)
+                < std::time::Duration::from_secs(relearn_after_secs) =>
+        {
+            relay.record_metric(local_port, |metrics| metrics.dropped_spoofed_packets += 1);
+            false
+        }
+        _ => {
+            *binding = Some(CachedSourceBinding {
+                address: source,
+                last_seen: now,
+            });
+            relay
+                .source_bindings
+                .insert(local_port, SourceBinding { address: source });
+            true
+        }
     }
 }

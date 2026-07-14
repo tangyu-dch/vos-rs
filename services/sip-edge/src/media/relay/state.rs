@@ -27,6 +27,7 @@ impl MediaRelayState {
             source_bindings: Arc::new(DashMap::new()),
             leased_rtp_ports: Arc::new(dashmap::DashSet::new()),
             next_port: Arc::new(AtomicU32::new(DEFAULT_RTP_PORT_MIN as u32)),
+            path_epochs: Arc::new(DashMap::new()),
             state: Arc::new(Mutex::new(MediaRelayStateInner {
                 recording_dirs: HashSet::new(),
                 dtmf_accumulators: HashMap::new(),
@@ -44,18 +45,27 @@ impl MediaRelayState {
 
     pub(crate) fn start_monitoring(&self, port: u16, supervisor: SocketAddr) {
         self.monitors.entry(port).or_default().push(supervisor);
+        self.mark_relay_features_changed(port);
         tracing::info!(port, %supervisor, "started monitoring port");
     }
 
     pub(crate) fn stop_monitoring(&self, port: u16, supervisor: SocketAddr) {
-        if let Some(mut entry) = self.monitors.get_mut(&port) {
+        let should_remove = if let Some(mut entry) = self.monitors.get_mut(&port) {
             entry.retain(|&x| x != supervisor);
             tracing::info!(port, %supervisor, "stopped monitoring port");
+            entry.is_empty()
+        } else {
+            false
+        };
+        if should_remove {
+            self.monitors.remove(&port);
         }
+        self.mark_relay_features_changed(port);
     }
 
     pub(crate) fn clear_monitors(&self, port: u16) {
         if self.monitors.remove(&port).is_some() {
+            self.mark_relay_features_changed(port);
             tracing::info!(port, "cleared monitors for port");
         }
     }
@@ -65,6 +75,7 @@ impl MediaRelayState {
             .entry(port)
             .or_default()
             .resume_after_exclusive = true;
+        self.mark_relay_features_changed(port);
     }
 
     pub(super) fn continuity_offsets(
@@ -142,8 +153,10 @@ impl MediaRelayState {
             let target_port_opt = self.peer_ports.get(&relay_port).map(|entry| *entry);
             if let Some(target_port) = target_port_opt {
                 self.targets.insert(target_port, binding.address);
+                self.mark_relay_features_changed(target_port);
             }
         }
+        self.mark_relay_features_changed(relay_port);
     }
 
     #[allow(dead_code)]
@@ -157,6 +170,7 @@ impl MediaRelayState {
         let session = MediaCryptoSession::from_sdes(suite, key_params, ssrc)?;
         self.crypto_sessions
             .insert(relay_port, Arc::new(tokio::sync::Mutex::new(session)));
+        self.mark_port_and_peer_features_changed(relay_port);
         Ok(())
     }
 
@@ -168,6 +182,7 @@ impl MediaRelayState {
                 key_params: key_params.to_string(),
             },
         );
+        self.mark_port_and_peer_features_changed(relay_port);
     }
 
     pub(crate) fn clear_srtp_session(&self, relay_port: u16) {
@@ -177,10 +192,12 @@ impl MediaRelayState {
             self.crypto_sessions.remove(&peer_port);
             self.pending_srtp.remove(&peer_port);
         }
+        self.mark_port_and_peer_features_changed(relay_port);
     }
 
     pub fn register_port_codec(&self, port: u16, codec: rtp_core::AudioCodec) {
         self.codecs.insert(port, codec);
+        self.mark_port_and_peer_features_changed(port);
     }
 
     pub fn clear_target(&self, relay_port: u16) {
@@ -231,6 +248,10 @@ impl MediaRelayState {
             for sender in senders {
                 let _ = sender.send(());
             }
+        }
+        self.mark_relay_features_changed(rtp_port);
+        if let Some(peer_port) = peer_port {
+            self.mark_relay_features_changed(peer_port);
         }
     }
 }

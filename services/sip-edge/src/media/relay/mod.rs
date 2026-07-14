@@ -23,10 +23,11 @@ pub use crate::media::metrics::{MediaRelayMetrics, RtcpQualitySnapshot, RtpRecei
 pub use crate::media::recording::{MediaError, RecordingLeg, RecordingPool};
 use crate::media::sdp::socket_addr_for_endpoint;
 pub use crate::media::utils::unix_timestamp_millis;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 mod allocation;
 mod listener;
+mod path;
 mod playback;
 mod source;
 mod state;
@@ -34,6 +35,7 @@ mod state;
 pub(crate) use listener::relay_media_port;
 #[allow(unused_imports)]
 pub use listener::spawn_rtp_relay_listeners;
+use path::{FastPathCounters, RelayPath};
 
 pub const MAX_RTP_DATAGRAM_SIZE: usize = 65_535;
 
@@ -65,7 +67,6 @@ pub(crate) struct PendingSrtpConfig {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SourceBinding {
     pub(crate) address: SocketAddr,
-    pub(crate) last_seen_unix_ms: u128,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -91,6 +92,7 @@ pub struct MediaRelayState {
     pub(crate) source_bindings: Arc<DashMap<u16, SourceBinding>>,
     pub(crate) leased_rtp_ports: Arc<dashmap::DashSet<u16>>,
     pub(crate) next_port: Arc<AtomicU32>,
+    pub(crate) path_epochs: Arc<DashMap<u16, Arc<AtomicU64>>>,
     pub(crate) state: Arc<Mutex<MediaRelayStateInner>>,
     pub(crate) active_sockets: Arc<DashMap<u16, Arc<UdpSocket>>>,
     pub(crate) playbacks: Arc<DashMap<u16, Arc<std::sync::Mutex<PlaybackState>>>>,
@@ -117,6 +119,7 @@ impl Clone for MediaRelayState {
             source_bindings: Arc::clone(&self.source_bindings),
             leased_rtp_ports: Arc::clone(&self.leased_rtp_ports),
             next_port: Arc::clone(&self.next_port),
+            path_epochs: Arc::clone(&self.path_epochs),
             state: Arc::clone(&self.state),
             active_sockets: Arc::clone(&self.active_sockets),
             playbacks: Arc::clone(&self.playbacks),
