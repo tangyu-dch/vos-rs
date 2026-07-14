@@ -477,8 +477,41 @@ async fn main() -> Result<(), AnyError> {
                         Transport::Udp
                     };
 
+                    let client_transaction_key = if transport == Transport::Udp {
+                        parse_message(&datagram.bytes)
+                            .ok()
+                            .and_then(|message| match message {
+                                SipMessage::Request(request)
+                                    if !matches!(&request.method, Method::Ack) =>
+                                {
+                                    sip::ClientTransactionKey::from_request(&request)
+                                }
+                                _ => None,
+                            })
+                    } else {
+                        None
+                    };
+                    let registered_transaction = client_transaction_key.and_then(|key| {
+                        if state.client_transactions.contains_key(&key) {
+                            None
+                        } else {
+                            spawn_client_transaction_retransmission(
+                                Arc::clone(&state),
+                                Arc::clone(&sock),
+                                datagram.target.clone(),
+                                datagram.bytes.clone(),
+                                key.clone(),
+                                cfg.clone(),
+                            );
+                            Some(key)
+                        }
+                    });
+
                     if let Err(error) = state.send_sip_datagram(datagram.clone(), &sock, &cfg).await
                     {
+                        if let Some(key) = registered_transaction.as_ref() {
+                            state.cancel_client_transaction(key);
+                        }
                         warn!(target = %datagram.target, error = %error, "failed to send SIP message");
                     } else {
                         debug!(
@@ -486,28 +519,6 @@ async fn main() -> Result<(), AnyError> {
                             bytes = datagram.bytes.len(),
                             "sent SIP datagram"
                         );
-
-                        if transport == Transport::Udp {
-                            if let Ok(SipMessage::Request(req)) =
-                                sip_core::parse_message(&datagram.bytes)
-                            {
-                                if !matches!(&req.method, Method::Ack) {
-                                    if let Some(key) = sip::ClientTransactionKey::from_request(&req)
-                                    {
-                                        if !state.client_transactions.contains_key(&key) {
-                                            spawn_client_transaction_retransmission(
-                                                Arc::clone(&state),
-                                                Arc::clone(&sock),
-                                                datagram.target.clone(),
-                                                datagram.bytes.clone(),
-                                                key,
-                                                cfg.clone(),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }

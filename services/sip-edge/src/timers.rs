@@ -28,9 +28,8 @@ pub(crate) fn spawn_client_transaction_retransmission(
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
 
     let key_clone = key.clone();
+    edge_state.client_transactions.insert(key_clone, cancel_tx);
     tokio::spawn(async move {
-        edge_state.client_transactions.insert(key_clone, cancel_tx);
-
         let is_invite = key.method == "INVITE";
         // To make unit tests faster, we can scale down the initial T1 timer in tests.
         // But for production, default is 500ms.

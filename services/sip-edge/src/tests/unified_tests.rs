@@ -5136,8 +5136,7 @@ sip_edge:
             key.clone(),
             Arc::new(edge_config()),
         );
-
-        tokio::time::sleep(Duration::from_millis(15)).await;
+        assert!(edge_state.client_transactions.contains_key(&key));
 
         let resp = parse_message(
             b"SIP/2.0 180 Ringing\r\n\
