@@ -47,11 +47,13 @@ pub struct EdgeConfig {
     pub internal_secret: String,
     pub bootstrap_auth_users: Option<String>,
     pub cdr_queue_capacity: usize,
+    pub cdr_persistence_enabled: bool,
     pub recording_workers: usize,
     pub recording_queue_capacity: usize,
     pub media_metrics_log: bool,
     pub dynamic_config_enabled: bool,
     pub balance_enforcement_enabled: bool,
+    pub billing_settlement_enabled: bool,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -154,6 +156,7 @@ struct SecuritySection {
 #[derive(serde::Deserialize, Debug, Default)]
 struct PerformanceSection {
     cdr_queue_capacity: Option<usize>,
+    cdr_persistence_enabled: Option<bool>,
     udp_workers: Option<usize>,
     udp_workers_auto: Option<bool>,
     udp_receive_buffer_bytes: Option<usize>,
@@ -168,6 +171,7 @@ struct DynamicConfigSection {
 #[derive(serde::Deserialize, Debug, Default)]
 struct BillingSection {
     balance_enforcement_enabled: Option<bool>,
+    settlement_enabled: Option<bool>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -372,6 +376,9 @@ impl EdgeConfig {
                 .cdr_queue_capacity
                 .unwrap_or(4096)
                 .max(1),
+            cdr_persistence_enabled: performance_section
+                .cdr_persistence_enabled
+                .unwrap_or(true),
             recording_workers: recording_section.workers.unwrap_or(4).max(1),
             recording_queue_capacity: recording_section.queue_capacity.unwrap_or(10_000).max(1),
             media_metrics_log: media_section.metrics_log.unwrap_or(false),
@@ -379,6 +386,7 @@ impl EdgeConfig {
             balance_enforcement_enabled: billing_section
                 .balance_enforcement_enabled
                 .unwrap_or(true),
+            billing_settlement_enabled: billing_section.settlement_enabled.unwrap_or(true),
         }
     }
 
@@ -480,6 +488,9 @@ impl EdgeConfig {
                 self.cdr_queue_capacity = v.max(1);
             }
         }
+        if let Some(val) = get_val!("cdr_persistence_enabled").await {
+            self.cdr_persistence_enabled = val == "true" || val == "1";
+        }
         if let Some(val) = get_val!("recording_workers").await {
             if let Ok(v) = val.parse::<usize>() {
                 self.recording_workers = v.max(1);
@@ -495,6 +506,12 @@ impl EdgeConfig {
         }
         if let Some(val) = get_val!("balance_enforcement_enabled").await {
             self.balance_enforcement_enabled = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("billing_settlement_enabled").await {
+            self.billing_settlement_enabled = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("gateway_health_checks_enabled").await {
+            self.gateway_health_checks_enabled = val == "true" || val == "1";
         }
 
         // 覆盖 Media Config 中的相关属性
@@ -627,11 +644,13 @@ impl Default for EdgeConfig {
             internal_secret: "internal-dev-secret".to_string(),
             bootstrap_auth_users: None,
             cdr_queue_capacity: 4096,
+            cdr_persistence_enabled: true,
             recording_workers: 4,
             recording_queue_capacity: 10_000,
             media_metrics_log: false,
             dynamic_config_enabled: true,
             balance_enforcement_enabled: true,
+            billing_settlement_enabled: true,
         }
     }
 }

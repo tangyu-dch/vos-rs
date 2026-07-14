@@ -2378,6 +2378,13 @@ connections:
 sip_edge:
   network:
     advertised_addr: "127.0.0.1:5070"
+  routing:
+    gateway_health_checks_enabled: false
+  billing:
+    balance_enforcement_enabled: false
+    settlement_enabled: false
+  performance:
+    cdr_persistence_enabled: false
 "#;
 
         fs::write("test_config.yaml", main_yaml).unwrap();
@@ -2392,6 +2399,10 @@ sip_edge:
         assert_eq!(config.nats_url, Some("nats://127.0.0.1:4222".to_string()));
         assert_eq!(config.nats_cdr_stream, Some("STREAM_A".to_string()));
         assert_eq!(config.nats_cdr_subject, Some("SUB_A".to_string()));
+        assert!(!config.gateway_health_checks_enabled);
+        assert!(!config.balance_enforcement_enabled);
+        assert!(!config.billing_settlement_enabled);
+        assert!(!config.cdr_persistence_enabled);
     }
 
 
@@ -6032,4 +6043,3 @@ async fn test_call_monitoring() {
     // Clean up
     let _ = tx.send(());
 }
-

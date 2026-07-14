@@ -393,7 +393,10 @@ pub(crate) fn spawn_session_timer_watchdog(
                     .terminate_call_with_reason(&call_id, &reason);
 
                 // Real-time billing: settle the call on timeout.
-                if let Some(ref db) = edge_state.db_store {
+                if let (true, Some(db)) = (
+                    edge_state.billing_settlement_enabled,
+                    edge_state.db_store.as_ref(),
+                ) {
                     if let Some(call) = edge_state
                         .call_manager
                         .get(&call_core::CallId::new(call_id.clone()))
@@ -621,6 +624,9 @@ pub(crate) fn persist_gateway_health(
     gateway_id: String,
     status: Option<(bool, i32, String, Option<std::time::SystemTime>, i32, i32)>,
 ) {
+    if !edge_state.gateway_health_persistence_enabled {
+        return;
+    }
     let Some((
         circuit_open,
         failures,

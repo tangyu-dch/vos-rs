@@ -292,6 +292,8 @@ pub(crate) struct EdgeState {
     pub(crate) user_concurrency: dashmap::DashMap<String, u32>,
     pub(crate) anti_fraud_rules: std::sync::RwLock<Vec<cdr_core::AntiFraudRule>>,
     pub(crate) media_metrics_log: bool,
+    pub(crate) billing_settlement_enabled: bool,
+    pub(crate) gateway_health_persistence_enabled: bool,
     /// Active gateway OPTIONS probes keyed by their SIP Call-ID.
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
     /// Redis 多路复用连接，用于集群模式下的跨节点注册状态共享。可选，单节点部署不设置。
@@ -359,6 +361,8 @@ impl EdgeState {
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
+            billing_settlement_enabled: config.billing_settlement_enabled,
+            gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
             #[cfg(test)]
@@ -407,6 +411,8 @@ impl EdgeState {
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
+            billing_settlement_enabled: config.billing_settlement_enabled,
+            gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
             test_gateways: std::sync::Mutex::new(Vec::new()),

@@ -165,6 +165,9 @@ fn config_value_kind(key: &str) -> Option<&'static str> {
         | "rtp_anti_spoofing"
         | "recording_enabled"
         | "balance_enforcement_enabled"
+        | "billing_settlement_enabled"
+        | "cdr_persistence_enabled"
+        | "gateway_health_checks_enabled"
         | "udp_workers_auto"
         | "media_metrics_log"
         | "tls_allow_test_certificate"
@@ -250,6 +253,12 @@ mod tests {
             ("recording_enabled".to_string(), "true".to_string()),
             (
                 "balance_enforcement_enabled".to_string(),
+                "false".to_string(),
+            ),
+            ("billing_settlement_enabled".to_string(), "false".to_string()),
+            ("cdr_persistence_enabled".to_string(), "false".to_string()),
+            (
+                "gateway_health_checks_enabled".to_string(),
                 "false".to_string(),
             ),
             ("rtp_port_min".to_string(), "40000".to_string()),

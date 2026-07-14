@@ -143,6 +143,7 @@ async fn main() -> Result<(), AnyError> {
 
     // 使用有界队列防止数据库/NATS 故障时 CDR 无限堆积。
     let cdr_queue_capacity = edge_config.cdr_queue_capacity;
+    let cdr_persistence_enabled = edge_config.cdr_persistence_enabled;
     let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
     let call_manager = CallManager::new(route_table, cdr_tx);
 
@@ -167,14 +168,18 @@ async fn main() -> Result<(), AnyError> {
             tokio::select! {
                 Some(cdr) = cdr_rx.recv() => {
                     batch.push(cdr);
-                    if batch.len() >= 100 {
+                    if batch.len() >= 100 && cdr_persistence_enabled {
                         flush_cdr_batch_with_retry_and_wal(&cdr_sinks_bg, &batch).await;
+                        batch.clear();
+                    } else if batch.len() >= 100 {
                         batch.clear();
                     }
                 }
                 _ = interval.tick() => {
-                    if !batch.is_empty() {
+                    if !batch.is_empty() && cdr_persistence_enabled {
                         flush_cdr_batch_with_retry_and_wal(&cdr_sinks_bg, &batch).await;
+                        batch.clear();
+                    } else if !batch.is_empty() {
                         batch.clear();
                     }
                 }
@@ -430,7 +435,11 @@ async fn main() -> Result<(), AnyError> {
     );
 
     // Start NAT keepalive background loop — sends keepalive probes to active registrations
-    let num_workers = num_cpus::get().max(4);
+    let num_workers = if edge_config.udp_workers_auto {
+        num_cpus::get().max(1)
+    } else {
+        edge_config.udp_workers.max(1)
+    };
     let queue_capacity = 10000;
     let mut worker_txs = Vec::new();
 

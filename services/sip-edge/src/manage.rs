@@ -117,7 +117,7 @@ async fn terminate(State(state): State<Arc<EdgeState>>, Path(call_id): Path<Stri
     state.call_manager.terminate_call(&call_id);
 
     // Real-time billing: settle the call on force terminate.
-    if let Some(ref db) = state.db_store {
+    if let (true, Some(db)) = (state.billing_settlement_enabled, state.db_store.as_ref()) {
         if let Some(call) = state
             .call_manager
             .get(&call_core::CallId::new(call_id.clone()))

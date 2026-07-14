@@ -248,7 +248,10 @@ pub(crate) async fn handle_in_dialog_request(
                     }
 
                     // Real-time billing: settle the call.
-                    if let Some(ref db) = edge_state.db_store {
+                    if let (true, Some(db)) = (
+                        edge_state.billing_settlement_enabled,
+                        edge_state.db_store.as_ref(),
+                    ) {
                         let call = edge_state.call_manager.get(&outcome.call_id);
                         if let Some(call) = call {
                             let caller_user = call.caller.as_deref().and_then(|s| {

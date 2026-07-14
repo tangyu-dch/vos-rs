@@ -42,6 +42,7 @@ sip_edge:
     ws_bind: "0.0.0.0:5062"
   routing:
     default_gateway: ""
+    gateway_health_checks_enabled: true
   nat_traversal:
     stun_server: ""
     upnp_enabled: false
@@ -69,8 +70,12 @@ sip_edge:
     max_duration_secs: 3600
     workers: 4
     queue_capacity: 10000
+  billing:
+    balance_enforcement_enabled: true
+    settlement_enabled: true
   performance:
     cdr_queue_capacity: 4096
+    cdr_persistence_enabled: true
     udp_workers: 4
     udp_workers_auto: true
     udp_receive_buffer_bytes: 4194304
