@@ -5,7 +5,6 @@ use std::path::Path;
 use crate::media;
 use crate::sip::AuthConfig;
 
-pub const DEFAULT_ADVERTISED_ADDR: &str = "127.0.0.1:5060";
 pub const DEFAULT_UDP_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

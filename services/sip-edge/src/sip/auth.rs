@@ -335,21 +335,6 @@ fn md5_hex(value: &str) -> String {
     format!("{:x}", md5::compute(value.as_bytes()))
 }
 
-fn parse_users(raw: &str) -> HashMap<String, String> {
-    raw.split(',')
-        .filter_map(|entry| {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                return None;
-            }
-            let (username, password) = entry.split_once(':').or_else(|| entry.split_once('='))?;
-            let username = username.trim();
-            let password = password.trim();
-            (!username.is_empty()).then(|| (username.to_string(), password.to_string()))
-        })
-        .collect()
-}
-
 fn parse_digest_authorization(raw: &str) -> Option<HashMap<String, String>> {
     let raw = raw.trim();
     let params = raw.strip_prefix("Digest ")?;

@@ -14,9 +14,9 @@
 
 use std::path::PathBuf;
 
-pub const DEFAULT_RTP_ADVERTISED_ADDR: &str = "127.0.0.1";
 pub const DEFAULT_RTP_PORT_MIN: u16 = 40_000;
 pub const DEFAULT_RTP_PORT_MAX: u16 = 40_100;
+#[cfg(test)]
 pub const DEFAULT_RTP_SYMMETRIC_LEARNING: bool = true;
 pub const DEFAULT_RTP_ANTI_SPOOFING: bool = true;
 pub const DEFAULT_RTP_SOURCE_RELEARN_SECS: u64 = 30;
@@ -121,6 +121,3 @@ fn even_port_at_or_below(port: u16) -> Option<u16> {
         port.checked_sub(1)
     }
 }
-
-pub(crate) const DEFAULT_RECORDING_WORKERS: usize = 4;
-pub(crate) const DEFAULT_RECORDING_QUEUE_CAPACITY: usize = 10000;

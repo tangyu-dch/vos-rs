@@ -137,6 +137,7 @@ pub(crate) struct MediaRelayStateInner {
 }
 
 impl MediaRelayState {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::with_recording_pool(4, 10_000)
     }

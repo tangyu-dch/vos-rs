@@ -86,8 +86,7 @@ async fn main() -> Result<(), AnyError> {
     let db_store = cdr_sinks.postgres.clone();
     if db_store.is_none() {
         tracing::error!("数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接！");
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接",
         )
         .into());
@@ -238,15 +237,9 @@ async fn main() -> Result<(), AnyError> {
                     }
                 }
             }
-        } else if !has_routes {
-            if !edge_config.default_gateway.trim().is_empty() {
-                let raw_gateway = &edge_config.default_gateway;
-                let raw_gateway = raw_gateway.trim();
-                if !raw_gateway.is_empty() {
-                    db.insert_route("default", "", 100, "default").await?;
-                    info!("seeded default route into database (gateway already exists)");
-                }
-            }
+        } else if !has_routes && !edge_config.default_gateway.trim().is_empty() {
+            db.insert_route("default", "", 100, "default").await?;
+            info!("seeded default route into database (gateway already exists)");
         }
 
         if let Some(ref db) = db_store {
