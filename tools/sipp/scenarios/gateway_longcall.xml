@@ -84,6 +84,17 @@
   </send>
 
   <recv request="ACK" rtd="true" crlf="true"/>
+
+  <!-- 200 OK may be retransmitted before the first ACK is processed. The UAC must ACK every
+       retransmission; these duplicates are valid SIP traffic and must not fail the scenario. -->
+  <recv request="ACK" optional="true"/>
+  <recv request="ACK" optional="true"/>
+  <recv request="ACK" optional="true"/>
+  <recv request="ACK" optional="true"/>
+  <recv request="ACK" optional="true"/>
+  <recv request="ACK" optional="true"/>
+  <recv request="ACK" optional="true"/>
+  <recv request="ACK" optional="true"/>
   <recv request="BYE"/>
 
   <send>

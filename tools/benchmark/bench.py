@@ -53,6 +53,8 @@ RESULT_FIELD_LABELS = {
     "target_concurrent": "目标并发数",
     "calls_completed": "成功呼叫数",
     "calls_failed": "失败呼叫数",
+    "gateway_calls_completed": "网关场景完成数",
+    "gateway_calls_failed": "网关场景失败数",
     "success_rate": "成功率（百分比）",
     "calls_peak": "峰值并发数",
     "calls_average": "平均并发数",
@@ -193,6 +195,8 @@ class BenchmarkResult:
     target_concurrent: int
     calls_completed: int
     calls_failed: int
+    gateway_calls_completed: int
+    gateway_calls_failed: int
     success_rate: float
     calls_peak: int
     calls_average: float
@@ -468,6 +472,7 @@ def localized_result(result: BenchmarkResult) -> dict[str, Any]:
     values["media_delta"] = localized_media(result.media_delta)
     values["artifacts"] = {
         "主叫日志": result.artifacts.get("caller_log", ""),
+        "网关日志": result.artifacts.get("gateway_log", ""),
         "SIP 状态码统计": result.artifacts.get("status_counts", "{}"),
     }
     return {RESULT_FIELD_LABELS[key]: value for key, value in values.items()}
@@ -530,6 +535,7 @@ def _markdown_report(config: BenchmarkConfig, result: BenchmarkResult) -> str:
 |---|---:|
 | 成功呼叫数 | {result.calls_completed} |
 | 失败呼叫数 | {result.calls_failed} |
+| 网关场景完成 / 失败数 | {result.gateway_calls_completed} / {result.gateway_calls_failed} |
 | 呼叫成功率 | {result.success_rate:.2f}% |
 | 峰值并发数 | {result.calls_peak} |
 | 平均并发数 | {result.calls_average:.2f} |
@@ -756,6 +762,7 @@ def run_scenario(config: BenchmarkConfig, dry_run: bool) -> BenchmarkResult | No
     media_after = peak_numeric_metrics(samples)
     media_delta = numeric_delta(media_before, media_after)
     completed, failed, status_counts = parse_sipp_summary(caller_log)
+    gateway_completed, gateway_failed, _ = parse_sipp_summary(gateway_log)
     summary = summarize_samples(samples, config.concurrent)
     failures = evaluate(config, completed, failed, summary, media_delta)
     success_rate = completed / config.total * 100 if config.total else 0.0
@@ -768,6 +775,8 @@ def run_scenario(config: BenchmarkConfig, dry_run: bool) -> BenchmarkResult | No
         target_concurrent=config.concurrent,
         calls_completed=completed,
         calls_failed=failed,
+        gateway_calls_completed=gateway_completed,
+        gateway_calls_failed=gateway_failed,
         success_rate=success_rate,
         calls_peak=int(summary["calls_peak"]),
         calls_average=float(summary["calls_average"]),
@@ -779,7 +788,11 @@ def run_scenario(config: BenchmarkConfig, dry_run: bool) -> BenchmarkResult | No
         media_delta=media_delta,
         status="PASS" if not failures else "FAIL",
         failures=failures,
-        artifacts={"caller_log": str(caller_log), "status_counts": json.dumps(status_counts)},
+        artifacts={
+            "caller_log": str(caller_log),
+            "gateway_log": str(gateway_log),
+            "status_counts": json.dumps(status_counts),
+        },
     )
     write_reports(scenario_dir, config, result, samples)
     return result
