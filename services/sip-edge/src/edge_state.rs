@@ -25,6 +25,7 @@ use tracing::{debug, error, info, warn};
 pub(crate) struct PendingDatagram {
     pub target: String,
     pub bytes: Vec<u8>,
+    invite_response: Option<InviteResponseMetadata>,
 }
 
 impl PendingDatagram {
@@ -32,8 +33,30 @@ impl PendingDatagram {
         Self {
             target: target.into(),
             bytes,
+            invite_response: None,
         }
     }
+
+    pub(crate) fn with_invite_response_order(
+        mut self,
+        order: Arc<tokio::sync::Mutex<InviteResponseOrder>>,
+        cseq: Option<u32>,
+        status_code: u16,
+    ) -> Self {
+        self.invite_response = Some(InviteResponseMetadata {
+            order,
+            cseq,
+            status_code,
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+struct InviteResponseMetadata {
+    order: Arc<tokio::sync::Mutex<InviteResponseOrder>>,
+    cseq: Option<u32>,
+    status_code: u16,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -96,6 +119,15 @@ pub(crate) struct InboundTransaction {
     pub(crate) active_forks: Vec<(String, String)>,
     pub(crate) max_duration_secs: Option<u32>,
     pub(crate) established_at: Option<std::time::Instant>,
+    /// Serializes INVITE responses for this dialog and rejects late provisional responses.
+    pub(crate) invite_response_order: Arc<tokio::sync::Mutex<InviteResponseOrder>>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct InviteResponseOrder {
+    pub(crate) cseq: Option<u32>,
+    pub(crate) final_response_seen: bool,
+    pub(crate) final_response_send_started: bool,
 }
 
 impl InboundTransaction {
@@ -544,6 +576,46 @@ impl EdgeState {
         fallback_socket: &UdpSocket,
         edge_config: &EdgeConfig,
     ) -> Result<(), std::io::Error> {
+        // The guard intentionally covers the actual socket/channel write. Merely serializing
+        // response construction still allows a suspended provisional-response task to send
+        // after a final response under high scheduler pressure.
+        let _invite_response_guard = match datagram.invite_response.as_ref() {
+            Some(metadata) => {
+                let mut order = metadata.order.lock().await;
+                if order.cseq != metadata.cseq {
+                    if order
+                        .cseq
+                        .zip(metadata.cseq)
+                        .is_some_and(|(current, pending)| pending < current)
+                    {
+                        debug!(
+                            cseq = ?metadata.cseq,
+                            current_cseq = ?order.cseq,
+                            status = metadata.status_code,
+                            "dropping response from an older INVITE transaction"
+                        );
+                        return Ok(());
+                    }
+                    order.cseq = metadata.cseq;
+                    order.final_response_seen = metadata.status_code >= 200;
+                    order.final_response_send_started = false;
+                }
+                if metadata.status_code < 200 && order.final_response_send_started {
+                    debug!(
+                        cseq = ?metadata.cseq,
+                        status = metadata.status_code,
+                        "dropping late provisional INVITE response before network send"
+                    );
+                    return Ok(());
+                }
+                if metadata.status_code >= 200 {
+                    order.final_response_send_started = true;
+                }
+                Some(order)
+            }
+            None => None,
+        };
+
         let target_addr: SocketAddr = match datagram.target.parse() {
             Ok(addr) => addr,
             Err(_) => {
@@ -865,6 +937,9 @@ impl EdgeState {
                 active_forks: Vec::new(),
                 max_duration_secs,
                 established_at: None,
+                invite_response_order: Arc::new(tokio::sync::Mutex::new(
+                    InviteResponseOrder::default(),
+                )),
             },
         );
 

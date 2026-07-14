@@ -386,6 +386,64 @@ mod tests {
         assert!(event_tx.is_closed());
     }
 
+    #[tokio::test]
+    async fn test_invite_2xx_transaction_replays_final_for_duplicate_request() {
+        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client_addr = client_socket.local_addr().unwrap();
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let initial_request = request(concat!(
+            "INVITE sip:1002@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 127.0.0.1:0;branch=z9hG4bK-success\r\n",
+            "Call-ID: call-success@example.com\r\n",
+            "CSeq: 1 INVITE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ));
+        let key = RequestTransactionKey::from_request(&initial_request, client_addr).unwrap();
+        let (event_tx, event_rx) = mpsc::channel(16);
+        spawn_invite_server_transaction(
+            key,
+            initial_request.clone(),
+            client_addr,
+            Some(Arc::new(server_socket)),
+            event_rx,
+        );
+
+        let provisional = b"SIP/2.0 183 Session Progress\r\nContent-Length: 0\r\n\r\n".to_vec();
+        event_tx
+            .send(ServerTransactionEvent::UpdateLastProvisional(provisional))
+            .await
+            .unwrap();
+        let final_response = b"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec();
+        event_tx
+            .send(ServerTransactionEvent::Response(final_response.clone()))
+            .await
+            .unwrap();
+
+        let mut buffer = [0_u8; 1024];
+        let (length, _) = tokio::time::timeout(
+            Duration::from_millis(100),
+            client_socket.recv_from(&mut buffer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&buffer[..length], final_response);
+
+        event_tx
+            .send(ServerTransactionEvent::Request(initial_request))
+            .await
+            .unwrap();
+        let (length, _) = tokio::time::timeout(
+            Duration::from_millis(100),
+            client_socket.recv_from(&mut buffer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&buffer[..length], final_response);
+    }
+
     fn request(raw: &str) -> sip_core::SipRequest {
         let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
             panic!("expected request");
@@ -520,6 +578,7 @@ pub(crate) fn spawn_invite_server_transaction(
 
         let mut last_response: Option<Vec<u8>> = None;
         let mut last_provisional: Option<Vec<u8>> = None;
+        let mut successful_final = false;
 
         loop {
             tokio::select! {
@@ -545,10 +604,12 @@ pub(crate) fn spawn_invite_server_transaction(
                             } else {
                                 let is_2xx = resp_bytes.starts_with(b"SIP/2.0 2");
                                 if is_2xx {
+                                    last_response = Some(resp_bytes.clone());
                                     if let Some(ref s) = socket {
                                         let _ = s.send_to(&resp_bytes, peer).await;
                                     }
-                                    return;
+                                    successful_final = true;
+                                    break;
                                 } else {
                                     last_response = Some(resp_bytes.clone());
                                     if let Some(ref s) = socket {
@@ -565,6 +626,32 @@ pub(crate) fn spawn_invite_server_transaction(
                     }
                 }
             }
+        }
+
+        if successful_final {
+            let timer_l = tokio::time::sleep(timer_h_duration);
+            tokio::pin!(timer_l);
+
+            loop {
+                tokio::select! {
+                    _ = &mut timer_l => break,
+                    event_opt = event_rx.recv() => {
+                        let Some(event) = event_opt else {
+                            break;
+                        };
+                        match event {
+                            ServerTransactionEvent::Request(_) => {
+                                if let (Some(response), Some(s)) = (&last_response, &socket) {
+                                    let _ = s.send_to(response, peer).await;
+                                }
+                            }
+                            ServerTransactionEvent::Ack(_) => break,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            return;
         }
 
         if let Some(final_resp) = last_response {

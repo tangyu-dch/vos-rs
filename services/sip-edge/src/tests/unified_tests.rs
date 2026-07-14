@@ -1246,6 +1246,38 @@ fn test_scenario_runner() {
     }
 
     #[tokio::test]
+    async fn late_provisional_response_after_invite_ok_is_dropped() {
+        let edge_state = state_with_default_route();
+        let call_id = "invite-late-provisional@example.com";
+        send_invite(&edge_state, call_id).await;
+        send_gateway_ok(&edge_state, call_id).await;
+
+        let late_response = format!(
+            concat!(
+                "SIP/2.0 183 Session Progress\r\n",
+                "Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n",
+                "From: <sip:1001@example.com>;tag=from-tag\r\n",
+                "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
+                "Call-ID: {call_id}\r\n",
+                "CSeq: 1 INVITE\r\n",
+                "Content-Length: 0\r\n",
+                "\r\n"
+            ),
+            call_id = call_id
+        );
+
+        let datagrams = handle_datagram(
+            late_response.as_bytes(),
+            "198.51.100.20:5060".parse().unwrap(),
+            &edge_state,
+            &edge_config(),
+        )
+        .await;
+
+        assert!(datagrams.is_empty());
+    }
+
+    #[tokio::test]
     async fn pairs_rtp_relay_ports_after_sdp_offer_answer() {
         let edge_state = state_with_default_route();
         let offer_body = concat!(
@@ -6000,5 +6032,4 @@ async fn test_call_monitoring() {
     // Clean up
     let _ = tx.send(());
 }
-
 

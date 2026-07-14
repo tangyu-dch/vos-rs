@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use sdp_core::RtpEndpoint;
@@ -97,6 +98,45 @@ pub(crate) async fn dispatch_response(
         .get("cseq")
         .map(|cseq| cseq.as_str().contains("INVITE"))
         .unwrap_or(false);
+    let response_cseq = sip_response
+        .headers
+        .get("cseq")
+        .and_then(|value| crate::sip::dialog::cseq_number(value.as_str()));
+
+    // UDP worker tasks may finish out of order under load. Keep response ordering local to
+    // each dialog so a delayed 1xx can never be emitted after that INVITE's final response.
+    let invite_response_order = if is_invite {
+        call_id.as_deref().and_then(|cid| {
+            edge_state
+                .inbound_transactions
+                .get(cid)
+                .map(|transaction| Arc::clone(&transaction.invite_response_order))
+        })
+    } else {
+        None
+    };
+    let mut invite_response_guard = match invite_response_order.as_ref() {
+        Some(order) => Some(order.lock().await),
+        None => None,
+    };
+    if let Some(order) = invite_response_guard.as_mut() {
+        if order.cseq != response_cseq {
+            order.cseq = response_cseq;
+            order.final_response_seen = false;
+            order.final_response_send_started = false;
+        }
+        if sip_response.status_code < 200 && order.final_response_seen {
+            debug!(
+                call_id = ?call_id,
+                status = sip_response.status_code,
+                "dropping late provisional INVITE response after final response"
+            );
+            return Vec::new();
+        }
+        if sip_response.status_code >= 200 {
+            order.final_response_seen = true;
+        }
+    }
 
     let mut cancel_datagrams = Vec::new();
 
@@ -980,7 +1020,16 @@ pub(crate) async fn dispatch_response(
                     }
                 }
 
-                datagrams.push(PendingDatagram::new(t.peer.clone(), rewritten_response));
+                let caller_response = PendingDatagram::new(t.peer.clone(), rewritten_response);
+                let caller_response = match invite_response_order.as_ref() {
+                    Some(order) => caller_response.with_invite_response_order(
+                        Arc::clone(order),
+                        response_cseq,
+                        sip_response.status_code,
+                    ),
+                    None => caller_response,
+                };
+                datagrams.push(caller_response);
             }
             return datagrams;
         }
@@ -998,18 +1047,25 @@ pub(crate) async fn dispatch_response(
                 call_id.as_deref(),
             );
 
-            if sip_response.status_code >= 100 && sip_response.status_code < 200 {
+            let mut delivered_by_server_transaction = false;
+            if is_invite {
                 if let (Some(ref orig_req), Ok(peer_addr)) = (
                     &transaction.original_request,
                     transaction.peer.parse::<SocketAddr>(),
                 ) {
                     if let Some(key) = RequestTransactionKey::from_request(orig_req, peer_addr) {
                         if let Some(tx) = edge_state.get_server_transaction(&key) {
-                            let _ = tx
-                                .send(transaction::ServerTransactionEvent::UpdateLastProvisional(
+                            let event = if sip_response.status_code < 200 {
+                                transaction::ServerTransactionEvent::UpdateLastProvisional(
                                     forwarded_bytes.clone(),
-                                ))
-                                .await;
+                                )
+                            } else {
+                                transaction::ServerTransactionEvent::Response(
+                                    forwarded_bytes.clone(),
+                                )
+                            };
+                            delivered_by_server_transaction =
+                                sip_response.status_code >= 200 && tx.send(event).await.is_ok();
                         }
                     }
                 }
@@ -1056,7 +1112,19 @@ pub(crate) async fn dispatch_response(
 
 
 
-            let mut datagrams = vec![PendingDatagram::new(transaction.peer, forwarded_bytes)];
+            let mut datagrams = Vec::new();
+            if !delivered_by_server_transaction {
+                let caller_response = PendingDatagram::new(transaction.peer, forwarded_bytes);
+                let caller_response = match invite_response_order.as_ref() {
+                    Some(order) => caller_response.with_invite_response_order(
+                        Arc::clone(order),
+                        response_cseq,
+                        sip_response.status_code,
+                    ),
+                    None => caller_response,
+                };
+                datagrams.push(caller_response);
+            }
             datagrams.extend(cancel_datagrams);
             datagrams
         }
