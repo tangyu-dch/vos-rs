@@ -556,6 +556,9 @@ def gateway_command(config: BenchmarkConfig, scenario_file: Path) -> list[str]:
         "-i", config.edge_host,
         "-p", str(config.gateway_port),
         "-m", str(config.total),
+        "-buff_size", "4194304",
+        "-max_recv_loops", "1000",
+        "-timer_resol", "1",
         "-aa", "-nostdin",
         "-timeout", f"{config.duration + 30}s",
     ]
@@ -574,6 +577,9 @@ def caller_command(config: BenchmarkConfig, scenario_file: Path) -> list[str]:
         "-r", str(config.cps),
         "-l", str(config.concurrent),
         "-d", str(config.duration * 1000),
+        "-buff_size", "4194304",
+        "-max_recv_loops", "1000",
+        "-timer_resol", "1",
         "-aa", "-nostdin", "-trace_err",
         "-timeout", f"{config.duration + int(config.ramp_seconds) + 30}s",
     ]
