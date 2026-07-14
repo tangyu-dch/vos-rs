@@ -296,10 +296,9 @@ pub(crate) async fn handle_in_dialog_request(
                     // 如果是会议呼叫（单腿 UAS 呼叫），直接在本地终结并返回 200 OK，不转发给其他任何节点
                     let out_user = transaction.outbound_uri.user.as_deref().unwrap_or("");
                     if out_user.starts_with("conf_") || out_user.starts_with("room_") {
-                        let username = transaction
-                            .original_request
-                            .as_ref()
-                            .and_then(|req| crate::edge_state::EdgeState::username_from_request(req.as_ref()));
+                        let username = transaction.original_request.as_ref().and_then(|req| {
+                            crate::edge_state::EdgeState::username_from_request(req.as_ref())
+                        });
                         if let Some(ref uname) = username {
                             edge_state.decrement_user_concurrency(uname);
                         }
@@ -437,17 +436,17 @@ pub(crate) async fn handle_in_dialog_request(
                 );
                 datagrams.push(PendingDatagram::new(peer.to_string(), notify));
 
-                let outbound_uri = if let Some(contact) = edge_state.lookup_contact(&target_uri).await {
-                    SipUri::from_str(&contact.uri).ok()
-                } else {
-                    edge_state
-                        .call_manager
-                        .routes()
-                        .select(&target_uri)
-                        .ok()
-                        .map(|sr| sr.outbound_uri)
-                };
-
+                let outbound_uri =
+                    if let Some(contact) = edge_state.lookup_contact(&target_uri).await {
+                        SipUri::from_str(&contact.uri).ok()
+                    } else {
+                        edge_state
+                            .call_manager
+                            .routes()
+                            .select(&target_uri)
+                            .ok()
+                            .map(|sr| sr.outbound_uri)
+                    };
 
                 if outbound_uri.is_none() {
                     let notify_404 = outbound::build_notify_sipfrag_with_state(

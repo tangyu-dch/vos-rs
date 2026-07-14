@@ -97,13 +97,18 @@ pub(crate) async fn handle_invite_request(
             .unwrap_or(rtp_core::AudioCodec::Pcma);
 
         // 注册局部编解码器关联
-        edge_state.media_relay.register_port_codec(local_ep.port, codec);
+        edge_state
+            .media_relay
+            .register_port_codec(local_ep.port, codec);
 
         // 从 active_sockets 中获取已分配的 UDP Socket
         let socket = match edge_state.media_relay.active_sockets.get(&local_ep.port) {
             Some(s) => s.value().clone(),
             None => {
-                warn!(port = local_ep.port, "UDP socket not found in active_sockets");
+                warn!(
+                    port = local_ep.port,
+                    "UDP socket not found in active_sockets"
+                );
                 edge_state.media_relay.clear_target(local_ep.port);
                 return vec![PendingDatagram::new(
                     peer.to_string(),
@@ -148,7 +153,9 @@ pub(crate) async fn handle_invite_request(
             headers: request.headers.clone(),
             body: Vec::new(),
         };
-        let _ = edge_state.call_manager.handle_outbound_response(&dummy_resp);
+        let _ = edge_state
+            .call_manager
+            .handle_outbound_response(&dummy_resp);
 
         // 5. 记录事务状态
         edge_state.remember_inbound_invite(
@@ -162,7 +169,6 @@ pub(crate) async fn handle_invite_request(
         );
 
         let to_tag = "vosrs-edge".to_string();
-
 
         // 修正本地中继关联为 caller 侧中继
         if let Some(mut tx) = edge_state.inbound_transactions.get_mut(&internal_call_id) {
@@ -196,15 +202,16 @@ pub(crate) async fn handle_invite_request(
             "OK",
             &[
                 ("Content-Type".to_string(), "application/sdp".to_string()),
-                ("Contact".to_string(), format!("<sip:{}@{}>", conf_id, edge_config.advertised_addr)),
+                (
+                    "Contact".to_string(),
+                    format!("<sip:{}@{}>", conf_id, edge_config.advertised_addr),
+                ),
             ],
             &sdp_answer,
         );
 
         return vec![PendingDatagram::new(peer.to_string(), response)];
-
     }
-
 
     {
         let rules = edge_state
@@ -330,7 +337,7 @@ pub(crate) async fn handle_invite_request(
             .verify_request(
                 &request,
                 db_store.as_ref(),
-                Some(&edge_state.nonce_replay_cache)
+                Some(&edge_state.nonce_replay_cache),
             )
             .await;
         match auth_res {
@@ -430,7 +437,6 @@ pub(crate) async fn handle_invite_request(
     }
 
     let registered_contact = edge_state.lookup_contact(&request.uri).await;
-
 
     let response::RequestHandling {
         response,

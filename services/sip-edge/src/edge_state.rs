@@ -297,11 +297,11 @@ pub(crate) struct EdgeState {
     /// Active gateway OPTIONS probes keyed by their SIP Call-ID.
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
     /// Redis 多路复用连接，用于集群模式下的跨节点注册状态共享。可选，单节点部署不设置。
-    pub(crate) redis_conn: std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>>,
+    pub(crate) redis_conn:
+        std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>>,
     #[cfg(test)]
     pub(crate) test_gateways: std::sync::Mutex<Vec<String>>,
 }
-
 
 impl EdgeState {
     #[cfg(test)]
@@ -421,11 +421,15 @@ impl EdgeState {
 
     /// 设置 Redis 连接（仅在启动阶段调用一次）。
     pub(crate) fn set_redis(&self, conn: redis::aio::MultiplexedConnection) {
-        let _ = self.redis_conn.set(std::sync::Arc::new(tokio::sync::Mutex::new(conn)));
+        let _ = self
+            .redis_conn
+            .set(std::sync::Arc::new(tokio::sync::Mutex::new(conn)));
     }
 
     /// 获取克隆的 Redis Mutex Arc 连接，适用于跨线程/异步闭包。
-    pub(crate) fn get_redis_arc(&self) -> Option<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>> {
+    pub(crate) fn get_redis_arc(
+        &self,
+    ) -> Option<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>> {
         self.redis_conn.get().cloned()
     }
 
@@ -456,7 +460,10 @@ impl EdgeState {
                     .query_async(&mut *conn)
                     .await;
                 if let Ok(json_str) = res {
-                    if let Ok(contacts) = serde_json::from_str::<Vec<crate::sip::registrar::RegistrationContact>>(&json_str) {
+                    if let Ok(contacts) = serde_json::from_str::<
+                        Vec<crate::sip::registrar::RegistrationContact>,
+                    >(&json_str)
+                    {
                         // 返回第一个还有效的联系人
                         for contact in contacts {
                             if contact.expires > 0 {
@@ -470,8 +477,6 @@ impl EdgeState {
 
         None
     }
-
-
 
     pub(crate) fn get_internal_call_id(&self, external_call_id: &str) -> Option<String> {
         self.external_to_internal_call_ids

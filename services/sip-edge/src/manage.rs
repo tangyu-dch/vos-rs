@@ -4,10 +4,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use std::sync::Arc;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-
 
 use call_core::ActiveCall;
 use serde::Deserialize;
@@ -50,18 +49,23 @@ pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String)
         .route("/manage/calls/:call_id/unmute", post(unmute))
         .route("/manage/calls/:call_id/status", get(call_status))
         .route("/manage/calls/:call_id/monitor", post(monitor_call))
-        .route("/manage/calls/:call_id/stop-monitor", post(stop_monitor_call))
+        .route(
+            "/manage/calls/:call_id/stop-monitor",
+            post(stop_monitor_call),
+        )
         .route("/manage/conferences/join", post(join_conference))
         .route("/manage/conferences/leave", post(leave_conference))
         .route("/manage/conferences/status", get(conference_status))
-        .route("/manage/conferences/mute-participant", post(mute_conference_participant))
+        .route(
+            "/manage/conferences/mute-participant",
+            post(mute_conference_participant),
+        )
         .route("/manage/sbc/rules", post(update_sbc_rules))
         .route_layer(axum::middleware::from_fn_with_state(
             ManageAuthSecret(internal_secret),
             internal_auth,
         ))
         .with_state(state)
-
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -571,17 +575,18 @@ async fn join_conference(
         }
     };
 
-    let target_addr = match format!("{}:{}", payload.target_ip, payload.target_port).parse::<SocketAddr>() {
-        Ok(addr) => addr,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("Invalid target address: {}", e)
-                })),
-            );
-        }
-    };
+    let target_addr =
+        match format!("{}:{}", payload.target_ip, payload.target_port).parse::<SocketAddr>() {
+            Ok(addr) => addr,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("Invalid target address: {}", e)
+                    })),
+                );
+            }
+        };
 
     let codec = match payload.codec.to_lowercase().as_str() {
         "pcmu" => rtp_core::AudioCodec::Pcmu,
@@ -591,11 +596,15 @@ async fn join_conference(
     state
         .media_relay
         .conference_manager
-        .join_conference(&payload.conference_id, payload.port, codec, target_addr, socket)
+        .join_conference(
+            &payload.conference_id,
+            payload.port,
+            codec,
+            target_addr,
+            socket,
+        )
         .await;
-    state
-        .media_relay
-        .mark_relay_features_changed(payload.port);
+    state.media_relay.mark_relay_features_changed(payload.port);
 
     (
         StatusCode::OK,
@@ -621,9 +630,7 @@ async fn leave_conference(
         .conference_manager
         .leave_conference(payload.port)
         .await;
-    state
-        .media_relay
-        .mark_relay_features_changed(payload.port);
+    state.media_relay.mark_relay_features_changed(payload.port);
 
     (
         StatusCode::OK,
@@ -634,9 +641,7 @@ async fn leave_conference(
     )
 }
 
-async fn conference_status(
-    State(state): State<Arc<EdgeState>>,
-) -> Json<serde_json::Value> {
+async fn conference_status(State(state): State<Arc<EdgeState>>) -> Json<serde_json::Value> {
     let mut list = Vec::new();
     for entry in state.media_relay.conference_manager.conferences.iter() {
         let conf = entry.value().lock().await;

@@ -31,7 +31,6 @@ pub(crate) async fn handle_out_of_dialog_message(
 
     let target_contact = edge_state.lookup_contact(&request.uri).await;
 
-
     let outbound_uri = if let Some(ref contact) = target_contact {
         SipUri::from_str(&contact.uri).ok()
     } else {

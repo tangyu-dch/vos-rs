@@ -255,7 +255,10 @@ mod tests {
                 "balance_enforcement_enabled".to_string(),
                 "false".to_string(),
             ),
-            ("billing_settlement_enabled".to_string(), "false".to_string()),
+            (
+                "billing_settlement_enabled".to_string(),
+                "false".to_string(),
+            ),
             ("cdr_persistence_enabled".to_string(), "false".to_string()),
             (
                 "gateway_health_checks_enabled".to_string(),

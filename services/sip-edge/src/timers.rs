@@ -788,13 +788,14 @@ pub(crate) fn spawn_billing_watchdog_simple(
             )
             .into_bytes();
 
-            ((caller_target, caller_bye_bytes), (gw_target, gateway_bye_bytes))
+            (
+                (caller_target, caller_bye_bytes),
+                (gw_target, gateway_bye_bytes),
+            )
         };
 
         // 向主叫发 BYE
-        let _ = socket
-            .send_to(&caller_bye.1, &caller_bye.0)
-            .await;
+        let _ = socket.send_to(&caller_bye.1, &caller_bye.0).await;
 
         // 向网关发 BYE
         if let Ok(gw_addr) = gateway_bye.0.parse::<SocketAddr>() {

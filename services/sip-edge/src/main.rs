@@ -84,10 +84,9 @@ async fn main() -> Result<(), AnyError> {
     let db_store = cdr_sinks.postgres.clone();
     if db_store.is_none() {
         tracing::error!("数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接！");
-        return Err(std::io::Error::other(
-            "数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接",
-        )
-        .into());
+        return Err(
+            std::io::Error::other("数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接").into(),
+        );
     }
 
     // 检查并强制校验 Redis 连接

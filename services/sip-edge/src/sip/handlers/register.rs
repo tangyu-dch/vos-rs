@@ -21,7 +21,7 @@ pub(crate) async fn handle_register_request(
         .verify_request(
             &request,
             db_store.as_ref(),
-            Some(&edge_state.nonce_replay_cache)
+            Some(&edge_state.nonce_replay_cache),
         )
         .await;
     match auth_res {
@@ -49,11 +49,16 @@ pub(crate) async fn handle_register_request(
         {
             Ok(outcome) => {
                 // 将注册信息同步至 Redis（用于集群模式下的跨节点状态共享）
-                let max_expires = outcome.contacts.iter().map(|c| c.expires).max().unwrap_or(0);
+                let max_expires = outcome
+                    .contacts
+                    .iter()
+                    .map(|c| c.expires)
+                    .max()
+                    .unwrap_or(0);
                 let aor_key = outcome.aor.clone();
                 let contacts_clone = outcome.contacts.clone();
                 let redis_arc = edge_state.get_redis_arc();
-                
+
                 // 异步在后台执行 Redis 写入，防止阻塞 SIP 消息处理链路
                 tokio::spawn(async move {
                     if let Some(arc) = redis_arc {

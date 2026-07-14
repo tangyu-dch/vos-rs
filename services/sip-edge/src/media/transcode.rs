@@ -97,7 +97,6 @@ impl RecordingFormat {
             Self::Amr => "amr",
         }
     }
-
 }
 
 /// 通话结束后异步转码录音文件。

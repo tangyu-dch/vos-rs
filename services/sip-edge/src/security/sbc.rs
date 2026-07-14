@@ -217,7 +217,8 @@ impl SbcEngine {
         let now = Instant::now();
         let mut fail_count = 1;
 
-        self.auth_failures.entry(ip)
+        self.auth_failures
+            .entry(ip)
             .and_modify(|(count, last_time)| {
                 // 如果上一次失败在 60 秒内，则累加计数
                 if now.duration_since(*last_time).as_secs() < 60 {
@@ -272,7 +273,6 @@ impl SbcEngine {
         self.rate_limiter.check_rate(ip)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

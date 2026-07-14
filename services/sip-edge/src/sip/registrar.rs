@@ -47,7 +47,6 @@ pub struct RegistrationContact {
     pub path: Vec<String>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterOutcome {
     pub aor: String,

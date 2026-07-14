@@ -1,12 +1,12 @@
+use dashmap::DashMap;
+use rtp_core::AudioCodec;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
-use dashmap::DashMap;
-use tracing::{info, debug};
-use rtp_core::AudioCodec;
+use tracing::{debug, info};
 
 /// 会议参会成员状态
 pub struct ConferenceParticipant {
@@ -69,7 +69,7 @@ impl Conference {
         // 2. 为每个参会者计算 mix-minus 混音（混合除了自己以外其他人的声音）
         for (&port, p) in &mut self.participants {
             let mut mixed_frame = vec![0_i32; 160];
-            
+
             for (&other_port, frame) in &participant_frames {
                 if other_port == port {
                     continue; // 排除自己，避免回音
@@ -141,7 +141,7 @@ impl ConferenceManager {
         socket: Arc<UdpSocket>,
     ) {
         info!(conference_id, port, %target_addr, "participant joining conference");
-        
+
         let conf_arc = self
             .conferences
             .entry(conference_id.to_string())
@@ -161,7 +161,8 @@ impl ConferenceManager {
             muted: false,
         };
         conf.participants.insert(port, participant);
-        self.port_to_conference.insert(port, conference_id.to_string());
+        self.port_to_conference
+            .insert(port, conference_id.to_string());
     }
 
     /// 离开会议
@@ -244,7 +245,7 @@ pub fn start_mixer_loop(manager: Arc<ConferenceManager>) {
             let mut interval = tokio::time::interval(Duration::from_millis(20));
             loop {
                 interval.tick().await;
-                
+
                 // 1. 先把所有会议的 Arc 收集起来，这样就能在 mix_and_send() 的 await 之前释放 DashMap 的迭代锁
                 let active_conferences: Vec<Arc<Mutex<Conference>>> = manager
                     .conferences
@@ -261,6 +262,3 @@ pub fn start_mixer_loop(manager: Arc<ConferenceManager>) {
         });
     }
 }
-
-
-

@@ -1109,9 +1109,6 @@ pub(crate) async fn dispatch_response(
                 }
             }
 
-
-
-
             let mut datagrams = Vec::new();
             if !delivered_by_server_transaction {
                 let caller_response = PendingDatagram::new(transaction.peer, forwarded_bytes);

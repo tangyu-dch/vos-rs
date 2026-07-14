@@ -376,9 +376,7 @@ impl EdgeConfig {
                 .cdr_queue_capacity
                 .unwrap_or(4096)
                 .max(1),
-            cdr_persistence_enabled: performance_section
-                .cdr_persistence_enabled
-                .unwrap_or(true),
+            cdr_persistence_enabled: performance_section.cdr_persistence_enabled.unwrap_or(true),
             recording_workers: recording_section.workers.unwrap_or(4).max(1),
             recording_queue_capacity: recording_section.queue_capacity.unwrap_or(10_000).max(1),
             media_metrics_log: media_section.metrics_log.unwrap_or(false),

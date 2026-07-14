@@ -24,6 +24,7 @@
 //! - 录音使用独立线程池，避免阻塞 tokio runtime
 //! - Symmetric RTP 自动学习对端地址，支持 NAT 穿透
 
+pub(crate) mod conference;
 pub(crate) mod config;
 pub(crate) mod crypto;
 pub(crate) mod dtmf;
@@ -35,8 +36,6 @@ pub(crate) mod sdp;
 pub(crate) mod transcode;
 pub(crate) mod utils;
 pub(crate) mod wav;
-pub(crate) mod conference;
-
 
 pub use self::config::MediaConfig;
 pub use self::metrics::RtcpQualitySnapshot;
