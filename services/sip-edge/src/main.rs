@@ -260,40 +260,44 @@ async fn main() -> Result<(), AnyError> {
             );
         }
 
-        if let Some(ref db) = db_store {
-            match db.load_gateway_health_list().await {
-                Ok(health_list) => {
-                    let mut health = edge_state
-                        .gateway_health
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    for (
-                        gw_id,
-                        open,
-                        failures,
-                        _state,
-                        last_failure_at,
-                        half_open_successes,
-                        _last_probe_at,
-                        active_calls,
-                    ) in health_list
-                    {
-                        let last_failure_sys = last_failure_at.map(|dt| {
-                            std::time::UNIX_EPOCH
-                                + std::time::Duration::from_secs(dt.unix_timestamp() as u64)
-                        });
-                        health.restore_state(
-                            &gw_id,
+        if edge_config.gateway_health_checks_enabled {
+            if let Some(ref db) = db_store {
+                match db.load_gateway_health_list().await {
+                    Ok(health_list) => {
+                        let mut health = edge_state
+                            .gateway_health
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        for (
+                            gw_id,
                             open,
                             failures,
-                            last_failure_sys,
+                            _state,
+                            last_failure_at,
                             half_open_successes,
+                            _last_probe_at,
                             active_calls,
-                        );
+                        ) in health_list
+                        {
+                            let last_failure_sys = last_failure_at.map(|dt| {
+                                std::time::UNIX_EPOCH
+                                    + std::time::Duration::from_secs(dt.unix_timestamp() as u64)
+                            });
+                            health.restore_state(
+                                &gw_id,
+                                open,
+                                failures,
+                                last_failure_sys,
+                                half_open_successes,
+                                active_calls,
+                            );
+                        }
+                        info!("loaded and restored gateway health states from database");
                     }
-                    info!("loaded and restored gateway health states from database");
+                    Err(error) => {
+                        warn!(%error, "failed to load gateway health states from database")
+                    }
                 }
-                Err(error) => warn!(%error, "failed to load gateway health states from database"),
             }
         }
 
@@ -502,11 +506,13 @@ async fn main() -> Result<(), AnyError> {
     }
 
     spawn_nat_keepalive_loop(Arc::clone(&edge_state), Arc::clone(&socket));
-    spawn_gateway_health_probe_loop(
-        Arc::clone(&edge_state),
-        Arc::clone(&socket),
-        Arc::clone(&edge_config),
-    );
+    if edge_config.gateway_health_checks_enabled {
+        spawn_gateway_health_probe_loop(
+            Arc::clone(&edge_state),
+            Arc::clone(&socket),
+            Arc::clone(&edge_config),
+        );
+    }
     if let Some(ref db) = db_store {
         spawn_periodic_route_refresh(Arc::clone(&edge_state), db.clone());
     }
