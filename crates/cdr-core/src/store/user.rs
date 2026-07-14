@@ -74,4 +74,11 @@ impl PostgresCdrStore {
                 .await?;
         Ok(row.map(|(pw,)| pw))
     }
+
+    /// 读取全部 SIP 用户凭据，用于启动时预热 Redis 鉴权缓存。
+    pub async fn list_user_credentials(&self) -> Result<Vec<(String, String)>, sqlx::Error> {
+        sqlx::query_as("SELECT username, password FROM sip_users ORDER BY username")
+            .fetch_all(&self.pool)
+            .await
+    }
 }

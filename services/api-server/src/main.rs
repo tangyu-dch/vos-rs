@@ -11,6 +11,7 @@ mod calls;
 mod cdr;
 mod dashboard;
 mod gateways;
+mod hot_cache;
 mod metrics;
 mod numbers;
 mod recording;
