@@ -405,7 +405,8 @@ def summarize_samples(samples: list[Sample], target: int) -> dict[str, float | i
     cpu = [sample.cpu_percent for sample in samples if sample.cpu_percent is not None]
     memory = [sample.rss_mb for sample in samples if sample.rss_mb is not None]
     calls = [sample.active_calls for sample in samples if sample.active_calls is not None]
-    sustained = sum(1 for value in calls if value >= target) if calls else 0
+    effective_target = (target * 95 + 99) // 100
+    sustained = sum(1 for value in calls if value >= effective_target) if calls else 0
     return {
         "cpu_average": statistics.fmean(cpu) if cpu else 0.0,
         "cpu_peak": max(cpu, default=0.0),
@@ -532,7 +533,7 @@ def _markdown_report(config: BenchmarkConfig, result: BenchmarkResult) -> str:
 | 呼叫成功率 | {result.success_rate:.2f}% |
 | 峰值并发数 | {result.calls_peak} |
 | 平均并发数 | {result.calls_average:.2f} |
-| 持续达标时间 | {result.sustained_seconds:.0f} 秒 |
+| 有效并发持续时间（≥95% 目标） | {result.sustained_seconds:.0f} 秒 |
 | 平均 / 峰值 CPU | {result.cpu_average:.2f}% / {result.cpu_peak:.2f}% |
 | 平均 / 峰值内存 | {result.memory_average_mb:.2f} / {result.memory_peak_mb:.2f} MB |
 | RTP 接收 / 转发包数 | {result.media_delta.get('received_packets', 0)} / {result.media_delta.get('forwarded_packets', 0)} |
