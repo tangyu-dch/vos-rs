@@ -38,6 +38,7 @@ async fn internal_auth(
 pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String) {
     let app = Router::new()
         .route("/manage/active-calls", get(active_calls))
+        .route("/manage/active-calls/count", get(active_calls_count))
         .route("/manage/calls/:call_id/terminate", post(terminate))
         .route("/manage/route-preview", get(route_preview))
         .route("/manage/media-metrics", get(media_metrics))
@@ -73,6 +74,10 @@ pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String)
 
 async fn active_calls(State(state): State<Arc<EdgeState>>) -> Json<Vec<ActiveCall>> {
     Json(state.call_manager.active_calls())
+}
+
+async fn active_calls_count(State(state): State<Arc<EdgeState>>) -> Json<usize> {
+    Json(state.call_manager.active_calls_count())
 }
 
 /// RTP/录音聚合指标，供 API Server、压测脚本和运维面板读取。
