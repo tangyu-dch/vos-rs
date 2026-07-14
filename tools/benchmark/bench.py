@@ -410,7 +410,14 @@ def summarize_samples(samples: list[Sample], target: int) -> dict[str, float | i
     memory = [sample.rss_mb for sample in samples if sample.rss_mb is not None]
     calls = [sample.active_calls for sample in samples if sample.active_calls is not None]
     effective_target = (target * 95 + 99) // 100
-    sustained = sum(1 for value in calls if value >= effective_target) if calls else 0
+    # Sampling HTTP metrics can take longer than one second while the host is saturated. Use
+    # timestamps instead of treating each sample as exactly one second, otherwise a healthy
+    # plateau is systematically under-counted at the load levels this benchmark targets.
+    sustained = sum(
+        max(0.0, following.elapsed_seconds - current.elapsed_seconds)
+        for current, following in zip(samples, samples[1:])
+        if current.active_calls is not None and current.active_calls >= effective_target
+    )
     return {
         "cpu_average": statistics.fmean(cpu) if cpu else 0.0,
         "cpu_peak": max(cpu, default=0.0),
@@ -566,7 +573,8 @@ def gateway_command(config: BenchmarkConfig, scenario_file: Path) -> list[str]:
         "-buff_size", "4194304",
         "-max_recv_loops", "1000",
         "-timer_resol", "1",
-        "-aa", "-nostdin",
+        "-aa", "-nostdin", "-trace_err",
+        "-error_file", str(config.output_dir / "gateway_errors.log"),
         "-timeout", f"{config.duration + 30}s",
     ]
 
@@ -588,6 +596,7 @@ def caller_command(config: BenchmarkConfig, scenario_file: Path) -> list[str]:
         "-max_recv_loops", "1000",
         "-timer_resol", "1",
         "-aa", "-nostdin", "-trace_err",
+        "-error_file", str(config.output_dir / "caller_errors.log"),
         "-timeout", f"{config.duration + int(config.ramp_seconds) + 30}s",
     ]
 
