@@ -16,3 +16,7 @@ sip_router:
   udp_workers: 2
   udp_queue_capacity: 1024
   max_transactions: 10000
+  tcp_max_connections: 100
+  tcp_write_queue_capacity: 128
+  tcp_idle_timeout_secs: 60
+  tcp_connect_timeout_secs: 1

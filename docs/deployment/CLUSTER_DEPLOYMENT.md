@@ -163,11 +163,18 @@ sip_router:
   udp_workers: 0 # 自动使用 CPU 核数，最多 64
   udp_queue_capacity: 4096
   max_transactions: 1000000
+  tcp_max_connections: 10000
+  tcp_write_queue_capacity: 1024
+  tcp_idle_timeout_secs: 300
+  tcp_connect_timeout_secs: 3
 ```
 
 UDP 接收线程只负责收包和按 Call-ID 分配 worker，同一对话始终进入同一有界队列；
 路由选择、Redis 归属和网络发送由 worker 并行执行。队列或事务表达到上限时会快速丢弃
 并输出采样告警，避免突发流量造成内存无限增长。
+TCP 长连接会对每条 SIP 消息重新按 Call-ID 解析归属，同一运营商连接可同时承载落在
+不同 sip-edge 节点上的呼叫。每条客户端连接按后端节点复用连接，并使用有界写队列；
+客户端连接数、空闲时间以及后端连接超时均由上述参数限制。
 
 ## 故障语义
 

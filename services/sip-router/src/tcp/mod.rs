@@ -1,4 +1,5 @@
 mod framing;
+mod pool;
 
 #[cfg(test)]
 mod tests;
@@ -8,15 +9,17 @@ use std::sync::Arc;
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
+    sync::{mpsc, Semaphore},
 };
 
 use crate::{
     config::RouterConfig,
     discovery::SharedNodes,
-    proxy::{add_router_via, header_value, remove_top_via, router_branch, top_via_branch},
+    proxy::{add_router_via, header_value, router_branch},
     routes::DialogRouteStore,
 };
 use framing::SipFrameReader;
+use pool::BackendPool;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -26,13 +29,24 @@ pub(crate) async fn run(
     routes: Arc<DialogRouteStore>,
 ) -> Result<(), BoxError> {
     let listener = TcpListener::bind(&config.tcp_bind).await?;
-    tracing::info!(bind = %config.tcp_bind, "原生 SIP TCP 路由器已启动");
+    let connection_limit = Arc::new(Semaphore::new(config.tcp_max_connections));
+    tracing::info!(
+        bind = %config.tcp_bind,
+        max_connections = config.tcp_max_connections,
+        "原生 SIP TCP 路由器已启动"
+    );
     loop {
         let (stream, peer) = listener.accept().await?;
+        let Ok(permit) = Arc::clone(&connection_limit).try_acquire_owned() else {
+            tracing::warn!(%peer, "SIP TCP 连接数达到上限，拒绝新连接");
+            drop(stream);
+            continue;
+        };
         let config = config.clone();
         let nodes = Arc::clone(&nodes);
         let routes = Arc::clone(&routes);
         tokio::spawn(async move {
+            let _permit = permit;
             if let Err(error) = handle_connection(stream, &config, &nodes, &routes).await {
                 tracing::debug!(%peer, %error, "SIP TCP 路由连接已关闭");
             }
@@ -48,55 +62,42 @@ async fn handle_connection(
 ) -> Result<(), BoxError> {
     let (client_read, mut client_write) = client.into_split();
     let mut client_reader = SipFrameReader::new(client_read);
-    let first = client_reader
-        .read_frame()
-        .await?
-        .ok_or("TCP 客户端未发送 SIP 消息")?;
-    if is_response(&first) {
-        return Err("TCP 连接首包不能是 SIP 响应".into());
-    }
-    let call_id = header_value(&first, &["call-id", "i"]).ok_or("SIP 请求缺少 Call-ID")?;
-    let backend = {
-        let snapshot = nodes.read().await;
-        let node = routes.resolve(call_id, &snapshot).await?;
-        (node.id, node.address)
-    };
-    let backend_stream = TcpStream::connect(backend.1).await?;
-    let (backend_read, mut backend_write) = backend_stream.into_split();
-    let mut backend_reader = SipFrameReader::new(backend_read);
-    tracing::debug!(backend = %backend.0, "SIP TCP 连接已绑定后端节点");
-
-    let first = add_tcp_via(&first, &config.advertised_addr)?;
-    backend_write.write_all(&first).await?;
-
-    let client_to_backend = async {
-        while let Some(frame) = client_reader.read_frame().await? {
+    let (client_sender, mut client_receiver) = mpsc::channel(config.tcp_write_queue_capacity);
+    let idle_timeout = std::time::Duration::from_secs(config.tcp_idle_timeout_secs);
+    let connect_timeout = std::time::Duration::from_secs(config.tcp_connect_timeout_secs);
+    let routing = async move {
+        let mut pool = BackendPool::new(
+            client_sender,
+            config.tcp_write_queue_capacity,
+            connect_timeout,
+        );
+        loop {
+            let frame = tokio::time::timeout(idle_timeout, client_reader.read_frame())
+                .await
+                .map_err(|_| "SIP TCP 客户端连接空闲超时")??;
+            let Some(frame) = frame else {
+                break;
+            };
+            let call_id =
+                header_value(&frame, &["call-id", "i"]).ok_or("SIP TCP 消息缺少 Call-ID")?;
+            let snapshot = nodes.read().await.clone();
+            let backend = routes.resolve(call_id, &snapshot).await?;
             let forwarded = if is_response(&frame) {
                 frame
             } else {
                 add_tcp_via(&frame, &config.advertised_addr)?
             };
-            backend_write.write_all(&forwarded).await?;
+            pool.send(&backend, forwarded).await?;
         }
         Ok::<(), BoxError>(())
     };
-
-    let backend_to_client = async {
-        while let Some(frame) = backend_reader.read_frame().await? {
-            let forwarded = if is_response(&frame)
-                && top_via_branch(&frame)
-                    .is_some_and(|branch| branch.starts_with("z9hG4bK-vosrs-tcp-"))
-            {
-                remove_top_via(&frame)?
-            } else {
-                frame
-            };
-            client_write.write_all(&forwarded).await?;
+    let writer = async move {
+        while let Some(frame) = client_receiver.recv().await {
+            client_write.write_all(&frame).await?;
         }
         Ok::<(), BoxError>(())
     };
-
-    tokio::try_join!(client_to_backend, backend_to_client)?;
+    tokio::try_join!(routing, writer)?;
     Ok(())
 }
 

@@ -55,6 +55,10 @@ sip_router:
   udp_workers: 0 # 0=按 CPU 核数自动，最大 64
   udp_queue_capacity: 4096 # 每个 worker 的有界队列
   max_transactions: 1000000
+  tcp_max_connections: 10000
+  tcp_write_queue_capacity: 1024
+  tcp_idle_timeout_secs: 300
+  tcp_connect_timeout_secs: 3
 
 # ==========================================
 # 2. sip-edge 信令边缘网关服务配置

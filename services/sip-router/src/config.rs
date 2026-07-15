@@ -16,6 +16,10 @@ pub(crate) struct RouterConfig {
     pub(crate) udp_workers: usize,
     pub(crate) udp_queue_capacity: usize,
     pub(crate) max_transactions: usize,
+    pub(crate) tcp_max_connections: usize,
+    pub(crate) tcp_write_queue_capacity: usize,
+    pub(crate) tcp_idle_timeout_secs: u64,
+    pub(crate) tcp_connect_timeout_secs: u64,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -49,6 +53,10 @@ struct SipRouterSection {
     udp_workers: Option<usize>,
     udp_queue_capacity: Option<usize>,
     max_transactions: Option<usize>,
+    tcp_max_connections: Option<usize>,
+    tcp_write_queue_capacity: Option<usize>,
+    tcp_idle_timeout_secs: Option<u64>,
+    tcp_connect_timeout_secs: Option<u64>,
 }
 
 impl RouterConfig {
@@ -99,6 +107,16 @@ impl RouterConfig {
                 .max_transactions
                 .unwrap_or(1_000_000)
                 .clamp(1024, 10_000_000),
+            tcp_max_connections: router
+                .tcp_max_connections
+                .unwrap_or(10_000)
+                .clamp(1, 1_000_000),
+            tcp_write_queue_capacity: router
+                .tcp_write_queue_capacity
+                .unwrap_or(1024)
+                .clamp(16, 65_536),
+            tcp_idle_timeout_secs: router.tcp_idle_timeout_secs.unwrap_or(300).max(10),
+            tcp_connect_timeout_secs: router.tcp_connect_timeout_secs.unwrap_or(3).max(1),
         })
     }
 }
