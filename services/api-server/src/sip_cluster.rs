@@ -1,4 +1,9 @@
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
 use futures::StreamExt;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -50,6 +55,12 @@ pub(crate) struct SipClusterStatus {
     nodes: Vec<SipNodeStatus>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct SipNodeActionResult {
+    status: String,
+    active_calls: usize,
+}
+
 /// 返回 Redis 心跳中仍在线的 SIP 信令节点。
 pub(crate) async fn get_sip_cluster_status(State(state): State<AppState>) -> impl IntoResponse {
     match load_status(&state.redis_client, &state.sip_node_key_prefix).await {
@@ -65,6 +76,103 @@ pub(crate) async fn get_sip_cluster_status(State(state): State<AppState>) -> imp
                 .into_response()
         }
     }
+}
+
+/// 将指定 SIP 节点切换为摘流或活动状态。
+pub(crate) async fn control_sip_cluster_node(
+    State(state): State<AppState>,
+    Path((node_id, action)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let action = match action_path(&action) {
+        Ok(action) => action,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    let status = match load_status(&state.redis_client, &state.sip_node_key_prefix).await {
+        Ok(status) => status,
+        Err(error) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("读取 SIP 集群状态失败: {error}"),
+            );
+        }
+    };
+    let Some(node) = status
+        .nodes
+        .into_iter()
+        .find(|node| node.node_id == node_id)
+    else {
+        return error_response(StatusCode::NOT_FOUND, "SIP 节点不存在或心跳已过期");
+    };
+    match send_node_action(&state, &node.management_url, action).await {
+        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+        Err((status, message)) => error_response(status, message),
+    }
+}
+
+fn action_path(action: &str) -> Result<&'static str, &'static str> {
+    match action {
+        "drain" => Ok("drain"),
+        "resume" => Ok("resume"),
+        _ => Err("仅支持 drain 或 resume 操作"),
+    }
+}
+
+async fn send_node_action(
+    state: &AppState,
+    management_url: &str,
+    action: &str,
+) -> Result<SipNodeActionResult, (StatusCode, String)> {
+    if state.internal_secret.is_empty() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "security.internal_secret 未配置".to_string(),
+        ));
+    }
+    let endpoint = management_endpoint(management_url, action)
+        .map_err(|message| (StatusCode::CONFLICT, message.to_string()))?;
+    let response = state
+        .internal_client
+        .post(endpoint)
+        .header("X-VOS-Token", &state.internal_secret)
+        .send()
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("连接 SIP 节点失败: {error}"),
+            )
+        })?;
+    if !response.status().is_success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            format!("SIP 节点拒绝操作: HTTP {}", response.status()),
+        ));
+    }
+    response.json().await.map_err(|error| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("解析 SIP 节点响应失败: {error}"),
+        )
+    })
+}
+
+fn management_endpoint(base: &str, action: &str) -> Result<reqwest::Url, &'static str> {
+    let mut url = reqwest::Url::parse(base).map_err(|_| "节点 management_url 无效")?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("节点 management_url 必须是无凭据的 HTTP(S) 地址");
+    }
+    url.set_path(&format!("/manage/cluster/{action}"));
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn error_response(status: StatusCode, message: impl Into<String>) -> axum::response::Response {
+    (status, Json(crate::ApiError::internal(message))).into_response()
 }
 
 async fn load_status(
@@ -151,5 +259,24 @@ mod tests {
         assert_eq!(status.status, "active");
         assert_eq!(status.active_calls, 12);
         assert_eq!(status.ttl_secs, 8);
+    }
+
+    #[test]
+    fn test_management_endpoint_only_accepts_http_without_credentials() {
+        let endpoint =
+            management_endpoint("http://10.0.0.11:8082", "drain").expect("valid management URL");
+        assert_eq!(
+            endpoint.as_str(),
+            "http://10.0.0.11:8082/manage/cluster/drain"
+        );
+        assert!(management_endpoint("file:///tmp/socket", "drain").is_err());
+        assert!(management_endpoint("http://user:secret@10.0.0.11", "resume").is_err());
+    }
+
+    #[test]
+    fn test_action_path_rejects_unknown_operation() {
+        assert_eq!(action_path("drain"), Ok("drain"));
+        assert_eq!(action_path("resume"), Ok("resume"));
+        assert!(action_path("delete").is_err());
     }
 }

@@ -63,7 +63,7 @@ use dashboard::{dashboard_events, get_dashboard_stats, get_dashboard_trend};
 use gateways::{create_gateway, delete_gateway, list_gateways, update_gateway};
 use registrations::list_registrations;
 use routes::{create_route, delete_route, list_routes, update_route};
-use sip_cluster::get_sip_cluster_status;
+use sip_cluster::{control_sip_cluster_node, get_sip_cluster_status};
 use system::{get_system_configs, health, prometheus_metrics, ready, update_system_configs};
 use users::{create_user, delete_user, list_users, update_user};
 
@@ -636,6 +636,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/system/sip-cluster/status",
             get(get_sip_cluster_status),
+        )
+        .route(
+            "/api/system/sip-cluster/nodes/:node_id/:action",
+            post(control_sip_cluster_node),
         )
         .route("/api/dashboard/stats", get(get_dashboard_stats))
         .route("/api/dashboard/trend", get(get_dashboard_trend))

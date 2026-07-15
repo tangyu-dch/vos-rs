@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Message, Spin, Table, Tag } from '@arco-design/web-react';
+import { Alert, Button, Message, Space, Spin, Table, Tag } from '@arco-design/web-react';
 import { IconRefresh } from '@arco-design/web-react/icon';
 import { apiService, type SipClusterNodeStatus, type SipClusterStatus } from '@/services/api';
 
@@ -9,9 +9,15 @@ const MODE_LABELS: Record<SipClusterNodeStatus['router_mode'], string> = {
   native: '原生路由器',
 };
 
+const STATUS_LABELS: Record<SipClusterNodeStatus['status'], string> = {
+  active: '接收新呼叫',
+  draining: '摘流中',
+};
+
 export default function SipClusterPanel() {
   const [status, setStatus] = useState<SipClusterStatus>();
   const [loading, setLoading] = useState(false);
+  const [changingNode, setChangingNode] = useState<string>();
 
   const load = useCallback(async (notify = false) => {
     setLoading(true);
@@ -26,6 +32,28 @@ export default function SipClusterPanel() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  const controlNode = async (node: SipClusterNodeStatus) => {
+    const action = node.status === 'active' ? 'drain' : 'resume';
+    setChangingNode(node.node_id);
+    try {
+      const result = await apiService.controlSipClusterNode(node.node_id, action);
+      setStatus((current) => current && ({
+        ...current,
+        active_nodes: current.active_nodes + (result.status === 'active' ? 1 : -1),
+        draining_nodes: current.draining_nodes + (result.status === 'draining' ? 1 : -1),
+        nodes: current.nodes.map((item) => item.node_id === node.node_id
+          ? { ...item, status: result.status, active_calls: result.active_calls }
+          : item),
+      }));
+      Message.success(action === 'drain' ? '节点已摘流，新呼叫将不再分配到该节点' : '节点已恢复接收新呼叫');
+      window.setTimeout(() => { void load(); }, 1500);
+    } catch (error) {
+      Message.error(error instanceof Error ? error.message : '修改节点状态失败');
+    } finally {
+      setChangingNode(undefined);
+    }
+  };
 
   return (
     <Spin loading={loading} style={{ width: '100%' }}>
@@ -45,6 +73,8 @@ export default function SipClusterPanel() {
         />
         <div className="system-configs__summary">
           <Tag color={status?.online_nodes ? 'green' : 'red'}>在线节点 {status?.online_nodes ?? 0}</Tag>
+          <Tag color="green">活动节点 {status?.active_nodes ?? 0}</Tag>
+          <Tag color={status?.draining_nodes ? 'orange' : 'gray'}>摘流节点 {status?.draining_nodes ?? 0}</Tag>
           <Tag color="arcoblue">心跳前缀 {status?.node_key_prefix ?? '-'}</Tag>
         </div>
         <Table<SipClusterNodeStatus>
@@ -56,8 +86,27 @@ export default function SipClusterPanel() {
             { title: '节点标识', dataIndex: 'node_id' },
             { title: '通告地址', dataIndex: 'advertised_addr' },
             { title: '接入模式', dataIndex: 'router_mode', render: (value) => <Tag color={value === 'native' ? 'green' : 'orange'}>{MODE_LABELS[value as SipClusterNodeStatus['router_mode']] ?? value}</Tag> },
+            { title: '运行状态', dataIndex: 'status', render: (value) => <Tag color={value === 'active' ? 'green' : 'orange'}>{STATUS_LABELS[value as SipClusterNodeStatus['status']] ?? value}</Tag> },
+            { title: '活动呼叫', dataIndex: 'active_calls' },
+            { title: '版本', dataIndex: 'version', render: (value) => value || '-' },
             { title: '剩余 TTL', dataIndex: 'ttl_secs', render: (value) => `${value} 秒` },
             { title: '最后心跳', dataIndex: 'updated_at', render: (value) => new Date(Number(value) * 1000).toLocaleString('zh-CN') },
+            {
+              title: '操作',
+              render: (_, node) => (
+                <Space>
+                  <Button
+                    size="small"
+                    status={node.status === 'active' ? 'danger' : 'success'}
+                    loading={changingNode === node.node_id}
+                    disabled={!node.management_url || (Boolean(changingNode) && changingNode !== node.node_id)}
+                    onClick={() => void controlNode(node)}
+                  >
+                    {node.status === 'active' ? '摘流' : '恢复'}
+                  </Button>
+                </Space>
+              ),
+            },
           ]}
         />
       </section>
