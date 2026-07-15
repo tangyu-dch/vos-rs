@@ -67,14 +67,10 @@ pub(crate) async fn handle_request(
         return handle_invite_request(request, peer, edge_state, edge_config).await;
     }
 
-    let mut health = edge_state
-        .gateway_health
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
     let handling = response::response_for_request_with_health(
         &request,
         &edge_state.call_manager,
-        Some(&mut health),
+        Some(&edge_state.gateway_health),
     );
     vec![PendingDatagram::new(peer.to_string(), handling.response)]
 }

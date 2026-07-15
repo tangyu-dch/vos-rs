@@ -52,7 +52,7 @@ fn test_lcr_cost_sort() {
 
 #[test]
 fn test_gateway_health_circuit_breaker() {
-    let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 3,
         recovery_interval: Duration::from_millis(1),
         min_success_rate: 0.0,
@@ -88,7 +88,7 @@ fn test_gateway_health_circuit_breaker() {
 
 #[test]
 fn test_capacity_control() {
-    let mut tracker = GatewayHealthTracker::default();
+    let tracker = GatewayHealthTracker::default();
 
     // Unlimited capacity
     assert!(tracker.has_capacity("gw1", None));
@@ -110,7 +110,7 @@ fn test_select_healthy_candidates_filters_unhealthy() {
         Route::new("r2", "86", 100, make_target("gw2.example.com")),
     ];
     let table = RouteTable::new(routes);
-    let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 1,
         recovery_interval: Duration::from_secs(60),
         min_success_rate: 0.0,
@@ -121,7 +121,7 @@ fn test_select_healthy_candidates_filters_unhealthy() {
     tracker.record_failure("gw1");
 
     let healthy = table
-        .select_healthy_candidates(&make_uri("8613800138000"), &mut tracker, None)
+        .select_healthy_candidates(&make_uri("8613800138000"), &tracker, None)
         .unwrap();
     assert_eq!(healthy.len(), 1);
     assert_eq!(healthy[0].target.host, "gw2.example.com");
@@ -131,7 +131,7 @@ fn test_select_healthy_candidates_filters_unhealthy() {
 fn test_select_healthy_candidates_rejects_when_all_unhealthy() {
     let routes = vec![Route::new("r1", "86", 100, make_target("gw1.example.com"))];
     let table = RouteTable::new(routes);
-    let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 1,
         recovery_interval: Duration::from_secs(60),
         min_success_rate: 0.0,
@@ -140,7 +140,7 @@ fn test_select_healthy_candidates_rejects_when_all_unhealthy() {
 
     tracker.record_failure("gw1");
 
-    let result = table.select_healthy_candidates(&make_uri("8613800138000"), &mut tracker, None);
+    let result = table.select_healthy_candidates(&make_uri("8613800138000"), &tracker, None);
     assert!(result.is_err());
 }
 
@@ -180,7 +180,7 @@ fn test_weighted_load_balancing() {
 
 #[test]
 fn test_half_open_failure_reopens_circuit() {
-    let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 2,
         recovery_interval: Duration::from_millis(1),
         min_success_rate: 0.0,
@@ -205,7 +205,7 @@ fn test_half_open_failure_reopens_circuit() {
 
 #[test]
 fn test_half_open_probe_in_flight_blocks_acquire() {
-    let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 1,
         recovery_interval: Duration::from_millis(1),
         min_success_rate: 0.0,
@@ -228,7 +228,7 @@ fn test_half_open_probe_in_flight_blocks_acquire() {
 
 #[test]
 fn test_restore_state_with_last_failure() {
-    let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 1,
         recovery_interval: Duration::from_millis(10),
         min_success_rate: 0.0,
@@ -250,7 +250,7 @@ fn test_restore_state_with_last_failure() {
 
 #[test]
 fn test_release_acquire_resets_probe_flag() {
-    let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 1,
         recovery_interval: Duration::from_millis(1),
         min_success_rate: 0.0,
@@ -274,7 +274,7 @@ fn test_release_acquire_resets_probe_flag() {
 
 #[test]
 fn test_success_rate_filter() {
-    let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 100,
         recovery_interval: Duration::from_secs(60),
         min_success_rate: 0.5,
@@ -295,7 +295,7 @@ fn test_success_rate_filter() {
 
 #[test]
 fn test_get_gateway_status_full() {
-    let mut tracker = GatewayHealthTracker::new(HealthThresholds {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 3,
         recovery_interval: Duration::from_millis(1),
         min_success_rate: 0.0,

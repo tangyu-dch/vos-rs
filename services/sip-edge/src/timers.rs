@@ -381,11 +381,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                 edge_state.inbound_transactions.remove(&call_id);
                 // Decrement active call count for the gateway before terminating.
                 if let Some(gw_id) = edge_state.call_manager.current_gateway_id(&call_id) {
-                    edge_state
-                        .gateway_health
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .decrement_active(&gw_id);
+                    edge_state.gateway_health.decrement_active(&gw_id);
                 }
                 edge_state
                     .call_manager
@@ -533,11 +529,7 @@ pub(crate) fn spawn_gateway_health_probe_loop(
                     continue;
                 }
 
-                let can_probe = edge_state
-                    .gateway_health
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .try_acquire_probe(&gateway_id);
+                let can_probe = edge_state.gateway_health.try_acquire_probe(&gateway_id);
                 if !can_probe {
                     continue;
                 }
@@ -590,13 +582,7 @@ fn chrono_like_epoch_millis() -> u128 {
 }
 
 pub(crate) fn record_probe_failure(edge_state: &EdgeState, gateway_id: &str, reason: String) {
-    let status = {
-        let health = edge_state
-            .gateway_health
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        health.get_gateway_status(gateway_id)
-    };
+    let status = edge_state.gateway_health.get_gateway_status(gateway_id);
     warn!(gateway = gateway_id, %reason, "gateway OPTIONS health probe failed");
     if let Some(status) = status {
         persist_gateway_health(edge_state, gateway_id.to_string(), Some(status));
@@ -604,13 +590,8 @@ pub(crate) fn record_probe_failure(edge_state: &EdgeState, gateway_id: &str, rea
 }
 
 pub(crate) fn record_probe_success(edge_state: &EdgeState, gateway_id: &str) {
-    let mut health = edge_state
-        .gateway_health
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    health.record_success(gateway_id);
-    let status = health.get_gateway_status(gateway_id);
-    drop(health);
+    edge_state.gateway_health.record_success(gateway_id);
+    let status = edge_state.gateway_health.get_gateway_status(gateway_id);
     info!(
         gateway = gateway_id,
         "gateway OPTIONS health probe succeeded"

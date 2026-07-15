@@ -192,7 +192,7 @@ impl RouteTable {
     pub fn select_healthy_candidates(
         &self,
         destination_uri: &SipUri,
-        health: &mut GatewayHealthTracker,
+        health: &GatewayHealthTracker,
         call_direction: Option<&str>,
     ) -> CallResult<Vec<SelectedRoute>> {
         let all_candidates = if let Some(dir) = call_direction {

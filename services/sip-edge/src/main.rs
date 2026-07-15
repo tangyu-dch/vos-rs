@@ -307,10 +307,7 @@ async fn main() -> Result<(), AnyError> {
             if edge_config.gateway_health_checks_enabled {
                 match db.load_gateway_health_list().await {
                     Ok(health_list) => {
-                        let mut health = edge_state
-                            .gateway_health
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
+                        let health = &edge_state.gateway_health;
                         for (
                             gw_id,
                             open,

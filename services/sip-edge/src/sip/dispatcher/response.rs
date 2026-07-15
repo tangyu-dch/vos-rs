@@ -179,13 +179,8 @@ pub(crate) async fn dispatch_response(
 
                 for (fork_cid, fork_gw) in forks_to_cancel {
                     if !fork_gw.is_empty() {
-                        let mut health = edge_state
-                            .gateway_health
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        health.decrement_active(&fork_gw);
-                        let status = health.get_gateway_status(&fork_gw);
-                        drop(health);
+                        edge_state.gateway_health.decrement_active(&fork_gw);
+                        let status = edge_state.gateway_health.get_gateway_status(&fork_gw);
                         crate::timers::persist_gateway_health(edge_state, fork_gw.clone(), status);
                     }
 
@@ -242,13 +237,8 @@ pub(crate) async fn dispatch_response(
                 }
                 if let Some(gw_id) = fork_gw_to_decrement {
                     if !gw_id.is_empty() {
-                        let mut health = edge_state
-                            .gateway_health
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        health.decrement_active(&gw_id);
-                        let status = health.get_gateway_status(&gw_id);
-                        drop(health);
+                        edge_state.gateway_health.decrement_active(&gw_id);
+                        let status = edge_state.gateway_health.get_gateway_status(&gw_id);
                         crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
                     }
                 }
@@ -624,14 +614,10 @@ pub(crate) async fn dispatch_response(
     if is_invite && !is_reinvite_response {
         let gateway_id = outbound_response_outcome.gateway_id.clone();
         if !gateway_id.is_empty() {
-            let mut health = edge_state
-                .gateway_health
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
             if sip_response.status_code >= 200 && sip_response.status_code <= 299 {
-                health.record_success(&gateway_id);
+                edge_state.gateway_health.record_success(&gateway_id);
             } else if sip_response.status_code >= 400 {
-                health.record_failure(&gateway_id);
+                edge_state.gateway_health.record_failure(&gateway_id);
             }
 
             if let (
@@ -648,7 +634,7 @@ pub(crate) async fn dispatch_response(
             ) = (
                 edge_state.gateway_health_persistence_enabled,
                 edge_state.db_store.clone(),
-                health.get_gateway_status(&gateway_id),
+                edge_state.gateway_health.get_gateway_status(&gateway_id),
             ) {
                 let gw = gateway_id.clone();
                 let last_failure_at = last_failure_at.map(|st| {
@@ -690,18 +676,10 @@ pub(crate) async fn dispatch_response(
 
         let old_gw = &outbound_response_outcome.gateway_id;
         if !old_gw.is_empty() {
-            edge_state
-                .gateway_health
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .decrement_active(old_gw);
+            edge_state.gateway_health.decrement_active(old_gw);
         }
         let new_gw = next_uri.host.clone();
-        edge_state
-            .gateway_health
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .increment_active(&new_gw);
+        edge_state.gateway_health.increment_active(&new_gw);
 
         if let Some(transaction) = transaction.as_ref() {
             edge_state.clear_media_targets(transaction);
@@ -794,8 +772,6 @@ pub(crate) async fn dispatch_response(
                 if !outbound_response_outcome.gateway_id.is_empty() {
                     edge_state
                         .gateway_health
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
                         .decrement_active(&outbound_response_outcome.gateway_id);
                 }
                 edge_state.inbound_transactions.remove(cid);

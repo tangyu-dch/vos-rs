@@ -154,11 +154,7 @@ async fn terminate(State(state): State<Arc<EdgeState>>, Path(call_id): Path<Stri
     }
     // Decrement active call count for the gateway before terminating.
     if let Some(gw_id) = state.call_manager.current_gateway_id(&call_id) {
-        state
-            .gateway_health
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .decrement_active(&gw_id);
+        state.gateway_health.decrement_active(&gw_id);
     }
     state.inbound_transactions.remove(&call_id);
     state.call_manager.terminate_call(&call_id);

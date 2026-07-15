@@ -110,7 +110,7 @@ impl GatewayHealth {
 /// 网关健康追踪器：管理所有网关的 Circuit Breaker 状态。
 #[derive(Debug, Clone)]
 pub struct GatewayHealthTracker {
-    states: HashMap<String, GatewayHealth>,
+    states: dashmap::DashMap<String, GatewayHealth>,
     thresholds: HealthThresholds,
 }
 
@@ -123,13 +123,13 @@ impl Default for GatewayHealthTracker {
 impl GatewayHealthTracker {
     pub fn new(thresholds: HealthThresholds) -> Self {
         Self {
-            states: HashMap::new(),
+            states: dashmap::DashMap::new(),
             thresholds,
         }
     }
 
     pub fn restore_state(
-        &mut self,
+        &self,
         gateway_id: &str,
         circuit_open: bool,
         consecutive_failures: i32,
@@ -137,7 +137,7 @@ impl GatewayHealthTracker {
         half_open_successes: i32,
         active_calls: i32,
     ) {
-        let health = self.states.entry(gateway_id.to_string()).or_default();
+        let mut health = self.states.entry(gateway_id.to_string()).or_default();
         health.state = if circuit_open {
             CircuitState::Open
         } else {
@@ -154,30 +154,30 @@ impl GatewayHealthTracker {
         }
     }
 
-    pub fn record_success(&mut self, gateway_id: &str) {
+    pub fn record_success(&self, gateway_id: &str) {
         self.states
             .entry(gateway_id.to_string())
             .or_default()
             .record_success();
     }
 
-    pub fn record_failure(&mut self, gateway_id: &str) {
-        let health = self.states.entry(gateway_id.to_string()).or_default();
+    pub fn record_failure(&self, gateway_id: &str) {
+        let mut health = self.states.entry(gateway_id.to_string()).or_default();
         health.record_failure();
         if health.consecutive_failures >= self.thresholds.failure_threshold {
             health.state = CircuitState::Open;
         }
     }
 
-    pub fn increment_active(&mut self, gateway_id: &str) {
+    pub fn increment_active(&self, gateway_id: &str) {
         self.states
             .entry(gateway_id.to_string())
             .or_default()
             .increment_active();
     }
 
-    pub fn decrement_active(&mut self, gateway_id: &str) {
-        if let Some(health) = self.states.get_mut(gateway_id) {
+    pub fn decrement_active(&self, gateway_id: &str) {
+        if let Some(mut health) = self.states.get_mut(gateway_id) {
             health.decrement_active();
         }
     }
@@ -233,16 +233,14 @@ impl GatewayHealthTracker {
         true
     }
 
-    pub fn try_acquire(&mut self, gateway_id: &str) -> bool {
+    pub fn try_acquire(&self, gateway_id: &str) -> bool {
         use rand::Rng;
 
         self.try_acquire_with_sample(gateway_id, rand::thread_rng().gen::<f64>())
     }
 
-    pub fn try_acquire_probe(&mut self, gateway_id: &str) -> bool {
-        let Some(health) = self.states.get_mut(gateway_id) else {
-            return true;
-        };
+    pub fn try_acquire_probe(&self, gateway_id: &str) -> bool {
+        let mut health = self.states.entry(gateway_id.to_string()).or_default();
 
         if health.state == CircuitState::Open {
             let recovered = health.last_failure.is_some_and(|last_failure| {
@@ -265,10 +263,8 @@ impl GatewayHealthTracker {
         true
     }
 
-    pub fn try_acquire_with_sample(&mut self, gateway_id: &str, sample: f64) -> bool {
-        let Some(health) = self.states.get_mut(gateway_id) else {
-            return true;
-        };
+    pub fn try_acquire_with_sample(&self, gateway_id: &str, sample: f64) -> bool {
+        let mut health = self.states.entry(gateway_id.to_string()).or_default();
 
         if health.state == CircuitState::Open {
             let recovered = health.last_failure.is_some_and(|last_failure| {
@@ -296,7 +292,7 @@ impl GatewayHealthTracker {
     }
 
     pub fn circuit_state(&self, gateway_id: &str) -> Option<CircuitState> {
-        self.states.get(gateway_id).map(GatewayHealth::state)
+        self.states.get(gateway_id).map(|h| h.value().state())
     }
 
     pub fn has_capacity(&self, gateway_id: &str, max_capacity: Option<u32>) -> bool {
@@ -313,16 +309,19 @@ impl GatewayHealthTracker {
         }
     }
 
-    pub fn health(&self, gateway_id: &str) -> Option<&GatewayHealth> {
-        self.states.get(gateway_id)
+    pub fn health(&self, gateway_id: &str) -> Option<GatewayHealth> {
+        self.states.get(gateway_id).map(|h| h.value().clone())
     }
 
-    pub fn all_health(&self) -> &HashMap<String, GatewayHealth> {
-        &self.states
+    pub fn all_health(&self) -> HashMap<String, GatewayHealth> {
+        self.states
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect()
     }
 
-    pub fn release_acquire(&mut self, gateway_id: &str) {
-        if let Some(health) = self.states.get_mut(gateway_id) {
+    pub fn release_acquire(&self, gateway_id: &str) {
+        if let Some(mut health) = self.states.get_mut(gateway_id) {
             health.half_open_probe_in_flight = false;
         }
     }

@@ -290,7 +290,7 @@ pub(crate) fn parse_target_addr_from_route(route: &str) -> Option<String> {
 
 pub(crate) struct EdgeState {
     pub(crate) call_manager: std::sync::Arc<CallManager>,
-    pub(crate) gateway_health: std::sync::Mutex<GatewayHealthTracker>,
+    pub(crate) gateway_health: GatewayHealthTracker,
     pub(crate) inbound_transactions: dashmap::DashMap<String, InboundTransaction>,
     pub(crate) media_relay: MediaRelayState,
     pub(crate) registrar: tokio::sync::RwLock<RegistrationStore>,
@@ -366,9 +366,7 @@ impl EdgeState {
 
         Self {
             call_manager: std::sync::Arc::new(call_manager),
-            gateway_health: std::sync::Mutex::new(GatewayHealthTracker::new(
-                call_core::HealthThresholds::default(),
-            )),
+            gateway_health: GatewayHealthTracker::new(call_core::HealthThresholds::default()),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay,
             registrar: tokio::sync::RwLock::new(RegistrationStore::new()),
@@ -423,7 +421,7 @@ impl EdgeState {
 
         Self {
             call_manager: std::sync::Arc::new(call_manager),
-            gateway_health: std::sync::Mutex::new(GatewayHealthTracker::default()),
+            gateway_health: GatewayHealthTracker::default(),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay: MediaRelayState::new(),
             registrar: tokio::sync::RwLock::new(RegistrationStore::new()),

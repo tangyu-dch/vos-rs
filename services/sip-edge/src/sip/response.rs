@@ -51,7 +51,7 @@ pub struct OutboundInvitePlan {
 pub fn response_for_request_with_health(
     request: &SipRequest,
     call_manager: &CallManager,
-    health: Option<&mut GatewayHealthTracker>,
+    health: Option<&GatewayHealthTracker>,
 ) -> RequestHandling {
     match &request.method {
         Method::Options => build_response(
@@ -70,7 +70,7 @@ pub fn response_for_request_with_health(
 fn response_for_invite(
     request: &SipRequest,
     call_manager: &CallManager,
-    health: Option<&mut GatewayHealthTracker>,
+    health: Option<&GatewayHealthTracker>,
 ) -> RequestHandling {
     match call_manager.handle_inbound_invite_with_health(request, health) {
         Ok(outcome) => {

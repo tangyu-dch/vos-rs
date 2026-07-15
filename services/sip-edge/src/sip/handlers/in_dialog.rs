@@ -239,14 +239,8 @@ pub(crate) async fn handle_in_dialog_request(
                         .map(|v| v.as_str())
                         .unwrap_or("");
                     if let Some(gw_id) = edge_state.call_manager.current_gateway_id(call_id_str) {
-                        let status = {
-                            let mut health = edge_state
-                                .gateway_health
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
-                            health.decrement_active(&gw_id);
-                            health.get_gateway_status(&gw_id)
-                        };
+                        edge_state.gateway_health.decrement_active(&gw_id);
+                        let status = edge_state.gateway_health.get_gateway_status(&gw_id);
                         crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
                     }
 

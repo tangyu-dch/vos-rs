@@ -2256,7 +2256,7 @@ fn test_scenario_runner() {
         }
 
         {
-            let health = edge_state.gateway_health.lock().unwrap();
+            let health = &edge_state.gateway_health;
             assert_eq!(health.health("gw1").map(|h| h.active_calls()).unwrap_or(0), 1);
             assert_eq!(health.health("gw2").map(|h| h.active_calls()).unwrap_or(0), 1);
         }
@@ -2296,7 +2296,7 @@ fn test_scenario_runner() {
         assert!(cancel_txt.contains(&format!("Call-ID: {}", branches[1].0)));
 
         {
-            let health = edge_state.gateway_health.lock().unwrap();
+            let health = &edge_state.gateway_health;
             let winning_gw = if branches[0].1.contains("gw1") { "gw1" } else { "gw2" };
             let canceled_gw = if branches[1].1.contains("gw1") { "gw1" } else { "gw2" };
             assert_eq!(health.health(winning_gw).map(|h| h.active_calls()).unwrap_or(0), 1);
@@ -5564,7 +5564,7 @@ async fn gateway_options_response_updates_probe_health() {
 
     assert!(datagrams.is_empty());
     assert!(!edge_state.gateway_probes.contains_key(call_id));
-    let health = edge_state.gateway_health.lock().unwrap();
+    let health = &edge_state.gateway_health;
     let status = health.get_gateway_status("gw1");
     assert!(status.is_some());
     let (open, failures, _, _, _, _) = status.unwrap();

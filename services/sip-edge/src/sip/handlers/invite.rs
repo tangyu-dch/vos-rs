@@ -398,25 +398,17 @@ pub(crate) async fn handle_invite_request(
         if let Ok(outbound_uri) = SipUri::from_str(&contact.uri) {
             response::response_for_invite_to_uri(&request, &edge_state.call_manager, outbound_uri)
         } else {
-            let mut health = edge_state
-                .gateway_health
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
             response::response_for_request_with_health(
                 &request,
                 &edge_state.call_manager,
-                Some(&mut health),
+                Some(&edge_state.gateway_health),
             )
         }
     } else {
-        let mut health = edge_state
-            .gateway_health
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
         response::response_for_request_with_health(
             &request,
             &edge_state.call_manager,
-            Some(&mut health),
+            Some(&edge_state.gateway_health),
         )
     };
 
@@ -590,14 +582,8 @@ pub(crate) async fn handle_invite_request(
 
                 let gw_id = candidate.target.gateway_id.as_str().to_string();
                 if !gw_id.is_empty() {
-                    let status = {
-                        let mut health = edge_state
-                            .gateway_health
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        health.increment_active(&gw_id);
-                        health.get_gateway_status(&gw_id)
-                    };
+                    edge_state.gateway_health.increment_active(&gw_id);
+                    let status = edge_state.gateway_health.get_gateway_status(&gw_id);
                     crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
                 }
             }
@@ -634,14 +620,12 @@ pub(crate) async fn handle_invite_request(
             datagrams.push(PendingDatagram::new(target, bytes));
 
             if !outbound_invite.gateway_id.is_empty() {
-                let status = {
-                    let mut health = edge_state
-                        .gateway_health
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    health.increment_active(&outbound_invite.gateway_id);
-                    health.get_gateway_status(&outbound_invite.gateway_id)
-                };
+                edge_state
+                    .gateway_health
+                    .increment_active(&outbound_invite.gateway_id);
+                let status = edge_state
+                    .gateway_health
+                    .get_gateway_status(&outbound_invite.gateway_id);
                 crate::timers::persist_gateway_health(
                     edge_state,
                     outbound_invite.gateway_id.clone(),

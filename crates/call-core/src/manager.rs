@@ -246,7 +246,7 @@ impl CallManager {
     pub fn handle_inbound_invite_with_health(
         &self,
         request: &SipRequest,
-        health: Option<&mut GatewayHealthTracker>,
+        health: Option<&GatewayHealthTracker>,
     ) -> CallResult<InboundInviteOutcome> {
         let mut call = Call::from_inbound_invite(request)?;
         let call_id = call.id.clone();
