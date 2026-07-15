@@ -190,7 +190,8 @@ async fn main() -> Result<(), AnyError> {
 
     // 将 Redis 连接注入 EdgeState（用于集群注册状态共享）
     if let Some(redis_conn) = redis_conn_for_state {
-        edge_state.set_redis(redis_conn);
+        edge_state.set_redis(redis_conn.clone());
+        edge_state.set_registration_sync(cluster::start_registration_sync(redis_conn));
     }
     let node_heartbeat =
         cluster::spawn_node_heartbeat(&redis_client, &edge_config.cluster, Arc::clone(&edge_state))

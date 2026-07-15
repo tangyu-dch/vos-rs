@@ -323,6 +323,7 @@ pub(crate) struct EdgeState {
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
     /// Redis 自动重连连接，用于集群状态与呼叫热路径缓存。
     pub(crate) redis_conn: std::sync::OnceLock<redis::aio::ConnectionManager>,
+    registration_sync: std::sync::OnceLock<crate::cluster::RegistrationSyncSender>,
     cluster_egress: std::sync::OnceLock<ClusterEgress>,
     registration_lookup_cache: dashmap::DashMap<String, CachedRegistrationLookup>,
     registration_lookup_locks: dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>>,
@@ -393,6 +394,7 @@ impl EdgeState {
             gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
+            registration_sync: std::sync::OnceLock::new(),
             cluster_egress: std::sync::OnceLock::new(),
             registration_lookup_cache: dashmap::DashMap::new(),
             registration_lookup_locks: dashmap::DashMap::new(),
@@ -447,6 +449,7 @@ impl EdgeState {
             gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
+            registration_sync: std::sync::OnceLock::new(),
             cluster_egress: std::sync::OnceLock::new(),
             registration_lookup_cache: dashmap::DashMap::new(),
             registration_lookup_locks: dashmap::DashMap::new(),
@@ -462,6 +465,14 @@ impl EdgeState {
     /// 获取 Redis 连接管理器的克隆，各请求可并发发送命令并共享重连状态。
     pub(crate) fn redis_connection(&self) -> Option<redis::aio::ConnectionManager> {
         self.redis_conn.get().cloned()
+    }
+
+    pub(crate) fn set_registration_sync(&self, sender: crate::cluster::RegistrationSyncSender) {
+        let _ = self.registration_sync.set(sender);
+    }
+
+    pub(crate) fn registration_sync(&self) -> Option<crate::cluster::RegistrationSyncSender> {
+        self.registration_sync.get().cloned()
     }
 
     pub(crate) fn set_cluster_egress(&self, egress: ClusterEgress) {
