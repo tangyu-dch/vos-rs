@@ -35,6 +35,7 @@ mod payload;
 mod rtcp;
 mod srtp;
 mod telephone_event;
+mod port_lease;
 
 pub use buffer_pool::{PacketBufferPool, RecycledBuffer, ReusablePacket, PACKET_BUFFER_SIZE};
 pub use error::{RtpError, RtpResult};
@@ -48,3 +49,4 @@ pub use srtp::{
     SrtpSessionManager,
 };
 pub use telephone_event::TelephoneEvent;
+pub use port_lease::PortLeaseMap;

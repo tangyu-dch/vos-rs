@@ -102,7 +102,7 @@ pub struct MediaRelayState {
     pub(crate) crypto_sessions: Arc<DashMap<u16, Arc<tokio::sync::Mutex<MediaCryptoSession>>>>,
     pub(crate) pending_srtp: Arc<DashMap<u16, PendingSrtpConfig>>,
     pub(crate) source_bindings: Arc<DashMap<u16, SourceBinding>>,
-    pub(crate) leased_rtp_ports: Arc<dashmap::DashSet<u16>>,
+    pub(crate) leased_rtp_ports: Arc<rtp_core::PortLeaseMap>,
     pub(crate) next_port: Arc<AtomicU32>,
     pub(crate) path_epochs: Arc<DashMap<u16, Arc<AtomicU64>>>,
     pub(crate) state: Arc<Mutex<MediaRelayStateInner>>,

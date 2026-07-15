@@ -27,7 +27,7 @@ impl MediaRelayState {
                 Ok(socket) => socket,
                 Err(error) => {
                     warn!(port, %error, "failed to bind RTP socket");
-                    self.leased_rtp_ports.remove(&port);
+                    self.leased_rtp_ports.remove(port);
                     continue;
                 }
             };
@@ -37,26 +37,26 @@ impl MediaRelayState {
             let rtcp_std = match std::net::UdpSocket::bind(rtcp_addr) {
                 Ok(socket) => socket,
                 Err(_) => {
-                    self.leased_rtp_ports.remove(&port);
+                    self.leased_rtp_ports.remove(port);
                     continue;
                 }
             };
 
             if let Err(error) = rtp_std.set_nonblocking(true) {
-                self.leased_rtp_ports.remove(&port);
+                self.leased_rtp_ports.remove(port);
                 return Err(MediaError::Io(error.to_string()));
             }
             if let Err(error) = rtcp_std.set_nonblocking(true) {
-                self.leased_rtp_ports.remove(&port);
+                self.leased_rtp_ports.remove(port);
                 return Err(MediaError::Io(error.to_string()));
             }
 
             let rtp_socket = tokio::net::UdpSocket::from_std(rtp_std).map_err(|error| {
-                self.leased_rtp_ports.remove(&port);
+                self.leased_rtp_ports.remove(port);
                 MediaError::Io(error.to_string())
             })?;
             let rtcp_socket = tokio::net::UdpSocket::from_std(rtcp_std).map_err(|error| {
-                self.leased_rtp_ports.remove(&port);
+                self.leased_rtp_ports.remove(port);
                 MediaError::Io(error.to_string())
             })?;
             let (rtp_tx, rtp_rx) = tokio::sync::oneshot::channel();

@@ -26,7 +26,7 @@ impl MediaRelayState {
             crypto_sessions: Arc::new(DashMap::new()),
             pending_srtp: Arc::new(DashMap::new()),
             source_bindings: Arc::new(DashMap::new()),
-            leased_rtp_ports: Arc::new(dashmap::DashSet::new()),
+            leased_rtp_ports: Arc::new(rtp_core::PortLeaseMap::new(0, 65535)),
             next_port: Arc::new(AtomicU32::new(DEFAULT_RTP_PORT_MIN as u32)),
             path_epochs: Arc::new(DashMap::new()),
             state: Arc::new(Mutex::new(MediaRelayStateInner {
@@ -410,7 +410,7 @@ impl MediaRelayState {
         self.recordings.remove(&rtp_port);
         self.clear_srtp_session(rtp_port);
         self.dtmf_states.remove(&rtp_port);
-        self.leased_rtp_ports.remove(&rtp_port);
+        self.leased_rtp_ports.remove(rtp_port);
         if let Some(peer_port) = peer_port {
             self.targets.remove(&peer_port);
             self.metrics.remove(&peer_port);
