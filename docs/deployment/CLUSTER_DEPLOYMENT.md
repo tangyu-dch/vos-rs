@@ -174,6 +174,14 @@ sip_router:
   tcp_write_queue_capacity: 1024
   tcp_idle_timeout_secs: 300
   tcp_connect_timeout_secs: 3
+  manage_bind: "127.0.0.1:8083"
+  acl_allow:
+    - "10.0.0.0/8"
+    - "198.51.100.0/24"
+  acl_block: []
+  rate_limit_capacity: 200
+  rate_limit_fill_rate: 100
+  rate_limit_max_entries: 100000
 ```
 
 UDP 接收线程只负责收包和按 Call-ID 分配 worker，同一对话始终进入同一有界队列；
@@ -182,6 +190,15 @@ UDP 接收线程只负责收包和按 Call-ID 分配 worker，同一对话始终
 TCP 长连接会对每条 SIP 消息重新按 Call-ID 解析归属，同一运营商连接可同时承载落在
 不同 sip-edge 节点上的呼叫。每条客户端连接按后端节点复用连接，并使用有界写队列；
 客户端连接数、空闲时间以及后端连接超时均由上述参数限制。
+
+`acl_block` 优先于 `acl_allow`；`acl_allow` 为空时不启用白名单。UDP 数据报和新建 TCP
+连接共享每来源 IP 令牌桶，已发现的 sip-edge 后端回包不受入口限流影响。生产环境应将
+`manage_bind` 绑定到管理网，以下端点无需暴露到公网：
+
+- `GET /health`：进程存活检查。
+- `GET /ready`：Redis 可连接且至少发现一个活动 sip-edge 时返回 200。
+- `GET /metrics`：Prometheus 文本指标，包含 UDP 收发/丢弃、TCP 连接、ACL/限流拒绝、
+  活跃事务、已发现节点和 Redis 错误。
 
 ## 故障语义
 

@@ -206,5 +206,11 @@ fn test_config(router_addr: std::net::SocketAddr) -> RouterConfig {
         tcp_write_queue_capacity: 64,
         tcp_idle_timeout_secs: 30,
         tcp_connect_timeout_secs: 1,
+        manage_bind: "127.0.0.1:0".to_string(),
+        acl_allow: Vec::new(),
+        acl_block: Vec::new(),
+        rate_limit_capacity: 200,
+        rate_limit_fill_rate: 100,
+        rate_limit_max_entries: 1024,
     }
 }

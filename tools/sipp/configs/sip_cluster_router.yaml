@@ -20,3 +20,10 @@ sip_router:
   tcp_write_queue_capacity: 128
   tcp_idle_timeout_secs: 60
   tcp_connect_timeout_secs: 1
+  manage_bind: "127.0.0.1:5283"
+  acl_allow:
+    - "127.0.0.0/8"
+  acl_block: []
+  rate_limit_capacity: 1000
+  rate_limit_fill_rate: 1000
+  rate_limit_max_entries: 1024

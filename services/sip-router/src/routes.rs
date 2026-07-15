@@ -8,7 +8,7 @@ use std::{
 use dashmap::DashMap;
 use redis::AsyncCommands;
 
-use crate::{discovery::SipNode, proxy::select_node};
+use crate::{discovery::SipNode, metrics, proxy::select_node};
 
 const DIALOG_ROUTE_KEY_PREFIX: &str = "vos_rs:cluster:sip_dialog_routes";
 
@@ -53,6 +53,7 @@ impl DialogRouteStore {
                     }
                     drop(route);
                     if let Err(error) = self.renew(call_id, &node.id).await {
+                        metrics::redis_error();
                         tracing::warn!(%error, "Redis 对话归属续期失败，继续使用本地亲和");
                     }
                     self.cache(call_id, &node);
@@ -72,6 +73,7 @@ impl DialogRouteStore {
         let stored: Option<String> = match redis.get(&key).await {
             Ok(stored) => stored,
             Err(error) => {
+                metrics::redis_error();
                 tracing::warn!(%error, "Redis 对话归属读取失败，使用确定性本地选路");
                 self.cache(call_id, &candidate);
                 return Ok(candidate);
@@ -84,6 +86,7 @@ impl DialogRouteStore {
                     .replace_owner(&mut redis, &key, &owner, &candidate, nodes)
                     .await
                     .unwrap_or_else(|error| {
+                        metrics::redis_error();
                         tracing::warn!(%error, "替换失效对话归属失败，使用确定性本地选路");
                         candidate.clone()
                     }),
@@ -92,6 +95,7 @@ impl DialogRouteStore {
                 .claim_owner(&mut redis, &key, &candidate, nodes)
                 .await
                 .unwrap_or_else(|error| {
+                    metrics::redis_error();
                     tracing::warn!(%error, "创建对话归属失败，使用确定性本地选路");
                     candidate.clone()
                 }),
@@ -173,6 +177,7 @@ impl DialogRouteStore {
             return;
         };
         if let Err(error) = redis.del::<_, usize>(route_key(call_id)).await {
+            metrics::redis_error();
             tracing::warn!(%error, "删除已完成对话归属失败");
         }
     }

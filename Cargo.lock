@@ -3218,6 +3218,7 @@ dependencies = [
 name = "sip-router"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "dashmap",
  "futures",
  "redis",

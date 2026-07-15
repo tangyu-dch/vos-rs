@@ -5,7 +5,7 @@ use redis::AsyncCommands;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
-use crate::config::RouterConfig;
+use crate::{config::RouterConfig, metrics};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SipNode {
@@ -42,6 +42,7 @@ pub(crate) async fn start(
         loop {
             interval.tick().await;
             if let Err(error) = refresh(&client, &config.node_key_prefix, &background_nodes).await {
+                metrics::redis_error();
                 tracing::warn!(%error, "刷新 SIP 节点列表失败");
             }
         }
@@ -60,6 +61,7 @@ async fn refresh(
     let keys: Vec<String> = iterator.collect().await;
     if keys.is_empty() {
         nodes.write().await.clear();
+        metrics::discovered_nodes(0);
         return Ok(());
     }
     let payloads: Vec<Option<String>> = redis::cmd("MGET")
@@ -88,6 +90,7 @@ async fn refresh(
         });
     }
     discovered.sort_by(|left, right| left.id.cmp(&right.id));
+    metrics::discovered_nodes(discovered.len());
     *nodes.write().await = discovered;
     Ok(())
 }

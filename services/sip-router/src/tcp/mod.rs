@@ -15,8 +15,10 @@ use tokio::{
 use crate::{
     config::RouterConfig,
     discovery::SharedNodes,
+    metrics,
     proxy::{add_router_via, header_value, router_branch},
     routes::DialogRouteStore,
+    security::RouterGuard,
 };
 use framing::SipFrameReader;
 use pool::BackendPool;
@@ -27,6 +29,7 @@ pub(crate) async fn run(
     config: RouterConfig,
     nodes: SharedNodes,
     routes: Arc<DialogRouteStore>,
+    guard: Arc<RouterGuard>,
 ) -> Result<(), BoxError> {
     let listener = TcpListener::bind(&config.tcp_bind).await?;
     let connection_limit = Arc::new(Semaphore::new(config.tcp_max_connections));
@@ -37,8 +40,14 @@ pub(crate) async fn run(
     );
     loop {
         let (stream, peer) = listener.accept().await?;
+        if !guard.allow(peer.ip(), false) {
+            metrics::tcp_rejected();
+            drop(stream);
+            continue;
+        }
         let Ok(permit) = Arc::clone(&connection_limit).try_acquire_owned() else {
             tracing::warn!(%peer, "SIP TCP 连接数达到上限，拒绝新连接");
+            metrics::tcp_rejected();
             drop(stream);
             continue;
         };
@@ -47,9 +56,11 @@ pub(crate) async fn run(
         let routes = Arc::clone(&routes);
         tokio::spawn(async move {
             let _permit = permit;
+            metrics::tcp_opened();
             if let Err(error) = handle_connection(stream, &config, &nodes, &routes).await {
                 tracing::debug!(%peer, %error, "SIP TCP 路由连接已关闭");
             }
+            metrics::tcp_closed();
         });
     }
 }
@@ -78,6 +89,7 @@ async fn handle_connection(
             let Some(frame) = frame else {
                 break;
             };
+            metrics::tcp_frame();
             let call_id =
                 header_value(&frame, &["call-id", "i"]).ok_or("SIP TCP 消息缺少 Call-ID")?;
             let snapshot = nodes.read().await.clone();

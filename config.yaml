@@ -59,6 +59,12 @@ sip_router:
   tcp_write_queue_capacity: 1024
   tcp_idle_timeout_secs: 300
   tcp_connect_timeout_secs: 3
+  manage_bind: "127.0.0.1:8083" # 健康检查与 Prometheus 指标，仅建议内网暴露
+  acl_allow: [] # 空列表允许全部；生产建议配置可信运营商/内网 CIDR
+  acl_block: []
+  rate_limit_capacity: 200 # 每个来源 IP 的令牌桶容量
+  rate_limit_fill_rate: 100 # 每秒补充令牌数
+  rate_limit_max_entries: 100000
 
 # ==========================================
 # 2. sip-edge 信令边缘网关服务配置

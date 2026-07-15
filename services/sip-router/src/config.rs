@@ -20,6 +20,12 @@ pub(crate) struct RouterConfig {
     pub(crate) tcp_write_queue_capacity: usize,
     pub(crate) tcp_idle_timeout_secs: u64,
     pub(crate) tcp_connect_timeout_secs: u64,
+    pub(crate) manage_bind: String,
+    pub(crate) acl_allow: Vec<String>,
+    pub(crate) acl_block: Vec<String>,
+    pub(crate) rate_limit_capacity: u32,
+    pub(crate) rate_limit_fill_rate: u32,
+    pub(crate) rate_limit_max_entries: usize,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -57,6 +63,12 @@ struct SipRouterSection {
     tcp_write_queue_capacity: Option<usize>,
     tcp_idle_timeout_secs: Option<u64>,
     tcp_connect_timeout_secs: Option<u64>,
+    manage_bind: Option<String>,
+    acl_allow: Option<Vec<String>>,
+    acl_block: Option<Vec<String>>,
+    rate_limit_capacity: Option<u32>,
+    rate_limit_fill_rate: Option<u32>,
+    rate_limit_max_entries: Option<usize>,
 }
 
 impl RouterConfig {
@@ -117,6 +129,17 @@ impl RouterConfig {
                 .clamp(16, 65_536),
             tcp_idle_timeout_secs: router.tcp_idle_timeout_secs.unwrap_or(300).max(10),
             tcp_connect_timeout_secs: router.tcp_connect_timeout_secs.unwrap_or(3).max(1),
+            manage_bind: router
+                .manage_bind
+                .unwrap_or_else(|| "127.0.0.1:8083".to_string()),
+            acl_allow: router.acl_allow.unwrap_or_default(),
+            acl_block: router.acl_block.unwrap_or_default(),
+            rate_limit_capacity: router.rate_limit_capacity.unwrap_or(200).max(1),
+            rate_limit_fill_rate: router.rate_limit_fill_rate.unwrap_or(100).max(1),
+            rate_limit_max_entries: router
+                .rate_limit_max_entries
+                .unwrap_or(100_000)
+                .clamp(1024, 10_000_000),
         })
     }
 }

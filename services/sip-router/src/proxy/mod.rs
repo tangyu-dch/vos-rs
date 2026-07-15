@@ -16,7 +16,10 @@ use std::{
 
 use tokio::{net::UdpSocket, sync::mpsc};
 
-use crate::{config::RouterConfig, discovery::SharedNodes, routes::DialogRouteStore};
+use crate::{
+    config::RouterConfig, discovery::SharedNodes, metrics, routes::DialogRouteStore,
+    security::RouterGuard,
+};
 
 use message::request_method;
 pub(crate) use message::{
@@ -36,6 +39,7 @@ pub(crate) async fn run(
     config: RouterConfig,
     nodes: SharedNodes,
     routes: Arc<DialogRouteStore>,
+    guard: Arc<RouterGuard>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let socket = Arc::new(UdpSocket::bind(&config.udp_bind).await?);
     let transactions = Arc::new(Transactions::new());
@@ -57,10 +61,17 @@ pub(crate) async fn run(
 
     loop {
         let (length, source) = socket.recv_from(&mut buffer).await?;
+        metrics::udp_received();
+        let trusted_backend = nodes.read().await.iter().any(|node| node.address == source);
+        if !guard.allow(source.ip(), trusted_backend) {
+            metrics::udp_dropped();
+            continue;
+        }
         let bytes = buffer[..length].to_vec();
         let index = worker_index(&bytes, source, workers.len());
         if workers[index].try_send(Datagram { bytes, source }).is_err() {
             let dropped = UDP_QUEUE_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
+            metrics::udp_dropped();
             if dropped == 1 || dropped.is_multiple_of(1000) {
                 tracing::warn!(
                     worker = index,
@@ -101,6 +112,7 @@ fn spawn_workers(
                     )
                     .await
                     {
+                        metrics::udp_error();
                         tracing::warn!(
                             worker,
                             source = %datagram.source,
@@ -165,6 +177,7 @@ async fn forward_client_packet(
         config.max_transactions,
     )?;
     socket.send_to(&forwarded, backend.address).await?;
+    metrics::udp_routed();
     Ok(())
 }
 

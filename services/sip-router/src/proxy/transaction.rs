@@ -11,7 +11,7 @@ use dashmap::DashMap;
 use tokio::net::UdpSocket;
 
 use super::message::{remove_top_via, response_status, top_via_branch};
-use crate::routes::DialogRouteStore;
+use crate::{metrics, routes::DialogRouteStore};
 
 #[derive(Debug, Clone)]
 pub(super) struct TransactionRoute {
@@ -46,6 +46,7 @@ pub(super) fn store(
             release_scheduled: Arc::new(AtomicBool::new(false)),
         },
     );
+    metrics::active_transactions(transactions.len());
     Ok(())
 }
 
@@ -57,6 +58,7 @@ pub(super) fn spawn_transaction_cleanup(transactions: Arc<Transactions>) {
             interval.tick().await;
             let now = Instant::now();
             transactions.retain(|_, route| route.expires_at > now);
+            metrics::active_transactions(transactions.len());
         }
     });
 }
