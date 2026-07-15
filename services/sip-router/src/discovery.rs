@@ -80,8 +80,8 @@ async fn refresh(
         if !record_is_routable(&record) {
             continue;
         }
-        let Ok(address) = record.advertised_addr.parse() else {
-            tracing::warn!(node_id = %record.node_id, "忽略通告地址无效的 SIP 节点");
+        let Some(address) = resolve_address(&record.advertised_addr).await else {
+            tracing::warn!(node_id = %record.node_id, advertised_addr = %record.advertised_addr, "忽略无法解析通告地址的 SIP 节点");
             continue;
         };
         discovered.push(SipNode {
@@ -93,6 +93,13 @@ async fn refresh(
     metrics::discovered_nodes(discovered.len());
     *nodes.write().await = discovered;
     Ok(())
+}
+
+async fn resolve_address(value: &str) -> Option<SocketAddr> {
+    if let Ok(address) = value.parse() {
+        return Some(address);
+    }
+    tokio::net::lookup_host(value).await.ok()?.next()
 }
 
 fn record_is_routable(record: &SipNodeRecord) -> bool {
@@ -116,5 +123,13 @@ mod tests {
 
         assert!(record_is_routable(&active));
         assert!(!record_is_routable(&draining));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_address_supports_service_hostname() {
+        let address = resolve_address("localhost:5060")
+            .await
+            .expect("localhost should resolve");
+        assert_eq!(address.port(), 5060);
     }
 }

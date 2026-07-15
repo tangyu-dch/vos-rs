@@ -37,7 +37,7 @@ async fn internal_auth(
 
 /// 启动管理 API（活跃呼叫查询 / 强制拆线）。
 pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String) {
-    let app = Router::new()
+    let protected = Router::new()
         .route("/manage/active-calls", get(active_calls))
         .route("/manage/active-calls/count", get(active_calls_count))
         .route("/manage/cluster/status", get(cluster_status))
@@ -68,7 +68,10 @@ pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String)
             ManageAuthSecret(internal_secret),
             internal_auth,
         ))
-        .with_state(state)
+        .with_state(state);
+    let app = Router::new()
+        .route("/health", get(health))
+        .merge(protected)
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -87,6 +90,10 @@ pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String)
             tracing::warn!(%addr, error = %e, "failed to bind manage API port");
         }
     }
+}
+
+async fn health() -> &'static str {
+    "ok"
 }
 
 async fn active_calls(State(state): State<Arc<EdgeState>>) -> Json<Vec<ActiveCall>> {

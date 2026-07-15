@@ -1,17 +1,17 @@
 [Unit]
-Description=VOS-RS CDR Worker (NATS Consumer)
-After=network.target postgresql.service sip-edge.service
-Wants=postgresql.service sip-edge.service
+Description=VOS-RS Native SIP Router
+After=network.target redis.service
+Wants=redis.service
 
 [Service]
 Type=simple
 User=vos-rs
 Group=vos-rs
 Environment=VOS_RS_CONFIG_FILE=/etc/vos-rs/config.yaml
-ExecStart=/opt/vos-rs/bin/cdr-worker
+ExecStart=/opt/vos-rs/bin/sip-router
 Restart=on-failure
 RestartSec=5
-LimitNOFILE=65536
+LimitNOFILE=1048576
 WorkingDirectory=/opt/vos-rs
 
 NoNewPrivileges=true

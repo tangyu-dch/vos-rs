@@ -1,0 +1,173 @@
+# Docker Compose 本地集群配置。
+# 生产部署请复制本文件、替换全部密码/对外地址，并通过
+# VOS_RS_CONFIG_FILE_HOST=/absolute/path/config.yaml 选择宿主机配置文件。
+
+logging:
+  filter: "info"
+
+connections:
+  database:
+    host: "postgres"
+    port: 5432
+    username: "vos_rs"
+    password: "vos_rs"
+    database: "vos_rs"
+    max_connections: 50
+  redis:
+    host: "redis"
+    port: 6379
+    password: ""
+    database: 0
+    max_connections: 50
+  nats:
+    url: "nats://nats:4222"
+    cdr_stream: "VOS_RS_CDR"
+    cdr_subject: "vos_rs.cdr"
+  s3:
+    backend: "s3"
+    local_dir: "/data/recordings"
+    endpoint: "http://rustfs:9000"
+    bucket: "recordings"
+    access_key: "rustfsadmin"
+    secret_key: "rustfsadmin"
+    region: "us-east-1"
+    key_prefix: "recordings/"
+
+media_edge:
+  control_bind: "0.0.0.0:3030"
+  control_token: "compose-media-secret"
+  uds_path: "/tmp/media-edge.sock"
+  recording_workers: 4
+  recording_queue_capacity: 10000
+
+sip_router:
+  udp_bind: "0.0.0.0:5060"
+  tcp_bind: "0.0.0.0:5060"
+  advertised_addr: "127.0.0.1:5060"
+  node_key_prefix: "vos_rs:cluster:sip_nodes"
+  discovery_interval_secs: 2
+  transaction_ttl_secs: 64
+  dialog_route_ttl_secs: 86400
+  udp_workers: 0
+  udp_queue_capacity: 4096
+  max_transactions: 1000000
+  tcp_max_connections: 10000
+  tcp_write_queue_capacity: 1024
+  tcp_idle_timeout_secs: 300
+  tcp_connect_timeout_secs: 3
+  manage_bind: "0.0.0.0:8083"
+  acl_allow: []
+  acl_block: []
+  rate_limit_capacity: 200
+  rate_limit_fill_rate: 100
+  rate_limit_max_entries: 100000
+
+sip_edge:
+  cluster:
+    enabled: true
+    node_id: "sip-edge-compose-1"
+    router_mode: "native"
+    advertised_addr: "sip-edge:5070"
+    management_url: "http://sip-edge:8082"
+    node_key_prefix: "vos_rs:cluster:sip_nodes"
+    heartbeat_interval_secs: 3
+    node_timeout_secs: 10
+    dialog_ttl_secs: 86400
+    nats_subject_prefix: "vos_rs.sip.node"
+    inter_node_ack_timeout_ms: 500
+    inter_node_max_retries: 3
+    inter_node_retry_delay_ms: 50
+    inter_node_dedupe_ttl_secs: 120
+  dynamic_config:
+    enabled: false
+  network:
+    sip_udp_bind: "0.0.0.0:5070"
+    advertised_addr: "127.0.0.1:5060"
+    manage_bind: "0.0.0.0:8082"
+    ws_bind: "0.0.0.0:5062"
+  routing:
+    default_gateway: ""
+    database_routes_enabled: true
+    gateway_health_checks_enabled: true
+  nat_traversal:
+    stun_server: ""
+    upnp_enabled: false
+  security:
+    internal_secret: "compose-internal-secret"
+  auth:
+    users: "1001:change-me,1002:change-me"
+    realm: "vos-rs"
+    nonce: "compose-nonce-change-me"
+    secret_key: "compose-auth-secret-change-me"
+  media:
+    allocation_strategy: "least_sessions"
+    health_check_interval_secs: 3
+    unhealthy_threshold: 3
+    nodes:
+      - id: "media-edge-compose-1"
+        type: "remote"
+        control_url: "http://media-edge:3030"
+        advertised_addr: "127.0.0.1"
+        port_min: 40000
+        port_max: 40100
+        weight: 1
+        control_token: "compose-media-secret"
+    symmetric_learning: true
+    anti_spoofing: true
+    source_relearn_secs: 30
+    metrics_log: false
+  recording:
+    enabled: false
+    directory: "/data/recordings"
+    retention_secs: 604800
+    min_free_bytes: 536870912
+    max_file_bytes: 134217728
+    max_duration_secs: 3600
+    workers: 4
+    queue_capacity: 10000
+  billing:
+    balance_enforcement_enabled: true
+    settlement_enabled: true
+  performance:
+    cdr_queue_capacity: 4096
+    cdr_persistence_enabled: true
+    udp_workers: 0
+    udp_workers_auto: true
+    udp_receive_buffer_bytes: 4194304
+    udp_send_buffer_bytes: 4194304
+  webhooks:
+    enabled: false
+    endpoint_url: "http://webhook-receiver:8090/webhooks/calls"
+    signing_secret: "compose-webhook-secret-change-me"
+    stream: "VOS_RS_WEBHOOKS"
+    subject: "vos_rs.webhooks.calls"
+    consumer: "vos_rs_webhook_delivery"
+    queue_capacity: 4096
+    request_timeout_ms: 3000
+    max_deliveries: 5
+    retry_delay_ms: 1000
+    delivery_record_ttl_secs: 604800
+
+api_server:
+  network:
+    port: 8080
+    allowed_origins: "http://localhost:3000,http://localhost"
+  security:
+    jwt_secret: "compose-jwt-secret-change-me"
+    internal_secret: "compose-internal-secret"
+  admin_credentials:
+    admin_password: "admin-change-me"
+    operator_password: "operator-change-me"
+    financier_password: "financier-change-me"
+
+cdr_worker:
+  queue:
+    nats_cdr_consumer: "vos_rs_cdr_worker"
+    nats_cdr_dlq_subject: "vos_rs.cdr.dlq"
+    nats_cdr_dlq_stream: "VOS_RS_CDR_DLQ"
+  batch_settings:
+    max_batch_size: 100
+    batch_timeout_ms: 1000
+    max_deliveries: 3
+    nak_delay_ms: 5000
+    db_retry_attempts: 5

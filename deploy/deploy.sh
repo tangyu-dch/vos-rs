@@ -10,7 +10,7 @@ DATA_DIR="/opt/vos-rs/data"
 LOG_DIR="/var/log/vos-rs"
 SERVICE_USER="vos-rs"
 SERVICE_GROUP="vos-rs"
-SERVICES=("sip-edge" "api-server" "cdr-worker")
+SERVICES=("sip-router" "sip-edge" "media-edge" "api-server" "cdr-worker")
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -40,12 +40,16 @@ install_binaries() {
     local profile="release"
     local target_dir="target/$profile"
 
-    if [[ ! -f "$target_dir/sip-edge" ]]; then
+    if [[ ! -f "$target_dir/sip-router" || ! -f "$target_dir/sip-edge" \
+        || ! -f "$target_dir/media-edge" || ! -f "$target_dir/api-server" \
+        || ! -f "$target_dir/cdr-worker" ]]; then
         warn "未找到 release 构建，正在编译..."
-        cargo build --release -p sip-edge -p api-server -p cdr-worker
+        cargo build --release -p sip-router -p sip-edge -p media-edge -p api-server -p cdr-worker
     fi
 
+    cp "$target_dir/sip-router"   "$INSTALL_DIR/bin/sip-router"
     cp "$target_dir/sip-edge"     "$INSTALL_DIR/bin/sip-edge"
+    cp "$target_dir/media-edge"   "$INSTALL_DIR/bin/media-edge"
     cp "$target_dir/api-server"   "$INSTALL_DIR/bin/api-server"
     cp "$target_dir/cdr-worker"   "$INSTALL_DIR/bin/cdr-worker"
     chmod 755 "$INSTALL_DIR/bin/"*
@@ -56,19 +60,16 @@ install_config() {
     info "安装配置文件到 $CONFIG_DIR"
     mkdir -p "$CONFIG_DIR/tls"
 
-    for svc in "${SERVICES[@]}"; do
-        local env_example="deploy/env/${svc}.env.example"
-        local env_target="$CONFIG_DIR/${svc}.env"
-        if [[ ! -f "$env_target" ]]; then
-            cp "$env_example" "$env_target"
-            warn "已创建 $env_target — 请编辑数据库密码等配置"
-        else
-            info "跳过 $env_target（已存在）"
-        fi
-    done
+    local config_target="$CONFIG_DIR/config.yaml"
+    if [[ ! -f "$config_target" ]]; then
+        cp config.yaml "$config_target"
+        warn "已创建 $config_target — 启动前必须修改节点地址、数据库凭据和密钥"
+    else
+        info "跳过 $config_target（已存在）"
+    fi
 
     chown -R "$SERVICE_USER:$SERVICE_GROUP" "$CONFIG_DIR"
-    chmod 600 "$CONFIG_DIR/"*.env
+    chmod 600 "$config_target"
 }
 
 install_systemd() {
@@ -113,12 +114,11 @@ install() {
     info "=== 部署完成 ==="
     echo ""
     warn "下一步："
-    echo "  1. 编辑配置: sudo vim /etc/vos-rs/sip-edge.env"
-    echo "  2. 编辑配置: sudo vim /etc/vos-rs/api-server.env"
-    echo "  3. 编辑配置: sudo vim /etc/vos-rs/cdr-worker.env"
-    echo "  4. 启动服务: sudo systemctl start sip-edge api-server cdr-worker"
-    echo "  5. 查看状态: sudo systemctl status sip-edge"
-    echo "  6. 查看日志: sudo journalctl -u sip-edge -f"
+    echo "  1. 编辑统一配置: sudo vim /etc/vos-rs/config.yaml"
+    echo "  2. 校验配置: make cluster-check CONFIG_FILE=/etc/vos-rs/config.yaml"
+    echo "  3. 启动服务: sudo systemctl start media-edge sip-edge sip-router api-server cdr-worker"
+    echo "  4. 查看状态: sudo systemctl status sip-router sip-edge media-edge"
+    echo "  5. 查看日志: sudo journalctl -u sip-edge -f"
 }
 
 uninstall() {
