@@ -52,45 +52,43 @@ impl PostgresCdrStore {
         if events.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await?;
-        for event in events {
-            sqlx::query(
-                r#"
-                INSERT INTO call_cdrs (
-                    call_id, caller, callee, started_at, answered_at, ended_at,
-                    duration_ms, billable_duration_ms, status, failure_status_code, failure_reason,
-                    caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms,
-                    gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
-                    mos, dtmf_digits, recording_path, direction
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-                ON CONFLICT (call_id) DO NOTHING
-                "#,
-            )
-            .bind(&event.call_id)
-            .bind(&event.caller)
-            .bind(&event.callee)
-            .bind(utils::offset_from_millis(event.started_at_ms))
-            .bind(event.answered_at_ms.map(utils::offset_from_millis))
-            .bind(utils::offset_from_millis(event.ended_at_ms))
-            .bind(event.duration_ms)
-            .bind(event.billable_duration_ms)
-            .bind(&event.status)
-            .bind(event.failure_status_code.map(|c| c as i32))
-            .bind(&event.failure_reason)
-            .bind(event.caller_rtcp_loss_rate)
-            .bind(event.caller_rtcp_jitter_ms)
-            .bind(event.caller_rtcp_rtt_ms.map(|v| v as i32))
-            .bind(event.gateway_rtcp_loss_rate)
-            .bind(event.gateway_rtcp_jitter_ms)
-            .bind(event.gateway_rtcp_rtt_ms.map(|v| v as i32))
-            .bind(event.mos)
-            .bind(&event.dtmf_digits)
-            .bind(&event.recording_path)
-            .bind(&event.direction)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
+        let mut query_builder = sqlx::QueryBuilder::new(
+            r#"
+            INSERT INTO call_cdrs (
+                call_id, caller, callee, started_at, answered_at, ended_at,
+                duration_ms, billable_duration_ms, status, failure_status_code, failure_reason,
+                caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms,
+                gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
+                mos, dtmf_digits, recording_path, direction
+            ) 
+            "#,
+        );
+        query_builder.push_values(events, |mut b, event| {
+            b.push_bind(&event.call_id)
+                .push_bind(&event.caller)
+                .push_bind(&event.callee)
+                .push_bind(utils::offset_from_millis(event.started_at_ms))
+                .push_bind(event.answered_at_ms.map(utils::offset_from_millis))
+                .push_bind(utils::offset_from_millis(event.ended_at_ms))
+                .push_bind(event.duration_ms)
+                .push_bind(event.billable_duration_ms)
+                .push_bind(&event.status)
+                .push_bind(event.failure_status_code.map(|c| c as i32))
+                .push_bind(&event.failure_reason)
+                .push_bind(event.caller_rtcp_loss_rate)
+                .push_bind(event.caller_rtcp_jitter_ms)
+                .push_bind(event.caller_rtcp_rtt_ms.map(|v| v as i32))
+                .push_bind(event.gateway_rtcp_loss_rate)
+                .push_bind(event.gateway_rtcp_jitter_ms)
+                .push_bind(event.gateway_rtcp_rtt_ms.map(|v| v as i32))
+                .push_bind(event.mos)
+                .push_bind(&event.dtmf_digits)
+                .push_bind(&event.recording_path)
+                .push_bind(&event.direction);
+        });
+        query_builder.push(" ON CONFLICT (call_id) DO NOTHING ");
+        let query = query_builder.build();
+        query.execute(&self.pool).await?;
         Ok(())
     }
 
@@ -118,23 +116,20 @@ impl PostgresCdrStore {
         if events.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await?;
-        for event in events {
-            sqlx::query(
-                "INSERT INTO dtmf_events (call_id, digit, source, timestamp_ms, rtp_timestamp, duration_ms, volume) \
-                  VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            )
-            .bind(&event.call_id)
-            .bind(&event.digit)
-            .bind(event.source.as_str())
-            .bind(event.timestamp_ms)
-            .bind(event.rtp_timestamp.map(|v| v as i64))
-            .bind(event.duration_ms.map(|v| v as i32))
-            .bind(event.volume.map(|v| v as i32))
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
+        let mut query_builder = sqlx::QueryBuilder::new(
+            "INSERT INTO dtmf_events (call_id, digit, source, timestamp_ms, rtp_timestamp, duration_ms, volume) "
+        );
+        query_builder.push_values(events, |mut b, event| {
+            b.push_bind(&event.call_id)
+                .push_bind(&event.digit)
+                .push_bind(event.source.as_str())
+                .push_bind(event.timestamp_ms)
+                .push_bind(event.rtp_timestamp.map(|v| v as i64))
+                .push_bind(event.duration_ms.map(|v| v as i32))
+                .push_bind(event.volume.map(|v| v as i32));
+        });
+        let query = query_builder.build();
+        query.execute(&self.pool).await?;
         Ok(())
     }
 
