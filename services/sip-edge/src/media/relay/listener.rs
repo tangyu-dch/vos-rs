@@ -5,6 +5,47 @@ struct CachedSourceBinding {
     last_seen: std::time::Instant,
 }
 
+fn set_socket_buffer_size(socket: &tokio::net::UdpSocket) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let fd = socket.as_raw_fd();
+        let buf_size = 262144_i32; // 256KB
+        unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                &buf_size as *const i32 as *const libc::c_void,
+                std::mem::size_of::<i32>() as libc::socklen_t,
+            );
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &buf_size as *const i32 as *const libc::c_void,
+                std::mem::size_of::<i32>() as libc::socklen_t,
+            );
+        }
+    }
+}
+
+#[inline]
+async fn send_media_nonblocking(
+    socket: &tokio::net::UdpSocket,
+    packet: &[u8],
+    target: SocketAddr,
+) -> std::io::Result<()> {
+    match socket.try_send_to(packet, target) {
+        Ok(_) => Ok(()),
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            socket.send_to(packet, target).await?;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 #[allow(dead_code)]
 pub async fn spawn_rtp_relay_listeners(
     config: &MediaConfig,
@@ -14,10 +55,12 @@ pub async fn spawn_rtp_relay_listeners(
 
     for port in (config.port_min..=config.port_max).step_by(2) {
         let rtp_socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
+        set_socket_buffer_size(&rtp_socket);
         sockets.push((rtp_socket, port, MediaPacketKind::Rtp));
 
         if let Some(rtcp_port) = rtcp_port_for(port) {
             let rtcp_socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], rtcp_port))).await?;
+            set_socket_buffer_size(&rtcp_socket);
             sockets.push((rtcp_socket, rtcp_port, MediaPacketKind::Rtcp));
         }
     }
@@ -72,7 +115,7 @@ pub(crate) async fn relay_media_port(
     let mut learned_symmetric_source = None;
 
     loop {
-        let (size, source) = tokio::select! {
+        let (mut size, mut source) = tokio::select! {
             _ = &mut shutdown_rx => {
                 debug!(local_port, packet_kind = packet_kind.label(), "shutting down media port loop");
                 break;
@@ -91,61 +134,350 @@ pub(crate) async fn relay_media_port(
                 continue;
             }
         };
-        let current_epoch = plan_version.load(Ordering::Acquire);
-        if current_epoch != plan_epoch {
-            fast_path_counters.flush(&relay, local_port);
-            plan = relay.relay_plan(local_port);
-            plan_epoch = current_epoch;
-        }
 
-        let use_fast_path = packet_kind == MediaPacketKind::Rtp && plan.path == RelayPath::Fast;
-        if use_fast_path {
-            fast_path_counters.record_received();
-        } else {
-            relay.record_metric(local_port, |metrics| metrics.received_packets += 1);
-        }
-        debug!(local_port, packet_kind = packet_kind.label(), size, %source, "received media packet");
+        // 积压包批量非阻塞接收与处理循环
+        loop {
+            let current_epoch = plan_version.load(Ordering::Acquire);
+            if current_epoch != plan_epoch {
+                fast_path_counters.flush(&relay, local_port);
+                plan = relay.relay_plan(local_port);
+                plan_epoch = current_epoch;
+            }
 
-        if !accept_media_source(
-            &relay,
-            local_port,
-            source,
-            anti_spoofing,
-            source_relearn_after_secs,
-            &mut source_binding,
-        ) {
-            warn!(%source, local_port, packet_kind = packet_kind.label(), "dropping media packet from unbound source");
-            continue;
-        }
+            let use_fast_path = packet_kind == MediaPacketKind::Rtp && plan.path == RelayPath::Fast;
+            if use_fast_path {
+                fast_path_counters.record_received();
+            } else {
+                relay.record_metric(local_port, |metrics| metrics.received_packets += 1);
+            }
+            debug!(local_port, packet_kind = packet_kind.label(), size, %source, "received media packet");
 
-        if !use_fast_path && relay.muted_ports.contains(&local_port) {
-            continue;
-        }
-
-        if use_fast_path {
-            let packet = &buffer[..size];
-            let is_pass_through = packet
-                .first()
-                .map(|first_byte| (0..=3).contains(first_byte) || (20..=63).contains(first_byte))
-                .unwrap_or(false);
-
-            if !is_pass_through {
-                let rtp = match RtpPacketView::parse(packet) {
-                    Ok(rtp) => rtp,
-                    Err(error) => {
-                        relay.record_metric(local_port, |metrics| {
-                            metrics.dropped_invalid_packets += 1
-                        });
-                        warn!(%error, %source, local_port, "dropping invalid RTP packet on fast path");
-                        fast_path_counters.flush_if_needed(&relay, local_port);
+            if !accept_media_source(
+                &relay,
+                local_port,
+                source,
+                anti_spoofing,
+                source_relearn_after_secs,
+                &mut source_binding,
+            ) {
+                warn!(%source, local_port, packet_kind = packet_kind.label(), "dropping media packet from unbound source");
+                match socket.try_recv_from(&mut buffer) {
+                    Ok((next_size, next_source)) => {
+                        size = next_size;
+                        source = next_source;
                         continue;
                     }
-                };
-                rtp_stats.observe(rtp);
-                if plan.dtmf_payload_type == Some(rtp.payload_type) {
-                    relay.process_dtmf_packet(local_port, rtp);
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => {
+                        warn!(%error, local_port, "failed to non-blocking receive media packet");
+                        break;
+                    }
                 }
             }
+
+            if !use_fast_path && relay.muted_ports.contains(&local_port) {
+                match socket.try_recv_from(&mut buffer) {
+                    Ok((next_size, next_source)) => {
+                        size = next_size;
+                        source = next_source;
+                        continue;
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => {
+                        warn!(%error, local_port, "failed to non-blocking receive media packet");
+                        break;
+                    }
+                }
+            }
+
+            if use_fast_path {
+                let packet = &buffer[..size];
+                let is_pass_through = packet
+                    .first()
+                    .map(|first_byte| (0..=3).contains(first_byte) || (20..=63).contains(first_byte))
+                    .unwrap_or(false);
+
+                if !is_pass_through {
+                    let rtp = match RtpPacketView::parse(packet) {
+                        Ok(rtp) => rtp,
+                        Err(error) => {
+                            relay.record_metric(local_port, |metrics| {
+                                metrics.dropped_invalid_packets += 1
+                            });
+                            warn!(%error, %source, local_port, "dropping invalid RTP packet on fast path");
+                            fast_path_counters.flush_if_needed(&relay, local_port);
+                            match socket.try_recv_from(&mut buffer) {
+                                Ok((next_size, next_source)) => {
+                                    size = next_size;
+                                    source = next_source;
+                                    continue;
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                                Err(error) => {
+                                    warn!(%error, local_port, "failed to non-blocking receive media packet");
+                                    break;
+                                }
+                            }
+                        }
+                    };
+                    rtp_stats.observe(rtp);
+                    if plan.dtmf_payload_type == Some(rtp.payload_type) {
+                        relay.process_dtmf_packet(local_port, rtp);
+                    }
+                }
+
+                if symmetric_rtp_learning {
+                    track_symmetric_source(
+                        &relay,
+                        local_port,
+                        source,
+                        packet_kind,
+                        &mut learned_symmetric_source,
+                    );
+                }
+
+                let Some(target) = plan.target else {
+                    fast_path_counters.flush(&relay, local_port);
+                    match socket.try_recv_from(&mut buffer) {
+                        Ok((next_size, next_source)) => {
+                            size = next_size;
+                            source = next_source;
+                            continue;
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) => {
+                            warn!(%error, local_port, "failed to non-blocking receive media packet");
+                            break;
+                        }
+                    }
+                };
+
+                // 优化一：非阻塞发送优先
+                if let Err(error) = send_media_nonblocking(&socket, packet, target).await {
+                    fast_path_counters.record_send_error();
+                    warn!(%error, %source, %target, local_port, "failed to relay RTP packet on fast path");
+                } else {
+                    fast_path_counters.record_forwarded();
+                }
+                fast_path_counters.flush_if_needed(&relay, local_port);
+
+                // 优化二：排空积压包
+                match socket.try_recv_from(&mut buffer) {
+                    Ok((next_size, next_source)) => {
+                        size = next_size;
+                        source = next_source;
+                        continue;
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => {
+                        warn!(%error, local_port, "failed to non-blocking receive media packet");
+                        break;
+                    }
+                }
+            }
+
+            let mut decrypted_packet: Option<pool::ReusablePacket> = None;
+            if packet_kind == MediaPacketKind::Rtp {
+                if let Ok(view) = RtpPacketView::parse(&buffer[..size]) {
+                    let peer_port = plan.peer_port;
+                    for port in [Some(local_port), peer_port].into_iter().flatten() {
+                        if relay.crypto_sessions.contains_key(&port) {
+                            continue;
+                        }
+                        let Some(offer) = relay.pending_srtp.get(&port).map(|entry| entry.clone())
+                        else {
+                            continue;
+                        };
+                        match MediaCryptoSession::from_sdes(&offer.suite, &offer.key_params, view.ssrc)
+                        {
+                            Ok(session) => {
+                                relay
+                                    .crypto_sessions
+                                    .insert(port, Arc::new(tokio::sync::Mutex::new(session)));
+                            }
+                            Err(error) => {
+                                relay.record_metric(local_port, |metrics| {
+                                    metrics.dropped_invalid_packets += 1
+                                });
+                                warn!(%error, port, "invalid pending SDES-SRTP offer");
+                            }
+                        }
+                    }
+                }
+                if let Some(session) = &plan.crypto_session {
+                    let mut candidate = relay.buffer_pool.copy(&buffer[..size]);
+                    let decrypted_len = match session.lock().await.decrypt(candidate.as_mut_slice()) {
+                        Ok(length) => length,
+                        Err(error) => {
+                            relay.record_metric(local_port, |metrics| {
+                                metrics.dropped_invalid_packets += 1
+                            });
+                            warn!(%error, local_port, "dropping RTP packet with invalid SRTP authentication");
+                            match socket.try_recv_from(&mut buffer) {
+                                Ok((next_size, next_source)) => {
+                                    size = next_size;
+                                    source = next_source;
+                                    continue;
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                                Err(error) => {
+                                    warn!(%error, local_port, "failed to non-blocking receive media packet");
+                                    break;
+                                }
+                            }
+                        }
+                    };
+                    if !candidate.set_len(decrypted_len) {
+                        relay.record_metric(local_port, |metrics| metrics.dropped_invalid_packets += 1);
+                        match socket.try_recv_from(&mut buffer) {
+                            Ok((next_size, next_source)) => {
+                                size = next_size;
+                                source = next_source;
+                                continue;
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(error) => {
+                                warn!(%error, local_port, "failed to non-blocking receive media packet");
+                                break;
+                            }
+                        }
+                    }
+                    decrypted_packet = Some(candidate);
+                }
+            }
+
+            let packet = decrypted_packet
+                .as_ref()
+                .map(pool::ReusablePacket::as_slice)
+                .unwrap_or(&buffer[..size]);
+            if packet.is_empty() {
+                match socket.try_recv_from(&mut buffer) {
+                    Ok((next_size, next_source)) => {
+                        size = next_size;
+                        source = next_source;
+                        continue;
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => {
+                        warn!(%error, local_port, "failed to non-blocking receive media packet");
+                        break;
+                    }
+                }
+            }
+
+            let mut parsed_rtp = None;
+            let mut rewritten_packet = None;
+            if packet_kind == MediaPacketKind::Rtp {
+                if let Ok(rtp) = RtpPacketView::parse(packet) {
+                    parsed_rtp = Some(rtp);
+                    // 如果当前端口属于活跃会议，将数据解包并路由至混音管理器，然后跳过单播转发
+                    if plan.is_in_conference {
+                        let codec = plan.codec.unwrap_or(rtp_core::AudioCodec::Pcma);
+                        relay
+                            .conference_manager
+                            .handle_rtp_packet(local_port, rtp.payload, codec);
+
+                        // 如果开启了录音，我们依然执行录音包落盘
+                        if let Some(leg) = &plan.recording {
+                            let _ = leg.session.try_record(leg.channel, rtp);
+                        }
+                        match socket.try_recv_from(&mut buffer) {
+                            Ok((next_size, next_source)) => {
+                                size = next_size;
+                                source = next_source;
+                                continue;
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(error) => {
+                                warn!(%error, local_port, "failed to non-blocking receive media packet");
+                                break;
+                            }
+                        }
+                    }
+
+                    let (seq_offset, ts_offset) =
+                        relay.continuity_offsets(local_port, rtp.sequence_number, rtp.timestamp);
+
+                    if seq_offset != 0 || ts_offset != 0 {
+                        if let Ok(mut owned_rtp) = rtp_core::RtpPacket::parse(packet) {
+                            owned_rtp.sequence_number =
+                                owned_rtp.sequence_number.wrapping_sub(seq_offset);
+                            owned_rtp.timestamp = owned_rtp.timestamp.wrapping_sub(ts_offset);
+                            if let Ok(encoded) = owned_rtp.encode() {
+                                rewritten_packet = Some(encoded);
+                            }
+                        }
+                    }
+                }
+            }
+            let packet = rewritten_packet.as_deref().unwrap_or(packet);
+
+            let first_byte = packet[0];
+            let is_pass_through = (0..=3).contains(&first_byte) || (20..=63).contains(&first_byte);
+
+            let summary = if is_pass_through {
+                None
+            } else if rewritten_packet.is_none() {
+                match parsed_rtp {
+                    Some(rtp_packet) => Some(MediaPacketSummary {
+                        rtp_packet: Some(rtp_packet),
+                        ..MediaPacketSummary::default()
+                    }),
+                    None => match packet_kind.inspect(packet) {
+                        Ok(summary) => Some(summary),
+                        Err(error) => {
+                            relay.record_metric(local_port, |metrics| {
+                                metrics.dropped_invalid_packets += 1
+                            });
+                            warn!(%error, %source, local_port, packet_kind = packet_kind.label(), "dropping invalid media packet");
+                            match socket.try_recv_from(&mut buffer) {
+                                Ok((next_size, next_source)) => {
+                                    size = next_size;
+                                    source = next_source;
+                                    continue;
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                                Err(error) => {
+                                    warn!(%error, local_port, "failed to non-blocking receive media packet");
+                                    break;
+                                }
+                            }
+                        }
+                    },
+                }
+            } else {
+                match packet_kind.inspect(packet) {
+                    Ok(summary) => Some(summary),
+                    Err(error) => {
+                        relay.record_metric(local_port, |metrics| metrics.dropped_invalid_packets += 1);
+                        warn!(%error, %source, local_port, packet_kind = packet_kind.label(), "dropping invalid media packet");
+                        match socket.try_recv_from(&mut buffer) {
+                            Ok((next_size, next_source)) => {
+                                size = next_size;
+                                source = next_source;
+                                continue;
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(error) => {
+                                warn!(%error, local_port, "failed to non-blocking receive media packet");
+                                break;
+                            }
+                        }
+                    }
+                }
+            };
+
+            if let Some(s) = &summary {
+                relay.record_rtcp_reports(local_port, s);
+            }
+
+            let generated_receiver_report = summary
+                .as_ref()
+                .and_then(|summary| summary.rtp_packet)
+                .and_then(|rtp_packet| {
+                    rtp_stats.observe(rtp_packet);
+                    rtp_stats.receiver_report()
+                });
 
             if symmetric_rtp_learning {
                 track_symmetric_source(
@@ -157,297 +489,208 @@ pub(crate) async fn relay_media_port(
                 );
             }
 
+            let peer_port = relay.peer_ports.get(&local_port).map(|entry| *entry);
+            if let Some(p_port) = peer_port {
+                if let Some(playback) = relay.playbacks.get(&p_port) {
+                    if playback.lock().unwrap().mode == PlaybackMode::Exclusive {
+                        match socket.try_recv_from(&mut buffer) {
+                            Ok((next_size, next_source)) => {
+                                size = next_size;
+                                source = next_source;
+                                continue;
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(error) => {
+                                warn!(%error, local_port, "failed to non-blocking receive media packet");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             let Some(target) = plan.target else {
-                fast_path_counters.flush(&relay, local_port);
-                continue;
+                relay.record_metric(local_port, |metrics| metrics.dropped_no_target_packets += 1);
+                debug!(%source, local_port, packet_kind = packet_kind.label(), "dropping media packet without relay target");
+                match socket.try_recv_from(&mut buffer) {
+                    Ok((next_size, next_source)) => {
+                        size = next_size;
+                        source = next_source;
+                        continue;
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => {
+                        warn!(%error, local_port, "failed to non-blocking receive media packet");
+                        break;
+                    }
+                }
             };
-            if let Err(error) = socket.send_to(packet, target).await {
-                fast_path_counters.record_send_error();
-                warn!(%error, %source, %target, local_port, "failed to relay RTP packet on fast path");
-            } else {
-                fast_path_counters.record_forwarded();
-            }
-            fast_path_counters.flush_if_needed(&relay, local_port);
-            continue;
-        }
 
-        let mut decrypted_packet: Option<pool::ReusablePacket> = None;
-        if packet_kind == MediaPacketKind::Rtp {
-            if let Ok(view) = RtpPacketView::parse(&buffer[..size]) {
-                let peer_port = plan.peer_port;
-                for port in [Some(local_port), peer_port].into_iter().flatten() {
-                    if relay.crypto_sessions.contains_key(&port) {
+            if target.ip().is_unspecified() || target.port() == 0 {
+                match socket.try_recv_from(&mut buffer) {
+                    Ok((next_size, next_source)) => {
+                        size = next_size;
+                        source = next_source;
                         continue;
                     }
-                    let Some(offer) = relay.pending_srtp.get(&port).map(|entry| entry.clone())
-                    else {
-                        continue;
-                    };
-                    match MediaCryptoSession::from_sdes(&offer.suite, &offer.key_params, view.ssrc)
-                    {
-                        Ok(session) => {
-                            relay
-                                .crypto_sessions
-                                .insert(port, Arc::new(tokio::sync::Mutex::new(session)));
-                        }
-                        Err(error) => {
-                            relay.record_metric(local_port, |metrics| {
-                                metrics.dropped_invalid_packets += 1
-                            });
-                            warn!(%error, port, "invalid pending SDES-SRTP offer");
-                        }
-                    }
-                }
-            }
-            if let Some(session) = &plan.crypto_session {
-                let mut candidate = relay.buffer_pool.copy(&buffer[..size]);
-                let decrypted_len = match session.lock().await.decrypt(candidate.as_mut_slice()) {
-                    Ok(length) => length,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                     Err(error) => {
-                        relay.record_metric(local_port, |metrics| {
-                            metrics.dropped_invalid_packets += 1
-                        });
-                        warn!(%error, local_port, "dropping RTP packet with invalid SRTP authentication");
-                        continue;
+                        warn!(%error, local_port, "failed to non-blocking receive media packet");
+                        break;
                     }
-                };
-                if !candidate.set_len(decrypted_len) {
-                    relay.record_metric(local_port, |metrics| metrics.dropped_invalid_packets += 1);
-                    continue;
                 }
-                decrypted_packet = Some(candidate);
             }
-        }
 
-        let packet = decrypted_packet
-            .as_ref()
-            .map(pool::ReusablePacket::as_slice)
-            .unwrap_or(&buffer[..size]);
-        if packet.is_empty() {
-            continue;
-        }
+            if let (Some(report), Some(rtcp_port)) =
+                (generated_receiver_report, target.port().checked_add(1))
+            {
+                let rtcp_target = SocketAddr::new(target.ip(), rtcp_port);
+                // 优化一：非阻塞发送优先
+                if let Err(error) = send_media_nonblocking(&socket, &report, rtcp_target).await {
+                    relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
+                    warn!(%error, local_port, %rtcp_target, "failed to send generated RTCP receiver report");
+                } else {
+                    relay.record_metric(local_port, |metrics| metrics.forwarded_packets += 1);
+                }
+            }
 
-        let mut parsed_rtp = None;
-        let mut rewritten_packet = None;
-        if packet_kind == MediaPacketKind::Rtp {
-            if let Ok(rtp) = RtpPacketView::parse(packet) {
-                parsed_rtp = Some(rtp);
-                // 如果当前端口属于活跃会议，将数据解包并路由至混音管理器，然后跳过单播转发
-                if plan.is_in_conference {
-                    let codec = plan.codec.unwrap_or(rtp_core::AudioCodec::Pcma);
-                    relay
-                        .conference_manager
-                        .handle_rtp_packet(local_port, rtp.payload, codec);
-
-                    // 如果开启了录音，我们依然执行录音包落盘
+            if let Some(s) = &summary {
+                if let Some(rtp_packet) = s.rtp_packet.as_ref() {
+                    relay.process_dtmf_packet(local_port, *rtp_packet);
                     if let Some(leg) = &plan.recording {
-                        let _ = leg.session.try_record(leg.channel, rtp);
-                    }
-                    continue;
-                }
-
-                let (seq_offset, ts_offset) =
-                    relay.continuity_offsets(local_port, rtp.sequence_number, rtp.timestamp);
-
-                if seq_offset != 0 || ts_offset != 0 {
-                    if let Ok(mut owned_rtp) = rtp_core::RtpPacket::parse(packet) {
-                        owned_rtp.sequence_number =
-                            owned_rtp.sequence_number.wrapping_sub(seq_offset);
-                        owned_rtp.timestamp = owned_rtp.timestamp.wrapping_sub(ts_offset);
-                        if let Ok(encoded) = owned_rtp.encode() {
-                            rewritten_packet = Some(encoded);
+                        match leg.session.try_record(leg.channel, *rtp_packet) {
+                            Ok(true) => {
+                                relay
+                                    .record_metric(local_port, |metrics| metrics.recorded_packets += 1);
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                if error.kind() == std::io::ErrorKind::WouldBlock {
+                                    relay.record_metric(local_port, |metrics| {
+                                        metrics.recording_dropped_packets += 1
+                                    });
+                                } else {
+                                    relay.record_metric(local_port, |metrics| {
+                                        metrics.recording_errors += 1
+                                    });
+                                    warn!(%error, %source, local_port, "failed to record RTP packet");
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
-        let packet = rewritten_packet.as_deref().unwrap_or(packet);
 
-        let first_byte = packet[0];
-        let is_pass_through = (0..=3).contains(&first_byte) || (20..=63).contains(&first_byte);
-
-        let summary = if is_pass_through {
-            None
-        } else if rewritten_packet.is_none() {
-            match parsed_rtp {
-                Some(rtp_packet) => Some(MediaPacketSummary {
-                    rtp_packet: Some(rtp_packet),
-                    ..MediaPacketSummary::default()
-                }),
-                None => match packet_kind.inspect(packet) {
-                    Ok(summary) => Some(summary),
-                    Err(error) => {
-                        relay.record_metric(local_port, |metrics| {
-                            metrics.dropped_invalid_packets += 1
-                        });
-                        warn!(%error, %source, local_port, packet_kind = packet_kind.label(), "dropping invalid media packet");
-                        continue;
+            let mut transcoded_packet = None;
+            if packet_kind == MediaPacketKind::Rtp && plan.peer_port.is_some() {
+                if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
+                    if local_codec != peer_codec {
+                        if let Ok(mut rtp) = rtp_core::RtpPacket::parse(packet) {
+                            let new_payload = match (local_codec, peer_codec) {
+                                (rtp_core::AudioCodec::Pcma, rtp_core::AudioCodec::Pcmu) => Some(
+                                    crate::media::transcode::transcode_pcma_to_pcmu(&rtp.payload),
+                                ),
+                                (rtp_core::AudioCodec::Pcmu, rtp_core::AudioCodec::Pcma) => Some(
+                                    crate::media::transcode::transcode_pcmu_to_pcma(&rtp.payload),
+                                ),
+                                _ => None,
+                            };
+                            if let Some(payload) = new_payload {
+                                rtp.payload = payload;
+                                if let Some(pt) = peer_codec.static_payload_type() {
+                                    rtp.payload_type = pt;
+                                }
+                                if let Ok(encoded) = rtp.encode() {
+                                    transcoded_packet = Some(encoded);
+                                }
+                            }
+                        }
                     }
-                },
-            }
-        } else {
-            match packet_kind.inspect(packet) {
-                Ok(summary) => Some(summary),
-                Err(error) => {
-                    relay.record_metric(local_port, |metrics| metrics.dropped_invalid_packets += 1);
-                    warn!(%error, %source, local_port, packet_kind = packet_kind.label(), "dropping invalid media packet");
-                    continue;
                 }
             }
-        };
+            let packet = transcoded_packet.as_deref().unwrap_or(packet);
 
-        if let Some(s) = &summary {
-            relay.record_rtcp_reports(local_port, s);
-        }
-
-        let generated_receiver_report = summary
-            .as_ref()
-            .and_then(|summary| summary.rtp_packet)
-            .and_then(|rtp_packet| {
-                rtp_stats.observe(rtp_packet);
-                rtp_stats.receiver_report()
-            });
-
-        if symmetric_rtp_learning {
-            track_symmetric_source(
-                &relay,
-                local_port,
-                source,
-                packet_kind,
-                &mut learned_symmetric_source,
-            );
-        }
-
-        let peer_port = relay.peer_ports.get(&local_port).map(|entry| *entry);
-        if let Some(p_port) = peer_port {
-            if let Some(playback) = relay.playbacks.get(&p_port) {
-                if playback.lock().unwrap().mode == PlaybackMode::Exclusive {
-                    continue;
+            let mut encrypted_packet: Option<pool::ReusablePacket> = None;
+            if packet_kind == MediaPacketKind::Rtp && plan.peer_port.is_some() {
+                if let Some(session) = &plan.peer_crypto_session {
+                    let mut candidate = relay.buffer_pool.copy(packet);
+                    let packet_len = candidate.as_slice().len();
+                    let encrypted_len = match session
+                        .lock()
+                        .await
+                        .encrypt_in_place(candidate.as_mut_capacity(), packet_len)
+                    {
+                        Ok(length) => length,
+                        Err(error) => {
+                            relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
+                            warn!(%error, local_port, "failed to encrypt RTP packet for relay target");
+                            match socket.try_recv_from(&mut buffer) {
+                                Ok((next_size, next_source)) => {
+                                    size = next_size;
+                                    source = next_source;
+                                    continue;
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                                Err(error) => {
+                                    warn!(%error, local_port, "failed to non-blocking receive media packet");
+                                    break;
+                                }
+                            }
+                        }
+                    };
+                    if !candidate.set_len(encrypted_len) {
+                        relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
+                        match socket.try_recv_from(&mut buffer) {
+                            Ok((next_size, next_source)) => {
+                                size = next_size;
+                                source = next_source;
+                                continue;
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(error) => {
+                                warn!(%error, local_port, "failed to non-blocking receive media packet");
+                                break;
+                            }
+                        }
+                    }
+                    encrypted_packet = Some(candidate);
                 }
             }
-        }
+            // 旁听/监控：如果本端口配置了监控目标，复制 RTP 包发送给监控端
+            if let Some(monitors_list) = relay.monitors.get(&local_port) {
+                for &monitor_addr in monitors_list.iter() {
+                    // 用 plain/decrypted packet，确保旁听者听到的是解密后的明文声音
+                    // 优化一：非阻塞发送优先
+                    let _ = send_media_nonblocking(&socket, packet, monitor_addr).await;
+                }
+            }
 
-        let Some(target) = plan.target else {
-            relay.record_metric(local_port, |metrics| metrics.dropped_no_target_packets += 1);
-            debug!(%source, local_port, packet_kind = packet_kind.label(), "dropping media packet without relay target");
-            continue;
-        };
+            let outbound_packet = encrypted_packet
+                .as_ref()
+                .map(pool::ReusablePacket::as_slice)
+                .unwrap_or(packet);
 
-        if target.ip().is_unspecified() || target.port() == 0 {
-            continue;
-        }
-
-        if let (Some(report), Some(rtcp_port)) =
-            (generated_receiver_report, target.port().checked_add(1))
-        {
-            let rtcp_target = SocketAddr::new(target.ip(), rtcp_port);
-            if let Err(error) = socket.send_to(&report, rtcp_target).await {
+            // 优化一：非阻塞发送优先
+            if let Err(error) = send_media_nonblocking(&socket, outbound_packet, target).await {
                 relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
-                warn!(%error, local_port, %rtcp_target, "failed to send generated RTCP receiver report");
+                warn!(%error, %source, %target, local_port, packet_kind = packet_kind.label(), "failed to relay media packet");
             } else {
                 relay.record_metric(local_port, |metrics| metrics.forwarded_packets += 1);
             }
-        }
 
-        if let Some(s) = &summary {
-            if let Some(rtp_packet) = s.rtp_packet.as_ref() {
-                relay.process_dtmf_packet(local_port, *rtp_packet);
-                if let Some(leg) = &plan.recording {
-                    match leg.session.try_record(leg.channel, *rtp_packet) {
-                        Ok(true) => {
-                            relay
-                                .record_metric(local_port, |metrics| metrics.recorded_packets += 1);
-                        }
-                        Ok(false) => {}
-                        Err(error) => {
-                            if error.kind() == std::io::ErrorKind::WouldBlock {
-                                relay.record_metric(local_port, |metrics| {
-                                    metrics.recording_dropped_packets += 1
-                                });
-                            } else {
-                                relay.record_metric(local_port, |metrics| {
-                                    metrics.recording_errors += 1
-                                });
-                                warn!(%error, %source, local_port, "failed to record RTP packet");
-                            }
-                        }
-                    }
+            // 优化二：尝试以非阻塞方式读取下一个包，读到就继续 loop 排空，读不到WouldBlock就退出排空小循环
+            match socket.try_recv_from(&mut buffer) {
+                Ok((next_size, next_source)) => {
+                    size = next_size;
+                    source = next_source;
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => {
+                    warn!(%error, local_port, "failed to non-blocking receive media packet");
+                    break;
                 }
             }
         }
-
-        let mut transcoded_packet = None;
-        if packet_kind == MediaPacketKind::Rtp && plan.peer_port.is_some() {
-            if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
-                if local_codec != peer_codec {
-                    if let Ok(mut rtp) = rtp_core::RtpPacket::parse(packet) {
-                        let new_payload = match (local_codec, peer_codec) {
-                            (rtp_core::AudioCodec::Pcma, rtp_core::AudioCodec::Pcmu) => Some(
-                                crate::media::transcode::transcode_pcma_to_pcmu(&rtp.payload),
-                            ),
-                            (rtp_core::AudioCodec::Pcmu, rtp_core::AudioCodec::Pcma) => Some(
-                                crate::media::transcode::transcode_pcmu_to_pcma(&rtp.payload),
-                            ),
-                            _ => None,
-                        };
-                        if let Some(payload) = new_payload {
-                            rtp.payload = payload;
-                            if let Some(pt) = peer_codec.static_payload_type() {
-                                rtp.payload_type = pt;
-                            }
-                            if let Ok(encoded) = rtp.encode() {
-                                transcoded_packet = Some(encoded);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let packet = transcoded_packet.as_deref().unwrap_or(packet);
-
-        let mut encrypted_packet: Option<pool::ReusablePacket> = None;
-        if packet_kind == MediaPacketKind::Rtp && plan.peer_port.is_some() {
-            if let Some(session) = &plan.peer_crypto_session {
-                let mut candidate = relay.buffer_pool.copy(packet);
-                let packet_len = candidate.as_slice().len();
-                let encrypted_len = match session
-                    .lock()
-                    .await
-                    .encrypt_in_place(candidate.as_mut_capacity(), packet_len)
-                {
-                    Ok(length) => length,
-                    Err(error) => {
-                        relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
-                        warn!(%error, local_port, "failed to encrypt RTP packet for relay target");
-                        continue;
-                    }
-                };
-                if !candidate.set_len(encrypted_len) {
-                    relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
-                    continue;
-                }
-                encrypted_packet = Some(candidate);
-            }
-        }
-        // 旁听/监控：如果本端口配置了监控目标，复制 RTP 包发送给监控端
-        if let Some(monitors_list) = relay.monitors.get(&local_port) {
-            for &monitor_addr in monitors_list.iter() {
-                // 用 plain/decrypted packet，确保旁听者听到的是解密后的明文声音
-                let _ = socket.send_to(packet, monitor_addr).await;
-            }
-        }
-
-        let outbound_packet = encrypted_packet
-            .as_ref()
-            .map(pool::ReusablePacket::as_slice)
-            .unwrap_or(packet);
-        if let Err(error) = socket.send_to(outbound_packet, target).await {
-            relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
-            warn!(%error, %source, %target, local_port, packet_kind = packet_kind.label(), "failed to relay media packet");
-            continue;
-        }
-
-        relay.record_metric(local_port, |metrics| metrics.forwarded_packets += 1);
     }
 
     fast_path_counters.flush(&relay, local_port);

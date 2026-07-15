@@ -708,7 +708,58 @@ def build_config(args: argparse.Namespace, scenario: Scenario, run_dir: Path) ->
     return config
 
 
+def check_os_limits() -> None:
+    try:
+        import resource
+        soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft < 10240:
+            print("\n" + "="*80)
+            print(f"⚠️  警告: 当前 Shell 的最大打开文件数限制过低 (ulimit -n = {soft})。")
+            print("   对于高并发媒体测试 (如 1500+)，这可能会导致套接字分配失败而引起呼叫丢弃。")
+            print("   建议执行: ulimit -n 65535")
+            print("="*80 + "\n")
+    except Exception:
+        pass
+
+    if platform.system() == "Darwin":
+        try:
+            val_bytes = subprocess.check_output(["sysctl", "-n", "kern.ipc.maxsockbuf"], text=True).strip()
+            maxsockbuf = int(val_bytes)
+            val_recv = subprocess.check_output(["sysctl", "-n", "net.inet.udp.recvspace"], text=True).strip()
+            recvspace = int(val_recv)
+            
+            if maxsockbuf < 8388608 or recvspace < 4194304:
+                print("\n" + "="*80)
+                print("⚠️  警告: 检测到 macOS 内核 UDP 套接字接收缓冲区限额偏低。")
+                print(f"   当前 kern.ipc.maxsockbuf = {maxsockbuf} 字节 (建议 >= 8388608 字节)")
+                print(f"   当前 net.inet.udp.recvspace = {recvspace} 字节 (建议 >= 4194304 字节)")
+                print("   在高 CPS 和高 RTP 包速率下，由于排队溢出可能会造成信令包或媒体包丢失。")
+                print("   建议在宿主机执行以下命令进行网络栈调优:")
+                print("       sudo sysctl -w kern.ipc.maxsockbuf=8388608")
+                print("       sudo sysctl -w net.inet.udp.recvspace=4194304")
+                print("="*80 + "\n")
+        except Exception:
+            pass
+    elif platform.system() == "Linux":
+        try:
+            rmem_max_path = Path("/proc/sys/net/core/rmem_max")
+            if rmem_max_path.is_file():
+                rmem_max = int(rmem_max_path.read_text().strip())
+                if rmem_max < 8388608:
+                    print("\n" + "="*80)
+                    print("⚠️  警告: 检测到 Linux 内核最大接收缓冲区大小偏低。")
+                    print(f"   当前 /proc/sys/net/core/rmem_max = {rmem_max} 字节 (建议 >= 8388608 字节)")
+                    print("   在高 CPS 和高 RTP 包速率下，可能会造成套接字缓冲区溢出丢包。")
+                    print("   建议执行以下命令进行调优:")
+                    print("       sudo sysctl -w net.core.rmem_max=8388608")
+                    print("       sudo sysctl -w net.core.wmem_max=8388608")
+                    print("="*80 + "\n")
+        except Exception:
+            pass
+
+
 def preflight(config: BenchmarkConfig) -> None:
+    check_os_limits()
     if not config.edge_binary.is_file():
         raise FileNotFoundError(f"找不到 sip-edge 可执行文件：{config.edge_binary}")
     if not config.edge_config.is_file():

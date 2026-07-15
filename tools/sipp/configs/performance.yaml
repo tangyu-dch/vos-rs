@@ -37,7 +37,7 @@ sip_edge:
         type: "local"
         advertised_addr: "127.0.0.1"
         port_min: 10000
-        port_max: 65534
+        port_max: 38000
         weight: 1
     symmetric_learning: true
     anti_spoofing: true
