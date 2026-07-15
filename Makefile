@@ -30,7 +30,7 @@ FULL_FLOW_LOG_DIR ?= target/full-flow
 PERF_LOG_DIR ?= target/sipp_bench
 
 .PHONY: help env fmt fmt-check check lint test test-unit test-integration test-bench \
-        clippy build build-release build-debug quick verify smoke full-flow full-flow-remote full-flow-uds full-flow-cluster full-flow-hybrid full-flow-sip-cluster \
+        clippy build build-release build-debug quick verify smoke full-flow full-flow-remote full-flow-uds full-flow-cluster full-flow-hybrid full-flow-sip-cluster full-flow-sip-cluster-failover \
         web-lint web-test web-build web-verify \
         perf perf-media perf-quick perf-all perf-report bench bench-concurrency \
         bench-concurrency-quick bench-concurrency-media bench-concurrency-recording doc \
@@ -57,6 +57,7 @@ help:
 	@printf '    make full-flow-cluster 双 media-edge 调度与录音测试\n'
 	@printf '    make full-flow-hybrid  本地 + 远程媒体混合调度测试\n'
 	@printf '    make full-flow-sip-cluster 双 sip-edge + 原生 sip-router 测试\n'
+	@printf '    make full-flow-sip-cluster-failover SIP 节点摘流与恢复测试\n'
 	@printf '    make bench           运行 Criterion 基准测试\n'
 	@printf '  构建:\n'
 	@printf '    make build           debug 构建\n'
@@ -412,6 +413,17 @@ full-flow-sip-cluster:
 		printf 'FULL-FLOW SIP CLUSTER FAIL: nodes=%s, calls=%s, edge-a=%s, edge-b=%s INVITE\n' "$$NODE_COUNT" "$$SUCC" "$$A_INVITES" "$$B_INVITES"; \
 		exit 1; \
 	fi
+
+full-flow-sip-cluster-failover:
+	@printf 'SIP 集群摘流与恢复故障场景测试...\n'
+	@$(CARGO) build --release -p sip-router -p sip-edge 2>/dev/null
+	@$(CARGO) test -p sip-router test_two_router_instances_share_dialog_owner_in_redis -- --ignored
+	@$(CARGO) test -p sip-edge test_inter_node_egress_waits_for_matching_ack -- --ignored
+	@FULL_FLOW_LOG_DIR="$(FULL_FLOW_LOG_DIR)" \
+	SIP_CLUSTER_EDGE_A_CONFIG_FILE="$(SIP_CLUSTER_EDGE_A_CONFIG_FILE)" \
+	SIP_CLUSTER_EDGE_B_CONFIG_FILE="$(SIP_CLUSTER_EDGE_B_CONFIG_FILE)" \
+	SIP_CLUSTER_ROUTER_CONFIG_FILE="$(SIP_CLUSTER_ROUTER_CONFIG_FILE)" \
+	SIPP_BIN="$(SIPP_BIN)" tools/sipp/run_sip_cluster_failover.sh
 
 # ─── 性能测试 ──────────────────────────────────────────
 
