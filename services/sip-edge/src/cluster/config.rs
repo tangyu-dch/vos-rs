@@ -31,6 +31,8 @@ pub struct ClusterConfig {
     pub router_mode: RouterMode,
     /// 当前节点供路由器访问的 SIP 地址。
     pub advertised_addr: String,
+    /// 当前节点供管理面访问的 HTTP 地址。
+    pub management_url: String,
     /// SIP 节点心跳在 Redis 中使用的键前缀。
     pub node_key_prefix: String,
     /// 节点心跳间隔。
@@ -50,6 +52,7 @@ impl Default for ClusterConfig {
             node_id: "sip-edge-1".to_string(),
             router_mode: RouterMode::Direct,
             advertised_addr: "127.0.0.1:5060".to_string(),
+            management_url: "http://127.0.0.1:8082".to_string(),
             node_key_prefix: "vos_rs:cluster:sip_nodes".to_string(),
             heartbeat_interval_secs: DEFAULT_HEARTBEAT_INTERVAL_SECS,
             node_timeout_secs: DEFAULT_NODE_TIMEOUT_SECS,
@@ -201,7 +204,11 @@ impl ClusterConfig {
             if self.node_id.trim().is_empty() {
                 return Err(ClusterConfigError::EmptyNodeId);
             }
-            if self.advertised_addr.trim().is_empty() || self.node_key_prefix.trim().is_empty() {
+            if self.advertised_addr.trim().is_empty()
+                || self.node_key_prefix.trim().is_empty()
+                || !(self.management_url.starts_with("http://")
+                    || self.management_url.starts_with("https://"))
+            {
                 return Err(ClusterConfigError::InvalidNodeDiscovery);
             }
             if redis_url.is_none() || nats_url.is_none() {

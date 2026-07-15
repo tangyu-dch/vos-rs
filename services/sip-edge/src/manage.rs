@@ -5,11 +5,11 @@ use axum::{
     Json, Router,
 };
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 use tower_http::cors::{Any, CorsLayer};
 
 use call_core::ActiveCall;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sip_core::SipUri;
 
 use crate::media::relay::MediaRelayMetrics;
@@ -40,6 +40,9 @@ pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String)
     let app = Router::new()
         .route("/manage/active-calls", get(active_calls))
         .route("/manage/active-calls/count", get(active_calls_count))
+        .route("/manage/cluster/status", get(cluster_status))
+        .route("/manage/cluster/drain", post(cluster_drain))
+        .route("/manage/cluster/resume", post(cluster_resume))
         .route("/manage/calls/:call_id/terminate", post(terminate))
         .route("/manage/route-preview", get(route_preview))
         .route("/manage/media-metrics", get(media_metrics))
@@ -92,6 +95,39 @@ async fn active_calls(State(state): State<Arc<EdgeState>>) -> Json<Vec<ActiveCal
 
 async fn active_calls_count(State(state): State<Arc<EdgeState>>) -> Json<usize> {
     Json(state.call_manager.active_calls_count())
+}
+
+#[derive(Debug, Serialize)]
+struct ClusterRuntimeStatus {
+    status: &'static str,
+    active_calls: usize,
+}
+
+fn runtime_status(state: &EdgeState) -> ClusterRuntimeStatus {
+    ClusterRuntimeStatus {
+        status: if state.draining.load(Ordering::Acquire) {
+            "draining"
+        } else {
+            "active"
+        },
+        active_calls: state.call_manager.active_calls_count(),
+    }
+}
+
+async fn cluster_status(State(state): State<Arc<EdgeState>>) -> Json<ClusterRuntimeStatus> {
+    Json(runtime_status(&state))
+}
+
+async fn cluster_drain(State(state): State<Arc<EdgeState>>) -> Json<ClusterRuntimeStatus> {
+    state.draining.store(true, Ordering::Release);
+    tracing::info!("SIP 节点已通过管理 API 进入摘流状态");
+    Json(runtime_status(&state))
+}
+
+async fn cluster_resume(State(state): State<Arc<EdgeState>>) -> Json<ClusterRuntimeStatus> {
+    state.draining.store(false, Ordering::Release);
+    tracing::info!("SIP 节点已通过管理 API 恢复接收新呼叫");
+    Json(runtime_status(&state))
 }
 
 /// RTP/录音聚合指标，供 API Server、压测脚本和运维面板读取。

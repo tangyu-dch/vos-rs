@@ -18,6 +18,12 @@ struct SipNodeRecord {
     node_id: String,
     advertised_addr: String,
     router_mode: String,
+    #[serde(default = "default_node_status")]
+    status: String,
+}
+
+fn default_node_status() -> String {
+    "active".to_string()
 }
 
 pub(crate) type SharedNodes = Arc<RwLock<Vec<SipNode>>>;
@@ -69,7 +75,7 @@ async fn refresh(
             tracing::warn!("忽略格式无效的 SIP 节点心跳");
             continue;
         };
-        if record.router_mode != "native" {
+        if !record_is_routable(&record) {
             continue;
         }
         let Ok(address) = record.advertised_addr.parse() else {
@@ -84,4 +90,28 @@ async fn refresh(
     discovered.sort_by(|left, right| left.id.cmp(&right.id));
     *nodes.write().await = discovered;
     Ok(())
+}
+
+fn record_is_routable(record: &SipNodeRecord) -> bool {
+    record.router_mode == "native" && record.status == "active"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_draining_node_is_not_routable() {
+        let active: SipNodeRecord = serde_json::from_str(
+            r#"{"node_id":"a","advertised_addr":"127.0.0.1:5061","router_mode":"native"}"#,
+        )
+        .expect("active record");
+        let draining: SipNodeRecord = serde_json::from_str(
+            r#"{"node_id":"b","advertised_addr":"127.0.0.1:5062","router_mode":"native","status":"draining"}"#,
+        )
+        .expect("draining record");
+
+        assert!(record_is_routable(&active));
+        assert!(!record_is_routable(&draining));
+    }
 }

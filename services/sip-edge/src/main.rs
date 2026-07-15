@@ -140,8 +140,6 @@ async fn main() -> Result<(), AnyError> {
     // Wrap EdgeConfig in Arc — all mutations done, now read-only shared access
     let edge_config = Arc::new(edge_config);
 
-    cluster::spawn_node_heartbeat(&redis_client, &edge_config.cluster).await?;
-
     tracing::info!(
         nodes = edge_config.media_cluster.nodes.len(),
         strategy = ?edge_config.media_cluster.allocation_strategy,
@@ -194,6 +192,9 @@ async fn main() -> Result<(), AnyError> {
     if let Some(redis_conn) = redis_conn_for_state {
         edge_state.set_redis(redis_conn);
     }
+    let node_heartbeat =
+        cluster::spawn_node_heartbeat(&redis_client, &edge_config.cluster, Arc::clone(&edge_state))
+            .await?;
     cluster::start_inter_node_egress(Arc::clone(&edge_state), &edge_config).await?;
     warm_hot_path_redis_cache(&edge_state, db_store.as_ref()).await?;
 
@@ -618,7 +619,12 @@ async fn main() -> Result<(), AnyError> {
             }
             _ = tokio::signal::ctrl_c(), if !is_draining => {
                 info!("Shutdown signal received. Entering graceful drain mode...");
-                edge_state.draining.store(true, Ordering::Relaxed);
+                edge_state.draining.store(true, Ordering::Release);
+                if let Some(heartbeat) = &node_heartbeat {
+                    if let Err(error) = heartbeat.refresh().await {
+                        warn!(%error, "failed to publish draining state immediately");
+                    }
+                }
                 is_draining = true;
                 shutdown_timeout.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(30));
             }
@@ -634,6 +640,12 @@ async fn main() -> Result<(), AnyError> {
                 warn!("Graceful shutdown timeout reached. Exiting immediately.");
                 break;
             }
+        }
+    }
+
+    if let Some(heartbeat) = &node_heartbeat {
+        if let Err(error) = heartbeat.unregister().await {
+            warn!(%error, "failed to unregister SIP cluster node during shutdown");
         }
     }
 

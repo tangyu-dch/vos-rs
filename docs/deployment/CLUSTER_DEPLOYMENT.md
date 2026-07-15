@@ -48,6 +48,7 @@ sip_edge:
     node_id: "sip-edge-1"
     router_mode: "external" # 或 native
     advertised_addr: "10.0.0.11:5060"
+    management_url: "http://10.0.0.11:8082"
     node_key_prefix: "vos_rs:cluster:sip_nodes"
     heartbeat_interval_secs: 3
     node_timeout_secs: 10
@@ -59,6 +60,9 @@ sip_edge:
 拒绝启动，防止节点在不共享状态的情况下静默分裂。
 `sip_edge.cluster.node_key_prefix` 必须与 `sip_router.node_key_prefix` 完全一致；原生
 路由器只发现 `router_mode: native` 的心跳，不会误选 direct 或 external 节点。
+`management_url` 必须是其他管理服务能够访问的 HTTP(S) 地址，不能填写
+`0.0.0.0`。心跳记录会同步发布 `active/draining` 状态、活动呼叫数、版本和启动时间；
+节点进入 draining 后不再接收新呼叫，退出前会主动注销 Redis 心跳。
 
 管理端可通过 `GET /api/system/sip-cluster/status` 查看 Redis 中仍有有效 TTL 的在线
 节点，Web 的“系统参数配置 → SIP 信令集群”页签展示相同信息。节点 ID、监听地址和

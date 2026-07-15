@@ -23,6 +23,7 @@ sip_edge:
     node_id: "sip-edge-a"
     router_mode: "native"
     advertised_addr: "127.0.0.1:5261"
+    management_url: "http://127.0.0.1:5281"
     node_key_prefix: "vos_rs:test:sip_nodes"
     heartbeat_interval_secs: 1
     node_timeout_secs: 5
