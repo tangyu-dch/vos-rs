@@ -76,6 +76,10 @@ sip_edge:
     node_timeout_secs: 10
     dialog_ttl_secs: 86400
     nats_subject_prefix: "vos_rs.sip.node"
+    inter_node_ack_timeout_ms: 500
+    inter_node_max_retries: 3
+    inter_node_retry_delay_ms: 50
+    inter_node_dedupe_ttl_secs: 120
   network:
     sip_udp_bind: "0.0.0.0:5060"
     advertised_addr: "127.0.0.1:5060"

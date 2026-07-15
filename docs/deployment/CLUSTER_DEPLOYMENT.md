@@ -54,6 +54,10 @@ sip_edge:
     node_timeout_secs: 10
     dialog_ttl_secs: 86400
     nats_subject_prefix: "vos_rs.sip.node"
+    inter_node_ack_timeout_ms: 500
+    inter_node_max_retries: 3
+    inter_node_retry_delay_ms: 50
+    inter_node_dedupe_ttl_secs: 120
 ```
 
 `node_timeout_secs` 必须大于心跳周期。集群启动时如果缺少 Redis 或 NATS，服务会
@@ -63,6 +67,9 @@ sip_edge:
 `management_url` 必须是其他管理服务能够访问的 HTTP(S) 地址，不能填写
 `0.0.0.0`。心跳记录会同步发布 `active/draining` 状态、活动呼叫数、版本和启动时间；
 节点进入 draining 后不再接收新呼叫，退出前会主动注销 Redis 心跳。
+跨节点 TCP/WebSocket 投递使用带消息 UUID 的 NATS 请求确认：接收端只有在消息进入
+本地连接有界写队列后才返回成功；确认丢失会按指数退避重试，接收端在去重 TTL 内
+不会重复写入同一消息。超过重试上限会向调用链返回明确错误并记录告警。
 
 管理端可通过 `GET /api/system/sip-cluster/status` 查看 Redis 中仍有有效 TTL 的在线
 节点，Web 的“系统参数配置 → SIP 信令集群”页签展示相同信息。节点 ID、监听地址和

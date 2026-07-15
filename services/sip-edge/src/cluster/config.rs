@@ -43,6 +43,14 @@ pub struct ClusterConfig {
     pub dialog_ttl_secs: u64,
     /// 节点间 NATS 主题前缀。
     pub nats_subject_prefix: String,
+    /// 跨节点投递确认超时。
+    pub inter_node_ack_timeout_ms: u64,
+    /// 跨节点投递最大重试次数，不含首次投递。
+    pub inter_node_max_retries: u32,
+    /// 首次重试等待时间，后续指数退避。
+    pub inter_node_retry_delay_ms: u64,
+    /// 接收端消息去重记录保留时间。
+    pub inter_node_dedupe_ttl_secs: u64,
 }
 
 impl Default for ClusterConfig {
@@ -58,6 +66,10 @@ impl Default for ClusterConfig {
             node_timeout_secs: DEFAULT_NODE_TIMEOUT_SECS,
             dialog_ttl_secs: DEFAULT_DIALOG_TTL_SECS,
             nats_subject_prefix: "vos_rs.sip.node".to_string(),
+            inter_node_ack_timeout_ms: 500,
+            inter_node_max_retries: 3,
+            inter_node_retry_delay_ms: 50,
+            inter_node_dedupe_ttl_secs: 120,
         }
     }
 }
@@ -146,6 +158,7 @@ pub enum ClusterConfigError {
     InvalidNodeDiscovery,
     MissingSharedInfrastructure,
     InvalidHeartbeatTimeout,
+    InvalidInterNodeDelivery,
     EmptyMediaNodes,
     InvalidMediaNode(String),
     MultipleLocalMediaNodes,
@@ -171,6 +184,9 @@ impl std::fmt::Display for ClusterConfigError {
                 formatter,
                 "node_timeout_secs 必须大于 heartbeat_interval_secs"
             ),
+            Self::InvalidInterNodeDelivery => {
+                write!(formatter, "跨节点确认超时、重试等待和去重 TTL 必须大于零")
+            }
             Self::EmptyMediaNodes => write!(formatter, "sip_edge.media.nodes 至少需要一个媒体节点"),
             Self::InvalidMediaNode(id) => {
                 write!(formatter, "媒体节点 {id} 的配置无效")
@@ -209,13 +225,19 @@ impl ClusterConfig {
                 || !(self.management_url.starts_with("http://")
                     || self.management_url.starts_with("https://"))
             {
-                return Err(ClusterConfigError::InvalidNodeDiscovery);
+                return Err(ClusterConfigError::InvalidInterNodeDelivery);
             }
             if redis_url.is_none() || nats_url.is_none() {
                 return Err(ClusterConfigError::MissingSharedInfrastructure);
             }
             if self.node_timeout_secs <= self.heartbeat_interval_secs {
                 return Err(ClusterConfigError::InvalidHeartbeatTimeout);
+            }
+            if self.inter_node_ack_timeout_ms == 0
+                || self.inter_node_retry_delay_ms == 0
+                || self.inter_node_dedupe_ttl_secs == 0
+            {
+                return Err(ClusterConfigError::InvalidNodeDiscovery);
             }
         }
         validate_media_nodes(&media.nodes)

@@ -29,6 +29,10 @@ sip_edge:
     node_timeout_secs: 5
     dialog_ttl_secs: 120
     nats_subject_prefix: "vos_rs.test.sip.node"
+    inter_node_ack_timeout_ms: 500
+    inter_node_max_retries: 2
+    inter_node_retry_delay_ms: 20
+    inter_node_dedupe_ttl_secs: 60
   dynamic_config:
     enabled: false
   billing:
