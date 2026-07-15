@@ -129,11 +129,11 @@ cdr_worker:
 
 ### 3.2 RTP 与媒体 Relay 规则
 
+媒体地址和端口不再使用独立的动态配置键，而是通过管理界面的“媒体节点集群”或
+`config.yaml` 中的 `sip_edge.media.nodes[]` 统一配置。单节点与多节点使用同一模型。
+
 | 配置项 Key | 典型数值 | 配置描述 |
 | :--- | :--- | :--- |
-| `rtp_advertised_addr` | `127.0.0.1` | RTP 媒体包流在 SDP 改写中通告的外部 IP 地址 |
-| `rtp_port_min` | `40000` | 中继 RTP 通道动态分配的起始 UDP 端口 |
-| `rtp_port_max` | `40100` | 中继 RTP 通道动态分配的结束 UDP 端口 |
 | `rtp_symmetric_learning` | `true` | 是否对对称 NAT 下的 RTP 音频包源地址进行自动学习改写 |
 | `rtp_anti_spoofing` | `true` | 是否启用 RTP 防欺诈攻击过滤 |
 | `rtp_source_relearn_secs` | `30` | 发生媒体切换时，RTP 重学习的锁定期限（秒） |

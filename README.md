@@ -134,8 +134,19 @@ make perf
 ```
 
 ## 相关文档
-- [系统分层架构规范 (docs/architecture/ARCHITECTURE.md)](docs/architecture/ARCHITECTURE.md)
-- [部署与调优指南 (docs/deployment/DEPLOY.md)](docs/deployment/DEPLOY.md)
-- [Web 后台管理系统指引 (docs/user-guide/WEB_GUIDE.md)](docs/user-guide/WEB_GUIDE.md)
-- [统一配置文件与连接参数配置 (docs/development/ENV_VARS.md)](docs/development/ENV_VARS.md)
-- [SIP/RTP 协议覆盖指标一览 (docs/architecture/rtp-sip-completeness.md)](docs/architecture/rtp-sip-completeness.md)
+
+### 架构与设计
+- [系统分层架构规范](docs/architecture/ARCHITECTURE.md)
+- [SIP/RTP 协议覆盖指标一览](docs/architecture/rtp-sip-completeness.md)
+- [Webhooks 全流程控制与 VCI 2.0 指令集设计对比](docs/architecture/WEBHOOKS_DESIGN_COMPARISON.md)
+- [Webhooks 插拔式可扩展通道架构](docs/architecture/WEBHOOKS_EXTENSIBILITY_ARCHITECTURE.md)
+
+### 开发与集成
+- [AI 语音插件标准接入协议（UDS 二进制流 + OpenAI/Gemini 接入示例）](docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md)
+- [环境变量配置参考](docs/development/ENV_VARS.md)
+
+### 部署与运维
+- [部署与调优指南](docs/deployment/DEPLOY.md)
+- [Web 后台管理系统指引](docs/user-guide/WEB_GUIDE.md)
+
+> 完整文档索引见 [docs/README.md](docs/README.md)。

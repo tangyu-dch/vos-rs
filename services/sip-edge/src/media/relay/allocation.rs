@@ -1,7 +1,106 @@
 use super::*;
 
 impl MediaRelayState {
+    #[cfg(test)]
     pub fn allocate_endpoint(&self, config: &MediaConfig) -> Result<RtpEndpoint, MediaError> {
+        self.allocate_endpoint_for_call(config, "local-allocation")
+    }
+
+    pub fn allocate_endpoint_for_call(
+        &self,
+        config: &MediaConfig,
+        call_id: &str,
+    ) -> Result<RtpEndpoint, MediaError> {
+        #[derive(serde::Deserialize)]
+        struct AllocateEndpointResp {
+            port: u16,
+        }
+
+        let selected_node = if let MediaRelayMode::Pool { pool } = &self.mode {
+            if call_id.is_empty() {
+                return Err(MediaError::Io("媒体池分配必须提供 Call-ID".to_string()));
+            }
+            let (node_index, node) = pool
+                .node_for_call(call_id)
+                .ok_or_else(|| MediaError::Io("没有健康的媒体节点".to_string()))?;
+            Some((Arc::clone(pool), node_index, node))
+        } else {
+            None
+        };
+
+        if let Some((pool, node_index, node)) = &selected_node {
+            if node.is_local() {
+                let mut node_config = config.clone();
+                node_config.advertised_addr = node.config.advertised_addr.clone();
+                node_config.port_min = node.config.port_min;
+                node_config.port_max = node.config.port_max;
+                let result = self.allocate_local_endpoint(&node_config);
+                match result {
+                    Ok(endpoint) => {
+                        pool.record_allocation(call_id, *node_index, endpoint.port);
+                        return Ok(endpoint);
+                    }
+                    Err(error) => {
+                        pool.cancel_unallocated_call(call_id);
+                        return Err(error);
+                    }
+                }
+            }
+            let mut node_config = config.clone();
+            node_config.advertised_addr = node.config.advertised_addr.clone();
+            node_config.port_min = node.config.port_min;
+            node_config.port_max = node.config.port_max;
+            let request_body = serde_json::json!({ "config": node_config });
+            let port_result = if let Some(uds_path) = node.uds_path().filter(|_| node.is_uds()) {
+                self.call_uds(uds_path, "allocate_endpoint", request_body)
+                    .and_then(|value| {
+                        value
+                            .get("port")
+                            .and_then(serde_json::Value::as_u64)
+                            .map(|port| port as u16)
+                            .ok_or_else(|| "UDS response missing port".to_string())
+                    })
+                    .map_err(MediaError::Io)
+            } else {
+                let control_url = node.control_url().ok_or_else(|| {
+                    MediaError::Io(format!("远程媒体节点 {} 缺少控制地址", node.config.id))
+                })?;
+                let url = format!("{control_url}/allocate_endpoint");
+                let handle = tokio::runtime::Handle::current();
+                tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        let mut request = node.client.post(url);
+                        if !node.config.control_token.is_empty() {
+                            request =
+                                request.header("X-VOS-Media-Token", &node.config.control_token);
+                        }
+                        request
+                            .json(&request_body)
+                            .send()
+                            .await?
+                            .json::<Result<AllocateEndpointResp, String>>()
+                            .await
+                    })
+                })
+                .map_err(|error| MediaError::Io(error.to_string()))
+                .and_then(|response| response.map_err(MediaError::Io))
+                .map(|response| response.port)
+            };
+            let port = match port_result {
+                Ok(port) => port,
+                Err(error) => {
+                    pool.cancel_unallocated_call(call_id);
+                    return Err(error);
+                }
+            };
+            pool.record_allocation(call_id, *node_index, port);
+            return Ok(RtpEndpoint::new(node.config.advertised_addr.clone(), port));
+        }
+
+        self.allocate_local_endpoint(config)
+    }
+
+    fn allocate_local_endpoint(&self, config: &MediaConfig) -> Result<RtpEndpoint, MediaError> {
         let port_min = config.port_min;
         let port_max = config.port_max;
         let available_ports = ((port_max - port_min) / 2) + 1;

@@ -174,7 +174,7 @@ pub(crate) async fn relay_media_port(
         let mut decrypted_packet = None;
         if packet_kind == MediaPacketKind::Rtp {
             if let Ok(view) = RtpPacketView::parse(&buffer[..size]) {
-                let peer_port = relay.peer_ports.get(&local_port).map(|entry| *entry);
+                let peer_port = plan.peer_port;
                 for port in [Some(local_port), peer_port].into_iter().flatten() {
                     if relay.crypto_sessions.contains_key(&port) {
                         continue;
@@ -199,11 +199,7 @@ pub(crate) async fn relay_media_port(
                     }
                 }
             }
-            if let Some(session) = relay
-                .crypto_sessions
-                .get(&local_port)
-                .map(|entry| entry.clone())
-            {
+            if let Some(session) = &plan.crypto_session {
                 let mut candidate = buffer[..size].to_vec();
                 let decrypted_len = match session.lock().await.decrypt(&mut candidate) {
                     Ok(length) => length,
@@ -231,22 +227,16 @@ pub(crate) async fn relay_media_port(
             if let Ok(rtp) = RtpPacketView::parse(packet) {
                 parsed_rtp = Some(rtp);
                 // 如果当前端口属于活跃会议，将数据解包并路由至混音管理器，然后跳过单播转发
-                if relay
-                    .conference_manager
-                    .port_to_conference
-                    .contains_key(&local_port)
-                {
-                    let codec = relay
-                        .codecs
-                        .get(&local_port)
-                        .map(|v| *v)
-                        .unwrap_or(rtp_core::AudioCodec::Pcma);
+                if plan.is_in_conference {
+                    let codec = plan.codec.unwrap_or(rtp_core::AudioCodec::Pcma);
                     relay
                         .conference_manager
                         .handle_rtp_packet(local_port, rtp.payload, codec);
 
                     // 如果开启了录音，我们依然执行录音包落盘
-                    let _ = relay.record_rtp_packet(local_port, rtp);
+                    if let Some(leg) = &plan.recording {
+                        let _ = leg.session.try_record(leg.channel, rtp);
+                    }
                     continue;
                 }
 
@@ -331,7 +321,7 @@ pub(crate) async fn relay_media_port(
             }
         }
 
-        let Some(target) = relay.target_for_port(local_port) else {
+        let Some(target) = plan.target else {
             relay.record_metric(local_port, |metrics| metrics.dropped_no_target_packets += 1);
             debug!(%source, local_port, packet_kind = packet_kind.label(), "dropping media packet without relay target");
             continue;
@@ -356,50 +346,51 @@ pub(crate) async fn relay_media_port(
         if let Some(s) = &summary {
             if let Some(rtp_packet) = s.rtp_packet.as_ref() {
                 relay.process_dtmf_packet(local_port, *rtp_packet);
-                match relay.record_rtp_packet(local_port, *rtp_packet) {
-                    Ok(true) => {
-                        relay.record_metric(local_port, |metrics| metrics.recorded_packets += 1);
-                    }
-                    Ok(false) => {}
-                    Err(MediaError::RecordingQueueFull) => {
-                        relay.record_metric(local_port, |metrics| {
-                            metrics.recording_dropped_packets += 1
-                        });
-                    }
-                    Err(error) => {
-                        relay.record_metric(local_port, |metrics| metrics.recording_errors += 1);
-                        warn!(%error, %source, local_port, "failed to record RTP packet");
+                if let Some(leg) = &plan.recording {
+                    match leg.session.try_record(leg.channel, *rtp_packet) {
+                        Ok(true) => {
+                            relay
+                                .record_metric(local_port, |metrics| metrics.recorded_packets += 1);
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            if error.kind() == std::io::ErrorKind::WouldBlock {
+                                relay.record_metric(local_port, |metrics| {
+                                    metrics.recording_dropped_packets += 1
+                                });
+                            } else {
+                                relay.record_metric(local_port, |metrics| {
+                                    metrics.recording_errors += 1
+                                });
+                                warn!(%error, %source, local_port, "failed to record RTP packet");
+                            }
+                        }
                     }
                 }
             }
         }
 
         let mut transcoded_packet = None;
-        if packet_kind == MediaPacketKind::Rtp {
-            if let Some(peer_port) = peer_port {
-                if let (Some(local_codec), Some(peer_codec)) = (
-                    relay.codecs.get(&local_port).map(|v| *v),
-                    relay.codecs.get(&peer_port).map(|v| *v),
-                ) {
-                    if local_codec != peer_codec {
-                        if let Ok(mut rtp) = rtp_core::RtpPacket::parse(packet) {
-                            let new_payload = match (local_codec, peer_codec) {
-                                (rtp_core::AudioCodec::Pcma, rtp_core::AudioCodec::Pcmu) => Some(
-                                    crate::media::transcode::transcode_pcma_to_pcmu(&rtp.payload),
-                                ),
-                                (rtp_core::AudioCodec::Pcmu, rtp_core::AudioCodec::Pcma) => Some(
-                                    crate::media::transcode::transcode_pcmu_to_pcma(&rtp.payload),
-                                ),
-                                _ => None,
-                            };
-                            if let Some(payload) = new_payload {
-                                rtp.payload = payload;
-                                if let Some(pt) = peer_codec.static_payload_type() {
-                                    rtp.payload_type = pt;
-                                }
-                                if let Ok(encoded) = rtp.encode() {
-                                    transcoded_packet = Some(encoded);
-                                }
+        if packet_kind == MediaPacketKind::Rtp && plan.peer_port.is_some() {
+            if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
+                if local_codec != peer_codec {
+                    if let Ok(mut rtp) = rtp_core::RtpPacket::parse(packet) {
+                        let new_payload = match (local_codec, peer_codec) {
+                            (rtp_core::AudioCodec::Pcma, rtp_core::AudioCodec::Pcmu) => Some(
+                                crate::media::transcode::transcode_pcma_to_pcmu(&rtp.payload),
+                            ),
+                            (rtp_core::AudioCodec::Pcmu, rtp_core::AudioCodec::Pcma) => Some(
+                                crate::media::transcode::transcode_pcmu_to_pcma(&rtp.payload),
+                            ),
+                            _ => None,
+                        };
+                        if let Some(payload) = new_payload {
+                            rtp.payload = payload;
+                            if let Some(pt) = peer_codec.static_payload_type() {
+                                rtp.payload_type = pt;
+                            }
+                            if let Ok(encoded) = rtp.encode() {
+                                transcoded_packet = Some(encoded);
                             }
                         }
                     }
@@ -409,21 +400,15 @@ pub(crate) async fn relay_media_port(
         let packet = transcoded_packet.as_deref().unwrap_or(packet);
 
         let mut encrypted_packet = None;
-        if packet_kind == MediaPacketKind::Rtp {
-            if let Some(peer_port) = peer_port {
-                if let Some(session) = relay
-                    .crypto_sessions
-                    .get(&peer_port)
-                    .map(|entry| entry.clone())
-                {
-                    let mut candidate = packet.to_vec();
-                    if let Err(error) = session.lock().await.encrypt(&mut candidate) {
-                        relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
-                        warn!(%error, local_port, "failed to encrypt RTP packet for relay target");
-                        continue;
-                    }
-                    encrypted_packet = Some(candidate);
+        if packet_kind == MediaPacketKind::Rtp && plan.peer_port.is_some() {
+            if let Some(session) = &plan.peer_crypto_session {
+                let mut candidate = packet.to_vec();
+                if let Err(error) = session.lock().await.encrypt(&mut candidate) {
+                    relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
+                    warn!(%error, local_port, "failed to encrypt RTP packet for relay target");
+                    continue;
                 }
+                encrypted_packet = Some(candidate);
             }
         }
         // 旁听/监控：如果本端口配置了监控目标，复制 RTP 包发送给监控端

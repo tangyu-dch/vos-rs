@@ -11,6 +11,7 @@ impl MediaRelayState {
         crate::media::conference::start_mixer_loop(Arc::clone(&conference_manager));
 
         Self {
+            mode: MediaRelayMode::Local,
             targets: Arc::new(DashMap::new()),
             peer_ports: Arc::new(DashMap::new()),
             codecs: Arc::new(DashMap::new()),
@@ -43,6 +44,164 @@ impl MediaRelayState {
         }
     }
 
+    /// 请求 media-edge 在指定端口启用 ICE-Lite、DTLS 与 SRTP。
+    pub fn register_webrtc_session(
+        &self,
+        port: u16,
+    ) -> Result<WebRtcSessionDescription, MediaError> {
+        let params = serde_json::json!({ "port": port });
+        match &self.mode {
+            MediaRelayMode::Pool { .. } if !self.port_is_local(port) => {
+                match self.remote_target_for_port(port) {
+                    Some(RemoteControlTarget::Http {
+                        client,
+                        base_url,
+                        control_token,
+                    }) => {
+                        let url = format!("{base_url}/register_webrtc_session");
+                        let handle = tokio::runtime::Handle::current();
+                        let response = tokio::task::block_in_place(|| {
+                            handle.block_on(async {
+                                let mut request = client.post(url);
+                                if !control_token.is_empty() {
+                                    request = request.header("X-VOS-Media-Token", control_token);
+                                }
+                                request
+                                    .json(&params)
+                                    .send()
+                                    .await?
+                                    .json::<Result<WebRtcSessionDescription, String>>()
+                                    .await
+                            })
+                        })
+                        .map_err(|error| MediaError::Io(error.to_string()))?;
+                        response.map_err(MediaError::Io)
+                    }
+                    Some(RemoteControlTarget::Uds { path }) => self
+                        .call_uds(&path, "register_webrtc_session", params)
+                        .and_then(|value| {
+                            serde_json::from_value(value).map_err(|error| error.to_string())
+                        })
+                        .map_err(MediaError::Io),
+                    None => Err(MediaError::Io(format!(
+                        "未找到 RTP 端口 {port} 对应的媒体节点"
+                    ))),
+                }
+            }
+            MediaRelayMode::Local | MediaRelayMode::Pool { .. } => Err(MediaError::Io(
+                "WebRTC 仅由独立 media-edge 承载，请配置 sip_edge.media.nodes".to_string(),
+            )),
+        }
+    }
+
+    pub fn with_node_pool(
+        config: &crate::cluster::MediaClusterConfig,
+        recording_workers: usize,
+        recording_queue_capacity: usize,
+    ) -> Self {
+        let mut state = Self::with_recording_pool(recording_workers, recording_queue_capacity);
+        state.mode = MediaRelayMode::Pool {
+            pool: MediaNodePool::new(config),
+        };
+        state
+    }
+
+    pub(crate) fn call_uds(
+        &self,
+        uds_path: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let handle = tokio::runtime::Handle::current();
+        let uds_path = uds_path.to_string();
+        let method = method.to_string();
+
+        let fut = async move {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+            let mut stream = tokio::net::UnixStream::connect(&uds_path)
+                .await
+                .map_err(|e| format!("UDS connect failed: {e}"))?;
+            let req = serde_json::json!({
+                "method": method,
+                "params": params
+            });
+            let req_str = serde_json::to_string(&req)
+                .map_err(|e| format!("Request serialization failed: {e}"))?
+                + "\n";
+
+            stream
+                .write_all(req_str.as_bytes())
+                .await
+                .map_err(|e| format!("UDS write failed: {e}"))?;
+
+            let (reader, _) = stream.split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            if reader
+                .read_line(&mut line)
+                .await
+                .map_err(|e| format!("UDS read failed: {e}"))?
+                > 0
+            {
+                #[derive(serde::Deserialize)]
+                struct UdsResponse {
+                    result: Option<serde_json::Value>,
+                    error: Option<String>,
+                }
+                let resp: UdsResponse = serde_json::from_str(&line)
+                    .map_err(|e| format!("Response parse failed: {e}"))?;
+                if let Some(err) = resp.error {
+                    Err(err)
+                } else if let Some(res) = resp.result {
+                    Ok(res)
+                } else {
+                    Err("No result or error field".to_string())
+                }
+            } else {
+                Err("Empty UDS response".to_string())
+            }
+        };
+
+        tokio::task::block_in_place(|| handle.block_on(fut))
+    }
+
+    pub(crate) fn call_remote_target(
+        &self,
+        target: RemoteControlTarget,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        match target {
+            RemoteControlTarget::Uds { path } => self.call_uds(&path, method, params),
+            RemoteControlTarget::Http {
+                client,
+                base_url,
+                control_token,
+            } => {
+                let url = format!("{base_url}/{method}");
+                let handle = tokio::runtime::Handle::current();
+                tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        let mut request = client.post(url);
+                        if !control_token.is_empty() {
+                            request = request.header("X-VOS-Media-Token", control_token);
+                        }
+                        request
+                            .json(&params)
+                            .send()
+                            .await
+                            .map_err(|error| error.to_string())?
+                            .error_for_status()
+                            .map_err(|error| error.to_string())?
+                            .json::<serde_json::Value>()
+                            .await
+                            .map_err(|error| error.to_string())
+                    })
+                })
+            }
+        }
+    }
+
     pub(crate) fn start_monitoring(&self, port: u16, supervisor: SocketAddr) {
         self.monitors.entry(port).or_default().push(supervisor);
         self.mark_relay_features_changed(port);
@@ -64,6 +223,14 @@ impl MediaRelayState {
     }
 
     pub(crate) fn clear_monitors(&self, port: u16) {
+        if let Some(target) = self.remote_target_for_port(port) {
+            let _ = self.call_remote_target(
+                target,
+                "clear_monitors",
+                serde_json::json!({ "port": port }),
+            );
+            return;
+        }
         if self.monitors.remove(&port).is_some() {
             self.mark_relay_features_changed(port);
             tracing::info!(port, "cleared monitors for port");
@@ -146,6 +313,14 @@ impl MediaRelayState {
     }
 
     pub fn set_target_addr(&self, relay_port: u16, target: SocketAddr) {
+        if let Some(remote) = self.remote_target_for_port(relay_port) {
+            let _ = self.call_remote_target(
+                remote,
+                "set_target",
+                serde_json::json!({ "local_port": relay_port, "target": target }),
+            );
+            return;
+        }
         self.targets.insert(relay_port, target);
 
         let binding_opt = self.source_bindings.get(&relay_port).map(|entry| *entry);
@@ -201,6 +376,17 @@ impl MediaRelayState {
     }
 
     pub fn clear_target(&self, relay_port: u16) {
+        if let MediaRelayMode::Pool { pool } = &self.mode {
+            if let Some(target) = self.remote_target_for_port(relay_port) {
+                let _ = self.call_remote_target(
+                    target,
+                    "clear_target",
+                    serde_json::json!({ "port": relay_port }),
+                );
+                pool.release_port(relay_port);
+                return;
+            }
+        }
         let rtp_port = rtp_port_for(relay_port).unwrap_or(relay_port);
         let peer_port = self.peer_ports.get(&rtp_port).map(|v| *v);
 
@@ -243,6 +429,9 @@ impl MediaRelayState {
                 self.active_sockets.remove(&rtcp_peer_port);
                 self.peer_ports.remove(&rtcp_peer_port);
             }
+        }
+        if let MediaRelayMode::Pool { pool } = &self.mode {
+            pool.release_port(rtp_port);
         }
         if let Some((_, senders)) = self.active_loops.remove(&rtp_port) {
             for sender in senders {

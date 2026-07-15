@@ -1,0 +1,5 @@
+media_edge:
+  control_bind: "127.0.0.1:3032"
+  uds_path: "/tmp/media-edge-b.sock"
+  recording_workers: 2
+  recording_queue_capacity: 4096

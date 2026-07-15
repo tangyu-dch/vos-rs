@@ -3,6 +3,7 @@ use std::time::SystemTime;
 
 use sip_core::SipRequest;
 
+use crate::cluster::{flow_key, FlowRecord};
 use crate::config::EdgeConfig;
 use crate::edge_state::{EdgeState, PendingDatagram};
 use crate::sip::registrar::RegisterOutcome;
@@ -52,6 +53,13 @@ pub(crate) async fn handle_register_request(
                 let aor_key = outcome.aor.clone();
                 let contacts_clone = outcome.contacts.clone();
                 let redis_connection = edge_state.redis_connection();
+                let flow_record = registration_transport(&request).and_then(|transport| {
+                    edge_config.cluster.enabled.then(|| FlowRecord {
+                        owner_node_id: edge_config.cluster.node_id.clone(),
+                        transport: transport.to_string(),
+                    })
+                });
+                let connection_flow_key = flow_key(peer);
 
                 // 异步在后台执行 Redis 写入，防止阻塞 SIP 消息处理链路
                 tokio::spawn(async move {
@@ -68,10 +76,25 @@ pub(crate) async fn handle_register_request(
                                     .query_async(&mut conn)
                                     .await;
                             }
+                            if let Some(flow_record) = flow_record {
+                                if let Ok(value) = serde_json::to_string(&flow_record) {
+                                    let _: Result<(), redis::RedisError> = redis::cmd("SET")
+                                        .arg(&connection_flow_key)
+                                        .arg(value)
+                                        .arg("EX")
+                                        .arg(max_expires as u64)
+                                        .query_async(&mut conn)
+                                        .await;
+                                }
+                            }
                         } else {
                             // 注销，从 Redis 清除
                             let _: Result<(), redis::RedisError> = redis::cmd("DEL")
                                 .arg(&redis_key)
+                                .query_async(&mut conn)
+                                .await;
+                            let _: Result<(), redis::RedisError> = redis::cmd("DEL")
+                                .arg(&connection_flow_key)
                                 .query_async(&mut conn)
                                 .await;
                         }
@@ -91,6 +114,21 @@ pub(crate) async fn handle_register_request(
     };
 
     vec![PendingDatagram::new(peer.to_string(), response)]
+}
+
+fn registration_transport(request: &SipRequest) -> Option<&'static str> {
+    let via = request.headers.get("via")?.as_str().to_ascii_uppercase();
+    if via.contains("SIP/2.0/WSS") {
+        Some("wss")
+    } else if via.contains("SIP/2.0/WS") {
+        Some("ws")
+    } else if via.contains("SIP/2.0/TLS") {
+        Some("tls")
+    } else if via.contains("SIP/2.0/TCP") {
+        Some("tcp")
+    } else {
+        None
+    }
 }
 
 fn unauthorized_for_request(request: &SipRequest, auth_config: &AuthConfig) -> Vec<u8> {

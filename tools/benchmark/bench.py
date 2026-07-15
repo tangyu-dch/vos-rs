@@ -741,8 +741,11 @@ def run_scenario(config: BenchmarkConfig, dry_run: bool) -> BenchmarkResult | No
         "caller": caller_command(config, caller_xml),
     }
     if config.scenario != Scenario.SIGNALING:
+        wav_path = Path("/Users/tangyu/Projects/vos-rs/tools/sample-speech-1m.wav")
+        if not wav_path.is_file():
+            wav_path = ROOT / "tools/sipp/test_speech.wav"
         commands["rtp"] = rtp_command(
-            config, ROOT / "tools/sipp/rtp_range_sender.py", ROOT / "tools/sipp/test_speech.wav"
+            config, ROOT / "tools/sipp/rtp_range_sender.py", wav_path
         )
     if dry_run:
         print(json.dumps(commands, ensure_ascii=False, indent=2))

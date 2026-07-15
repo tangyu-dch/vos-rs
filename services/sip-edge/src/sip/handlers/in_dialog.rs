@@ -486,7 +486,7 @@ pub(crate) async fn handle_in_dialog_request(
 
                 let target_relay_rtp = match edge_state
                     .media_relay
-                    .allocate_endpoint(&edge_config.media)
+                    .allocate_endpoint_for_call(&edge_config.media, call_id.as_str())
                 {
                     Ok(ep) => ep,
                     Err(error) => {

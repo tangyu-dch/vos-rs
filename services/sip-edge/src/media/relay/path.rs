@@ -10,11 +10,18 @@ pub(super) enum RelayPath {
 }
 
 /// 监听循环缓存的不可变转发计划。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct RelayPlan {
     pub(super) path: RelayPath,
     pub(super) target: Option<SocketAddr>,
     pub(super) dtmf_payload_type: Option<u8>,
+    pub(super) recording: Option<RecordingLeg>,
+    pub(super) is_in_conference: bool,
+    pub(super) codec: Option<rtp_core::AudioCodec>,
+    pub(super) crypto_session: Option<Arc<tokio::sync::Mutex<MediaCryptoSession>>>,
+    pub(super) peer_port: Option<u16>,
+    pub(super) peer_codec: Option<rtp_core::AudioCodec>,
+    pub(super) peer_crypto_session: Option<Arc<tokio::sync::Mutex<MediaCryptoSession>>>,
 }
 
 /// 快路径按批次回写指标，避免每个 RTP 包都获取 DashMap 分片锁。
@@ -92,6 +99,21 @@ impl MediaRelayState {
             .get(&relay_port)
             .map(|state| state.payload_type);
 
+        let recording = self.recordings.get(&relay_port).map(|entry| entry.clone());
+        let is_in_conference = self
+            .conference_manager
+            .port_to_conference
+            .contains_key(&relay_port);
+        let codec = self.codecs.get(&relay_port).map(|entry| *entry);
+        let crypto_session = self
+            .crypto_sessions
+            .get(&relay_port)
+            .map(|entry| entry.clone());
+
+        let peer_codec = peer_port.and_then(|p| self.codecs.get(&p).map(|entry| *entry));
+        let peer_crypto_session =
+            peer_port.and_then(|p| self.crypto_sessions.get(&p).map(|entry| entry.clone()));
+
         let requires_processing = self.requires_processed_path(relay_port, peer_port);
         let has_valid_target = target
             .map(|address| !address.ip().is_unspecified() && address.port() != 0)
@@ -105,6 +127,13 @@ impl MediaRelayState {
             },
             target,
             dtmf_payload_type,
+            recording,
+            is_in_conference,
+            codec,
+            crypto_session,
+            peer_port,
+            peer_codec,
+            peer_crypto_session,
         }
     }
 

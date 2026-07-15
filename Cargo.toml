@@ -9,6 +9,8 @@ members = [
     "services/api-server",
     "services/cdr-worker",
     "services/sip-edge",
+    "services/media-edge",
+    "services/sip-router",
 ]
 resolver = "2"
 

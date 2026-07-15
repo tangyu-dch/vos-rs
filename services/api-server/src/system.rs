@@ -68,6 +68,9 @@ pub async fn get_system_configs(State(state): State<AppState>) -> impl IntoRespo
             for item in items {
                 let key: String = item.get("config_key");
                 let val: String = item.get("config_value");
+                if key == "media_cluster_json" {
+                    continue;
+                }
                 configs.insert(
                     key.clone(),
                     if key == "secret_key" {
@@ -156,7 +159,7 @@ fn validate_system_configs(configs: &HashMap<String, String>) -> Result<(), &'st
             _ => {}
         }
     }
-    validate_config_ranges(configs)
+    Ok(())
 }
 
 fn config_value_kind(key: &str) -> Option<&'static str> {
@@ -180,8 +183,6 @@ fn config_value_kind(key: &str) -> Option<&'static str> {
         | "udp_receive_buffer_bytes"
         | "udp_send_buffer_bytes"
         | "cdr_queue_capacity"
-        | "rtp_port_min"
-        | "rtp_port_max"
         | "rtp_source_relearn_secs"
         | "recording_workers"
         | "recording_queue_capacity"
@@ -189,36 +190,10 @@ fn config_value_kind(key: &str) -> Option<&'static str> {
         | "recording_min_free_bytes"
         | "recording_max_file_bytes"
         | "recording_max_duration_secs" => Some("integer"),
-        "rtp_advertised_addr"
-        | "recording_dir"
-        | "realm"
-        | "nonce"
-        | "secret_key"
-        | "tls_bind_addr"
-        | "tls_cert_path"
-        | "tls_key_path"
-        | "tls_ca_path"
-        | "tls_server_name" => Some("string"),
+        "recording_dir" | "realm" | "nonce" | "secret_key" | "tls_bind_addr" | "tls_cert_path"
+        | "tls_key_path" | "tls_ca_path" | "tls_server_name" => Some("string"),
         _ => None,
     }
-}
-
-fn validate_config_ranges(configs: &HashMap<String, String>) -> Result<(), &'static str> {
-    let port_min = configs
-        .get("rtp_port_min")
-        .and_then(|value| value.parse::<u16>().ok());
-    let port_max = configs
-        .get("rtp_port_max")
-        .and_then(|value| value.parse::<u16>().ok());
-    if port_min.is_some_and(|port| port < 1024 || port % 2 != 0)
-        || port_max.is_some_and(|port| port < 1024 || port % 2 != 0)
-    {
-        return Err("RTP 端口必须是 1024 以上的偶数");
-    }
-    if matches!((port_min, port_max), (Some(min), Some(max)) if min >= max) {
-        return Err("RTP 最大端口必须大于最小端口");
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -239,15 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_rtp_port_range() {
-        let configs = HashMap::from([
-            ("rtp_port_min".to_string(), "40002".to_string()),
-            ("rtp_port_max".to_string(), "40000".to_string()),
-        ]);
-        assert!(validate_system_configs(&configs).is_err());
-    }
-
-    #[test]
     fn accepts_supported_system_configs() {
         let configs = HashMap::from([
             ("recording_enabled".to_string(), "true".to_string()),
@@ -264,8 +230,6 @@ mod tests {
                 "gateway_health_checks_enabled".to_string(),
                 "false".to_string(),
             ),
-            ("rtp_port_min".to_string(), "40000".to_string()),
-            ("rtp_port_max".to_string(), "40100".to_string()),
         ]);
         assert!(validate_system_configs(&configs).is_ok());
     }

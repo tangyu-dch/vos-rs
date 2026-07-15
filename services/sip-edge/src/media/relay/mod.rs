@@ -16,6 +16,7 @@ use tracing::{debug, warn};
 use super::rtcp_processor::{
     next_rtp_port, rtcp_port_for, rtp_port_for, MediaPacketKind, MediaPacketSummary,
 };
+use crate::media::cluster::{MediaNodePool, MediaNodeRuntime};
 pub use crate::media::config::{MediaConfig, DEFAULT_RTP_PORT_MIN};
 pub use crate::media::crypto::MediaCryptoSession;
 pub use crate::media::dtmf::DtmfState;
@@ -38,6 +39,21 @@ pub use listener::spawn_rtp_relay_listeners;
 use path::{FastPathCounters, RelayPath};
 
 pub const MAX_RTP_DATAGRAM_SIZE: usize = 65_535;
+
+/// media-edge 为 WebRTC SDP Answer 生成的协商参数。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WebRtcSessionDescription {
+    pub ice: WebRtcIceCredentials,
+    pub fingerprint_sha256: String,
+    pub dtls_setup: String,
+}
+
+/// ICE-Lite 本地凭据。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WebRtcIceCredentials {
+    pub username_fragment: String,
+    pub password: String,
+}
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -78,7 +94,28 @@ struct RtpContinuityState {
     resume_after_exclusive: bool,
 }
 
+#[derive(Clone)]
+pub enum MediaRelayMode {
+    /// 无节点池的测试专用进程内模式。
+    Local,
+    /// 生产统一节点池，可同时包含一个本地节点和多个远程节点。
+    Pool { pool: Arc<MediaNodePool> },
+}
+
+#[derive(Clone)]
+pub(crate) enum RemoteControlTarget {
+    Http {
+        client: reqwest::Client,
+        base_url: String,
+        control_token: String,
+    },
+    Uds {
+        path: String,
+    },
+}
+
 pub struct MediaRelayState {
+    pub(crate) mode: MediaRelayMode,
     pub(crate) targets: Arc<DashMap<u16, SocketAddr>>,
     pub(crate) peer_ports: Arc<DashMap<u16, u16>>,
     pub(crate) codecs: Arc<DashMap<u16, rtp_core::AudioCodec>>,
@@ -106,6 +143,7 @@ pub struct MediaRelayState {
 impl Clone for MediaRelayState {
     fn clone(&self) -> Self {
         Self {
+            mode: self.mode.clone(),
             targets: Arc::clone(&self.targets),
             peer_ports: Arc::clone(&self.peer_ports),
             codecs: Arc::clone(&self.codecs),
@@ -142,6 +180,44 @@ impl std::fmt::Debug for MediaRelayState {
             .field("recordings_len", &self.recordings.len())
             .field("recording_workers", &self.recording_pool.worker_count())
             .finish()
+    }
+}
+
+impl MediaRelayState {
+    pub(crate) fn remote_target_for_port(&self, port: u16) -> Option<RemoteControlTarget> {
+        match &self.mode {
+            MediaRelayMode::Pool { pool } => pool
+                .node_for_port(port)
+                .and_then(|node| remote_target_for_node(&node)),
+            MediaRelayMode::Local => None,
+        }
+    }
+
+    pub(crate) fn port_is_local(&self, port: u16) -> bool {
+        match &self.mode {
+            MediaRelayMode::Pool { pool } => {
+                pool.node_for_port(port).is_some_and(|node| node.is_local())
+            }
+            MediaRelayMode::Local => true,
+        }
+    }
+}
+
+fn remote_target_for_node(node: &MediaNodeRuntime) -> Option<RemoteControlTarget> {
+    if node.is_local() {
+        return None;
+    }
+    if node.is_uds() {
+        node.uds_path().map(|path| RemoteControlTarget::Uds {
+            path: path.to_string(),
+        })
+    } else {
+        node.control_url()
+            .map(|base_url| RemoteControlTarget::Http {
+                client: node.client.clone(),
+                base_url: base_url.to_string(),
+                control_token: node.config.control_token.clone(),
+            })
     }
 }
 

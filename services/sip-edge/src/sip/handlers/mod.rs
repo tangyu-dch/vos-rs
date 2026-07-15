@@ -118,12 +118,46 @@ pub(crate) struct RewrittenSdp {
     pub(crate) body: Vec<u8>,
 }
 
+pub(super) fn prepare_webrtc_answer(
+    body: &[u8],
+    media_relay: &MediaRelayState,
+    media_config: &MediaConfig,
+    call_id: &str,
+) -> Result<RewrittenSdp, media::MediaError> {
+    media::validate_media_negotiation(body)?;
+    let gateway_endpoint = media::parse_sdp_rtp_endpoint(body)?;
+    let relay_endpoint = media_relay.allocate_endpoint_for_call(media_config, call_id)?;
+    let result = (|| {
+        if let Some(codec) = media::negotiated_audio_codec(body) {
+            media_relay.register_port_codec(relay_endpoint.port, codec);
+        }
+        let session = media_relay.register_webrtc_session(relay_endpoint.port)?;
+        let answer = media::build_webrtc_answer(body, &relay_endpoint, &session)?;
+        register_relay_target(
+            media_relay,
+            &relay_endpoint,
+            &gateway_endpoint,
+            "browser-to-gateway RTP",
+        );
+        Ok(RewrittenSdp {
+            original_endpoint: Some(gateway_endpoint),
+            relay_endpoint: relay_endpoint.clone(),
+            body: answer,
+        })
+    })();
+    if result.is_err() {
+        media_relay.clear_target(relay_endpoint.port);
+    }
+    result
+}
+
 pub(super) fn prepare_rewritten_sdp(
     headers: &HeaderMap,
     body: &[u8],
     media_relay: &MediaRelayState,
     media_config: &MediaConfig,
     direction: &'static str,
+    call_id: &str,
 ) -> Result<Option<RewrittenSdp>, media::MediaError> {
     if !media::is_sdp_body(headers, body) {
         return Ok(None);
@@ -131,7 +165,8 @@ pub(super) fn prepare_rewritten_sdp(
 
     media::validate_media_negotiation(body)?;
 
-    let relay_endpoint = media_relay.allocate_endpoint(media_config)?;
+    let is_webrtc = media::is_webrtc_sdp(body);
+    let relay_endpoint = media_relay.allocate_endpoint_for_call(media_config, call_id)?;
     if let Some(codec) = media::negotiated_audio_codec(body) {
         media_relay.register_port_codec(relay_endpoint.port, codec);
     }
@@ -147,6 +182,20 @@ pub(super) fn prepare_rewritten_sdp(
                 }
             }
         }
+    }
+    if is_webrtc {
+        return match media::rewrite_webrtc_offer_for_legacy(body, &relay_endpoint) {
+            Ok(body) => Ok(Some(RewrittenSdp {
+                original_endpoint: None,
+                relay_endpoint,
+                body,
+            })),
+            Err(error) => {
+                media_relay.clear_target(relay_endpoint.port);
+                warn!(%error, direction, "failed to convert WebRTC offer to legacy SIP SDP");
+                Err(error)
+            }
+        };
     }
     match media::rewrite_sdp_and_extract_endpoint(body, &relay_endpoint) {
         Ok((body, original_endpoint)) => Ok(Some(RewrittenSdp {

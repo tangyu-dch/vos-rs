@@ -717,6 +717,7 @@ pub(crate) async fn dispatch_response(
                 &edge_state.media_relay,
                 &edge_config.media,
                 "failover INVITE offer",
+                call_id.as_deref().unwrap_or(""),
             ) {
                 Ok(rewritten_sdp) => rewritten_sdp,
                 Err(error) => {
@@ -846,13 +847,30 @@ pub(crate) async fn dispatch_response(
     let rewritten_sdp_bytes = if mid_dialog_rewritten {
         rewritten_sdp_body
     } else {
-        match crate::sip::handlers::prepare_rewritten_sdp(
-            &sip_response.headers,
-            &sip_response.body,
-            &edge_state.media_relay,
-            &edge_config.media,
-            "outbound response answer",
-        ) {
+        let caller_is_webrtc = transaction
+            .as_ref()
+            .and_then(|value| value.original_request.as_ref())
+            .is_some_and(|request| media::is_webrtc_sdp(&request.body));
+        let prepared =
+            if caller_is_webrtc && media::is_sdp_body(&sip_response.headers, &sip_response.body) {
+                crate::sip::handlers::prepare_webrtc_answer(
+                    &sip_response.body,
+                    &edge_state.media_relay,
+                    &edge_config.media,
+                    call_id.as_deref().unwrap_or(""),
+                )
+                .map(Some)
+            } else {
+                crate::sip::handlers::prepare_rewritten_sdp(
+                    &sip_response.headers,
+                    &sip_response.body,
+                    &edge_state.media_relay,
+                    &edge_config.media,
+                    "outbound response answer",
+                    call_id.as_deref().unwrap_or(""),
+                )
+            };
+        match prepared {
             Ok(Some(sdp)) => {
                 if let (Some(call_id), Some(gateway_rtp)) =
                     (call_id.as_deref(), &sdp.original_endpoint)

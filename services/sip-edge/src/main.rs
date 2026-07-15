@@ -1,3 +1,4 @@
+pub(crate) mod cluster;
 pub(crate) mod config;
 pub(crate) mod edge_state;
 mod manage;
@@ -6,6 +7,8 @@ pub(crate) mod net;
 pub(crate) mod security;
 pub(crate) mod sip;
 pub(crate) mod timers;
+mod webhook_delivery;
+mod webhooks;
 
 // Re-export for backward compatibility with inline module references
 #[allow(unused_imports)]
@@ -67,6 +70,7 @@ async fn main() -> Result<(), AnyError> {
     init_tracing();
 
     let mut edge_config = EdgeConfig::from_env();
+    edge_config.validate_cluster()?;
     let bind_addr = edge_config.sip_udp_bind.clone();
     let route_table = route_table_from_config(&edge_config)?;
     if route_table.is_empty() {
@@ -118,6 +122,8 @@ async fn main() -> Result<(), AnyError> {
     } else {
         info!("dynamic Redis/PostgreSQL configuration override is disabled");
     }
+    // 动态配置可能替换媒体节点池，必须在创建监听和媒体状态前再次校验。
+    edge_config.validate_cluster()?;
 
     // STUN: discover public address for media relay if configured
     if let Some(stun_server) = edge_config.stun_server.clone() {
@@ -134,7 +140,15 @@ async fn main() -> Result<(), AnyError> {
     // Wrap EdgeConfig in Arc — all mutations done, now read-only shared access
     let edge_config = Arc::new(edge_config);
 
-    let media_relay = MediaRelayState::with_recording_pool(
+    cluster::spawn_node_heartbeat(&redis_client, &edge_config.cluster).await?;
+
+    tracing::info!(
+        nodes = edge_config.media_cluster.nodes.len(),
+        strategy = ?edge_config.media_cluster.allocation_strategy,
+        "Initializing unified media node pool"
+    );
+    let media_relay = MediaRelayState::with_node_pool(
+        &edge_config.media_cluster,
         edge_config.recording_workers,
         edge_config.recording_queue_capacity,
     );
@@ -144,7 +158,30 @@ async fn main() -> Result<(), AnyError> {
     let cdr_queue_capacity = edge_config.cdr_queue_capacity;
     let cdr_persistence_enabled = edge_config.cdr_persistence_enabled;
     let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
-    let call_manager = CallManager::new(route_table, cdr_tx);
+    let (call_manager, webhook_receiver) = if edge_config.webhooks.enabled {
+        let (event_sender, event_receiver) =
+            tokio::sync::mpsc::channel(edge_config.webhooks.queue_capacity);
+        (
+            CallManager::new_with_event_sink(route_table, cdr_tx, event_sender),
+            Some(event_receiver),
+        )
+    } else {
+        (CallManager::new(route_table, cdr_tx), None)
+    };
+
+    if let Some(event_receiver) = webhook_receiver {
+        let nats_url = edge_config
+            .nats_url
+            .as_deref()
+            .ok_or("启用 Webhook 时必须在 config.yaml 配置 connections.nats.url")?;
+        webhooks::start_pipeline(
+            edge_config.webhooks.clone(),
+            nats_url,
+            redis_client.clone(),
+            event_receiver,
+        )
+        .await?;
+    }
 
     let edge_state = Arc::new(EdgeState::with_media_relay_and_db(
         call_manager,
@@ -157,6 +194,7 @@ async fn main() -> Result<(), AnyError> {
     if let Some(redis_conn) = redis_conn_for_state {
         edge_state.set_redis(redis_conn);
     }
+    cluster::start_inter_node_egress(Arc::clone(&edge_state), &edge_config).await?;
     warm_hot_path_redis_cache(&edge_state, db_store.as_ref()).await?;
 
     // Start background task to flush CDRs in batches (every 100ms or 100 entries)
@@ -562,8 +600,12 @@ async fn main() -> Result<(), AnyError> {
                 }
                 let worker_idx = (hasher.finish() as usize) % num_workers;
 
-                if worker_txs[worker_idx].try_send((packet.clone(), peer)).is_err() {
-                    let _ = worker_txs[worker_idx].send((packet, peer)).await;
+                if worker_txs[worker_idx].try_send((packet, peer)).is_err() {
+                    static DROP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                    let cnt = DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if cnt % 1000 == 0 {
+                        tracing::warn!("UDP Worker {} 队列满，丢弃入站数据包 (当前累计丢包数: {})", worker_idx, cnt);
+                    }
                 }
 
                 if is_draining {

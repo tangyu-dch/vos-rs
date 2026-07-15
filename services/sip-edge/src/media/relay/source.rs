@@ -6,6 +6,18 @@ impl MediaRelayState {
     }
 
     pub fn metrics_for_port(&self, relay_port: u16) -> MediaRelayMetrics {
+        if let Some(target) = self.remote_target_for_port(relay_port) {
+            return self
+                .call_remote_target(
+                    target,
+                    "metrics_for_port",
+                    serde_json::json!({ "port": relay_port }),
+                )
+                .ok()
+                .and_then(|value| serde_json::from_value::<Option<MediaRelayMetrics>>(value).ok())
+                .flatten()
+                .unwrap_or_default();
+        }
         self.metrics
             .get(&relay_port)
             .map(|entry| *entry)
@@ -20,26 +32,35 @@ impl MediaRelayState {
     }
 
     pub fn metrics_totals(&self) -> MediaRelayMetrics {
+        if let MediaRelayMode::Pool { pool } = &self.mode {
+            let mut totals = MediaRelayMetrics::default();
+            for node in pool.nodes() {
+                if node.is_local() {
+                    continue;
+                }
+                let target = match super::remote_target_for_node(node) {
+                    Some(target) => target,
+                    None => continue,
+                };
+                if let Ok(value) =
+                    self.call_remote_target(target, "metrics_totals", serde_json::json!({}))
+                {
+                    if let Ok(metrics) = serde_json::from_value::<MediaRelayMetrics>(value) {
+                        totals.merge(metrics);
+                    }
+                }
+            }
+            for entry in self.metrics.iter() {
+                totals.merge(*entry.value());
+            }
+            totals.recording_workers = self.recording_pool.worker_count() as u64;
+            totals.recording_queue_capacity = self.recording_pool.total_capacity() as u64;
+            totals.recording_queue_depth = self.recording_pool.queued_commands() as u64;
+            return totals;
+        }
         let mut totals = MediaRelayMetrics::default();
         for entry in self.metrics.iter() {
-            let metrics = entry.value();
-            totals.received_packets += metrics.received_packets;
-            totals.forwarded_packets += metrics.forwarded_packets;
-            totals.dropped_invalid_packets += metrics.dropped_invalid_packets;
-            totals.dropped_no_target_packets += metrics.dropped_no_target_packets;
-            totals.send_errors += metrics.send_errors;
-            totals.learned_source_updates += metrics.learned_source_updates;
-            totals.recorded_packets += metrics.recorded_packets;
-            totals.recording_dropped_packets += metrics.recording_dropped_packets;
-            totals.recording_errors += metrics.recording_errors;
-            totals.fast_path_packets += metrics.fast_path_packets;
-
-            if metrics.rtcp_quality.reports > 0 {
-                totals.rtcp_quality.merge(metrics.rtcp_quality);
-                totals.rtcp_window.merge(metrics.rtcp_window);
-                totals.rtcp_quality_alerts += metrics.rtcp_quality_alerts;
-                totals.rtcp_quality_degraded |= metrics.rtcp_quality_degraded;
-            }
+            totals.merge(*entry.value());
         }
         totals.recording_workers = self.recording_pool.worker_count() as u64;
         totals.recording_queue_capacity = self.recording_pool.total_capacity() as u64;
@@ -48,6 +69,23 @@ impl MediaRelayState {
     }
 
     pub fn pair_ports(&self, first_port: u16, second_port: u16) {
+        if let MediaRelayMode::Pool { pool } = &self.mode {
+            let first_node = pool.node_for_port(first_port);
+            let second_node = pool.node_for_port(second_port);
+            let same_node = matches!((&first_node, &second_node), (Some(left), Some(right)) if left.config.id == right.config.id);
+            if !same_node {
+                tracing::error!(first_port, second_port, "拒绝跨媒体节点配对 RTP 端口");
+                return;
+            }
+            if let Some(target) = self.remote_target_for_port(first_port) {
+                let _ = self.call_remote_target(
+                    target,
+                    "pair_ports",
+                    serde_json::json!({ "port_a": first_port, "port_b": second_port }),
+                );
+                return;
+            }
+        }
         self.peer_ports.insert(first_port, second_port);
         self.peer_ports.insert(second_port, first_port);
 

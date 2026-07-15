@@ -1,4 +1,5 @@
 use super::*;
+use crate::cluster::{MediaClusterConfig, MediaNodeConfig, MediaNodeType};
 use crate::media::metrics::RtcpQualityWindow;
 use crate::media::recording::{decode_pcma, decode_pcmu, RecordingPool};
 use crate::media::sdp::{is_sdp_body, parse_sdp_rtp_endpoint, rewrite_sdp_body};
@@ -102,6 +103,44 @@ async fn allocates_even_ports_without_reusing_active_leases() {
         relay.allocate_endpoint(&config).unwrap(),
         RtpEndpoint::new("203.0.113.10", 40_002)
     );
+}
+
+#[tokio::test]
+async fn local_node_uses_unified_pool_and_releases_call_affinity() {
+    let port = (52_000..60_000)
+        .step_by(2)
+        .find(|port| {
+            let rtp = std::net::UdpSocket::bind(("127.0.0.1", *port));
+            let rtcp = std::net::UdpSocket::bind(("127.0.0.1", *port + 1));
+            rtp.is_ok() && rtcp.is_ok()
+        })
+        .expect("需要一个空闲 RTP/RTCP 端口对");
+    let pool_config = MediaClusterConfig {
+        nodes: vec![MediaNodeConfig {
+            id: "local-test".to_string(),
+            node_type: MediaNodeType::Local,
+            control_url: None,
+            advertised_addr: "203.0.113.20".to_string(),
+            port_min: port,
+            port_max: port + 2,
+            weight: 1,
+            control_token: String::new(),
+        }],
+        ..MediaClusterConfig::default()
+    };
+    let relay = MediaRelayState::with_node_pool(&pool_config, 1, 16);
+    let runtime_config = MediaConfig::new("198.51.100.1", 40_000, 40_002);
+
+    let endpoint = relay
+        .allocate_endpoint_for_call(&runtime_config, "local-call")
+        .expect("本地节点应成功分配");
+    assert_eq!(endpoint, RtpEndpoint::new("203.0.113.20", port));
+    relay.set_target_addr(port, "127.0.0.1:9000".parse().unwrap());
+    assert_eq!(relay.target_for_port(port).unwrap().port(), 9000);
+
+    relay.clear_target(port);
+    sleep(Duration::from_millis(20)).await;
+    assert!(relay.target_for_port(port).is_none());
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use crate::cluster::{flow_key, ClusterEgress, FlowRecord};
 use crate::handle_datagram;
 use crate::media::relay::MediaRelayMetrics;
 use crate::net::create_tls_connector;
@@ -309,6 +310,7 @@ pub(crate) struct EdgeState {
     pub(crate) nonce_replay_cache: DashMap<String, u64>,
     pub(crate) tcp_connections: dashmap::DashMap<SocketAddr, tokio::sync::mpsc::Sender<Vec<u8>>>,
     pub(crate) sbc_engine: sbc::SbcEngine,
+    pub(crate) sbc_rate_limit_enabled: bool,
     pub(crate) external_to_internal_call_ids: dashmap::DashMap<String, String>,
     pub(crate) internal_to_external_call_ids: dashmap::DashMap<String, String>,
     pub(crate) gateway_cache: std::sync::RwLock<HashMap<String, (bool, std::time::Instant)>>,
@@ -322,6 +324,7 @@ pub(crate) struct EdgeState {
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
     /// Redis 多路复用连接，用于集群模式下的跨节点注册状态共享。可选，单节点部署不设置。
     pub(crate) redis_conn: std::sync::OnceLock<redis::aio::MultiplexedConnection>,
+    cluster_egress: std::sync::OnceLock<ClusterEgress>,
     registration_lookup_cache: dashmap::DashMap<String, CachedRegistrationLookup>,
     registration_lookup_locks: dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     #[cfg(test)]
@@ -380,6 +383,7 @@ impl EdgeState {
             nonce_replay_cache: DashMap::new(),
             tcp_connections: dashmap::DashMap::new(),
             sbc_engine,
+            sbc_rate_limit_enabled: config.sbc_rate_limit_enabled,
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
@@ -390,6 +394,7 @@ impl EdgeState {
             gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
+            cluster_egress: std::sync::OnceLock::new(),
             registration_lookup_cache: dashmap::DashMap::new(),
             registration_lookup_locks: dashmap::DashMap::new(),
             #[cfg(test)]
@@ -432,6 +437,7 @@ impl EdgeState {
             nonce_replay_cache: DashMap::new(),
             tcp_connections: dashmap::DashMap::new(),
             sbc_engine,
+            sbc_rate_limit_enabled: config.sbc_rate_limit_enabled,
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
@@ -442,6 +448,7 @@ impl EdgeState {
             gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
+            cluster_egress: std::sync::OnceLock::new(),
             registration_lookup_cache: dashmap::DashMap::new(),
             registration_lookup_locks: dashmap::DashMap::new(),
             test_gateways: std::sync::Mutex::new(Vec::new()),
@@ -456,6 +463,42 @@ impl EdgeState {
     /// 获取 Redis 多路复用连接的克隆，各请求可并发发送命令。
     pub(crate) fn redis_connection(&self) -> Option<redis::aio::MultiplexedConnection> {
         self.redis_conn.get().cloned()
+    }
+
+    pub(crate) fn set_cluster_egress(&self, egress: ClusterEgress) {
+        let _ = self.cluster_egress.set(egress);
+    }
+
+    async fn forward_to_flow_owner(
+        &self,
+        target: SocketAddr,
+        bytes: Vec<u8>,
+    ) -> Result<bool, std::io::Error> {
+        let Some(egress) = self.cluster_egress.get() else {
+            return Ok(false);
+        };
+        let Some(mut redis) = self.redis_connection() else {
+            return Ok(false);
+        };
+        let payload: Option<String> = redis::cmd("GET")
+            .arg(flow_key(target))
+            .query_async(&mut redis)
+            .await
+            .map_err(std::io::Error::other)?;
+        let Some(flow) = payload
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<FlowRecord>(value).ok())
+        else {
+            return Ok(false);
+        };
+        if flow.owner_node_id == egress.node_id {
+            return Ok(false);
+        }
+        egress
+            .publish(&flow.owner_node_id, target, bytes)
+            .await
+            .map_err(std::io::Error::other)?;
+        Ok(true)
     }
 
     /// 从 Redis 读取 SIP 鉴权凭据，不回退查询 PostgreSQL。
@@ -798,6 +841,16 @@ impl EdgeState {
             if tx.send(datagram.bytes.clone()).await.is_ok() {
                 return Ok(());
             }
+        }
+
+        if matches!(
+            transport,
+            Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss
+        ) && self
+            .forward_to_flow_owner(target_addr, datagram.bytes.clone())
+            .await?
+        {
+            return Ok(());
         }
 
         match transport {

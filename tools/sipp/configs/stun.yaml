@@ -30,3 +30,11 @@ sip_edge:
     upnp_enabled: false
   security:
     internal_secret: "stun-test-secret"
+  media:
+    nodes:
+      - id: "local-media"
+        type: "local"
+        advertised_addr: "127.0.0.1"
+        port_min: 40000
+        port_max: 40100
+        weight: 1

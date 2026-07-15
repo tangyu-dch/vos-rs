@@ -22,6 +22,25 @@ import type {
   AuditLog,
 } from '@/types';
 
+export interface MediaClusterNode {
+  id: string;
+  type: 'local' | 'remote';
+  control_url?: string;
+  advertised_addr: string;
+  port_min: number;
+  port_max: number;
+  weight: number;
+  control_token?: string;
+  control_token_configured: boolean;
+}
+
+export interface MediaClusterConfig {
+  allocation_strategy: 'weighted_round_robin' | 'least_sessions' | 'call_id_hash';
+  health_check_interval_secs: number;
+  unhealthy_threshold: number;
+  nodes: MediaClusterNode[];
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
@@ -385,6 +404,14 @@ export const apiService = {
   },
   async updateSystemConfigs(configs: Record<string, string>): Promise<void> {
     await api.post('/system/configs', configs);
+  },
+  async getMediaCluster(): Promise<MediaClusterConfig> {
+    const response = await api.get<MediaClusterConfig>('/system/media-cluster');
+    return response.data;
+  },
+  async updateMediaCluster(config: MediaClusterConfig): Promise<MediaClusterConfig> {
+    const response = await api.put<MediaClusterConfig>('/system/media-cluster', config);
+    return response.data;
   },
 };
 

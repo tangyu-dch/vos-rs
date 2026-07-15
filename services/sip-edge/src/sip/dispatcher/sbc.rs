@@ -15,6 +15,10 @@ pub(crate) fn check_sbc_filter(
         return Err(Vec::new());
     }
 
+    if !edge_state.sbc_rate_limit_enabled || peer.ip().is_loopback() {
+        return Ok(());
+    }
+
     if !edge_state.sbc_engine.check_rate(peer.ip()) {
         warn!(%peer, "packet blocked by SBC rate limit");
         if let Ok(SipMessage::Request(req)) = parse_message(packet) {

@@ -57,7 +57,15 @@ pub(crate) async fn handle_invite_request(
         info!(conf_id, "incoming SIP INVITE to join conference");
 
         // 1. 自动为会议分配媒体中继端口
-        let local_ep = match edge_state.media_relay.allocate_endpoint(&edge_config.media) {
+        let call_id = request
+            .headers
+            .get("call-id")
+            .map(|value| value.as_str())
+            .unwrap_or("");
+        let local_ep = match edge_state
+            .media_relay
+            .allocate_endpoint_for_call(&edge_config.media, call_id)
+        {
             Ok(ep) => ep,
             Err(e) => {
                 warn!(error = %e, "failed to allocate endpoint for conference");
@@ -484,6 +492,11 @@ pub(crate) async fn handle_invite_request(
             &edge_state.media_relay,
             &edge_config.media,
             "inbound INVITE offer",
+            request
+                .headers
+                .get("call-id")
+                .map(|value| value.as_str())
+                .unwrap_or(""),
         ) {
             Ok(rewritten_sdp) => rewritten_sdp,
             Err(error) => {

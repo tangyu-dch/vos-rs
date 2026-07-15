@@ -2,13 +2,25 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+use crate::cluster::MediaNodeType;
+
 pub(crate) async fn run_stun_discovery(
     stun_server: &str,
     edge_config: &mut crate::config::EdgeConfig,
 ) {
     info!(server = %stun_server, "STUN discovery enabled");
-    let fallback = edge_config.media.advertised_addr.clone();
+    let Some(local_node) = edge_config
+        .media_cluster
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_type == MediaNodeType::Local)
+    else {
+        warn!("STUN 仅适用于 local 媒体节点，当前配置将忽略 STUN");
+        return;
+    };
+    let fallback = local_node.advertised_addr.clone();
     let public_ip = crate::net::stun_client::discover_stun_addr(Some(stun_server), &fallback).await;
+    local_node.advertised_addr = public_ip.clone();
     edge_config.media.set_advertised_addr(public_ip);
 
     // Background STUN keepalive: reuse one socket for consistent NAT mapping
@@ -86,8 +98,17 @@ pub(crate) fn run_upnp_port_mapping(bind_addr: &str, edge_config: &crate::config
             );
 
             // Map RTP port range
-            let rtp_min = edge_config.media.port_min;
-            let rtp_max = edge_config.media.port_max;
+            let Some(local_node) = edge_config
+                .media_cluster
+                .nodes
+                .iter()
+                .find(|node| node.node_type == MediaNodeType::Local)
+            else {
+                warn!("UPnP RTP 映射仅适用于 local 媒体节点");
+                return;
+            };
+            let rtp_min = local_node.port_min;
+            let rtp_max = local_node.port_max;
             for port in (rtp_min..=rtp_max).step_by(2) {
                 crate::net::upnp::add_port_mapping(&gw, port, port, "UDP", "sip-edge RTP", 3600);
             }

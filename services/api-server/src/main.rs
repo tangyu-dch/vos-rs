@@ -12,6 +12,7 @@ mod cdr;
 mod dashboard;
 mod gateways;
 mod hot_cache;
+mod media_cluster;
 mod metrics;
 mod numbers;
 mod recording;
@@ -42,6 +43,7 @@ use billing::{
 };
 use calls::{list_active, media_metrics, route_preview, terminate_call as calls_terminate};
 use cdr_core::PostgresCdrStore;
+use media_cluster::{get_media_cluster, update_media_cluster};
 use numbers::{create_number, delete_number, list_numbers, update_number};
 use recording::get_recording_audio;
 use report::{export_cdrs_csv, get_report_summary};
@@ -611,6 +613,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/system/configs",
             get(get_system_configs).post(update_system_configs),
+        )
+        .route(
+            "/api/system/media-cluster",
+            get(get_media_cluster).put(update_media_cluster),
         )
         .route("/api/dashboard/stats", get(get_dashboard_stats))
         .route("/api/dashboard/trend", get(get_dashboard_trend))

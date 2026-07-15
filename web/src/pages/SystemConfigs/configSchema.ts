@@ -31,11 +31,8 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
   {
     key: 'media',
     title: 'RTP 媒体',
-    description: '媒体通告、端口分配、NAT 学习和安全策略。',
+    description: '媒体节点地址和端口请在“媒体节点集群”中配置；这里仅管理全局媒体行为。',
     fields: [
-      { key: 'rtp_advertised_addr', label: 'RTP 通告地址', description: '写入 SDP 的媒体公网 IP，不包含端口。', type: 'string', placeholder: '例如 203.0.113.10' },
-      { key: 'rtp_port_min', label: 'RTP 最小端口', description: 'RTP 端口池起点，建议使用偶数。', type: 'integer', min: 1024, max: 65534, step: 2 },
-      { key: 'rtp_port_max', label: 'RTP 最大端口', description: 'RTP 端口池终点，必须大于最小端口。', type: 'integer', min: 1024, max: 65534, step: 2 },
       { key: 'rtp_symmetric_learning', label: '对称 RTP 学习', description: '根据收到的数据包学习远端媒体地址。', type: 'boolean' },
       { key: 'rtp_anti_spoofing', label: 'RTP 防欺骗', description: '拒绝不符合已学习源地址的媒体包。', type: 'boolean' },
       { key: 'rtp_source_relearn_secs', label: '源地址重新学习间隔', description: '允许重新学习 RTP 源地址的最短秒数。', type: 'integer', min: 1, max: 3600 },

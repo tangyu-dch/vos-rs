@@ -2389,6 +2389,15 @@ sip_edge:
     advertised_addr: "127.0.0.1:5070"
   routing:
     gateway_health_checks_enabled: false
+  media:
+    nodes:
+      - id: "media-edge-test"
+        type: "remote"
+        control_url: "uds:///tmp/media-edge-test.sock"
+        advertised_addr: "127.0.0.1"
+        port_min: 40000
+        port_max: 40100
+        weight: 1
   billing:
     balance_enforcement_enabled: false
     settlement_enabled: false
@@ -2409,6 +2418,11 @@ sip_edge:
         assert_eq!(config.nats_cdr_stream, Some("STREAM_A".to_string()));
         assert_eq!(config.nats_cdr_subject, Some("SUB_A".to_string()));
         assert!(!config.gateway_health_checks_enabled);
+        assert_eq!(config.media_cluster.nodes.len(), 1);
+        assert_eq!(
+            config.media_cluster.nodes[0].control_url.as_deref(),
+            Some("uds:///tmp/media-edge-test.sock")
+        );
         assert!(!config.balance_enforcement_enabled);
         assert!(!config.billing_settlement_enabled);
         assert!(!config.cdr_persistence_enabled);

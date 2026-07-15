@@ -32,9 +32,41 @@ connections:
     key_prefix: "recordings/"
 
 # ==========================================
+# 独立媒体边缘服务
+# ==========================================
+media_edge:
+  control_bind: "0.0.0.0:3030"
+  control_token: "change-me"
+  uds_path: "/tmp/media-edge.sock"
+  recording_workers: 4
+  recording_queue_capacity: 10000
+
+# ==========================================
+# 原生 SIP 集群入口（router_mode=native 时启用）
+# ==========================================
+sip_router:
+  udp_bind: "0.0.0.0:5070"
+  tcp_bind: "0.0.0.0:5070"
+  advertised_addr: "127.0.0.1:5070"
+  node_key_prefix: "vos_rs:cluster:sip_nodes"
+  discovery_interval_secs: 2
+  transaction_ttl_secs: 64
+  dialog_route_ttl_secs: 86400
+
+# ==========================================
 # 2. sip-edge 信令边缘网关服务配置
 # ==========================================
 sip_edge:
+  # 集群关闭时保持原有单节点直连行为。生产集群可选择 external 或 native。
+  cluster:
+    enabled: false
+    node_id: "sip-edge-1"
+    router_mode: "direct" # direct | external | native
+    advertised_addr: "127.0.0.1:5060"
+    heartbeat_interval_secs: 3
+    node_timeout_secs: 10
+    dialog_ttl_secs: 86400
+    nats_subject_prefix: "vos_rs.sip.node"
   network:
     sip_udp_bind: "0.0.0.0:5060"
     advertised_addr: "127.0.0.1:5060"
@@ -54,9 +86,27 @@ sip_edge:
     nonce: "vos-rs-dev-nonce"
     secret_key: "change-me"
   media:
-    advertised_addr: "127.0.0.1"
-    port_min: 40000
-    port_max: 40100
+    allocation_strategy: "weighted_round_robin" # weighted_round_robin | least_sessions | call_id_hash
+    health_check_interval_secs: 3
+    unhealthy_threshold: 3
+    # 至少配置一个节点；local 最多一个，remote 可配置多个，也可以混合调度。
+    # 当前要求各节点 RTP 端口段不重叠。
+    nodes:
+      - id: "local-media"
+        type: "local"
+        advertised_addr: "127.0.0.1"
+        port_min: 40000
+        port_max: 40100
+        weight: 1
+    # nodes:
+    #   - id: "media-edge-1"
+    #     type: "remote"
+    #     control_url: "http://10.0.1.11:3030"
+    #     advertised_addr: "203.0.113.11"
+    #     port_min: 40000
+    #     port_max: 40998
+    #     weight: 1
+    #     control_token: "replace-with-random-token"
     symmetric_learning: true
     anti_spoofing: true
     source_relearn_secs: 30
@@ -80,6 +130,20 @@ sip_edge:
     udp_workers_auto: true
     udp_receive_buffer_bytes: 4194304
     udp_send_buffer_bytes: 4194304
+  # Webhook 最小闭环：呼叫事件 -> NATS -> 签名 HTTP -> Redis 投递记录
+  webhooks:
+    enabled: false
+    endpoint_url: "http://127.0.0.1:8090/webhooks/calls"
+    # 生产环境必须替换为至少 16 字符的随机密钥。
+    signing_secret: "change-this-webhook-secret"
+    stream: "VOS_RS_WEBHOOKS"
+    subject: "vos_rs.webhooks.calls"
+    consumer: "vos_rs_webhook_delivery"
+    queue_capacity: 4096
+    request_timeout_ms: 3000
+    max_deliveries: 5
+    retry_delay_ms: 1000
+    delivery_record_ttl_secs: 604800
 
 # ==========================================
 # 3. api-server 管理控制台后端服务配置

@@ -95,7 +95,7 @@
 - 将首个音频 RTP 的 `c=` 和 `m=` 行重写为中继端点。
 - SDP 负载修剪，保留兼容的 PCMU/PCMA 负载和 `telephone-event/8000` DTMF 动态负载，并移除不支持的负载特定属性。
 - `sdp-core` 已结构化解析 ICE username fragment/password、host/srflx candidate、`end-of-candidates`、DTLS fingerprint 和 setup role；SIP Edge 在转发 SDP 前校验这些属性的成对关系与基本格式。
-- 可通过数据库参数 `rtp_advertised_addr`、`rtp_port_min` 和 `rtp_port_max` 配置 RTP 通告地址和偶数 RTP 端口范围。
+- 通过 `sip_edge.media.nodes[]` 统一配置本地或远程媒体节点的 RTP 通告地址和偶数端口范围；节点列表为空会拒绝启动。
 - RTP 端口租用分配，自动跳过活动中继端口，在配置的端口范围耗尽时返回 SIP 503，并在呼叫拆线或出局呼叫失败时释放租期。
 - 绑定在所配偶数端口上的 UDP RTP 监听器，以及绑定在相邻奇数端口上的 RTCP 监听器。
 - 支持在主叫 and 网关段上从 SDP 学习 RTP/RTCP 目标。

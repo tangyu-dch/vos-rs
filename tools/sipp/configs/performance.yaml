@@ -29,10 +29,16 @@ sip_edge:
     gateway_health_checks_enabled: false
   security:
     internal_secret: "sipp-performance-secret"
+    sbc_rate_limit_enabled: false
+    sbc_max_concurrency: 100000
   media:
-    advertised_addr: "127.0.0.1"
-    port_min: 40000
-    port_max: 65000
+    nodes:
+      - id: "local-media"
+        type: "local"
+        advertised_addr: "127.0.0.1"
+        port_min: 10000
+        port_max: 65534
+        weight: 1
     symmetric_learning: true
     anti_spoofing: true
     source_relearn_secs: 30
