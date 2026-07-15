@@ -238,7 +238,10 @@ mod tests {
                 address: "127.0.0.1:5062".parse().expect("address"),
             },
         ];
-        let owner = store.resolve("call-move", &first_nodes).await.expect("owner");
+        let owner = store
+            .resolve("call-move", &first_nodes)
+            .await
+            .expect("owner");
         let remaining = first_nodes
             .into_iter()
             .filter(|node| node.id != owner.id)
