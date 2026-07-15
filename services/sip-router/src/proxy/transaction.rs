@@ -83,7 +83,7 @@ pub(super) async fn forward_backend_packet(
         let routes = Arc::clone(routes);
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
-            routes.release(&call_id).await;
+            routes.release(&call_id);
         });
     }
     Ok(())

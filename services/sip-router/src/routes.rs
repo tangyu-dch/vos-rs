@@ -48,11 +48,32 @@ impl DialogRouteStore {
                         return Ok(node);
                     }
                     drop(route);
-                    if let Err(error) = self.renew(call_id, &node.id).await {
-                        metrics::redis_error();
-                        tracing::warn!(%error, "Redis 对话归属续期失败，继续使用本地亲和");
-                    }
                     self.cache(call_id, &node);
+
+                    if let Some(mut redis) = self.redis.clone() {
+                        let call_id_str = call_id.to_string();
+                        let node_id_str = node.id.clone();
+                        let ttl_secs = self.ttl_secs;
+                        tokio::spawn(async move {
+                            let script_result: Result<(), redis::RedisError> = async move {
+                                let _: i64 = redis::Script::new(
+                                    "if redis.call('GET', KEYS[1]) == ARGV[1] then \
+                                       return redis.call('EXPIRE', KEYS[1], ARGV[2]); \
+                                     end; return 0",
+                                )
+                                .key(route_key(&call_id_str))
+                                .arg(&node_id_str)
+                                .arg(ttl_secs)
+                                .invoke_async(&mut redis)
+                                .await?;
+                                Ok(())
+                            }.await;
+                            if let Err(error) = script_result {
+                                metrics::redis_error();
+                                tracing::warn!(%error, "Redis 对话归属续期失败 (后台任务)");
+                            }
+                        });
+                    }
                     return Ok(node);
                 }
             }
@@ -149,33 +170,19 @@ impl DialogRouteStore {
             .unwrap_or_else(|| candidate.clone()))
     }
 
-    async fn renew(&self, call_id: &str, node_id: &str) -> Result<(), redis::RedisError> {
-        let Some(mut redis) = self.redis.clone() else {
-            return Ok(());
-        };
-        let _: i64 = redis::Script::new(
-            "if redis.call('GET', KEYS[1]) == ARGV[1] then \
-               return redis.call('EXPIRE', KEYS[1], ARGV[2]); \
-             end; return 0",
-        )
-        .key(route_key(call_id))
-        .arg(node_id)
-        .arg(self.ttl_secs)
-        .invoke_async(&mut redis)
-        .await?;
-        Ok(())
-    }
-
     /// 在对话完成后删除本地与 Redis 归属，避免无效键保留到 TTL 到期。
-    pub(crate) async fn release(&self, call_id: &str) {
+    pub(crate) fn release(&self, call_id: &str) {
         self.local.remove(call_id);
         let Some(mut redis) = self.redis.clone() else {
             return;
         };
-        if let Err(error) = redis.del::<_, usize>(route_key(call_id)).await {
-            metrics::redis_error();
-            tracing::warn!(%error, "删除已完成对话归属失败");
-        }
+        let key = route_key(call_id);
+        tokio::spawn(async move {
+            if let Err(error) = redis.del::<_, usize>(key).await {
+                metrics::redis_error();
+                tracing::warn!(%error, "删除已完成对话归属失败 (后台任务)");
+            }
+        });
     }
 
     fn cache(&self, call_id: &str, node: &SipNode) {
@@ -266,7 +273,7 @@ mod tests {
         store.resolve("call-release", &nodes).await.expect("owner");
         assert!(store.local.contains_key("call-release"));
 
-        store.release("call-release").await;
+        store.release("call-release");
 
         assert!(!store.local.contains_key("call-release"));
     }
@@ -311,8 +318,16 @@ mod tests {
         assert_eq!(first_owner, second_owner);
         let stored_owner: String = cleanup.get(&key).await.expect("stored owner");
         assert_eq!(stored_owner, first_owner.id);
-        first.release(call_id).await;
-        let exists: bool = cleanup.exists(&key).await.expect("route exists");
+        first.release(call_id);
+
+        let mut exists = true;
+        for _ in 0..10 {
+            exists = cleanup.exists(&key).await.expect("route exists");
+            if !exists {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         assert!(!exists);
     }
 }
