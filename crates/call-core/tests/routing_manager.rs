@@ -1,5 +1,5 @@
 use call_core::{
-    CallError, CallId, CallManager, CallState, CdrStatus, Route, RouteTable, RouteTarget,
+    CallError, CallEvent, CallId, CallManager, CallState, CdrStatus, Route, RouteTable, RouteTarget,
 };
 use sip_core::{parse_message, SipMessage, SipUri};
 use std::str::FromStr;
@@ -54,6 +54,38 @@ fn call_manager_accepts_invite_and_stores_routed_call() {
         .expect("call should be stored");
     assert_eq!(call.state, CallState::Routing);
     assert!(call.outbound.is_some());
+}
+
+#[test]
+fn call_manager_emits_ordered_lifecycle_webhook_events() {
+    let (cdr_tx, _cdr_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(8);
+    let manager = CallManager::new_with_event_sink(test_routes(), cdr_tx, event_tx);
+    let call_id = "call-webhook@example.com";
+
+    manager
+        .handle_inbound_invite(&invite_request(call_id, "13800138000"))
+        .expect("呼叫应进入路由状态");
+    manager
+        .handle_outbound_response(&outbound_response(180, "Ringing", call_id))
+        .expect("呼叫应进入振铃状态");
+    manager
+        .handle_outbound_response(&outbound_response(200, "OK", call_id))
+        .expect("呼叫应进入接通状态");
+    manager
+        .handle_inbound_termination(&bye_request(call_id), None, None)
+        .expect("呼叫应正常结束");
+
+    let events = std::iter::from_fn(|| event_rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_eq!(events.len(), 4);
+    assert!(matches!(events[0].event, CallEvent::CallInitiated { .. }));
+    assert!(matches!(events[1].event, CallEvent::CallRinging { .. }));
+    assert!(matches!(events[2].event, CallEvent::CallAnswered { .. }));
+    assert!(matches!(events[3].event, CallEvent::CallFinished { .. }));
+    assert!(events
+        .windows(2)
+        .all(|pair| pair[0].sequence < pair[1].sequence));
+    assert!(events.iter().all(|event| event.call_id == call_id));
 }
 
 #[test]
