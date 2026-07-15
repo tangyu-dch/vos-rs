@@ -41,3 +41,5 @@ pub(crate) use auth::{AuthConfig, AuthDecision};
 pub(crate) use dialog::DialogValidationError;
 pub(crate) use dispatcher::handle_datagram;
 pub(crate) use transaction::{ClientTransactionKey, InviteAckKey, RequestTransactionKey};
+pub(crate) mod utils;
+pub(crate) use utils::extract_call_id_fast;
