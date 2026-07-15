@@ -2,7 +2,10 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     net::SocketAddr,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -16,7 +19,10 @@ const MAX_DATAGRAM_BYTES: usize = 65_535;
 #[derive(Debug, Clone)]
 struct TransactionRoute {
     client: SocketAddr,
+    call_id: String,
+    method: String,
     expires_at: Instant,
+    release_scheduled: Arc<AtomicBool>,
 }
 
 pub(crate) async fn run(
@@ -34,7 +40,7 @@ pub(crate) async fn run(
         let (length, source) = socket.recv_from(&mut buffer).await?;
         let packet = &buffer[..length];
         let result = if is_backend(source, &nodes).await {
-            forward_backend_packet(&socket, packet, &transactions).await
+            forward_backend_packet(&socket, packet, &transactions, Arc::clone(&routes)).await
         } else {
             forward_client_packet(
                 &socket,
@@ -75,6 +81,7 @@ async fn forward_client_packet(
     transactions: &DashMap<String, TransactionRoute>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let call_id = header_value(packet, &["call-id", "i"]).ok_or("SIP 请求缺少 Call-ID")?;
+    let method = request_method(packet).ok_or("SIP 请求起始行无效")?;
     let snapshot = nodes.read().await;
     let backend = routes.resolve(call_id, &snapshot).await?;
     let branch = router_branch(packet, "UDP")?;
@@ -83,7 +90,10 @@ async fn forward_client_packet(
         branch,
         TransactionRoute {
             client: source,
+            call_id: call_id.to_string(),
+            method: method.to_string(),
             expires_at: Instant::now() + Duration::from_secs(config.transaction_ttl_secs),
+            release_scheduled: Arc::new(AtomicBool::new(false)),
         },
     );
     socket.send_to(&forwarded, backend.address).await?;
@@ -94,12 +104,55 @@ async fn forward_backend_packet(
     socket: &UdpSocket,
     packet: &[u8],
     transactions: &DashMap<String, TransactionRoute>,
+    routes: Arc<DialogRouteStore>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let branch = top_via_branch(packet).ok_or("SIP 响应缺少路由器 Via branch")?;
     let route = transactions.get(&branch).ok_or("SIP 响应事务路由已过期")?;
     let forwarded = remove_top_via(packet)?;
     socket.send_to(&forwarded, route.client).await?;
+    if response_status(packet).is_some_and(|status| should_release(&route.method, status))
+        && !route.release_scheduled.swap(true, Ordering::AcqRel)
+    {
+        let call_id = route.call_id.clone();
+        let delay = route.expires_at.saturating_duration_since(Instant::now());
+        drop(route);
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            routes.release(&call_id).await;
+        });
+    }
     Ok(())
+}
+
+fn request_method(packet: &[u8]) -> Option<&str> {
+    std::str::from_utf8(packet)
+        .ok()?
+        .lines()
+        .next()?
+        .split_whitespace()
+        .next()
+}
+
+fn response_status(packet: &[u8]) -> Option<u16> {
+    std::str::from_utf8(packet)
+        .ok()?
+        .lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+fn should_release(method: &str, status: u16) -> bool {
+    if status < 200 {
+        return false;
+    }
+    method.eq_ignore_ascii_case("BYE")
+        || (method.eq_ignore_ascii_case("INVITE") && status >= 300)
+        || ["OPTIONS", "REGISTER", "MESSAGE", "PUBLISH"]
+            .iter()
+            .any(|candidate| method.eq_ignore_ascii_case(candidate))
 }
 
 async fn is_backend(source: SocketAddr, nodes: &SharedNodes) -> bool {
@@ -214,6 +267,15 @@ mod tests {
     #[test]
     fn test_router_branch_is_stable_for_retransmission() {
         assert_eq!(router_branch(REQUEST, "UDP"), router_branch(REQUEST, "UDP"));
+    }
+
+    #[test]
+    fn test_dialog_route_release_only_happens_after_terminal_response() {
+        assert!(!should_release("INVITE", 180));
+        assert!(!should_release("INVITE", 200));
+        assert!(should_release("INVITE", 503));
+        assert!(should_release("BYE", 200));
+        assert!(should_release("OPTIONS", 200));
     }
 
     #[test]
