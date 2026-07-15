@@ -44,7 +44,7 @@
 ┌──────────────────────────▼──────────────────────────────────┐
 │                    sip-edge (B2BUA)                           │
 │  SIP 信令 │ RTP Relay │ 录音 │ SBC │ 认证 │ 路由             │
-│  9138 行 main.rs │ UDP/TCP/TLS/WebSocket                     │
+│  已重构 main.rs │ UDP/TCP/TLS/WebSocket                     │
 └───────┬──────────────────────────────────┬──────────────────┘
         │ SIP/UDP                          │ SIP/UDP
 ┌───────▼───────┐                  ┌───────▼───────┐
@@ -63,7 +63,7 @@
 | call-core | `crates/call-core/` | ~1200 | 呼叫状态机、路由(LCR)、CDR 生成、网关健康追踪 |
 | cdr-core | `crates/cdr-core/` | ~1800 | CDR 存储(PostgreSQL)、数据模型、DTMF 事件 |
 | storage-core | `crates/storage-core/` | ~600 | 录音存储抽象 (Local/OSS/Dual) |
-| sip-edge | `services/sip-edge/` | ~12000 | SIP B2BUA 核心 (main.rs 9138行 + 子模块) |
+| sip-edge | `services/sip-edge/` | ~12000 | SIP B2BUA 核心 (已重构 main.rs 并拆分为子模块) |
 | api-server | `services/api-server/` | ~560 | REST API (Axum) |
 | cdr-worker | `services/cdr-worker/` | ~200 | NATS CDR 消费者 |
 | web | `web/` | ~15000 | React 管理界面 |
@@ -74,7 +74,7 @@
 
 ### 2.1 INVITE 处理 (呼入)
 
-**源文件**: `services/sip-edge/src/main.rs:3090-3319`
+**源文件**: `services/sip-edge/src/sip/handlers/invite.rs`
 
 ```
 1. 收到 INVITE
@@ -98,7 +98,7 @@
 
 ### 2.2 200 OK 处理 (应答)
 
-**源文件**: `services/sip-edge/src/main.rs:2253-2650`
+**源文件**: `services/sip-edge/src/sip/handlers/in_dialog.rs`
 
 ```
 1. 收到 200 OK (来自网关或注册用户)
@@ -114,7 +114,7 @@
 
 ### 2.3 BYE 处理
 
-**源文件**: `services/sip-edge/src/main.rs:3663-3776`
+**源文件**: `services/sip-edge/src/sip/handlers/in_dialog.rs`
 
 ```
 1. 收到 BYE (任意一侧)
@@ -129,7 +129,7 @@
 
 ### 2.4 CANCEL 处理
 
-**源文件**: `services/sip-edge/src/main.rs:3754-3766`
+**源文件**: `services/sip-edge/src/sip/handlers/in_dialog.rs`
 
 ```
 1. 收到 CANCEL (呼叫方超时)
@@ -157,7 +157,7 @@
 
 ### 2.6 REFER 处理 (呼叫转接)
 
-**源文件**: `services/sip-edge/src/main.rs:3843-3950`
+**源文件**: `services/sip-edge/src/sip/handlers/in_dialog.rs`
 
 ```
 1. 收到 REFER (盲转)

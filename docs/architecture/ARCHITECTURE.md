@@ -73,11 +73,12 @@
 ```
 
 **关键代码路径**：
-- INVITE 入站处理：`main.rs:handle_datagram()` → 路由选择 → 拓扑隐藏 → 转发到网关
-- 路由选择：`call-core/routing.rs` → 最长前缀匹配 → LCR + 加权负载均衡
-- 拓扑隐藏：`main.rs:2337` — 内部 Call-ID ↔ 外部 Call-ID 双向映射
-- 200 OK 处理：`main.rs:2670` → SDP 重写 → RTP 中继建立 → 录音开始
-- BYE 处理：`main.rs:3645` → CDR 生成 → 录音停止
+- INVITE 入站处理：`services/sip-edge/src/sip/handlers/invite.rs` → 路由选择 → 拓扑隐藏映射登记 → 转发到网关
+- 路由选择：`crates/call-core/src/routing/table.rs` → `PrefixTrie` 前缀匹配树 → LCR + 加权负载均衡
+- 拓扑隐藏：`services/sip-edge/src/sip/outbound.rs` (出站 Call-ID 覆写) & `services/sip-edge/src/sip/response.rs` (入站响应还原)
+- 200 OK 处理：`services/sip-edge/src/sip/handlers/in_dialog.rs` → SDP 重写 → RTP 中继建立 → 录音开始
+- BYE 处理：`services/sip-edge/src/sip/handlers/in_dialog.rs` → CDR 生成 → 录音停止
+
 
 ### 2.2 来电流程（入站呼叫）
 
