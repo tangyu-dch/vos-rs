@@ -66,3 +66,5 @@ sip_edge:
     cdr_persistence_enabled: false
     udp_workers: 1
     udp_workers_auto: false
+logging:
+  filter: "sip_edge=debug,info"

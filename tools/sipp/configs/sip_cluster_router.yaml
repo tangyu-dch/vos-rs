@@ -27,3 +27,5 @@ sip_router:
   rate_limit_capacity: 1000
   rate_limit_fill_rate: 1000
   rate_limit_max_entries: 1024
+logging:
+  filter: "sip_router=info,info"

@@ -67,9 +67,8 @@ type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), AnyError> {
-    init_tracing();
-
     let mut edge_config = EdgeConfig::from_env();
+    init_tracing(&config_logging_filter("sip_edge=info"));
     edge_config.validate_cluster()?;
     let bind_addr = edge_config.sip_udp_bind.clone();
     let route_table = route_table_from_config(&edge_config)?;
@@ -652,10 +651,25 @@ async fn main() -> Result<(), AnyError> {
     Ok(())
 }
 
-fn init_tracing() {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("sip_edge=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+fn init_tracing(filter: &str) {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(filter))
+        .init();
+}
+
+fn config_logging_filter(default: &str) -> String {
+    let path = std::env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
+        .and_then(|root| {
+            root.get("logging")?
+                .get("filter")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .filter(|filter| !filter.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 async fn cdr_sinks_from_config(config: &EdgeConfig) -> Result<CdrSinks, AnyError> {

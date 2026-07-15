@@ -89,7 +89,7 @@ help:
 env:
 	@test -f "$(CONFIG_FILE)" || { printf '配置文件不存在: %s\n' "$(CONFIG_FILE)"; exit 2; }
 	@printf '统一配置文件: %s\n' "$(CONFIG_FILE)"
-	@printf '日志过滤级别: %s\n' "$${RUST_LOG:-info}"
+	@awk '/^logging:/{found=1; next} found && /filter:/{gsub(/^[[:space:]]*filter:[[:space:]]*|"/, ""); print "日志过滤级别: " $$0; exit}' "$(CONFIG_FILE)"
 	@printf '配置顶级分组:\n'
 	@sed -n 's/^\([a-z_][a-z_]*\):.*/  - \1/p' "$(CONFIG_FILE)"
 
@@ -127,7 +127,7 @@ test-bench:
 
 test-stun:
 	@printf 'Testing STUN discovery...\n'
-	@RUST_LOG=info VOS_RS_CONFIG_FILE="$(STUN_CONFIG_FILE)" \
+	@VOS_RS_CONFIG_FILE="$(STUN_CONFIG_FILE)" \
 		timeout 10 $(CARGO) run -p sip-edge 2>&1 | grep -E "STUN.*discovered|STUN.*failed|STUN.*all retries"
 	@printf 'STUN test complete.\n'
 
@@ -200,7 +200,6 @@ full-flow:
 	@mkdir -p "$(FULL_FLOW_LOG_DIR)" target/test_recordings
 	@rm -f target/test_recordings/*.wav
 	@VOS_RS_CONFIG_FILE="$(FULL_FLOW_CONFIG_FILE)" \
-	RUST_LOG=info \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/edge.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 3; \
 	python3 tools/sipp/wav_rtp_sender.py tools/sipp/test_speech.wav 127.0.0.1 40000 50 2 >/dev/null 2>&1 & \
@@ -232,7 +231,6 @@ full-flow-remote:
 	target/release/media-edge >"$(FULL_FLOW_LOG_DIR)/media-edge.log" 2>&1 & \
 	MEDIA_EDGE_PID=$$!; sleep 2; \
 	VOS_RS_CONFIG_FILE="$(FULL_FLOW_REMOTE_CONFIG_FILE)" \
-	RUST_LOG=info \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/edge.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 3; \
 	python3 tools/sipp/wav_rtp_sender.py tools/sipp/test_speech.wav 127.0.0.1 40000 50 2 >/dev/null 2>&1 & \
@@ -265,7 +263,6 @@ full-flow-uds:
 	target/release/media-edge >"$(FULL_FLOW_LOG_DIR)/media-edge.log" 2>&1 & \
 	MEDIA_EDGE_PID=$$!; sleep 2; \
 	VOS_RS_CONFIG_FILE="$(FULL_FLOW_UDS_CONFIG_FILE)" \
-	RUST_LOG=info \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/edge.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 3; \
 	python3 tools/sipp/wav_rtp_sender.py tools/sipp/test_speech.wav 127.0.0.1 40000 50 2 >/dev/null 2>&1 & \
@@ -293,13 +290,13 @@ full-flow-cluster:
 	@$(CARGO) build --release -p sip-edge -p media-edge 2>/dev/null
 	@mkdir -p "$(FULL_FLOW_LOG_DIR)" target/test_recordings
 	@rm -f target/test_recordings/*.wav /tmp/media-edge-a.sock /tmp/media-edge-b.sock
-	@VOS_RS_CONFIG_FILE="$(MEDIA_EDGE_A_CONFIG_FILE)" RUST_LOG=debug \
+	@VOS_RS_CONFIG_FILE="$(MEDIA_EDGE_A_CONFIG_FILE)" \
 	target/release/media-edge >"$(FULL_FLOW_LOG_DIR)/media-edge-a.log" 2>&1 & \
 	MEDIA_A_PID=$$!; \
-	VOS_RS_CONFIG_FILE="$(MEDIA_EDGE_B_CONFIG_FILE)" RUST_LOG=debug \
+	VOS_RS_CONFIG_FILE="$(MEDIA_EDGE_B_CONFIG_FILE)" \
 	target/release/media-edge >"$(FULL_FLOW_LOG_DIR)/media-edge-b.log" 2>&1 & \
 	MEDIA_B_PID=$$!; sleep 2; \
-	VOS_RS_CONFIG_FILE="$(FULL_FLOW_CLUSTER_CONFIG_FILE)" RUST_LOG=info \
+	VOS_RS_CONFIG_FILE="$(FULL_FLOW_CLUSTER_CONFIG_FILE)" \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/edge-cluster.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 4; \
 	RTP_PIDS=""; \
@@ -334,10 +331,10 @@ full-flow-hybrid:
 	@$(CARGO) build --release -p sip-edge -p media-edge 2>/dev/null
 	@mkdir -p "$(FULL_FLOW_LOG_DIR)" target/test_recordings
 	@rm -f target/test_recordings/*.wav /tmp/media-edge-a.sock
-	@VOS_RS_CONFIG_FILE="$(MEDIA_EDGE_A_CONFIG_FILE)" RUST_LOG=debug \
+	@VOS_RS_CONFIG_FILE="$(MEDIA_EDGE_A_CONFIG_FILE)" \
 	target/release/media-edge >"$(FULL_FLOW_LOG_DIR)/media-edge-hybrid.log" 2>&1 & \
 	MEDIA_PID=$$!; sleep 2; \
-	VOS_RS_CONFIG_FILE="$(FULL_FLOW_HYBRID_CONFIG_FILE)" RUST_LOG=debug \
+	VOS_RS_CONFIG_FILE="$(FULL_FLOW_HYBRID_CONFIG_FILE)" \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/edge-hybrid.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 4; \
 	RTP_PIDS=""; \
@@ -375,13 +372,13 @@ full-flow-sip-cluster:
 	@mkdir -p "$(FULL_FLOW_LOG_DIR)"
 	@for KEY in $$(redis-cli --scan --pattern 'vos_rs:test:sip_nodes:*'); do redis-cli del "$$KEY" >/dev/null; done
 	@for KEY in $$(redis-cli --scan --pattern 'vos_rs:cluster:sip_dialog_routes:*'); do redis-cli del "$$KEY" >/dev/null; done
-	@VOS_RS_CONFIG_FILE="$(SIP_CLUSTER_EDGE_A_CONFIG_FILE)" RUST_LOG=sip_edge=debug \
+	@VOS_RS_CONFIG_FILE="$(SIP_CLUSTER_EDGE_A_CONFIG_FILE)" \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/sip-edge-a.log" 2>&1 & \
 	EDGE_A_PID=$$!; \
-	VOS_RS_CONFIG_FILE="$(SIP_CLUSTER_EDGE_B_CONFIG_FILE)" RUST_LOG=sip_edge=debug \
+	VOS_RS_CONFIG_FILE="$(SIP_CLUSTER_EDGE_B_CONFIG_FILE)" \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/sip-edge-b.log" 2>&1 & \
 	EDGE_B_PID=$$!; sleep 3; \
-	VOS_RS_CONFIG_FILE="$(SIP_CLUSTER_ROUTER_CONFIG_FILE)" RUST_LOG=info \
+	VOS_RS_CONFIG_FILE="$(SIP_CLUSTER_ROUTER_CONFIG_FILE)" \
 	target/release/sip-router >"$(FULL_FLOW_LOG_DIR)/sip-router.log" 2>&1 & \
 	ROUTER_PID=$$!; sleep 3; \
 	NODE_COUNT=$$(redis-cli --scan --pattern 'vos_rs:test:sip_nodes:*' | wc -l | tr -d ' '); \

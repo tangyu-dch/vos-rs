@@ -38,6 +38,10 @@
 在项目根目录下或通过 `VOS_RS_CONFIG_FILE` 指定的路径中，`config.yaml` 必须包含以下嵌套的多级功能分级结构：
 
 ```yaml
+logging:
+  # tracing-subscriber 过滤语法；生产环境建议 info，性能压测建议 warn。
+  filter: "info"
+
 # ==========================================
 # 1. 基础设施连接配置 (Connections)
 # ==========================================
@@ -113,6 +117,10 @@ cdr_worker:
     nak_delay_ms: 5000
     db_retry_attempts: 5
 ```
+
+日志级别同样只从 `logging.filter` 读取，`RUST_LOG` 不再覆盖服务配置。节点级网络地址、
+证书路径、媒体端口段和密钥属于引导配置；适合在线修改的业务参数继续由 PostgreSQL 与
+Redis 热配置管理。
 
 ---
 

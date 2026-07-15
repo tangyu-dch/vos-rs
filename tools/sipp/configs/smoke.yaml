@@ -50,3 +50,5 @@ sip_edge:
     udp_workers_auto: false
     udp_receive_buffer_bytes: 4194304
     udp_send_buffer_bytes: 4194304
+logging:
+  filter: "sip_edge=info,info"

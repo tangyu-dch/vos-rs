@@ -18,7 +18,6 @@ trap cleanup EXIT INT TERM
 
 echo "==> 启动 sip-edge（参数读取 $CONFIG_FILE）"
 VOS_RS_CONFIG_FILE="$CONFIG_FILE" \
-RUST_LOG=sip_edge=info \
   cargo run -p sip-edge &
 PIDS+=($!)
 

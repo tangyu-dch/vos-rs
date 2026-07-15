@@ -41,14 +41,14 @@ require_dependencies() {
 start_processes() {
     mkdir -p "${LOG_DIR}"
     cleanup_redis
-    VOS_RS_CONFIG_FILE="${EDGE_A_CONFIG}" RUST_LOG=sip_edge=debug \
+    VOS_RS_CONFIG_FILE="${EDGE_A_CONFIG}" \
         "${ROOT_DIR}/target/release/sip-edge" >"${LOG_DIR}/sip-edge-a-failover.log" 2>&1 &
     PIDS+=("$!")
-    VOS_RS_CONFIG_FILE="${EDGE_B_CONFIG}" RUST_LOG=sip_edge=debug \
+    VOS_RS_CONFIG_FILE="${EDGE_B_CONFIG}" \
         "${ROOT_DIR}/target/release/sip-edge" >"${LOG_DIR}/sip-edge-b-failover.log" 2>&1 &
     PIDS+=("$!")
     sleep 3
-    VOS_RS_CONFIG_FILE="${ROUTER_CONFIG}" RUST_LOG=info \
+    VOS_RS_CONFIG_FILE="${ROUTER_CONFIG}" \
         "${ROOT_DIR}/target/release/sip-router" >"${LOG_DIR}/sip-router-failover.log" 2>&1 &
     PIDS+=("$!")
     sleep 3

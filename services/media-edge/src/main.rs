@@ -24,13 +24,12 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    let service_config = config::MediaEdgeServiceConfig::load();
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with_env_filter(EnvFilter::new(config_logging_filter("media_edge=info")))
         .init();
 
     info!("Starting VOS-RS Next-Gen Media Edge service...");
-
-    let service_config = config::MediaEdgeServiceConfig::load();
 
     let media_relay = MediaRelayState::with_recording_pool(
         service_config.recording_workers,
@@ -73,6 +72,21 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn config_logging_filter(default: &str) -> String {
+    let path = std::env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
+        .and_then(|root| {
+            root.get("logging")?
+                .get("filter")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .filter(|filter| !filter.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 async fn health() -> &'static str {

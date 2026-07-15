@@ -349,11 +349,9 @@ async fn audit_log(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let logging_filter = config_logging_filter("api_server=info,tower_http=info");
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "api_server=debug,tower_http=debug,info".into()),
-        )
+        .with(tracing_subscriber::EnvFilter::new(logging_filter))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -434,6 +432,7 @@ async fn main() -> anyhow::Result<()> {
     #[derive(serde::Deserialize, Debug, Default)]
     struct SipEdgeClusterSection {
         node_key_prefix: Option<String>,
+        management_url: Option<String>,
     }
 
     let config: ApiServerConfig = serde_yaml::from_str(&config_content).unwrap_or_default();
@@ -535,20 +534,25 @@ async fn main() -> anyhow::Result<()> {
     let nats_client = async_nats::connect(&nats_url).await.ok();
 
     let sip_edge_section = config.sip_edge.unwrap_or_default();
-    let sip_node_key_prefix = sip_edge_section
-        .cluster
-        .unwrap_or_default()
+    let cluster_section = sip_edge_section.cluster.unwrap_or_default();
+    let sip_node_key_prefix = cluster_section
         .node_key_prefix
+        .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "vos_rs:cluster:sip_nodes".to_string());
-    let sip_manage_base = format!(
-        "http://{}",
-        sip_edge_section
-            .network
-            .unwrap_or_default()
-            .manage_bind
-            .unwrap_or_else(|| "127.0.0.1:8082".to_string())
-    );
+    let sip_manage_base = cluster_section
+        .management_url
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "http://{}",
+                sip_edge_section
+                    .network
+                    .unwrap_or_default()
+                    .manage_bind
+                    .unwrap_or_else(|| "127.0.0.1:8082".to_string())
+            )
+        });
 
     let internal_client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(1))
@@ -710,6 +714,21 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn config_logging_filter(default: &str) -> String {
+    let path = env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
+        .and_then(|root| {
+            root.get("logging")?
+                .get("filter")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .filter(|filter| !filter.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 #[cfg(test)]

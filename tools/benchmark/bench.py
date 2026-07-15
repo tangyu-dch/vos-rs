@@ -734,7 +734,6 @@ def run_scenario(config: BenchmarkConfig, dry_run: bool) -> BenchmarkResult | No
     call_id_file = write_call_id_manifest(config)
     env = os.environ.copy()
     env["VOS_RS_CONFIG_FILE"] = str(config.edge_config)
-    env.setdefault("RUST_LOG", "warn")
     commands = {
         "edge": [str(config.edge_binary)],
         "gateway": gateway_command(config, gateway_xml),
