@@ -105,7 +105,9 @@ async fn run_backend(
                 && top_via_branch(&frame)
                     .is_some_and(|branch| branch.starts_with("z9hG4bK-vosrs-tcp-"))
             {
-                remove_top_via(&frame)?
+                let mut output = Vec::new();
+                remove_top_via(&frame, &mut output)?;
+                output
             } else {
                 frame
             };

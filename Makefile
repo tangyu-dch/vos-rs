@@ -397,8 +397,8 @@ full-flow-sip-cluster:
 		-error_file "$(FULL_FLOW_LOG_DIR)/caller-sip-cluster-errors.log" \
 		>"$(FULL_FLOW_LOG_DIR)/caller-sip-cluster.log" 2>&1; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(FULL_FLOW_LOG_DIR)/caller-sip-cluster.log"); \
-	A_INVITES=$$(grep 'received SIP request' "$(FULL_FLOW_LOG_DIR)/sip-edge-a.log" | grep -c 'method=INVITE' || true); \
-	B_INVITES=$$(grep 'received SIP request' "$(FULL_FLOW_LOG_DIR)/sip-edge-b.log" | grep -c 'method=INVITE' || true); \
+	A_INVITES=$$(grep 'received SIP request' "$(FULL_FLOW_LOG_DIR)/sip-edge-a.log" | grep -E -c 'method.*INVITE' || true); \
+	B_INVITES=$$(grep 'received SIP request' "$(FULL_FLOW_LOG_DIR)/sip-edge-b.log" | grep -E -c 'method.*INVITE' || true); \
 	kill $$ROUTER_PID $$EDGE_A_PID $$EDGE_B_PID $$GATEWAY_A_PID $$GATEWAY_B_PID 2>/dev/null; \
 	wait $$ROUTER_PID $$EDGE_A_PID $$EDGE_B_PID $$GATEWAY_A_PID $$GATEWAY_B_PID 2>/dev/null || true; \
 	pkill -9 -f sipp 2>/dev/null; \

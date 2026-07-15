@@ -68,11 +68,12 @@ pub(super) async fn forward_backend_packet(
     packet: &[u8],
     transactions: &Transactions,
     routes: &Arc<DialogRouteStore>,
+    write_buf: &mut Vec<u8>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let branch = top_via_branch(packet).ok_or("SIP 响应缺少路由器 Via branch")?;
     let route = transactions.get(&branch).ok_or("SIP 响应事务路由已过期")?;
-    let forwarded = remove_top_via(packet)?;
-    socket.send_to(&forwarded, route.client).await?;
+    remove_top_via(packet, write_buf)?;
+    socket.send_to(write_buf, route.client).await?;
     if response_status(packet).is_some_and(|status| should_release(&route.method, status))
         && !route.release_scheduled.swap(true, Ordering::AcqRel)
     {

@@ -7,13 +7,15 @@ const REQUEST: &[u8] = b"OPTIONS sip:test@example.com SIP/2.0\r\nVia: SIP/2.0/UD
 
 #[test]
 fn test_add_and_remove_router_via_round_trips_packet() {
-    let forwarded =
-        add_router_via(REQUEST, "router:5060", "UDP", "z9hG4bK-router").expect("add Via");
+    let mut forwarded = Vec::new();
+    add_router_via(REQUEST, "router:5060", "UDP", "z9hG4bK-router", &mut forwarded).expect("add Via");
     assert_eq!(
         top_via_branch(&forwarded).as_deref(),
         Some("z9hG4bK-router")
     );
-    assert_eq!(remove_top_via(&forwarded).expect("remove Via"), REQUEST);
+    let mut output = Vec::new();
+    remove_top_via(&forwarded, &mut output).expect("remove Via");
+    assert_eq!(output, REQUEST);
 }
 
 #[test]

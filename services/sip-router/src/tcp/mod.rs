@@ -115,7 +115,9 @@ async fn handle_connection(
 
 fn add_tcp_via(frame: &[u8], advertised_addr: &str) -> Result<Vec<u8>, &'static str> {
     let branch = router_branch(frame, "TCP")?.replacen("z9hG4bK-vosrs-", "z9hG4bK-vosrs-tcp-", 1);
-    add_router_via(frame, advertised_addr, "TCP", &branch)
+    let mut output = Vec::new();
+    add_router_via(frame, advertised_addr, "TCP", &branch, &mut output)?;
+    Ok(output)
 }
 
 fn is_response(frame: &[u8]) -> bool {

@@ -8,18 +8,18 @@ pub(crate) fn add_router_via(
     advertised_addr: &str,
     transport: &str,
     branch: &str,
-) -> Result<Vec<u8>, &'static str> {
+    output: &mut Vec<u8>,
+) -> Result<(), &'static str> {
     let split = packet
         .iter()
         .position(|byte| *byte == b'\n')
         .ok_or("SIP 起始行不完整")?
         + 1;
     let via = format!("Via: SIP/2.0/{transport} {advertised_addr};branch={branch};rport\r\n");
-    let mut output = Vec::with_capacity(packet.len() + via.len());
     output.extend_from_slice(&packet[..split]);
     output.extend_from_slice(via.as_bytes());
     output.extend_from_slice(&packet[split..]);
-    Ok(output)
+    Ok(())
 }
 
 pub(crate) fn router_branch(packet: &[u8], transport: &str) -> Result<String, &'static str> {
@@ -80,7 +80,7 @@ fn parameter(value: &str, name: &str) -> Option<String> {
     })
 }
 
-pub(crate) fn remove_top_via(packet: &[u8]) -> Result<Vec<u8>, &'static str> {
+pub(crate) fn remove_top_via(packet: &[u8], output: &mut Vec<u8>) -> Result<(), &'static str> {
     let text = std::str::from_utf8(packet).map_err(|_| "SIP 响应不是 UTF-8")?;
     let line_start = text.find('\n').ok_or("SIP 起始行不完整")? + 1;
     let relative_end = text[line_start..].find('\n').ok_or("Via 行不完整")? + 1;
@@ -91,8 +91,7 @@ pub(crate) fn remove_top_via(packet: &[u8]) -> Result<Vec<u8>, &'static str> {
     {
         return Err("路由器 Via 不是首个响应头");
     }
-    let mut output = Vec::with_capacity(packet.len() - (line_end - line_start));
     output.extend_from_slice(&packet[..line_start]);
     output.extend_from_slice(&packet[line_end..]);
-    Ok(output)
+    Ok(())
 }
