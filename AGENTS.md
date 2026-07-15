@@ -83,12 +83,13 @@ vos-rs/
 │   └── storage-core/          # 录音存储抽象 (Local/OSS/Dual)
 │       └── src/               #   config, local, oss
 │
-├── services/                  # 3 个服务二进制
-│   ├── sip-edge/              # SIP B2BUA 核心 (最大服务)
-│   │   └── src/               #   main.rs(9401行!), media, auth, dialog, transaction,
-│   │                          #   outbound, registrar, transport, sbc, anti_fraud,
-│   │                          #   fork, manage, multimedia, nats_cdr, stun_client,
-│   │                          #   topology, transcode, turn, upnp, tenant, subscribe
+  ├── services/                  # 3 个服务二进制
+  │   ├── sip-edge/              # SIP B2BUA 核心 (已拆分重构)
+  │   │   └── src/               #   main.rs (入口，已重构瘦身), cdr, routing, rules, utils,
+  │   │                          #   media, auth, dialog, transaction, outbound, registrar,
+  │   │                          #   transport, sbc, anti_fraud, fork, manage, multimedia,
+  │   │                          #   nats_cdr, stun_client, topology, transcode, turn,
+  │   │                          #   upnp, tenant, subscribe
 │   ├── api-server/            # REST API (Axum, 30+ 端点)
 │   │   └── src/               #   main, recording, report, billing, calls, numbers,
 │   │                          #   anti_fraud, metrics
@@ -206,7 +207,7 @@ vos-rs/
 2. **公共 API 必须有文档注释** (`///`)
 3. **禁止 unwrap() 出现在生产代码中**（测试代码除外）
 4. **函数长度不超过 50 行**，超出应拆分
-5. **文件长度不超过 500 行**，超出应拆模块（当前 main.rs 9401 行需重构！）
+5. **文件长度不超过 500 行**，超出应拆模块
 6. **命名清晰，避免缩写**（`user` 不写成 `usr`，`response` 不写成 `resp`）
 
 ### 5.2 命名约定
@@ -659,9 +660,9 @@ Response:
 | 录音 sync I/O | 🔴 高 | `media.rs:629-639` | std::fs::File 在 Mutex 内同步写，阻塞 tokio runtime |
 | SBC RateLimiter 单 Mutex | 🔴 高 | `sbc.rs:88,106` | 高 CPS 下所有 SIP 收包串行化 |
 | RTP 每包 6-8 次 DashMap 锁 | 🟡 中 | `media.rs:1403-1476` | 高 pps 下 cache line bouncing |
-| RTP 解析每包 Vec alloc | 🟡 中 | `rtp-core/packet.rs:85,115` | 无 buffer pool |
+| RTP 解析每包 Vec alloc | [已优化] | `rtp-core/packet.rs:85,115` | 已下沉并引入有界 BufferPool 机制 |
 | SIP 解析非零拷贝 | 🟡 中 | `sip-core/message.rs:62` | String::from_utf8_lossy + .to_string() |
-| main.rs 9401 行 | 🔴 高 | `sip-edge/main.rs` | 无法独立测试、维护困难 |
+| main.rs 9401 行 | [已完成] | `sip-edge/main.rs` | **已重构拆分**为 cdr/routing/rules/utils 等子模块 |
 
 ---
 
@@ -691,7 +692,7 @@ Response:
 
 当 AI 阅读本项目代码时，请注意：
 
-1. **入口点**：`services/sip-edge/src/main.rs`（最大文件，9401 行）
+1. **入口点**：`services/sip-edge/src/main.rs`（已进行子模块拆分瘦身）
 2. **协议解析层**：`crates/sip-core/`、`crates/rtp-core/`、`crates/sdp-core/`（零外部依赖）
 3. **业务逻辑层**：`crates/call-core/`（呼叫状态机、路由、CDR）
 4. **数据存储层**：`crates/cdr-core/`（PostgreSQL CRUD + 数据模型）
@@ -816,11 +817,11 @@ VOS_RS_UDP_WORKERS_AUTO=true               # 自适应 worker 数量
 
 ### 已知技术债务（需逐步解决）
 
-1. `sip-edge/src/main.rs` 9401 行 → 需拆分为 10+ 子模块
+1. [已完成] `sip-edge/src/main.rs` 9401 行 → **已拆分为多个子模块**
 2. `cdr-core/src/lib.rs` 1838 行 → 需拆分为 db、models、cdr 子模块
 3. 录音模块使用 `std::sync::Mutex` + sync I/O → 需改为 async
 4. SBC RateLimiter 使用单 Mutex → 需改为 DashMap 分片
-5. RTP 解析无 buffer pool → 需引入 `bytes::Bytes` 池化
+5. [已完成] RTP 解析无 buffer pool → **已下沉并引入有界 `BufferPool`**
 6. SIP 解析非零拷贝 → 需引入借用生命周期
-7. 路由引擎使用 Vec 线性扫描 → 需引入 Trie
+7. [已完成] 路由引擎与 SBC ACL 线性扫描 → **已实现 `PrefixTrie` 与 `IpTrie` 树检索**
 8. 缺少实时余额扣减 → 需引入 AtomicI64 CAS 缓存
