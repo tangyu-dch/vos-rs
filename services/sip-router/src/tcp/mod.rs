@@ -92,8 +92,8 @@ async fn handle_connection(
             metrics::tcp_frame();
             let call_id =
                 header_value(&frame, &["call-id", "i"]).ok_or("SIP TCP 消息缺少 Call-ID")?;
-            let snapshot = nodes.read().await.clone();
-            let backend = routes.resolve(call_id, &snapshot).await?;
+            let snapshot = crate::discovery::snapshot(nodes);
+            let backend = routes.resolve(call_id, snapshot.as_ref()).await?;
             let forwarded = if is_response(&frame) {
                 frame
             } else {

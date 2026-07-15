@@ -33,6 +33,8 @@ static UDP_QUEUE_DROPS: AtomicU64 = AtomicU64::new(0);
 struct Datagram {
     bytes: Vec<u8>,
     source: SocketAddr,
+    trusted_backend: bool,
+    nodes: Option<Arc<[crate::discovery::SipNode]>>,
 }
 
 pub(crate) async fn run(
@@ -47,7 +49,6 @@ pub(crate) async fn run(
     let workers = spawn_workers(
         &config,
         Arc::clone(&socket),
-        Arc::clone(&nodes),
         Arc::clone(&routes),
         Arc::clone(&transactions),
     );
@@ -62,14 +63,23 @@ pub(crate) async fn run(
     loop {
         let (length, source) = socket.recv_from(&mut buffer).await?;
         metrics::udp_received();
-        let trusted_backend = nodes.read().await.iter().any(|node| node.address == source);
+        let snapshot = crate::discovery::snapshot(&nodes);
+        let trusted_backend = snapshot.iter().any(|node| node.address == source);
         if !guard.allow(source.ip(), trusted_backend) {
             metrics::udp_dropped();
             continue;
         }
         let bytes = buffer[..length].to_vec();
         let index = worker_index(&bytes, source, workers.len());
-        if workers[index].try_send(Datagram { bytes, source }).is_err() {
+        if workers[index]
+            .try_send(Datagram {
+                bytes,
+                source,
+                trusted_backend,
+                nodes: (!trusted_backend).then_some(snapshot),
+            })
+            .is_err()
+        {
             let dropped = UDP_QUEUE_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
             metrics::udp_dropped();
             if dropped == 1 || dropped.is_multiple_of(1000) {
@@ -87,7 +97,6 @@ pub(crate) async fn run(
 fn spawn_workers(
     config: &RouterConfig,
     socket: Arc<UdpSocket>,
-    nodes: SharedNodes,
     routes: Arc<DialogRouteStore>,
     transactions: Arc<Transactions>,
 ) -> Vec<mpsc::Sender<Datagram>> {
@@ -95,22 +104,13 @@ fn spawn_workers(
         .map(|worker| {
             let (sender, mut receiver) = mpsc::channel::<Datagram>(config.udp_queue_capacity);
             let socket = Arc::clone(&socket);
-            let nodes = Arc::clone(&nodes);
             let routes = Arc::clone(&routes);
             let transactions = Arc::clone(&transactions);
             let config = config.clone();
             tokio::spawn(async move {
                 while let Some(datagram) = receiver.recv().await {
-                    if let Err(error) = process_packet(
-                        &socket,
-                        &datagram.bytes,
-                        datagram.source,
-                        &config,
-                        &nodes,
-                        Arc::clone(&routes),
-                        &transactions,
-                    )
-                    .await
+                    if let Err(error) =
+                        process_packet(&socket, &datagram, &config, &routes, &transactions).await
                     {
                         metrics::udp_error();
                         tracing::warn!(
@@ -129,24 +129,25 @@ fn spawn_workers(
 
 async fn process_packet(
     socket: &UdpSocket,
-    packet: &[u8],
-    source: SocketAddr,
+    datagram: &Datagram,
     config: &RouterConfig,
-    nodes: &SharedNodes,
-    routes: Arc<DialogRouteStore>,
+    routes: &Arc<DialogRouteStore>,
     transactions: &Transactions,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let snapshot = nodes.read().await.clone();
-    if snapshot.iter().any(|node| node.address == source) {
-        forward_backend_packet(socket, packet, transactions, routes).await
+    if datagram.trusted_backend {
+        forward_backend_packet(socket, &datagram.bytes, transactions, routes).await
     } else {
+        let snapshot = datagram
+            .nodes
+            .as_deref()
+            .ok_or("SIP 客户端数据报缺少节点快照")?;
         forward_client_packet(
             socket,
-            packet,
-            source,
+            &datagram.bytes,
+            datagram.source,
             config,
-            &snapshot,
-            &routes,
+            snapshot,
+            routes,
             transactions,
         )
         .await

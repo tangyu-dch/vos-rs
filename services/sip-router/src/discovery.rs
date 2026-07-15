@@ -3,7 +3,6 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use futures::StreamExt;
 use redis::AsyncCommands;
 use serde::Deserialize;
-use tokio::sync::RwLock;
 
 use crate::{config::RouterConfig, metrics};
 
@@ -26,13 +25,27 @@ fn default_node_status() -> String {
     "active".to_string()
 }
 
-pub(crate) type SharedNodes = Arc<RwLock<Vec<SipNode>>>;
+/// 节点列表使用不可变快照发布，转发热路径只克隆 `Arc`，不复制节点数组。
+pub(crate) type SharedNodes = Arc<std::sync::RwLock<Arc<[SipNode]>>>;
+
+pub(crate) fn snapshot(nodes: &SharedNodes) -> Arc<[SipNode]> {
+    nodes
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+fn publish(nodes: &SharedNodes, discovered: Vec<SipNode>) {
+    *nodes
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = discovered.into();
+}
 
 pub(crate) async fn start(
     redis: redis::aio::ConnectionManager,
     config: RouterConfig,
 ) -> Result<SharedNodes, Box<dyn std::error::Error + Send + Sync>> {
-    let nodes = Arc::new(RwLock::new(Vec::new()));
+    let nodes = Arc::new(std::sync::RwLock::new(Arc::from([])));
     refresh(redis.clone(), &config.node_key_prefix, &nodes).await?;
     let background_nodes = Arc::clone(&nodes);
     tokio::spawn(async move {
@@ -61,7 +74,7 @@ async fn refresh(
     let iterator = connection.scan_match::<_, String>(pattern).await?;
     let keys: Vec<String> = iterator.collect().await;
     if keys.is_empty() {
-        nodes.write().await.clear();
+        publish(nodes, Vec::new());
         metrics::discovered_nodes(0);
         return Ok(());
     }
@@ -92,7 +105,7 @@ async fn refresh(
     }
     discovered.sort_by(|left, right| left.id.cmp(&right.id));
     metrics::discovered_nodes(discovered.len());
-    *nodes.write().await = discovered;
+    publish(nodes, discovered);
     Ok(())
 }
 

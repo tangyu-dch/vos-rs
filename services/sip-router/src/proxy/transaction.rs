@@ -67,7 +67,7 @@ pub(super) async fn forward_backend_packet(
     socket: &UdpSocket,
     packet: &[u8],
     transactions: &Transactions,
-    routes: Arc<DialogRouteStore>,
+    routes: &Arc<DialogRouteStore>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let branch = top_via_branch(packet).ok_or("SIP 响应缺少路由器 Via branch")?;
     let route = transactions.get(&branch).ok_or("SIP 响应事务路由已过期")?;
@@ -79,6 +79,7 @@ pub(super) async fn forward_backend_packet(
         let call_id = route.call_id.clone();
         let delay = route.expires_at.saturating_duration_since(Instant::now());
         drop(route);
+        let routes = Arc::clone(routes);
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             routes.release(&call_id).await;

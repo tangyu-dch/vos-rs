@@ -1,7 +1,7 @@
 use super::*;
 use crate::discovery::SipNode;
 use crate::proxy::select_node;
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 
 #[tokio::test]
 async fn test_tcp_framer_reads_multiple_messages_and_body() {
@@ -51,10 +51,10 @@ async fn test_tcp_proxy_adds_and_removes_own_via() {
 
     let router_listener = TcpListener::bind("127.0.0.1:0").await.expect("router");
     let router_addr = router_listener.local_addr().expect("router address");
-    let nodes = Arc::new(RwLock::new(vec![SipNode {
+    let nodes = Arc::new(RwLock::new(Arc::from([SipNode {
         id: "sip-a".to_string(),
         address: backend_addr,
-    }]));
+    }])));
     let config = test_config(router_addr);
     let proxy_nodes = Arc::clone(&nodes);
     let routes = DialogRouteStore::without_redis_for_test(60);
@@ -108,7 +108,7 @@ async fn test_one_tcp_client_routes_two_call_ids_to_different_nodes() {
 
     let router_listener = TcpListener::bind("127.0.0.1:0").await.expect("router");
     let router_addr = router_listener.local_addr().expect("router address");
-    let nodes = Arc::new(RwLock::new(nodes_list));
+    let nodes = Arc::new(RwLock::new(Arc::from(nodes_list)));
     let config = test_config(router_addr);
     let routes = DialogRouteStore::without_redis_for_test(60);
     let proxy_nodes = Arc::clone(&nodes);

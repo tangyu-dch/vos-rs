@@ -38,7 +38,7 @@ async fn ready(State(state): State<HttpState>) -> impl IntoResponse {
         .query_async::<String>(&mut redis)
         .await
         .is_ok();
-    let nodes = state.nodes.read().await.len();
+    let nodes = crate::discovery::snapshot(&state.nodes).len();
     if redis_ok && nodes > 0 {
         (StatusCode::OK, format!("ready: {nodes} nodes"))
     } else {
