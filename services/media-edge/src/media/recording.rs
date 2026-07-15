@@ -1,4 +1,4 @@
-use rtp_core::{AudioCodec, RtpPacketView};
+use rtp_core::{AudioCodec, PacketBufferPool, ReusablePacket, RtpPacketView};
 use sdp_core::SdpError;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -61,6 +61,7 @@ pub const RECORDING_CHANNELS: u16 = 2;
 pub const RECORDING_BITS_PER_SAMPLE: u16 = 16;
 pub const RECORDING_FLUSH_INTERVAL_FRAMES: u64 = 1024; // 1024 frames = 4096 bytes (1 disk block)
 pub const RECORDING_WORKER_DRAIN_LIMIT: usize = 256;
+const RECORDING_PACKET_POOL_CAPACITY: usize = 4_096;
 
 static NEXT_RECORDING_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -131,7 +132,7 @@ impl RecordingSession {
                 channel,
                 payload_type: packet.payload_type,
                 timestamp: packet.timestamp,
-                payload: packet.payload.to_vec(),
+                payload: self.pool.copy_payload(packet.payload),
             },
         )
     }
@@ -214,6 +215,7 @@ impl RecordingSessionInfo {
 pub struct RecordingPool {
     workers: Vec<RecordingWorkerHandle>,
     queue_capacity: usize,
+    packet_pool: PacketBufferPool,
 }
 
 #[derive(Debug)]
@@ -242,6 +244,7 @@ impl RecordingPool {
         Self {
             workers,
             queue_capacity,
+            packet_pool: PacketBufferPool::new(RECORDING_PACKET_POOL_CAPACITY),
         }
     }
 
@@ -267,6 +270,10 @@ impl RecordingPool {
     ) -> io::Result<bool> {
         self.try_send_packet(session.id, RecordingCommand::Packet { session, packet })?;
         Ok(true)
+    }
+
+    fn copy_payload(&self, payload: &[u8]) -> ReusablePacket {
+        self.packet_pool.copy(payload)
     }
 
     #[cfg(test)]
@@ -437,7 +444,7 @@ fn handle_recording_command(
                     recording_file.recorder.would_exceed_limit(
                         packet.channel,
                         packet.timestamp,
-                        packet.payload.len(),
+                        packet.payload.as_slice().len(),
                         session.max_file_frames(),
                     )
                 })
@@ -459,7 +466,7 @@ fn handle_recording_command(
                 packet.channel,
                 packet.payload_type,
                 packet.timestamp,
-                &packet.payload,
+                packet.payload.as_slice(),
             ) {
                 warn!(%error, session_id = session.id, "failed to write RTP packet to recording");
             }
@@ -536,7 +543,7 @@ pub struct RecordedRtpPacket {
     pub channel: RecordingChannel,
     pub payload_type: u8,
     pub timestamp: u32,
-    pub payload: Vec<u8>,
+    pub payload: ReusablePacket,
 }
 
 pub enum RecordingCommand {

@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 aes = "0.8"
 base64 = "0.22"
+crossbeam-queue = "0.3"
 ctr = "0.9"
 hmac = "0.12"
 sha1 = "0.10"

@@ -43,6 +43,15 @@ impl MediaCryptoSession {
         self.context.encrypt_rtp(packet)
     }
 
+    /// 在固定容量缓冲区中加密 RTP 包，避免热路径分配 `Vec`。
+    pub fn encrypt_in_place(
+        &mut self,
+        buffer: &mut [u8],
+        packet_len: usize,
+    ) -> Result<usize, SrtpError> {
+        self.context.encrypt_rtp_in_place(buffer, packet_len)
+    }
+
     /// 解密 SRTP 包。
     pub fn decrypt(&mut self, packet: &mut [u8]) -> Result<usize, SrtpError> {
         self.context.decrypt_srtp(packet)

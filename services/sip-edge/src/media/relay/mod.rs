@@ -39,6 +39,11 @@ pub use listener::spawn_rtp_relay_listeners;
 use path::{FastPathCounters, RelayPath};
 
 pub const MAX_RTP_DATAGRAM_SIZE: usize = 65_535;
+const MEDIA_PACKET_POOL_CAPACITY: usize = 4_096;
+
+pub mod pool {
+    pub use rtp_core::{PacketBufferPool, ReusablePacket};
+}
 
 /// media-edge 为 WebRTC SDP Answer 生成的协商参数。
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -138,6 +143,7 @@ pub struct MediaRelayState {
     continuity: Arc<DashMap<u16, RtpContinuityState>>,
     pub(crate) conference_manager: Arc<crate::media::conference::ConferenceManager>,
     pub(crate) monitors: Arc<DashMap<u16, Vec<SocketAddr>>>,
+    pub(crate) buffer_pool: Arc<pool::PacketBufferPool>,
 }
 
 impl Clone for MediaRelayState {
@@ -166,6 +172,7 @@ impl Clone for MediaRelayState {
             continuity: Arc::clone(&self.continuity),
             conference_manager: Arc::clone(&self.conference_manager),
             monitors: Arc::clone(&self.monitors),
+            buffer_pool: Arc::clone(&self.buffer_pool),
         }
     }
 }

@@ -41,6 +41,7 @@ impl MediaRelayState {
             continuity: Arc::new(DashMap::new()),
             conference_manager,
             monitors: Arc::new(DashMap::new()),
+            buffer_pool: Arc::new(pool::PacketBufferPool::new(MEDIA_PACKET_POOL_CAPACITY)),
         }
     }
 

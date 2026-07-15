@@ -214,14 +214,17 @@ pub(crate) async fn relay_media_port(
             continue;
         }
 
-        let mut decrypted_packet = None;
+        let mut decrypted_packet: Option<pool::ReusablePacket> = None;
         let web_rtc_session = relay
             .webrtc_sessions
             .get(&local_port)
             .map(|entry| entry.clone());
         if let Some(session) = web_rtc_session {
             match session.decrypt(packet_kind, &buffer[..size]).await {
-                Ok(packet) => decrypted_packet = Some(packet),
+                Ok(packet) => {
+                    let len = packet.len();
+                    decrypted_packet = Some(pool::ReusablePacket::Owned { data: packet, len });
+                }
                 Err(error) => {
                     relay.record_metric(local_port, |metrics| metrics.dropped_invalid_packets += 1);
                     warn!(%error, local_port, "丢弃无法通过 SRTP/SRTCP 校验的 WebRTC 报文");
@@ -230,7 +233,10 @@ pub(crate) async fn relay_media_port(
             }
         }
         if packet_kind == MediaPacketKind::Rtp {
-            let current_packet = decrypted_packet.as_deref().unwrap_or(&buffer[..size]);
+            let current_packet = decrypted_packet
+                .as_ref()
+                .map(pool::ReusablePacket::as_slice)
+                .unwrap_or(&buffer[..size]);
             if let Ok(view) = RtpPacketView::parse(current_packet) {
                 let peer_port = plan.peer_port;
                 for port in [Some(local_port), peer_port].into_iter().flatten() {
@@ -259,8 +265,9 @@ pub(crate) async fn relay_media_port(
             }
             if decrypted_packet.is_none() {
                 if let Some(session) = &plan.crypto_session {
-                    let mut candidate = buffer[..size].to_vec();
-                    let decrypted_len = match session.lock().await.decrypt(&mut candidate) {
+                    let mut candidate = relay.buffer_pool.copy(&buffer[..size]);
+                    let decrypted_len = match session.lock().await.decrypt(candidate.as_mut_slice())
+                    {
                         Ok(length) => length,
                         Err(error) => {
                             relay.record_metric(local_port, |metrics| {
@@ -270,13 +277,21 @@ pub(crate) async fn relay_media_port(
                             continue;
                         }
                     };
-                    candidate.truncate(decrypted_len);
+                    if !candidate.set_len(decrypted_len) {
+                        relay.record_metric(local_port, |metrics| {
+                            metrics.dropped_invalid_packets += 1
+                        });
+                        continue;
+                    }
                     decrypted_packet = Some(candidate);
                 }
             }
         }
 
-        let packet = decrypted_packet.as_deref().unwrap_or(&buffer[..size]);
+        let packet = decrypted_packet
+            .as_ref()
+            .map(pool::ReusablePacket::as_slice)
+            .unwrap_or(&buffer[..size]);
         if packet.is_empty() {
             continue;
         }
@@ -459,13 +474,25 @@ pub(crate) async fn relay_media_port(
         }
         let packet = transcoded_packet.as_deref().unwrap_or(packet);
 
-        let mut encrypted_packet = None;
+        let mut encrypted_packet: Option<pool::ReusablePacket> = None;
         if packet_kind == MediaPacketKind::Rtp && plan.peer_port.is_some() {
             if let Some(session) = &plan.peer_crypto_session {
-                let mut candidate = packet.to_vec();
-                if let Err(error) = session.lock().await.encrypt(&mut candidate) {
+                let mut candidate = relay.buffer_pool.copy(packet);
+                let packet_len = candidate.as_slice().len();
+                let encrypted_len = match session
+                    .lock()
+                    .await
+                    .encrypt_in_place(candidate.as_mut_capacity(), packet_len)
+                {
+                    Ok(length) => length,
+                    Err(error) => {
+                        relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
+                        warn!(%error, local_port, "failed to encrypt RTP packet for relay target");
+                        continue;
+                    }
+                };
+                if !candidate.set_len(encrypted_len) {
                     relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
-                    warn!(%error, local_port, "failed to encrypt RTP packet for relay target");
                     continue;
                 }
                 encrypted_packet = Some(candidate);
@@ -479,7 +506,10 @@ pub(crate) async fn relay_media_port(
             }
         }
 
-        let outbound_packet = encrypted_packet.as_deref().unwrap_or(packet);
+        let outbound_packet = encrypted_packet
+            .as_ref()
+            .map(pool::ReusablePacket::as_slice)
+            .unwrap_or(packet);
         let web_rtc_target_session = plan.peer_port.and_then(|peer_port| {
             relay
                 .webrtc_sessions

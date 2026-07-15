@@ -2790,6 +2790,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "base64",
+ "crossbeam-queue",
  "ctr",
  "hmac",
  "sha1",

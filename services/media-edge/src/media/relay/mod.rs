@@ -35,8 +35,9 @@ mod listener;
 mod path;
 #[allow(dead_code)]
 mod playback;
-#[allow(dead_code)]
-pub mod pool;
+pub mod pool {
+    pub use rtp_core::{PacketBufferPool, ReusablePacket};
+}
 #[allow(dead_code)]
 pub mod sans_io;
 mod source;
@@ -49,6 +50,7 @@ pub use listener::spawn_rtp_relay_listeners;
 use path::{FastPathCounters, RelayPath};
 
 pub const MAX_RTP_DATAGRAM_SIZE: usize = 65_535;
+const MEDIA_PACKET_POOL_CAPACITY: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

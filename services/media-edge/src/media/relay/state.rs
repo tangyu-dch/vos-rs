@@ -41,7 +41,7 @@ impl MediaRelayState {
             conference_manager,
             monitors: Arc::new(DashMap::new()),
             webrtc_sessions: Arc::new(DashMap::new()),
-            buffer_pool: Arc::new(pool::PacketBufferPool::new(10000)),
+            buffer_pool: Arc::new(pool::PacketBufferPool::new(MEDIA_PACKET_POOL_CAPACITY)),
         }
     }
 
