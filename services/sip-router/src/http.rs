@@ -5,13 +5,13 @@ use crate::{discovery::SharedNodes, metrics};
 #[derive(Clone)]
 struct HttpState {
     nodes: SharedNodes,
-    redis: redis::Client,
+    redis: redis::aio::ConnectionManager,
 }
 
 pub(crate) async fn start(
     bind: &str,
     nodes: SharedNodes,
-    redis: redis::Client,
+    redis: redis::aio::ConnectionManager,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let app = Router::new()
@@ -33,13 +33,11 @@ async fn health() -> &'static str {
 }
 
 async fn ready(State(state): State<HttpState>) -> impl IntoResponse {
-    let redis_ok = match state.redis.get_multiplexed_tokio_connection().await {
-        Ok(mut connection) => redis::cmd("PING")
-            .query_async::<String>(&mut connection)
-            .await
-            .is_ok(),
-        Err(_) => false,
-    };
+    let mut redis = state.redis.clone();
+    let redis_ok = redis::cmd("PING")
+        .query_async::<String>(&mut redis)
+        .await
+        .is_ok();
     let nodes = state.nodes.read().await.len();
     if redis_ok && nodes > 0 {
         (StatusCode::OK, format!("ready: {nodes} nodes"))

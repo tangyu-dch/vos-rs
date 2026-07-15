@@ -18,15 +18,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_env_filter(EnvFilter::new(config_logging_filter("sip_router=info")))
         .init();
     let redis_client = redis::Client::open(config.redis_url.clone())?;
+    let redis = redis::aio::ConnectionManager::new(redis_client).await?;
     let guard = Arc::new(security::RouterGuard::from_config(&config)?);
-    let nodes = discovery::start(redis_client.clone(), config.clone()).await?;
-    http::start(
-        &config.manage_bind,
-        Arc::clone(&nodes),
-        redis_client.clone(),
-    )
-    .await?;
-    let routes = routes::DialogRouteStore::new(redis_client, config.dialog_route_ttl_secs).await?;
+    let nodes = discovery::start(redis.clone(), config.clone()).await?;
+    http::start(&config.manage_bind, Arc::clone(&nodes), redis.clone()).await?;
+    let routes = routes::DialogRouteStore::new(redis, config.dialog_route_ttl_secs);
     tokio::try_join!(
         proxy::run(
             config.clone(),

@@ -80,7 +80,7 @@ pub(crate) struct AppState {
     pub(crate) operator_password: String,
     pub(crate) financier_password: String,
     pub(crate) internal_secret: String,
-    pub(crate) redis_client: redis::Client,
+    pub(crate) redis_client: redis::aio::ConnectionManager,
     pub(crate) sip_node_key_prefix: String,
 }
 
@@ -491,7 +491,7 @@ async fn main() -> anyhow::Result<()> {
             return Err(e.into());
         }
     };
-    let _redis_conn = match redis_client.get_multiplexed_tokio_connection().await {
+    let redis_client = match redis::aio::ConnectionManager::new(redis_client).await {
         Ok(conn) => conn,
         Err(e) => {
             tracing::error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");

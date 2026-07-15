@@ -288,7 +288,6 @@ pub(crate) fn parse_target_addr_from_route(route: &str) -> Option<String> {
     Some(format!("{}:{}", uri.host, uri.port.unwrap_or(5060)))
 }
 
-#[derive(Debug)]
 pub(crate) struct EdgeState {
     pub(crate) call_manager: std::sync::Arc<CallManager>,
     pub(crate) gateway_health: std::sync::Mutex<GatewayHealthTracker>,
@@ -322,8 +321,8 @@ pub(crate) struct EdgeState {
     pub(crate) gateway_health_persistence_enabled: bool,
     /// Active gateway OPTIONS probes keyed by their SIP Call-ID.
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
-    /// Redis 多路复用连接，用于集群模式下的跨节点注册状态共享。可选，单节点部署不设置。
-    pub(crate) redis_conn: std::sync::OnceLock<redis::aio::MultiplexedConnection>,
+    /// Redis 自动重连连接，用于集群状态与呼叫热路径缓存。
+    pub(crate) redis_conn: std::sync::OnceLock<redis::aio::ConnectionManager>,
     cluster_egress: std::sync::OnceLock<ClusterEgress>,
     registration_lookup_cache: dashmap::DashMap<String, CachedRegistrationLookup>,
     registration_lookup_locks: dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>>,
@@ -456,12 +455,12 @@ impl EdgeState {
     }
 
     /// 设置 Redis 连接（仅在启动阶段调用一次）。
-    pub(crate) fn set_redis(&self, conn: redis::aio::MultiplexedConnection) {
+    pub(crate) fn set_redis(&self, conn: redis::aio::ConnectionManager) {
         let _ = self.redis_conn.set(conn);
     }
 
-    /// 获取 Redis 多路复用连接的克隆，各请求可并发发送命令。
-    pub(crate) fn redis_connection(&self) -> Option<redis::aio::MultiplexedConnection> {
+    /// 获取 Redis 连接管理器的克隆，各请求可并发发送命令并共享重连状态。
+    pub(crate) fn redis_connection(&self) -> Option<redis::aio::ConnectionManager> {
         self.redis_conn.get().cloned()
     }
 
@@ -541,28 +540,24 @@ impl EdgeState {
         username: &str,
         callee: &str,
     ) -> Option<RedisBalanceCheck> {
-        let mut balance_connection = self.redis_connection()?;
-        let mut rate_connection = balance_connection.clone();
-        let prefixes = (0..=callee.len())
+        let mut connection = self.redis_connection()?;
+        let mut pipeline = redis::pipe();
+        pipeline
+            .cmd("HGET")
+            .arg("vos_rs:billing:balances")
+            .arg(username)
+            .cmd("HMGET")
+            .arg("vos_rs:billing:rates");
+        for index in (0..=callee.len())
             .rev()
             .filter(|index| callee.is_char_boundary(*index))
-            .map(|index| &callee[..index])
-            .collect::<Vec<_>>();
-
-        let mut balance_command = redis::cmd("HGET");
-        balance_command.arg("vos_rs:billing:balances").arg(username);
-        let mut rate_command = redis::cmd("HMGET");
-        rate_command.arg("vos_rs:billing:rates").arg(&prefixes);
-        let balance_future = balance_command.query_async::<Option<f64>>(&mut balance_connection);
-        let rate_future = rate_command.query_async::<Vec<Option<f64>>>(&mut rate_connection);
-        let (balance_result, rates_result) = tokio::join!(balance_future, rate_future);
-        let balance = balance_result.ok()?.unwrap_or(0.0);
-        let rate = rates_result
-            .ok()?
-            .into_iter()
-            .flatten()
-            .next()
-            .unwrap_or(0.0);
+        {
+            pipeline.arg(&callee[..index]);
+        }
+        let (balance, rates): (Option<f64>, Vec<Option<f64>>) =
+            pipeline.query_async(&mut connection).await.ok()?;
+        let balance = balance.unwrap_or(0.0);
+        let rate = rates.into_iter().flatten().next().unwrap_or(0.0);
         Some(RedisBalanceCheck {
             has_balance: balance > 0.0 || rate == 0.0,
             balance,

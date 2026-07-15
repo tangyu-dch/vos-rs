@@ -29,11 +29,11 @@ fn default_node_status() -> String {
 pub(crate) type SharedNodes = Arc<RwLock<Vec<SipNode>>>;
 
 pub(crate) async fn start(
-    client: redis::Client,
+    redis: redis::aio::ConnectionManager,
     config: RouterConfig,
 ) -> Result<SharedNodes, Box<dyn std::error::Error + Send + Sync>> {
     let nodes = Arc::new(RwLock::new(Vec::new()));
-    refresh(&client, &config.node_key_prefix, &nodes).await?;
+    refresh(redis.clone(), &config.node_key_prefix, &nodes).await?;
     let background_nodes = Arc::clone(&nodes);
     tokio::spawn(async move {
         let mut interval =
@@ -41,7 +41,9 @@ pub(crate) async fn start(
         interval.tick().await;
         loop {
             interval.tick().await;
-            if let Err(error) = refresh(&client, &config.node_key_prefix, &background_nodes).await {
+            if let Err(error) =
+                refresh(redis.clone(), &config.node_key_prefix, &background_nodes).await
+            {
                 metrics::redis_error();
                 tracing::warn!(%error, "刷新 SIP 节点列表失败");
             }
@@ -51,11 +53,10 @@ pub(crate) async fn start(
 }
 
 async fn refresh(
-    client: &redis::Client,
+    mut connection: redis::aio::ConnectionManager,
     prefix: &str,
     nodes: &SharedNodes,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut connection = client.get_multiplexed_tokio_connection().await?;
     let pattern = format!("{prefix}:*");
     let iterator = connection.scan_match::<_, String>(pattern).await?;
     let keys: Vec<String> = iterator.collect().await;

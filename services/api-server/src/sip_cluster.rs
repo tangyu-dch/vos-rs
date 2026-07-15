@@ -176,21 +176,34 @@ fn error_response(status: StatusCode, message: impl Into<String>) -> axum::respo
 }
 
 async fn load_status(
-    client: &redis::Client,
+    client: &redis::aio::ConnectionManager,
     prefix: &str,
 ) -> Result<SipClusterStatus, Box<dyn std::error::Error + Send + Sync>> {
-    let mut connection = client.get_multiplexed_tokio_connection().await?;
+    let mut connection = client.clone();
     let iterator = connection
         .scan_match::<_, String>(format!("{}:*", prefix.trim_end_matches(':')))
         .await?;
     let keys: Vec<String> = iterator.collect().await;
+    if keys.is_empty() {
+        return Ok(SipClusterStatus {
+            node_key_prefix: prefix.to_string(),
+            online_nodes: 0,
+            active_nodes: 0,
+            draining_nodes: 0,
+            nodes: Vec::new(),
+        });
+    }
+    let payloads: Vec<Option<String>> = redis::cmd("MGET")
+        .arg(&keys)
+        .query_async(&mut connection)
+        .await?;
+    let mut ttl_pipeline = redis::pipe();
+    for key in &keys {
+        ttl_pipeline.ttl(key);
+    }
+    let ttls: Vec<i64> = ttl_pipeline.query_async(&mut connection).await?;
     let mut nodes = Vec::with_capacity(keys.len());
-    for key in keys {
-        let (payload, ttl): (Option<String>, i64) = redis::pipe()
-            .get(&key)
-            .ttl(&key)
-            .query_async(&mut connection)
-            .await?;
+    for ((key, payload), ttl) in keys.into_iter().zip(payloads).zip(ttls) {
         if ttl <= 0 {
             continue;
         }

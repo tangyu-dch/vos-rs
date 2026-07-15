@@ -4,12 +4,8 @@ const AUTH_USERS_KEY: &str = "vos_rs:auth_users";
 const BILLING_RATES_KEY: &str = "vos_rs:billing:rates";
 const BILLING_BALANCES_KEY: &str = "vos_rs:billing:balances";
 
-async fn connection(state: &AppState) -> Result<redis::aio::MultiplexedConnection, ApiError> {
-    state
-        .redis_client
-        .get_multiplexed_tokio_connection()
-        .await
-        .map_err(|error| ApiError::internal(format!("Redis 连接失败: {error}")))
+fn connection(state: &AppState) -> redis::aio::ConnectionManager {
+    state.redis_client.clone()
 }
 
 /// 更新 SIP 鉴权热路径缓存。
@@ -18,7 +14,7 @@ pub(crate) async fn set_auth_user(
     username: &str,
     password: &str,
 ) -> Result<(), ApiError> {
-    let mut connection = connection(state).await?;
+    let mut connection = connection(state);
     redis::cmd("HSET")
         .arg(AUTH_USERS_KEY)
         .arg(username)
@@ -30,7 +26,7 @@ pub(crate) async fn set_auth_user(
 
 /// 删除 SIP 鉴权热路径缓存。
 pub(crate) async fn delete_auth_user(state: &AppState, username: &str) -> Result<(), ApiError> {
-    let mut connection = connection(state).await?;
+    let mut connection = connection(state);
     redis::cmd("HDEL")
         .arg(AUTH_USERS_KEY)
         .arg(username)
@@ -46,7 +42,7 @@ pub(crate) async fn rebuild_billing_rates(state: &AppState) -> Result<(), ApiErr
         .list_rates()
         .await
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    let mut connection = connection(state).await?;
+    let mut connection = connection(state);
     let mut pipeline = redis::pipe();
     pipeline.atomic().del(BILLING_RATES_KEY).ignore();
     for rate in rates {
@@ -66,7 +62,7 @@ pub(crate) async fn set_billing_balance(
     username: &str,
     balance: f64,
 ) -> Result<(), ApiError> {
-    let mut connection = connection(state).await?;
+    let mut connection = connection(state);
     redis::cmd("HSET")
         .arg(BILLING_BALANCES_KEY)
         .arg(username)

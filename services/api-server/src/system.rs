@@ -131,15 +131,13 @@ pub async fn update_system_configs(
     }
 
     // 双写写入 Redis
-    if let Ok(mut con) = state.redis_client.get_multiplexed_tokio_connection().await {
-        for (k, v) in &payload {
-            let _: Result<(), redis::RedisError> = redis::cmd("HSET")
-                .arg("vos_rs:system_configs")
-                .arg(k)
-                .arg(v)
-                .query_async(&mut con)
-                .await;
-        }
+    let mut redis = state.redis_client.clone();
+    let mut pipeline = redis::pipe();
+    for (key, value) in &payload {
+        pipeline.hset("vos_rs:system_configs", key, value).ignore();
+    }
+    if let Err(error) = pipeline.query_async::<()>(&mut redis).await {
+        tracing::error!(%error, "Redis 系统配置批量更新失败");
     }
 
     StatusCode::OK.into_response()

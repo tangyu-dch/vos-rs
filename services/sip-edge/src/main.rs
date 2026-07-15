@@ -104,7 +104,8 @@ async fn main() -> Result<(), AnyError> {
             return Err(e.into());
         }
     };
-    let redis_conn_for_state = match redis_client.get_multiplexed_tokio_connection().await {
+    let redis_conn_for_state = match redis::aio::ConnectionManager::new(redis_client.clone()).await
+    {
         Ok(conn) => Some(conn),
         Err(e) => {
             tracing::error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");

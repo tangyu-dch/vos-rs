@@ -102,13 +102,15 @@ pub(crate) async fn update_media_cluster(
         tracing::error!(%error, "保存媒体集群配置失败");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    if let Ok(mut redis) = state.redis_client.get_multiplexed_tokio_connection().await {
-        let _: Result<(), redis::RedisError> = redis::cmd("HSET")
-            .arg("vos_rs:system_configs")
-            .arg(CONFIG_KEY)
-            .arg(&serialized)
-            .query_async(&mut redis)
-            .await;
+    let mut redis = state.redis_client.clone();
+    if let Err(error) = redis::cmd("HSET")
+        .arg("vos_rs:system_configs")
+        .arg(CONFIG_KEY)
+        .arg(&serialized)
+        .query_async::<()>(&mut redis)
+        .await
+    {
+        tracing::error!(%error, "Redis 媒体集群配置更新失败");
     }
     mask_tokens(&mut payload);
     (StatusCode::OK, Json(payload)).into_response()

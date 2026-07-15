@@ -20,22 +20,18 @@ struct CachedRoute {
 }
 
 pub(crate) struct DialogRouteStore {
-    redis: Option<redis::aio::MultiplexedConnection>,
+    redis: Option<redis::aio::ConnectionManager>,
     ttl_secs: u64,
     local: DashMap<String, CachedRoute>,
 }
 
 impl DialogRouteStore {
-    pub(crate) async fn new(
-        client: redis::Client,
-        ttl_secs: u64,
-    ) -> Result<Arc<Self>, redis::RedisError> {
-        let redis = client.get_multiplexed_tokio_connection().await?;
-        Ok(Arc::new(Self {
+    pub(crate) fn new(redis: redis::aio::ConnectionManager, ttl_secs: u64) -> Arc<Self> {
+        Arc::new(Self {
             redis: Some(redis),
             ttl_secs: ttl_secs.max(60),
             local: DashMap::new(),
-        }))
+        })
     }
 
     pub(crate) async fn resolve(
@@ -106,7 +102,7 @@ impl DialogRouteStore {
 
     async fn claim_owner(
         &self,
-        redis: &mut redis::aio::MultiplexedConnection,
+        redis: &mut redis::aio::ConnectionManager,
         key: &str,
         candidate: &SipNode,
         nodes: &[SipNode],
@@ -130,7 +126,7 @@ impl DialogRouteStore {
 
     async fn replace_owner(
         &self,
-        redis: &mut redis::aio::MultiplexedConnection,
+        redis: &mut redis::aio::ConnectionManager,
         key: &str,
         stale_owner: &str,
         candidate: &SipNode,
@@ -290,12 +286,14 @@ mod tests {
             .set_ex(&key, "dead-node", 60)
             .await
             .expect("seed stale owner");
-        let first = DialogRouteStore::new(client.clone(), 60)
+        let first_redis = redis::aio::ConnectionManager::new(client.clone())
             .await
-            .expect("first store");
-        let second = DialogRouteStore::new(client, 60)
+            .expect("first redis manager");
+        let second_redis = redis::aio::ConnectionManager::new(client)
             .await
-            .expect("second store");
+            .expect("second redis manager");
+        let first = DialogRouteStore::new(first_redis, 60);
+        let second = DialogRouteStore::new(second_redis, 60);
         let nodes = vec![
             SipNode {
                 id: "sip-a".to_string(),
