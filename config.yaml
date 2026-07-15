@@ -52,6 +52,9 @@ sip_router:
   discovery_interval_secs: 2
   transaction_ttl_secs: 64
   dialog_route_ttl_secs: 86400
+  udp_workers: 0 # 0=按 CPU 核数自动，最大 64
+  udp_queue_capacity: 4096 # 每个 worker 的有界队列
+  max_transactions: 1000000
 
 # ==========================================
 # 2. sip-edge 信令边缘网关服务配置

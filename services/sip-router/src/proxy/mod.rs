@@ -8,10 +8,13 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     net::SocketAddr,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
-use tokio::net::UdpSocket;
+use tokio::{net::UdpSocket, sync::mpsc};
 
 use crate::{config::RouterConfig, discovery::SharedNodes, routes::DialogRouteStore};
 
@@ -22,6 +25,12 @@ pub(crate) use message::{
 use transaction::{forward_backend_packet, spawn_transaction_cleanup, store, Transactions};
 
 const MAX_DATAGRAM_BYTES: usize = 65_535;
+static UDP_QUEUE_DROPS: AtomicU64 = AtomicU64::new(0);
+
+struct Datagram {
+    bytes: Vec<u8>,
+    source: SocketAddr,
+}
 
 pub(crate) async fn run(
     config: RouterConfig,
@@ -31,29 +40,104 @@ pub(crate) async fn run(
     let socket = Arc::new(UdpSocket::bind(&config.udp_bind).await?);
     let transactions = Arc::new(Transactions::new());
     spawn_transaction_cleanup(Arc::clone(&transactions));
-    tracing::info!(bind = %config.udp_bind, "原生 SIP UDP 路由器已启动");
+    let workers = spawn_workers(
+        &config,
+        Arc::clone(&socket),
+        Arc::clone(&nodes),
+        Arc::clone(&routes),
+        Arc::clone(&transactions),
+    );
+    tracing::info!(
+        bind = %config.udp_bind,
+        workers = config.udp_workers,
+        queue_capacity = config.udp_queue_capacity,
+        "原生 SIP UDP 路由器已启动"
+    );
     let mut buffer = vec![0_u8; MAX_DATAGRAM_BYTES];
 
     loop {
         let (length, source) = socket.recv_from(&mut buffer).await?;
-        let packet = &buffer[..length];
-        let result = if is_backend(source, &nodes).await {
-            forward_backend_packet(&socket, packet, &transactions, Arc::clone(&routes)).await
-        } else {
-            forward_client_packet(
-                &socket,
-                packet,
-                source,
-                &config,
-                &nodes,
-                &routes,
-                &transactions,
-            )
-            .await
-        };
-        if let Err(error) = result {
-            tracing::warn!(%source, %error, "丢弃无法路由的 SIP UDP 数据报");
+        let bytes = buffer[..length].to_vec();
+        let index = worker_index(&bytes, source, workers.len());
+        if workers[index].try_send(Datagram { bytes, source }).is_err() {
+            let dropped = UDP_QUEUE_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
+            if dropped == 1 || dropped.is_multiple_of(1000) {
+                tracing::warn!(
+                    worker = index,
+                    %source,
+                    dropped,
+                    "SIP UDP worker 队列已满，丢弃数据报"
+                );
+            }
         }
+    }
+}
+
+fn spawn_workers(
+    config: &RouterConfig,
+    socket: Arc<UdpSocket>,
+    nodes: SharedNodes,
+    routes: Arc<DialogRouteStore>,
+    transactions: Arc<Transactions>,
+) -> Vec<mpsc::Sender<Datagram>> {
+    (0..config.udp_workers)
+        .map(|worker| {
+            let (sender, mut receiver) = mpsc::channel::<Datagram>(config.udp_queue_capacity);
+            let socket = Arc::clone(&socket);
+            let nodes = Arc::clone(&nodes);
+            let routes = Arc::clone(&routes);
+            let transactions = Arc::clone(&transactions);
+            let config = config.clone();
+            tokio::spawn(async move {
+                while let Some(datagram) = receiver.recv().await {
+                    if let Err(error) = process_packet(
+                        &socket,
+                        &datagram.bytes,
+                        datagram.source,
+                        &config,
+                        &nodes,
+                        Arc::clone(&routes),
+                        &transactions,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            worker,
+                            source = %datagram.source,
+                            %error,
+                            "丢弃无法路由的 SIP UDP 数据报"
+                        );
+                    }
+                }
+            });
+            sender
+        })
+        .collect()
+}
+
+async fn process_packet(
+    socket: &UdpSocket,
+    packet: &[u8],
+    source: SocketAddr,
+    config: &RouterConfig,
+    nodes: &SharedNodes,
+    routes: Arc<DialogRouteStore>,
+    transactions: &Transactions,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let snapshot = nodes.read().await.clone();
+    if snapshot.iter().any(|node| node.address == source) {
+        forward_backend_packet(socket, packet, transactions, routes).await
+    } else {
+        forward_client_packet(
+            socket,
+            packet,
+            source,
+            config,
+            &snapshot,
+            &routes,
+            transactions,
+        )
+        .await
     }
 }
 
@@ -62,14 +146,13 @@ async fn forward_client_packet(
     packet: &[u8],
     source: SocketAddr,
     config: &RouterConfig,
-    nodes: &SharedNodes,
+    nodes: &[crate::discovery::SipNode],
     routes: &DialogRouteStore,
     transactions: &Transactions,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let call_id = header_value(packet, &["call-id", "i"]).ok_or("SIP 请求缺少 Call-ID")?;
     let method = request_method(packet).ok_or("SIP 请求起始行无效")?;
-    let snapshot = nodes.read().await;
-    let backend = routes.resolve(call_id, &snapshot).await?;
+    let backend = routes.resolve(call_id, nodes).await?;
     let branch = router_branch(packet, "UDP")?;
     let forwarded = add_router_via(packet, &config.advertised_addr, "UDP", &branch)?;
     store(
@@ -79,13 +162,20 @@ async fn forward_client_packet(
         call_id,
         method,
         config.transaction_ttl_secs,
-    );
+        config.max_transactions,
+    )?;
     socket.send_to(&forwarded, backend.address).await?;
     Ok(())
 }
 
-async fn is_backend(source: SocketAddr, nodes: &SharedNodes) -> bool {
-    nodes.read().await.iter().any(|node| node.address == source)
+fn worker_index(packet: &[u8], source: SocketAddr, workers: usize) -> usize {
+    let mut hasher = DefaultHasher::new();
+    if let Some(call_id) = header_value(packet, &["call-id", "i"]) {
+        call_id.hash(&mut hasher);
+    } else {
+        source.hash(&mut hasher);
+    }
+    hasher.finish() as usize % workers.max(1)
 }
 
 pub(crate) fn select_node<'a>(

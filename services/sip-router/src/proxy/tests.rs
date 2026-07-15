@@ -22,6 +22,54 @@ fn test_router_branch_is_stable_for_retransmission() {
 }
 
 #[test]
+fn test_same_call_id_always_uses_same_worker() {
+    let source = "127.0.0.1:5090".parse().expect("source");
+    assert_eq!(
+        worker_index(REQUEST, source, 8),
+        worker_index(REQUEST, source, 8)
+    );
+}
+
+#[test]
+fn test_transaction_capacity_allows_retransmission_but_rejects_new_branch() {
+    use super::transaction::{store, Transactions};
+
+    let transactions = Transactions::new();
+    let client = "127.0.0.1:5090".parse().expect("client");
+    store(
+        &transactions,
+        "branch-a".to_string(),
+        client,
+        "call-a",
+        "INVITE",
+        60,
+        1,
+    )
+    .expect("first transaction");
+    store(
+        &transactions,
+        "branch-a".to_string(),
+        client,
+        "call-a",
+        "INVITE",
+        60,
+        1,
+    )
+    .expect("retransmission");
+
+    assert!(store(
+        &transactions,
+        "branch-b".to_string(),
+        client,
+        "call-b",
+        "INVITE",
+        60,
+        1,
+    )
+    .is_err());
+}
+
+#[test]
 fn test_dialog_route_release_only_happens_after_terminal_response() {
     use super::transaction::should_release;
 

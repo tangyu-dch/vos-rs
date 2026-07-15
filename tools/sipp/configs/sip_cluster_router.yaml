@@ -13,3 +13,6 @@ sip_router:
   discovery_interval_secs: 1
   transaction_ttl_secs: 64
   dialog_route_ttl_secs: 120
+  udp_workers: 2
+  udp_queue_capacity: 1024
+  max_transactions: 10000

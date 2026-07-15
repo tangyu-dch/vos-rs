@@ -251,6 +251,9 @@ mod tests {
             discovery_interval_secs: 1,
             transaction_ttl_secs: 64,
             dialog_route_ttl_secs: 60,
+            udp_workers: 1,
+            udp_queue_capacity: 64,
+            max_transactions: 1024,
         };
         let proxy_nodes = Arc::clone(&nodes);
         let routes = DialogRouteStore::without_redis_for_test(60);

@@ -160,7 +160,14 @@ sip_router:
   discovery_interval_secs: 2
   transaction_ttl_secs: 64
   dialog_route_ttl_secs: 86400
+  udp_workers: 0 # 自动使用 CPU 核数，最多 64
+  udp_queue_capacity: 4096
+  max_transactions: 1000000
 ```
+
+UDP 接收线程只负责收包和按 Call-ID 分配 worker，同一对话始终进入同一有界队列；
+路由选择、Redis 归属和网络发送由 worker 并行执行。队列或事务表达到上限时会快速丢弃
+并输出采样告警，避免突发流量造成内存无限增长。
 
 ## 故障语义
 

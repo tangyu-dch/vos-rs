@@ -31,7 +31,11 @@ pub(super) fn store(
     call_id: &str,
     method: &str,
     ttl_secs: u64,
-) {
+    max_transactions: usize,
+) -> Result<(), &'static str> {
+    if transactions.len() >= max_transactions && !transactions.contains_key(&branch) {
+        return Err("SIP UDP 事务容量已满");
+    }
     transactions.insert(
         branch,
         TransactionRoute {
@@ -42,6 +46,7 @@ pub(super) fn store(
             release_scheduled: Arc::new(AtomicBool::new(false)),
         },
     );
+    Ok(())
 }
 
 pub(super) fn spawn_transaction_cleanup(transactions: Arc<Transactions>) {

@@ -13,6 +13,9 @@ pub(crate) struct RouterConfig {
     pub(crate) discovery_interval_secs: u64,
     pub(crate) transaction_ttl_secs: u64,
     pub(crate) dialog_route_ttl_secs: u64,
+    pub(crate) udp_workers: usize,
+    pub(crate) udp_queue_capacity: usize,
+    pub(crate) max_transactions: usize,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -43,6 +46,9 @@ struct SipRouterSection {
     discovery_interval_secs: Option<u64>,
     transaction_ttl_secs: Option<u64>,
     dialog_route_ttl_secs: Option<u64>,
+    udp_workers: Option<usize>,
+    udp_queue_capacity: Option<usize>,
+    max_transactions: Option<usize>,
 }
 
 impl RouterConfig {
@@ -87,7 +93,23 @@ impl RouterConfig {
             discovery_interval_secs: router.discovery_interval_secs.unwrap_or(2).max(1),
             transaction_ttl_secs: router.transaction_ttl_secs.unwrap_or(64).max(1),
             dialog_route_ttl_secs: router.dialog_route_ttl_secs.unwrap_or(86_400).max(60),
+            udp_workers: resolve_udp_workers(router.udp_workers),
+            udp_queue_capacity: router.udp_queue_capacity.unwrap_or(4096).clamp(64, 65_536),
+            max_transactions: router
+                .max_transactions
+                .unwrap_or(1_000_000)
+                .clamp(1024, 10_000_000),
         })
+    }
+}
+
+fn resolve_udp_workers(configured: Option<usize>) -> usize {
+    match configured.unwrap_or(0) {
+        0 => std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1)
+            .clamp(1, 64),
+        workers => workers.clamp(1, 64),
     }
 }
 
@@ -114,5 +136,12 @@ mod tests {
             root.sip_router.expect("router").udp_bind.as_deref(),
             Some("0.0.0.0:5070")
         );
+    }
+
+    #[test]
+    fn test_udp_worker_count_is_bounded_and_zero_means_auto() {
+        assert!((1..=64).contains(&resolve_udp_workers(Some(0))));
+        assert_eq!(resolve_udp_workers(Some(128)), 64);
+        assert_eq!(resolve_udp_workers(Some(4)), 4);
     }
 }
