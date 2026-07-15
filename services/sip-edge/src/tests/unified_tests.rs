@@ -607,7 +607,8 @@ fn test_scenario_runner() {
         assert!(response.starts_with("SIP/2.0 100 Trying\r\n"));
         assert!(response.contains("Call-ID: invite-1@example.com\r\n"));
         assert!(response.contains("CSeq: 1 INVITE\r\n"));
-        assert!(response.contains("To: <sip:13800138000@example.com>;tag=vosrs-edge\r\n"));
+        assert!(response.contains("To: <sip:13800138000@example.com>\r\n"));
+        assert!(!response.contains("To: <sip:13800138000@example.com>;tag="));
 
         let outbound_invite = datagram_text(&datagrams[1]);
         assert_eq!(datagrams[1].target, "gw1.example.com:5060");

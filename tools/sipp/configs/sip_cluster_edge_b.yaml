@@ -1,0 +1,63 @@
+connections:
+  database:
+    host: "127.0.0.1"
+    port: 5432
+    username: "tangyu"
+    password: ""
+    database: "vos_rs"
+    max_connections: 10
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+    database: 0
+    max_connections: 10
+  nats:
+    url: "nats://127.0.0.1:4222"
+    cdr_stream: "VOS_RS_CDR"
+    cdr_subject: "vos_rs.cdr"
+
+sip_edge:
+  cluster:
+    enabled: true
+    node_id: "sip-edge-b"
+    router_mode: "native"
+    advertised_addr: "127.0.0.1:5262"
+    node_key_prefix: "vos_rs:test:sip_nodes"
+    heartbeat_interval_secs: 1
+    node_timeout_secs: 5
+    dialog_ttl_secs: 120
+    nats_subject_prefix: "vos_rs.test.sip.node"
+  dynamic_config:
+    enabled: false
+  billing:
+    balance_enforcement_enabled: false
+  network:
+    sip_udp_bind: "127.0.0.1:5262"
+    advertised_addr: "127.0.0.1:5262"
+    manage_bind: "127.0.0.1:5282"
+    ws_bind: "127.0.0.1:5292"
+  routing:
+    default_gateway: "127.0.0.1:5272"
+    database_routes_enabled: false
+    gateway_health_checks_enabled: false
+  security:
+    internal_secret: "sip-cluster-test-secret"
+  media:
+    nodes:
+      - id: "local-media-b"
+        type: "local"
+        advertised_addr: "127.0.0.1"
+        port_min: 44000
+        port_max: 44998
+        weight: 1
+    symmetric_learning: true
+    anti_spoofing: true
+    source_relearn_secs: 30
+    metrics_log: false
+  recording:
+    enabled: false
+  performance:
+    cdr_persistence_enabled: false
+    udp_workers: 1
+    udp_workers_auto: false

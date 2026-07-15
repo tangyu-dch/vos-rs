@@ -58,6 +58,7 @@ pub struct EdgeConfig {
     pub sip_udp_bind: String,
     pub advertised_addr: String,
     pub default_gateway: String,
+    pub database_routes_enabled: bool,
     pub gateway_health_checks_enabled: bool,
     pub manage_bind: String,
     pub stun_server: Option<String>,
@@ -272,6 +273,7 @@ struct BillingSection {
 #[derive(serde::Deserialize, Debug, Default)]
 struct RoutingSection {
     default_gateway: Option<String>,
+    database_routes_enabled: Option<bool>,
     gateway_health_checks_enabled: Option<bool>,
 }
 
@@ -424,6 +426,7 @@ impl EdgeConfig {
                 .advertised_addr
                 .unwrap_or_else(|| "127.0.0.1:5060".to_string()),
             default_gateway: route_section.default_gateway.unwrap_or_default(),
+            database_routes_enabled: route_section.database_routes_enabled.unwrap_or(true),
             gateway_health_checks_enabled: route_section
                 .gateway_health_checks_enabled
                 .unwrap_or(true),
@@ -745,6 +748,7 @@ impl Default for EdgeConfig {
             sip_udp_bind: "0.0.0.0:5060".to_string(),
             advertised_addr: "127.0.0.1:5060".to_string(),
             default_gateway: String::new(),
+            database_routes_enabled: true,
             gateway_health_checks_enabled: true,
             manage_bind: "127.0.0.1:8082".to_string(),
             stun_server: None,

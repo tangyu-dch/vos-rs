@@ -226,7 +226,7 @@ pub fn build_response_with_owned_headers(
 
     append_all_headers(&mut response, &request.headers, "via", "Via");
     append_single_header(&mut response, &request.headers, "from", "From");
-    append_to_header(&mut response, &request.headers);
+    append_to_header(&mut response, &request.headers, status_code);
     append_single_header(&mut response, &request.headers, "call-id", "Call-ID");
     append_single_header(&mut response, &request.headers, "cseq", "CSeq");
     append_all_headers(
@@ -365,11 +365,14 @@ fn append_single_header(
     }
 }
 
-fn append_to_header(response: &mut String, headers: &HeaderMap) {
+fn append_to_header(response: &mut String, headers: &HeaderMap, status_code: u16) {
     if let Some(value) = headers.get("to") {
         response.push_str("To: ");
         response.push_str(value.as_str());
-        if !value.as_str().to_ascii_lowercase().contains(";tag=") {
+        // RFC 3261 8.2.6.2: a 100 (Trying) response must copy the request To
+        // header without adding a tag. A premature tag also makes SIP clients
+        // treat the following gateway response as belonging to another dialog.
+        if status_code != 100 && !value.as_str().to_ascii_lowercase().contains(";tag=") {
             response.push_str(";tag=");
             response.push_str(EDGE_TAG);
         }
@@ -379,7 +382,7 @@ fn append_to_header(response: &mut String, headers: &HeaderMap) {
 
 #[cfg(test)]
 mod tests {
-    use super::{accepted_202_for_request, response_for_request_with_health};
+    use super::{accepted_202_for_request, build_response, response_for_request_with_health};
     use call_core::{CallManager, RouteTable};
     use sip_core::{parse_message, SipMessage};
 
@@ -403,11 +406,34 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let call_manager = CallManager::new(RouteTable::default(), tx);
         let handling = response_for_request_with_health(&request, &call_manager, None);
-        let response = String::from_utf8(handling.response).unwrap();
+        let response = String::from_utf8(handling.response.clone()).unwrap();
 
         assert!(response.starts_with("SIP/2.0 501 Not Implemented\r\n"));
         assert!(response.contains("CSeq: 1 MESSAGE\r\n"));
         assert!(handling.outbound_invite.is_none());
+    }
+
+    #[test]
+    fn trying_response_does_not_add_to_tag() {
+        let request = concat!(
+            "INVITE sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-trying\r\n",
+            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "To: <sip:13800138000@example.com>\r\n",
+            "Call-ID: trying-1@example.com\r\n",
+            "CSeq: 1 INVITE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        );
+
+        let SipMessage::Request(request) = parse_message(request.as_bytes()).unwrap() else {
+            panic!("expected request");
+        };
+        let response = String::from_utf8(build_response(&request, 100, "Trying", &[], "")).unwrap();
+
+        assert!(response.starts_with("SIP/2.0 100 Trying\r\n"));
+        assert!(response.contains("To: <sip:13800138000@example.com>\r\n"));
+        assert!(!response.contains("To: <sip:13800138000@example.com>;tag="));
     }
 
     #[test]

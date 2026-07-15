@@ -2,10 +2,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     net::SocketAddr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -15,7 +12,6 @@ use tokio::net::UdpSocket;
 use crate::{config::RouterConfig, discovery::SharedNodes, routes::DialogRouteStore};
 
 const MAX_DATAGRAM_BYTES: usize = 65_535;
-static NEXT_BRANCH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 struct TransactionRoute {
@@ -81,10 +77,7 @@ async fn forward_client_packet(
     let call_id = header_value(packet, &["call-id", "i"]).ok_or("SIP 请求缺少 Call-ID")?;
     let snapshot = nodes.read().await;
     let backend = routes.resolve(call_id, &snapshot).await?;
-    let branch = format!(
-        "z9hG4bK-vosrs-{:016x}",
-        NEXT_BRANCH_ID.fetch_add(1, Ordering::Relaxed)
-    );
+    let branch = router_branch(packet, "UDP")?;
     let forwarded = add_router_via(packet, &config.advertised_addr, "UDP", &branch)?;
     transactions.insert(
         branch,
@@ -144,6 +137,18 @@ pub(crate) fn add_router_via(
     Ok(output)
 }
 
+pub(crate) fn router_branch(packet: &[u8], transport: &str) -> Result<String, &'static str> {
+    let call_id = header_value(packet, &["call-id", "i"]).ok_or("SIP 请求缺少 Call-ID")?;
+    let via = header_value(packet, &["via", "v"]).ok_or("SIP 请求缺少 Via")?;
+    let cseq = header_value(packet, &["cseq"]).ok_or("SIP 请求缺少 CSeq")?;
+    let mut hasher = DefaultHasher::new();
+    transport.hash(&mut hasher);
+    call_id.hash(&mut hasher);
+    via.hash(&mut hasher);
+    cseq.hash(&mut hasher);
+    Ok(format!("z9hG4bK-vosrs-{:016x}", hasher.finish()))
+}
+
 pub(crate) fn top_via_branch(packet: &[u8]) -> Option<String> {
     header_value(packet, &["via", "v"]).and_then(|via| parameter(via, "branch"))
 }
@@ -191,6 +196,7 @@ pub(crate) fn remove_top_via(packet: &[u8]) -> Result<Vec<u8>, &'static str> {
 mod tests {
     use super::*;
     use crate::discovery::SipNode;
+    use std::collections::HashSet;
 
     const REQUEST: &[u8] = b"OPTIONS sip:test@example.com SIP/2.0\r\nVia: SIP/2.0/UDP client;branch=z9hG4bK-client\r\nCall-ID: call-1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n";
 
@@ -206,6 +212,11 @@ mod tests {
     }
 
     #[test]
+    fn test_router_branch_is_stable_for_retransmission() {
+        assert_eq!(router_branch(REQUEST, "UDP"), router_branch(REQUEST, "UDP"));
+    }
+
+    #[test]
     fn test_select_node_is_stable_for_call_id() {
         let nodes = vec![
             SipNode {
@@ -218,5 +229,31 @@ mod tests {
             },
         ];
         assert_eq!(select_node("call-1", &nodes), select_node("call-1", &nodes));
+    }
+
+    #[test]
+    fn test_uuid_call_ids_cover_both_nodes() {
+        let nodes = vec![
+            SipNode {
+                id: "sip-edge-a".to_string(),
+                address: "127.0.0.1:5261".parse().expect("address"),
+            },
+            SipNode {
+                id: "sip-edge-b".to_string(),
+                address: "127.0.0.1:5262".parse().expect("address"),
+            },
+        ];
+        let call_ids = [
+            "58d4c1d2-5bd3-4c1b-a0e4-7c30dd331101",
+            "bc47848a-a335-419d-923e-05e9b8111302",
+            "c25be5aa-e8fb-4bbc-82fe-f6dbd69f1303",
+            "22ea8f46-00e0-46d2-8b85-35a2db971304",
+        ];
+        let selected: HashSet<&str> = call_ids
+            .iter()
+            .filter_map(|call_id| select_node(call_id, &nodes).map(|node| node.id.as_str()))
+            .collect();
+
+        assert_eq!(selected.len(), 2);
     }
 }

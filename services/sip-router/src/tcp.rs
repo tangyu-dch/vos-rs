@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -11,12 +8,11 @@ use tokio::{
 use crate::{
     config::RouterConfig,
     discovery::SharedNodes,
-    proxy::{add_router_via, header_value, remove_top_via, top_via_branch},
+    proxy::{add_router_via, header_value, remove_top_via, router_branch, top_via_branch},
     routes::DialogRouteStore,
 };
 
 const MAX_SIP_MESSAGE_BYTES: usize = 1024 * 1024;
-static NEXT_TCP_BRANCH_ID: AtomicU64 = AtomicU64::new(1);
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -101,10 +97,7 @@ async fn handle_connection(
 }
 
 fn add_tcp_via(frame: &[u8], advertised_addr: &str) -> Result<Vec<u8>, &'static str> {
-    let branch = format!(
-        "z9hG4bK-vosrs-tcp-{:016x}",
-        NEXT_TCP_BRANCH_ID.fetch_add(1, Ordering::Relaxed)
-    );
+    let branch = router_branch(frame, "TCP")?.replacen("z9hG4bK-vosrs-", "z9hG4bK-vosrs-tcp-", 1);
     add_router_via(frame, advertised_addr, "TCP", &branch)
 }
 

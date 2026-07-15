@@ -5,8 +5,6 @@ use serde::Serialize;
 
 use super::{ClusterConfig, RouterMode};
 
-const SIP_NODE_KEY_PREFIX: &str = "vos_rs:cluster:sip_nodes";
-
 #[derive(Debug, Serialize)]
 struct SipNodeRecord<'a> {
     node_id: &'a str,
@@ -69,7 +67,7 @@ async fn write_heartbeat(
     config: &ClusterConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let payload = heartbeat_payload(config)?;
-    let key = node_key(&config.node_id);
+    let key = node_key(&config.node_key_prefix, &config.node_id);
     let ttl = config.node_timeout_secs.max(1);
     let _: () = connection.set_ex(key, payload, ttl).await?;
     Ok(())
@@ -88,8 +86,8 @@ fn heartbeat_payload(config: &ClusterConfig) -> Result<String, serde_json::Error
     })
 }
 
-fn node_key(node_id: &str) -> String {
-    format!("{SIP_NODE_KEY_PREFIX}:{node_id}")
+fn node_key(prefix: &str, node_id: &str) -> String {
+    format!("{}:{node_id}", prefix.trim_end_matches(':'))
 }
 
 #[cfg(test)]
@@ -110,6 +108,9 @@ mod tests {
 
         assert!(payload.contains("\"node_id\":\"sip-a\""));
         assert!(payload.contains("\"router_mode\":\"native\""));
-        assert_eq!(node_key("sip-a"), "vos_rs:cluster:sip_nodes:sip-a");
+        assert_eq!(
+            node_key(&config.node_key_prefix, "sip-a"),
+            "vos_rs:cluster:sip_nodes:sip-a"
+        );
     }
 }

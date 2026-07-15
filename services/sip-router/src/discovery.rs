@@ -17,6 +17,7 @@ pub(crate) struct SipNode {
 struct SipNodeRecord {
     node_id: String,
     advertised_addr: String,
+    router_mode: String,
 }
 
 pub(crate) type SharedNodes = Arc<RwLock<Vec<SipNode>>>;
@@ -64,10 +65,20 @@ async fn refresh(
         let Some(payload) = payload else {
             continue;
         };
-        let record: SipNodeRecord = serde_json::from_str(&payload)?;
+        let Ok(record) = serde_json::from_str::<SipNodeRecord>(&payload) else {
+            tracing::warn!("忽略格式无效的 SIP 节点心跳");
+            continue;
+        };
+        if record.router_mode != "native" {
+            continue;
+        }
+        let Ok(address) = record.advertised_addr.parse() else {
+            tracing::warn!(node_id = %record.node_id, "忽略通告地址无效的 SIP 节点");
+            continue;
+        };
         discovered.push(SipNode {
             id: record.node_id,
-            address: record.advertised_addr.parse()?,
+            address,
         });
     }
     discovered.sort_by(|left, right| left.id.cmp(&right.id));

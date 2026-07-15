@@ -16,6 +16,9 @@ FULL_FLOW_REMOTE_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/full_flow_remote.ya
 FULL_FLOW_UDS_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/full_flow_uds.yaml
 FULL_FLOW_CLUSTER_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/full_flow_cluster.yaml
 FULL_FLOW_HYBRID_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/full_flow_hybrid.yaml
+SIP_CLUSTER_EDGE_A_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/sip_cluster_edge_a.yaml
+SIP_CLUSTER_EDGE_B_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/sip_cluster_edge_b.yaml
+SIP_CLUSTER_ROUTER_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/sip_cluster_router.yaml
 MEDIA_EDGE_A_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/media_edge_a.yaml
 MEDIA_EDGE_B_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/media_edge_b.yaml
 STUN_CONFIG_FILE ?= $(CURDIR)/tools/sipp/configs/stun.yaml
@@ -27,7 +30,7 @@ FULL_FLOW_LOG_DIR ?= target/full-flow
 PERF_LOG_DIR ?= target/sipp_bench
 
 .PHONY: help env fmt fmt-check check lint test test-unit test-integration test-bench \
-        clippy build build-release build-debug quick verify smoke full-flow full-flow-remote full-flow-uds full-flow-cluster full-flow-hybrid \
+        clippy build build-release build-debug quick verify smoke full-flow full-flow-remote full-flow-uds full-flow-cluster full-flow-hybrid full-flow-sip-cluster \
         web-lint web-test web-build web-verify \
         perf perf-media perf-quick perf-all perf-report bench bench-concurrency \
         bench-concurrency-quick bench-concurrency-media bench-concurrency-recording doc \
@@ -53,6 +56,7 @@ help:
 	@printf '    make test-stun       STUN 公网地址发现测试\n'
 	@printf '    make full-flow-cluster 双 media-edge 调度与录音测试\n'
 	@printf '    make full-flow-hybrid  本地 + 远程媒体混合调度测试\n'
+	@printf '    make full-flow-sip-cluster 双 sip-edge + 原生 sip-router 测试\n'
 	@printf '    make bench           运行 Criterion 基准测试\n'
 	@printf '  构建:\n'
 	@printf '    make build           debug 构建\n'
@@ -358,6 +362,54 @@ full-flow-hybrid:
 		printf 'FULL-FLOW HYBRID PASS: %s calls, %s WAV, local=%s, remote=%s allocations\n' "$$SUCC" "$$WAV_COUNT" "$$LOCAL_ALLOC" "$$REMOTE_ALLOC"; \
 	else \
 		printf 'FULL-FLOW HYBRID FAIL: %s calls, %s WAV, local=%s, remote=%s allocations\n' "$$SUCC" "$$WAV_COUNT" "$$LOCAL_ALLOC" "$$REMOTE_ALLOC"; \
+		exit 1; \
+	fi
+
+full-flow-sip-cluster:
+	@printf 'Full-flow SIP Cluster test: sip-router + two sip-edge nodes...\n'
+	@command -v redis-cli >/dev/null || { printf '缺少 redis-cli\n'; exit 2; }
+	@redis-cli ping >/dev/null || { printf 'Redis 6379 不可用\n'; exit 2; }
+	@nc -z 127.0.0.1 4222 || { printf 'NATS 4222 不可用\n'; exit 2; }
+	@$(CARGO) build --release -p sip-router -p sip-edge 2>/dev/null
+	@mkdir -p "$(FULL_FLOW_LOG_DIR)"
+	@for KEY in $$(redis-cli --scan --pattern 'vos_rs:test:sip_nodes:*'); do redis-cli del "$$KEY" >/dev/null; done
+	@for KEY in $$(redis-cli --scan --pattern 'vos_rs:cluster:sip_dialog_routes:*'); do redis-cli del "$$KEY" >/dev/null; done
+	@VOS_RS_CONFIG_FILE="$(SIP_CLUSTER_EDGE_A_CONFIG_FILE)" RUST_LOG=sip_edge=debug \
+	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/sip-edge-a.log" 2>&1 & \
+	EDGE_A_PID=$$!; \
+	VOS_RS_CONFIG_FILE="$(SIP_CLUSTER_EDGE_B_CONFIG_FILE)" RUST_LOG=sip_edge=debug \
+	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/sip-edge-b.log" 2>&1 & \
+	EDGE_B_PID=$$!; sleep 3; \
+	VOS_RS_CONFIG_FILE="$(SIP_CLUSTER_ROUTER_CONFIG_FILE)" RUST_LOG=info \
+	target/release/sip-router >"$(FULL_FLOW_LOG_DIR)/sip-router.log" 2>&1 & \
+	ROUTER_PID=$$!; sleep 3; \
+	NODE_COUNT=$$(redis-cli --scan --pattern 'vos_rs:test:sip_nodes:*' | wc -l | tr -d ' '); \
+	$(SIPP_BIN) 127.0.0.1:5261 -sf tools/sipp/scenarios/gateway_longcall.xml \
+		-i 127.0.0.1 -p 5271 -m 16 -aa -nostdin -timeout 60s -trace_msg \
+		-message_file "$(FULL_FLOW_LOG_DIR)/gateway-a-messages.log" >/dev/null 2>&1 & \
+	GATEWAY_A_PID=$$!; \
+	$(SIPP_BIN) 127.0.0.1:5262 -sf tools/sipp/scenarios/gateway_longcall.xml \
+		-i 127.0.0.1 -p 5272 -m 16 -aa -nostdin -timeout 60s -trace_msg \
+		-message_file "$(FULL_FLOW_LOG_DIR)/gateway-b-messages.log" >/dev/null 2>&1 & \
+	GATEWAY_B_PID=$$!; sleep 1; \
+	$(SIPP_BIN) 127.0.0.1:5260 -sf tools/sipp/scenarios/caller_cluster_longcall.xml \
+		-i 127.0.0.1 -p 5264 -cid_str '00000000-0000-4000-8000-%u@vos-rs' \
+		-s 13800138000 -m 16 -r 4 -l 4 -aa -nostdin -timeout 20s -timeout_error -trace_err \
+		-trace_msg -message_file "$(FULL_FLOW_LOG_DIR)/caller-sip-cluster-messages.log" \
+		-error_file "$(FULL_FLOW_LOG_DIR)/caller-sip-cluster-errors.log" \
+		>"$(FULL_FLOW_LOG_DIR)/caller-sip-cluster.log" 2>&1; \
+	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(FULL_FLOW_LOG_DIR)/caller-sip-cluster.log"); \
+	A_INVITES=$$(grep 'received SIP request' "$(FULL_FLOW_LOG_DIR)/sip-edge-a.log" | grep -c 'method=INVITE' || true); \
+	B_INVITES=$$(grep 'received SIP request' "$(FULL_FLOW_LOG_DIR)/sip-edge-b.log" | grep -c 'method=INVITE' || true); \
+	kill $$ROUTER_PID $$EDGE_A_PID $$EDGE_B_PID $$GATEWAY_A_PID $$GATEWAY_B_PID 2>/dev/null; \
+	wait $$ROUTER_PID $$EDGE_A_PID $$EDGE_B_PID $$GATEWAY_A_PID $$GATEWAY_B_PID 2>/dev/null || true; \
+	pkill -9 -f sipp 2>/dev/null; \
+	for KEY in $$(redis-cli --scan --pattern 'vos_rs:test:sip_nodes:*'); do redis-cli del "$$KEY" >/dev/null; done; \
+	for KEY in $$(redis-cli --scan --pattern 'vos_rs:cluster:sip_dialog_routes:*'); do redis-cli del "$$KEY" >/dev/null; done; \
+	if [ "$$NODE_COUNT" = "2" ] && [ "$$SUCC" = "16" ] && [ "$$A_INVITES" -gt "0" ] && [ "$$B_INVITES" -gt "0" ]; then \
+		printf 'FULL-FLOW SIP CLUSTER PASS: nodes=%s, calls=%s, edge-a=%s, edge-b=%s INVITE\n' "$$NODE_COUNT" "$$SUCC" "$$A_INVITES" "$$B_INVITES"; \
+	else \
+		printf 'FULL-FLOW SIP CLUSTER FAIL: nodes=%s, calls=%s, edge-a=%s, edge-b=%s INVITE\n' "$$NODE_COUNT" "$$SUCC" "$$A_INVITES" "$$B_INVITES"; \
 		exit 1; \
 	fi
 

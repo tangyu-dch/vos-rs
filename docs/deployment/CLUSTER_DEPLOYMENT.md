@@ -48,6 +48,7 @@ sip_edge:
     node_id: "sip-edge-1"
     router_mode: "external" # 或 native
     advertised_addr: "10.0.0.11:5060"
+    node_key_prefix: "vos_rs:cluster:sip_nodes"
     heartbeat_interval_secs: 3
     node_timeout_secs: 10
     dialog_ttl_secs: 86400
@@ -56,6 +57,21 @@ sip_edge:
 
 `node_timeout_secs` 必须大于心跳周期。集群启动时如果缺少 Redis 或 NATS，服务会
 拒绝启动，防止节点在不共享状态的情况下静默分裂。
+`sip_edge.cluster.node_key_prefix` 必须与 `sip_router.node_key_prefix` 完全一致；原生
+路由器只发现 `router_mode: native` 的心跳，不会误选 direct 或 external 节点。
+
+管理端可通过 `GET /api/system/sip-cluster/status` 查看 Redis 中仍有有效 TTL 的在线
+节点，Web 的“系统参数配置 → SIP 信令集群”页签展示相同信息。节点 ID、监听地址和
+路由模式是单机引导配置，必须在每台服务器的 `config.yaml` 分别维护，不能作为全局
+动态配置下发。
+
+本地双节点完整流测试可运行 `make full-flow-sip-cluster`。该场景会启动一个原生
+`sip-router`、两个 `sip-edge` 和两个 SIPp 网关，校验节点发现、稳定哈希、响应回程、
+ACK/BYE 对话路由以及 16 路通话在两个信令节点间的实际分布。
+
+压测或端到端测试如需完全使用 `config.yaml` 中的静态网关，可设置
+`sip_edge.routing.database_routes_enabled: false`，避免现有数据库路由覆盖测试网关；
+生产环境默认保持 `true`。
 
 ## 多媒体节点配置
 

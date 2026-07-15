@@ -259,52 +259,50 @@ async fn main() -> Result<(), AnyError> {
             }
         }
 
-        let has_gateways = sqlx::query("SELECT 1 FROM sip_gateways LIMIT 1")
-            .fetch_optional(db.pool())
-            .await?
-            .is_some();
-        let has_routes = sqlx::query("SELECT 1 FROM sip_routes LIMIT 1")
-            .fetch_optional(db.pool())
-            .await?
-            .is_some();
-        if !has_gateways {
-            if !edge_config.default_gateway.trim().is_empty() {
-                let raw_gateway = &edge_config.default_gateway;
-                let raw_gateway = raw_gateway.trim();
-                if !raw_gateway.is_empty() {
-                    if let Ok(target) = parse_gateway_target("default", raw_gateway) {
-                        db.insert_gateway("default", &target.host, target.port, "udp")
-                            .await?;
-                        db.insert_route("default", "", 100, "default").await?;
-                        info!(
-                            gateway = raw_gateway,
-                            "seeded default gateway and route into database"
-                        );
+        if edge_config.database_routes_enabled {
+            let has_gateways = sqlx::query("SELECT 1 FROM sip_gateways LIMIT 1")
+                .fetch_optional(db.pool())
+                .await?
+                .is_some();
+            let has_routes = sqlx::query("SELECT 1 FROM sip_routes LIMIT 1")
+                .fetch_optional(db.pool())
+                .await?
+                .is_some();
+            if !has_gateways {
+                if !edge_config.default_gateway.trim().is_empty() {
+                    let raw_gateway = &edge_config.default_gateway;
+                    let raw_gateway = raw_gateway.trim();
+                    if !raw_gateway.is_empty() {
+                        if let Ok(target) = parse_gateway_target("default", raw_gateway) {
+                            db.insert_gateway("default", &target.host, target.port, "udp")
+                                .await?;
+                            db.insert_route("default", "", 100, "default").await?;
+                            info!(
+                                gateway = raw_gateway,
+                                "seeded default gateway and route into database"
+                            );
+                        }
                     }
                 }
+            } else if !has_routes && !edge_config.default_gateway.trim().is_empty() {
+                db.insert_route("default", "", 100, "default").await?;
+                info!("seeded default route into database (gateway already exists)");
             }
-        } else if !has_routes && !edge_config.default_gateway.trim().is_empty() {
-            db.insert_route("default", "", 100, "default").await?;
-            info!("seeded default route into database (gateway already exists)");
-        }
 
-        if let Some(ref db) = db_store {
             match reload_routes_from_database(&edge_state, db).await {
                 Ok(()) => info!("loaded routes from database"),
                 Err(e) => warn!(%e, "failed to load routes from database"),
             }
-        }
 
-        if let Some(ref nats_url) = edge_config.nats_url {
-            spawn_route_reload_listener(
-                nats_url.clone(),
-                Arc::clone(&edge_state),
-                db_store.clone(),
-            );
-        }
+            if let Some(ref nats_url) = edge_config.nats_url {
+                spawn_route_reload_listener(
+                    nats_url.clone(),
+                    Arc::clone(&edge_state),
+                    db_store.clone(),
+                );
+            }
 
-        if edge_config.gateway_health_checks_enabled {
-            if let Some(ref db) = db_store {
+            if edge_config.gateway_health_checks_enabled {
                 match db.load_gateway_health_list().await {
                     Ok(health_list) => {
                         let mut health = edge_state
@@ -342,6 +340,8 @@ async fn main() -> Result<(), AnyError> {
                     }
                 }
             }
+        } else {
+            info!("database route loading disabled; using config.yaml routing table");
         }
 
         refresh_anti_fraud_rules(&edge_state).await;
@@ -571,7 +571,7 @@ async fn main() -> Result<(), AnyError> {
             Arc::clone(&edge_config),
         );
     }
-    if edge_config.dynamic_config_enabled {
+    if edge_config.dynamic_config_enabled && edge_config.database_routes_enabled {
         if let Some(ref db) = db_store {
             spawn_periodic_route_refresh(Arc::clone(&edge_state), db.clone());
         }

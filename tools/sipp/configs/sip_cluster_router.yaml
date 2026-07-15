@@ -1,0 +1,15 @@
+connections:
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+    database: 0
+
+sip_router:
+  udp_bind: "127.0.0.1:5260"
+  tcp_bind: "127.0.0.1:5260"
+  advertised_addr: "127.0.0.1:5260"
+  node_key_prefix: "vos_rs:test:sip_nodes"
+  discovery_interval_secs: 1
+  transaction_ttl_secs: 64
+  dialog_route_ttl_secs: 120
