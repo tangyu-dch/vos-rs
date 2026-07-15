@@ -33,6 +33,7 @@ impl IpNet {
         Ok(Self { ip, mask_len })
     }
 
+    #[allow(dead_code)]
     pub fn contains(&self, other: &IpAddr) -> bool {
         match (self.ip, other) {
             (IpAddr::V4(net_v4), IpAddr::V4(other_v4)) => {
@@ -91,6 +92,105 @@ impl TokenBucket {
     }
 }
 
+#[derive(Debug, Default)]
+struct IpTrieNode {
+    is_match: bool,
+    children: [Option<Box<IpTrieNode>>; 2],
+}
+
+impl IpTrieNode {
+    fn insert(&mut self, ip_bytes: &[u8], mask_len: u8) {
+        let mut current = self;
+        for bit_idx in 0..mask_len {
+            let byte_pos = (bit_idx / 8) as usize;
+            let bit_pos = 7 - (bit_idx % 8);
+            let bit = ((ip_bytes[byte_pos] >> bit_pos) & 1) as usize;
+
+            if current.is_match {
+                return;
+            }
+
+            unsafe {
+                let next_ptr = &mut **current.children[bit]
+                    .get_or_insert_with(|| Box::new(IpTrieNode::default()))
+                    as *mut IpTrieNode;
+                current = &mut *next_ptr;
+            }
+        }
+        current.is_match = true;
+    }
+
+    fn contains(&self, ip_bytes: &[u8]) -> bool {
+        let mut current = self;
+        if current.is_match {
+            return true;
+        }
+
+        let max_bits = (ip_bytes.len() * 8) as u8;
+        for bit_idx in 0..max_bits {
+            let byte_pos = (bit_idx / 8) as usize;
+            let bit_pos = 7 - (bit_idx % 8);
+            let bit = ((ip_bytes[byte_pos] >> bit_pos) & 1) as usize;
+
+            if let Some(ref next) = current.children[bit] {
+                current = next;
+                if current.is_match {
+                    return true;
+                }
+            } else {
+                break;
+            }
+        }
+        false
+    }
+}
+
+#[derive(Debug)]
+pub struct IpTrie {
+    ipv4_root: IpTrieNode,
+    ipv6_root: IpTrieNode,
+    is_empty: bool,
+}
+
+impl Default for IpTrie {
+    fn default() -> Self {
+        Self {
+            ipv4_root: IpTrieNode::default(),
+            ipv6_root: IpTrieNode::default(),
+            is_empty: true,
+        }
+    }
+}
+
+impl IpTrie {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, net: &IpNet) {
+        self.is_empty = false;
+        match net.ip {
+            IpAddr::V4(v4) => {
+                self.ipv4_root.insert(&v4.octets(), net.mask_len);
+            }
+            IpAddr::V6(v6) => {
+                self.ipv6_root.insert(&v6.octets(), net.mask_len);
+            }
+        }
+    }
+
+    pub fn contains(&self, ip: &IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(v4) => self.ipv4_root.contains(&v4.octets()),
+            IpAddr::V6(v6) => self.ipv6_root.contains(&v6.octets()),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.is_empty
+    }
+}
+
 #[derive(Debug)]
 pub struct RateLimiter {
     buckets: DashMap<IpAddr, TokenBucket>,
@@ -138,8 +238,8 @@ impl RateLimiter {
 
 #[derive(Debug)]
 pub struct SbcEngine {
-    allowlist: std::sync::RwLock<Vec<IpNet>>,
-    blocklist: std::sync::RwLock<Vec<IpNet>>,
+    allowlist: std::sync::RwLock<IpTrie>,
+    blocklist: std::sync::RwLock<IpTrie>,
     rate_limiter: RateLimiter,
     auth_failures: DashMap<IpAddr, (u32, Instant)>,
     locked_ips: DashMap<IpAddr, Instant>,
@@ -147,26 +247,24 @@ pub struct SbcEngine {
 
 impl SbcEngine {
     pub fn new(allow_rules: &[&str], block_rules: &[&str], capacity: f64, fill_rate: f64) -> Self {
-        let allowlist = allow_rules
-            .iter()
-            .filter_map(|rule| match IpNet::parse(rule) {
-                Ok(net) => Some(net),
+        let mut allowlist = IpTrie::new();
+        for rule in allow_rules {
+            match IpNet::parse(rule) {
+                Ok(net) => allowlist.insert(&net),
                 Err(error) => {
                     warn!(rule, %error, "忽略无效 SBC allowlist CIDR 规则");
-                    None
                 }
-            })
-            .collect();
-        let blocklist = block_rules
-            .iter()
-            .filter_map(|rule| match IpNet::parse(rule) {
-                Ok(net) => Some(net),
+            }
+        }
+        let mut blocklist = IpTrie::new();
+        for rule in block_rules {
+            match IpNet::parse(rule) {
+                Ok(net) => blocklist.insert(&net),
                 Err(error) => {
                     warn!(rule, %error, "忽略无效 SBC blocklist CIDR 规则");
-                    None
                 }
-            })
-            .collect();
+            }
+        }
         Self {
             allowlist: std::sync::RwLock::new(allowlist),
             blocklist: std::sync::RwLock::new(blocklist),
@@ -187,26 +285,15 @@ impl SbcEngine {
 
         // 2. 检查黑名单
         if let Ok(blocklist) = self.blocklist.read() {
-            for net in &*blocklist {
-                if net.contains(&ip) {
-                    return false;
-                }
+            if blocklist.contains(&ip) {
+                return false;
             }
         }
 
         // 3. 检查白名单
         if let Ok(allowlist) = self.allowlist.read() {
-            if !allowlist.is_empty() {
-                let mut found = false;
-                for net in &*allowlist {
-                    if net.contains(&ip) {
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    return false;
-                }
+            if !allowlist.is_empty() && !allowlist.contains(&ip) {
+                return false;
             }
         }
 
@@ -240,26 +327,24 @@ impl SbcEngine {
     }
 
     pub fn update_rules(&self, allow_rules: &[&str], block_rules: &[&str]) {
-        let allowlist: Vec<IpNet> = allow_rules
-            .iter()
-            .filter_map(|rule| match IpNet::parse(rule) {
-                Ok(net) => Some(net),
+        let mut allowlist = IpTrie::new();
+        for rule in allow_rules {
+            match IpNet::parse(rule) {
+                Ok(net) => allowlist.insert(&net),
                 Err(error) => {
                     warn!(rule, %error, "忽略无效 SBC allowlist CIDR 规则");
-                    None
                 }
-            })
-            .collect();
-        let blocklist: Vec<IpNet> = block_rules
-            .iter()
-            .filter_map(|rule| match IpNet::parse(rule) {
-                Ok(net) => Some(net),
+            }
+        }
+        let mut blocklist = IpTrie::new();
+        for rule in block_rules {
+            match IpNet::parse(rule) {
+                Ok(net) => blocklist.insert(&net),
                 Err(error) => {
                     warn!(rule, %error, "忽略无效 SBC blocklist CIDR 规则");
-                    None
                 }
-            })
-            .collect();
+            }
+        }
 
         if let Ok(mut w) = self.allowlist.write() {
             *w = allowlist;

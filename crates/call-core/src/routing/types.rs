@@ -250,6 +250,7 @@ impl Route {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn matches(&self, destination: &str) -> bool {
         destination.starts_with(&self.prefix)
     }
