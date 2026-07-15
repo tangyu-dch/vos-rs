@@ -19,6 +19,7 @@ mod recording;
 mod registrations;
 mod report;
 mod routes;
+mod sip_cluster;
 mod system;
 mod users;
 
@@ -62,6 +63,7 @@ use dashboard::{dashboard_events, get_dashboard_stats, get_dashboard_trend};
 use gateways::{create_gateway, delete_gateway, list_gateways, update_gateway};
 use registrations::list_registrations;
 use routes::{create_route, delete_route, list_routes, update_route};
+use sip_cluster::get_sip_cluster_status;
 use system::{get_system_configs, health, prometheus_metrics, ready, update_system_configs};
 use users::{create_user, delete_user, list_users, update_user};
 
@@ -79,6 +81,7 @@ pub(crate) struct AppState {
     pub(crate) financier_password: String,
     pub(crate) internal_secret: String,
     pub(crate) redis_client: redis::Client,
+    pub(crate) sip_node_key_prefix: String,
 }
 
 /// 管理列表统一分页参数；服务端限制单页最大 100 条，避免大响应拖慢 API。
@@ -422,10 +425,15 @@ async fn main() -> anyhow::Result<()> {
     #[derive(serde::Deserialize, Debug, Default)]
     struct SipEdgeConfigSection {
         network: Option<SipEdgeNetworkSection>,
+        cluster: Option<SipEdgeClusterSection>,
     }
     #[derive(serde::Deserialize, Debug, Default)]
     struct SipEdgeNetworkSection {
         manage_bind: Option<String>,
+    }
+    #[derive(serde::Deserialize, Debug, Default)]
+    struct SipEdgeClusterSection {
+        node_key_prefix: Option<String>,
     }
 
     let config: ApiServerConfig = serde_yaml::from_str(&config_content).unwrap_or_default();
@@ -527,6 +535,12 @@ async fn main() -> anyhow::Result<()> {
     let nats_client = async_nats::connect(&nats_url).await.ok();
 
     let sip_edge_section = config.sip_edge.unwrap_or_default();
+    let sip_node_key_prefix = sip_edge_section
+        .cluster
+        .unwrap_or_default()
+        .node_key_prefix
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "vos_rs:cluster:sip_nodes".to_string());
     let sip_manage_base = format!(
         "http://{}",
         sip_edge_section
@@ -572,6 +586,7 @@ async fn main() -> anyhow::Result<()> {
         financier_password,
         internal_secret,
         redis_client,
+        sip_node_key_prefix,
     };
 
     let cors_origins_raw = api_network.allowed_origins.clone().unwrap_or_default();
@@ -617,6 +632,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/system/media-cluster",
             get(get_media_cluster).put(update_media_cluster),
+        )
+        .route(
+            "/api/system/sip-cluster/status",
+            get(get_sip_cluster_status),
         )
         .route("/api/dashboard/stats", get(get_dashboard_stats))
         .route("/api/dashboard/trend", get(get_dashboard_trend))

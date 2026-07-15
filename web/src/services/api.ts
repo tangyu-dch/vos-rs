@@ -41,6 +41,20 @@ export interface MediaClusterConfig {
   nodes: MediaClusterNode[];
 }
 
+export interface SipClusterNodeStatus {
+  node_id: string;
+  advertised_addr: string;
+  router_mode: 'direct' | 'external' | 'native';
+  updated_at: number;
+  ttl_secs: number;
+}
+
+export interface SipClusterStatus {
+  node_key_prefix: string;
+  online_nodes: number;
+  nodes: SipClusterNodeStatus[];
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
@@ -411,6 +425,10 @@ export const apiService = {
   },
   async updateMediaCluster(config: MediaClusterConfig): Promise<MediaClusterConfig> {
     const response = await api.put<MediaClusterConfig>('/system/media-cluster', config);
+    return response.data;
+  },
+  async getSipClusterStatus(): Promise<SipClusterStatus> {
+    const response = await api.get<SipClusterStatus>('/system/sip-cluster/status');
     return response.data;
   },
 };
