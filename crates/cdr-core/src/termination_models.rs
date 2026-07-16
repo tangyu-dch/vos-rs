@@ -10,6 +10,7 @@ pub struct TrunkIpRule {
     pub cidr: String,
     pub source_port: Option<i32>,
     pub transport: String,
+    pub description: String,
     pub enabled: bool,
 }
 

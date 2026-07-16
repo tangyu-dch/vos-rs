@@ -61,7 +61,10 @@ impl CallerNumberDirectory {
             return Ok(None);
         };
         match mode {
-            "passthrough" | "strict_passthrough" => self.resolve_owned(
+            // Historical gateways default to `passthrough` and may not have number inventory yet.
+            // Strict ownership is enabled only by the new source-policy enum.
+            "passthrough" => Ok(None),
+            "strict_passthrough" => self.resolve_owned(
                 original_number,
                 original_number,
                 CallerIdentityMode::StrictPassthrough,
@@ -198,7 +201,7 @@ mod tests {
         let directory = CallerNumberDirectory::new([("13800138000".into(), "gw1".into())]);
         let resolved = directory
             .resolve(
-                Some("passthrough"),
+                Some("strict_passthrough"),
                 None,
                 "13800138000",
                 &[candidate("gw1")],
@@ -211,13 +214,30 @@ mod tests {
 
         assert!(directory
             .resolve(
-                Some("passthrough"),
+                Some("strict_passthrough"),
                 None,
                 "13900139000",
                 &[candidate("gw1")],
                 "call-2",
             )
             .is_err());
+    }
+
+    #[test]
+    fn legacy_passthrough_remains_compatible_without_number_inventory() {
+        let directory = CallerNumberDirectory::default();
+        assert_eq!(
+            directory
+                .resolve(
+                    Some("passthrough"),
+                    None,
+                    "1001",
+                    &[candidate("gw1")],
+                    "legacy-call",
+                )
+                .expect("legacy passthrough must remain available"),
+            None
+        );
     }
 
     #[test]

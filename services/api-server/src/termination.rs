@@ -26,6 +26,7 @@ pub struct IpRuleBody {
     pub cidr: String,
     pub source_port: Option<i32>,
     pub transport: Option<String>,
+    pub description: Option<String>,
     pub enabled: Option<bool>,
 }
 
@@ -90,8 +91,6 @@ pub struct EgressGroupMemberBody {
 
 #[derive(Debug, Deserialize)]
 pub struct SourcePolicyBody {
-    pub source_type: Option<String>,
-    pub source_id: Option<String>,
     pub caller_mode: String,
     pub fixed_number: Option<String>,
     pub caller_pool_id: Option<String>,
@@ -183,7 +182,7 @@ fn validate_policy(body: &SourcePolicyBody) -> Result<&'static str, Error> {
     }
     if !matches!(
         body.fallback_mode.as_deref().unwrap_or("reject"),
-        "reject" | "fixed" | "pool"
+        "reject" | "fallback_number" | "fallback_pool" | "fixed" | "pool"
     ) {
         return Err(invalid("失败策略不受支持"));
     }
@@ -226,6 +225,7 @@ pub async fn replace_ip_rules(
             cidr: item.cidr,
             source_port: item.source_port,
             transport,
+            description: item.description.unwrap_or_default(),
             enabled: item.enabled.unwrap_or(true),
         });
     }
@@ -365,11 +365,22 @@ async fn save_caller_pool(
     }
     if !matches!(
         body.strategy.as_str(),
-        "random" | "round_robin" | "weighted" | "hash"
+        "random" | "round_robin" | "weighted_random" | "stable_hash" | "weighted" | "hash"
     ) {
         return Err(invalid("号码池策略不受支持"));
     }
-    let fallback_mode = body.fallback_mode.unwrap_or_else(|| "reject".to_string());
+    let strategy = match body.strategy.as_str() {
+        "weighted" => "weighted_random",
+        "hash" => "stable_hash",
+        value => value,
+    }
+    .to_string();
+    let fallback_mode = match body.fallback_mode.as_deref().unwrap_or("reject") {
+        "fixed" => "fallback_number",
+        "pool" => "fallback_pool",
+        value => value,
+    }
+    .to_string();
     let now = OffsetDateTime::now_utc();
     state
         .store
@@ -378,7 +389,7 @@ async fn save_caller_pool(
             owner_source_type: body.owner_source_type,
             owner_source_id: body.owner_source_id,
             virtual_alias: body.virtual_alias,
-            strategy: body.strategy,
+            strategy,
             fallback_mode,
             enabled: body.enabled.unwrap_or(true),
             created_at: now,
@@ -616,7 +627,12 @@ fn build_policy(
         egress_mode: body.egress_mode,
         direct_egress_trunk_id: body.direct_egress_trunk_id,
         egress_group_id: body.egress_group_id,
-        fallback_mode: body.fallback_mode.unwrap_or_else(|| "reject".to_string()),
+        fallback_mode: match body.fallback_mode.as_deref().unwrap_or("reject") {
+            "fixed" => "fallback_number",
+            "pool" => "fallback_pool",
+            value => value,
+        }
+        .to_string(),
         enabled: body.enabled.unwrap_or(true),
         updated_at: OffsetDateTime::now_utc(),
     })
@@ -766,8 +782,6 @@ mod tests {
 
     fn policy(caller_mode: &str, egress_mode: &str) -> SourcePolicyBody {
         SourcePolicyBody {
-            source_type: None,
-            source_id: None,
             caller_mode: caller_mode.to_string(),
             fixed_number: None,
             caller_pool_id: None,

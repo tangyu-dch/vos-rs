@@ -3,6 +3,9 @@
 pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'egress'",
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS access_auth_mode TEXT NOT NULL DEFAULT 'none'",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS access_username TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS access_realm TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS access_password_hash TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE number_inventory ADD COLUMN IF NOT EXISTS owner_egress_trunk_id TEXT REFERENCES sip_gateways(id) ON DELETE RESTRICT",
     r#"CREATE TABLE IF NOT EXISTS trunk_ip_rules (
         id BIGSERIAL PRIMARY KEY,
@@ -10,6 +13,7 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
         cidr CIDR NOT NULL,
         source_port INTEGER,
         transport TEXT NOT NULL DEFAULT 'udp',
+        description TEXT NOT NULL DEFAULT '',
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         UNIQUE (trunk_id, cidr, source_port, transport),
@@ -52,8 +56,8 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         UNIQUE (owner_source_type, owner_source_id, virtual_alias),
         CHECK (owner_source_type IN ('trunk', 'extension', 'extension_group')),
-        CHECK (strategy IN ('random', 'round_robin', 'weighted', 'hash')),
-        CHECK (fallback_mode IN ('reject', 'fixed', 'pool'))
+        CHECK (strategy IN ('random', 'round_robin', 'weighted_random', 'stable_hash', 'weighted', 'hash')),
+        CHECK (fallback_mode IN ('reject', 'fallback_number', 'fallback_pool', 'fixed', 'pool'))
     )"#,
     r#"CREATE TABLE IF NOT EXISTS caller_pool_members (
         id BIGSERIAL PRIMARY KEY,
@@ -107,7 +111,12 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
         CHECK (source_type IN ('trunk', 'extension', 'extension_group')),
         CHECK (caller_mode IN ('strict_passthrough', 'fixed_number', 'virtual_pool')),
         CHECK (egress_mode IN ('direct', 'group')),
-        CHECK (fallback_mode IN ('reject', 'fixed', 'pool'))
+        CHECK (fallback_mode IN ('reject', 'fallback_number', 'fallback_pool', 'fixed', 'pool')),
+        CHECK ((caller_mode = 'strict_passthrough' AND fixed_number IS NULL AND caller_pool_id IS NULL)
+            OR (caller_mode = 'fixed_number' AND fixed_number IS NOT NULL AND caller_pool_id IS NULL)
+            OR (caller_mode = 'virtual_pool' AND fixed_number IS NULL AND caller_pool_id IS NOT NULL)),
+        CHECK ((egress_mode = 'direct' AND direct_egress_trunk_id IS NOT NULL AND egress_group_id IS NULL)
+            OR (egress_mode = 'group' AND direct_egress_trunk_id IS NULL AND egress_group_id IS NOT NULL))
     )"#,
     r#"CREATE TABLE IF NOT EXISTS did_destinations (
         number TEXT PRIMARY KEY REFERENCES number_inventory(number) ON DELETE CASCADE,
@@ -119,9 +128,26 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
         CHECK (target_type IN ('extension', 'extension_group', 'ivr', 'reject'))
     )"#,
     "CREATE INDEX IF NOT EXISTS idx_trunk_ip_rules_trunk ON trunk_ip_rules (trunk_id)",
+    "ALTER TABLE trunk_ip_rules ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''",
     "CREATE INDEX IF NOT EXISTS idx_egress_endpoints_trunk ON egress_endpoints (trunk_id)",
     "CREATE INDEX IF NOT EXISTS idx_number_owner ON number_inventory (owner_egress_trunk_id)",
     "CREATE INDEX IF NOT EXISTS idx_number_allocations_source ON number_allocations (source_type, source_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_number_allocations_one_active ON number_allocations (number) WHERE enabled",
     "CREATE INDEX IF NOT EXISTS idx_caller_pool_members_pool ON caller_pool_members (pool_id)",
     "CREATE INDEX IF NOT EXISTS idx_egress_group_members_group ON egress_group_members (group_id)",
+    r#"DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_source_policy_caller_fields') THEN
+            ALTER TABLE source_outbound_policies ADD CONSTRAINT chk_source_policy_caller_fields CHECK (
+                (caller_mode='strict_passthrough' AND fixed_number IS NULL AND caller_pool_id IS NULL) OR
+                (caller_mode='fixed_number' AND fixed_number IS NOT NULL AND caller_pool_id IS NULL) OR
+                (caller_mode='virtual_pool' AND fixed_number IS NULL AND caller_pool_id IS NOT NULL)
+            ) NOT VALID;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_source_policy_egress_fields') THEN
+            ALTER TABLE source_outbound_policies ADD CONSTRAINT chk_source_policy_egress_fields CHECK (
+                (egress_mode='direct' AND direct_egress_trunk_id IS NOT NULL AND egress_group_id IS NULL) OR
+                (egress_mode='group' AND direct_egress_trunk_id IS NULL AND egress_group_id IS NOT NULL)
+            ) NOT VALID;
+        END IF;
+    END $$"#,
 ];
