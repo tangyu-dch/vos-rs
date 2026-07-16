@@ -593,6 +593,7 @@ pub(crate) async fn dispatch_response(
                     failover_uri: None,
                     gateway_id: String::new(),
                     failover_gateway_id: None,
+                    caller_identity: None,
                 }
             }
         }
@@ -610,6 +611,7 @@ pub(crate) async fn dispatch_response(
             failover_uri: None,
             gateway_id: String::new(),
             failover_gateway_id: None,
+            caller_identity: None,
         }
     };
 

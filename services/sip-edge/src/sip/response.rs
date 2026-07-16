@@ -186,6 +186,7 @@ fn invite_error_status(error: &CallError) -> (u16, &'static str) {
         }
         CallError::NoRouteForDestination(_) => (404, "Not Found"),
         CallError::GatewayUnavailable(_) => (503, "Service Unavailable"),
+        CallError::CallerIdentityUnavailable(_) => (403, "Forbidden"),
         CallError::UnknownCall(_) => (481, "Call/Transaction Does Not Exist"),
         CallError::InvalidTransition { .. }
         | CallError::OutboundLegAlreadyExists

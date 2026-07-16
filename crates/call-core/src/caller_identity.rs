@@ -186,11 +186,11 @@ mod tests {
     use std::str::FromStr;
 
     fn candidate(gateway: &str) -> SelectedRoute {
-        SelectedRoute::new(
-            "route",
-            RouteTarget::new(gateway, "example.com", Some(5060)),
-            SipUri::from_str("sip:callee@example.com").expect("valid URI"),
-        )
+        SelectedRoute {
+            route_id: "route".to_string(),
+            target: RouteTarget::new(gateway, "example.com", Some(5060)),
+            outbound_uri: SipUri::from_str("sip:callee@example.com").expect("valid URI"),
+        }
     }
 
     #[test]
