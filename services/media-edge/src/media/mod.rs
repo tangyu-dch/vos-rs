@@ -38,9 +38,12 @@ pub(crate) mod rtcp_processor;
 #[allow(dead_code)]
 pub(crate) mod sdp;
 pub(crate) mod transcode;
+pub(crate) mod live_transcode;
 pub(crate) mod utils;
 #[allow(dead_code)]
 pub(crate) mod wav;
 
 pub use self::config::MediaConfig;
 pub use self::relay::MediaRelayState;
+pub use self::live_transcode::LiveTranscoder;
+

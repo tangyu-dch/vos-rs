@@ -81,6 +81,15 @@ pub(crate) async fn relay_media_port(
     metrics_flush_interval.tick().await;
     let mut source_binding = None;
     let mut learned_symmetric_source = None;
+    let mut live_transcoder = if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
+        if local_codec != peer_codec {
+            crate::media::LiveTranscoder::new(local_codec, peer_codec).ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     loop {
         let (size, source) = tokio::select! {
@@ -139,6 +148,15 @@ pub(crate) async fn relay_media_port(
             fast_path_counters.flush(&relay, local_port);
             plan = relay.relay_plan(local_port);
             plan_epoch = current_epoch;
+            live_transcoder = if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
+                if local_codec != peer_codec {
+                    crate::media::LiveTranscoder::new(local_codec, peer_codec).ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
         }
 
         let use_fast_path = packet_kind == MediaPacketKind::Rtp && plan.path == RelayPath::Fast;
@@ -450,19 +468,32 @@ pub(crate) async fn relay_media_port(
             if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
                 if local_codec != peer_codec {
                     if let Ok(mut rtp) = rtp_core::RtpPacket::parse(packet) {
-                        let new_payload = match (local_codec, peer_codec) {
-                            (rtp_core::AudioCodec::Pcma, rtp_core::AudioCodec::Pcmu) => Some(
-                                crate::media::transcode::transcode_pcma_to_pcmu(&rtp.payload),
-                            ),
-                            (rtp_core::AudioCodec::Pcmu, rtp_core::AudioCodec::Pcma) => Some(
-                                crate::media::transcode::transcode_pcmu_to_pcma(&rtp.payload),
-                            ),
-                            _ => None,
-                        };
-                        if let Some(payload) = new_payload {
-                            rtp.payload = payload;
+                        let mut success = false;
+                        match (local_codec, peer_codec) {
+                            (rtp_core::AudioCodec::Pcma, rtp_core::AudioCodec::Pcmu) => {
+                                crate::media::transcode::transcode_pcma_to_pcmu_inplace(&mut rtp.payload);
+                                success = true;
+                            }
+                            (rtp_core::AudioCodec::Pcmu, rtp_core::AudioCodec::Pcma) => {
+                                crate::media::transcode::transcode_pcmu_to_pcma_inplace(&mut rtp.payload);
+                                success = true;
+                            }
+                            _ => {
+                                if let Some(transcoder) = &mut live_transcoder {
+                                    if let Ok(new_payload) = transcoder.transcode(&rtp.payload) {
+                                        if !new_payload.is_empty() {
+                                            rtp.payload = new_payload;
+                                            success = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if success {
                             if let Some(pt) = peer_codec.static_payload_type() {
                                 rtp.payload_type = pt;
+                            } else if peer_codec == rtp_core::AudioCodec::Opus {
+                                rtp.payload_type = 111;
                             }
                             if let Ok(encoded) = rtp.encode() {
                                 transcoded_packet = Some(encoded);

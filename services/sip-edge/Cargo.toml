@@ -43,3 +43,5 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"                                                  # ICE credential 随机生成
+opus = "0.3.0"
+rubato = "0.15"
