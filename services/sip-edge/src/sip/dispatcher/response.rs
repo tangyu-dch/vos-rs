@@ -739,12 +739,13 @@ pub(crate) async fn dispatch_response(
             let failover_external_cid = edge_state
                 .get_external_call_id(&failover_internal_cid)
                 .unwrap_or_else(|| failover_internal_cid.clone());
-            let bytes = outbound::build_outbound_invite_with_body_and_call_id(
+            let bytes = outbound::build_outbound_invite_with_body_call_id_and_caller(
                 req,
                 &next_uri,
                 &edge_config.advertised_addr,
                 sdp.body.as_slice(),
                 &failover_external_cid,
+                outbound_response_outcome.caller_identity.as_ref(),
             );
             return vec![PendingDatagram::new(target, bytes)];
         } else {

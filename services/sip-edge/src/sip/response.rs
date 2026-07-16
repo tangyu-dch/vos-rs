@@ -20,7 +20,7 @@
 //! - 检查网关容量
 //! - 应用前缀规则和 Caller ID 重写
 
-use call_core::{CallError, CallManager, GatewayHealthTracker};
+use call_core::{CallError, CallManager, CallerIdentity, GatewayHealthTracker};
 use sip_core::{HeaderMap, Method, SipRequest, SipResponse, SipUri};
 
 const SERVER_HEADER: &str = "VOS-RS sip-edge/0.1";
@@ -46,6 +46,7 @@ pub struct OutboundInvitePlan {
     pub outbound_uri: SipUri,
     pub target_override_addr: Option<String>,
     pub gateway_id: String,
+    pub caller_identity: Option<CallerIdentity>,
 }
 
 pub fn response_for_request_with_health(
@@ -83,6 +84,7 @@ fn response_for_invite(
                     outbound_uri: outcome.outbound_uri,
                     target_override_addr: None,
                     gateway_id,
+                    caller_identity: outcome.caller_identity,
                 }),
             }
         }
@@ -113,6 +115,7 @@ pub fn response_for_invite_to_uri(
                 outbound_uri: outcome.outbound_uri,
                 target_override_addr: None,
                 gateway_id: String::new(),
+                caller_identity: None,
             }),
         },
         Err(error) => {

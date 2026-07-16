@@ -716,9 +716,6 @@ fn parse_uri_from_contact(raw: &str) -> Option<sip_core::SipUri> {
 fn caller_number_from_request(request: &SipRequest) -> Option<String> {
     let header = request.headers.get("from")?.as_str().trim();
     let sip_start = header.find("sip:").map(|index| index + 4)?;
-    let user = header[sip_start..]
-        .split(['@', ';', '>'])
-        .next()?
-        .trim();
+    let user = header[sip_start..].split(['@', ';', '>']).next()?.trim();
     (!user.is_empty()).then(|| user.to_string())
 }

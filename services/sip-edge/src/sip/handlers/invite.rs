@@ -566,7 +566,7 @@ pub(crate) async fn handle_invite_request(
                 ));
 
                 let target = outbound::target_addr_for(&candidate.outbound_uri);
-                let bytes = outbound::build_outbound_invite_with_session_timer_and_call_id(
+                let bytes = outbound::build_outbound_invite_with_session_timer_call_id_and_caller(
                     &request,
                     &candidate.outbound_uri,
                     &edge_config.advertised_addr,
@@ -577,6 +577,7 @@ pub(crate) async fn handle_invite_request(
                     edge_config.session_expires_gateway,
                     path,
                     &external_call_id,
+                    outbound_invite.caller_identity.as_ref(),
                 );
                 datagrams.push(PendingDatagram::new(target, bytes));
 
@@ -605,7 +606,7 @@ pub(crate) async fn handle_invite_request(
                 outbound::target_addr_for(&outbound_invite.outbound_uri)
             };
 
-            let bytes = outbound::build_outbound_invite_with_session_timer_and_call_id(
+            let bytes = outbound::build_outbound_invite_with_session_timer_call_id_and_caller(
                 &request,
                 &outbound_invite.outbound_uri,
                 &edge_config.advertised_addr,
@@ -616,6 +617,7 @@ pub(crate) async fn handle_invite_request(
                 edge_config.session_expires_gateway,
                 path,
                 &external_call_id,
+                outbound_invite.caller_identity.as_ref(),
             );
             datagrams.push(PendingDatagram::new(target, bytes));
 

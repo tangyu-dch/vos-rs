@@ -15,6 +15,7 @@
 //! 出站 INVITE 使用独立的 Call-ID（external_call_id），
 //! 隐藏内部拓扑信息，防止外部网关探测内部网络结构。
 
+use call_core::CallerIdentity;
 use sip_core::{HeaderMap, Method, SipRequest, SipResponse, SipUri};
 use std::str::FromStr;
 
@@ -135,6 +136,27 @@ pub fn build_outbound_invite_with_body_and_call_id(
     )
 }
 
+/// Topology-hiding INVITE that also applies a resolved caller identity.
+pub fn build_outbound_invite_with_body_call_id_and_caller(
+    inbound: &SipRequest,
+    outbound_uri: &SipUri,
+    advertised_addr: &str,
+    body: &[u8],
+    external_call_id: &str,
+    caller_identity: Option<&CallerIdentity>,
+) -> Vec<u8> {
+    build_outbound_request_with_extra(
+        inbound,
+        outbound_uri,
+        advertised_addr,
+        &[],
+        body,
+        "",
+        Some(external_call_id),
+        caller_identity,
+    )
+}
+
 /// Topology-hiding variant of `build_outbound_invite_with_session_timer`.
 /// Sends `external_call_id` on the outbound leg instead of copying the inbound Call-ID.
 pub fn build_outbound_invite_with_session_timer_and_call_id(
@@ -157,6 +179,34 @@ pub fn build_outbound_invite_with_session_timer_and_call_id(
         body,
         &extra_headers,
         Some(external_call_id),
+        None,
+    )
+}
+
+/// Builds an outbound INVITE with a caller number resolved by the ownership directory.
+#[allow(clippy::too_many_arguments)]
+pub fn build_outbound_invite_with_session_timer_call_id_and_caller(
+    inbound: &SipRequest,
+    outbound_uri: &SipUri,
+    advertised_addr: &str,
+    body: &[u8],
+    session_expires: u32,
+    route_set: &[String],
+    external_call_id: &str,
+    caller_identity: Option<&CallerIdentity>,
+) -> Vec<u8> {
+    let extra_headers = format!(
+        "Supported: timer,100rel\r\nSession-Expires: {session_expires};refresher=uac\r\nMin-SE: 90\r\n"
+    );
+    build_outbound_request_with_extra(
+        inbound,
+        outbound_uri,
+        advertised_addr,
+        route_set,
+        body,
+        &extra_headers,
+        Some(external_call_id),
+        caller_identity,
     )
 }
 
@@ -361,6 +411,7 @@ fn build_outbound_request(
         body,
         "",
         override_call_id,
+        None,
     )
 }
 
@@ -372,6 +423,7 @@ fn build_outbound_request_with_extra(
     body: &[u8],
     extra_headers: &str,
     override_call_id: Option<&str>,
+    caller_identity: Option<&CallerIdentity>,
 ) -> Vec<u8> {
     let mut request = String::new();
     request.push_str(inbound.method.as_str());
@@ -399,7 +451,11 @@ fn build_outbound_request_with_extra(
         request.push_str("\r\n");
     }
 
-    append_single_header(&mut request, &inbound.headers, "from", "From");
+    if let Some(identity) = caller_identity {
+        append_caller_identity_headers(&mut request, inbound, advertised_addr, identity);
+    } else {
+        append_single_header(&mut request, &inbound.headers, "from", "From");
+    }
     append_single_header(&mut request, &inbound.headers, "to", "To");
     // Topology Hiding: use the override Call-ID for the outbound leg if provided.
     if let Some(cid) = override_call_id {
@@ -528,14 +584,96 @@ fn append_single_header(
     }
 }
 
+/// Rebuilds identity headers from trusted structured data instead of forwarding raw input.
+pub fn caller_identity_headers(
+    inbound: &SipRequest,
+    advertised_addr: &str,
+    identity: &CallerIdentity,
+) -> Option<String> {
+    if advertised_addr.contains(['\r', '\n']) || !valid_caller_number(&identity.presented_number) {
+        return None;
+    }
+    let tag = inbound
+        .headers
+        .get("from")
+        .and_then(|value| header_parameter(value.as_str(), "tag"))
+        .filter(|value| value.bytes().all(valid_token_byte));
+    let tag = tag.map(|tag| format!(";tag={tag}")).unwrap_or_default();
+    Some(format!(
+        "From: <sip:{number}@{domain}>{tag}\r\nP-Asserted-Identity: <sip:{number}@{domain}>\r\n",
+        number = identity.presented_number,
+        domain = advertised_addr,
+    ))
+}
+
+fn append_caller_identity_headers(
+    request: &mut String,
+    inbound: &SipRequest,
+    advertised_addr: &str,
+    identity: &CallerIdentity,
+) {
+    if let Some(headers) = caller_identity_headers(inbound, advertised_addr, identity) {
+        request.push_str(&headers);
+    }
+}
+
+fn valid_caller_number(number: &str) -> bool {
+    let digits = number.strip_prefix('+').unwrap_or(number);
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn header_parameter<'a>(header: &'a str, name: &str) -> Option<&'a str> {
+    header.split(';').skip(1).find_map(|parameter| {
+        let (key, value) = parameter.trim().split_once('=')?;
+        key.eq_ignore_ascii_case(name)
+            .then_some(value.trim().trim_end_matches('>'))
+    })
+}
+
+fn valid_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'+')
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         build_gateway_options, build_notify_sipfrag, build_outbound_in_dialog_request,
-        build_outbound_invite_with_body, target_addr_for,
+        build_outbound_invite_with_body, caller_identity_headers, target_addr_for,
     };
+    use call_core::{CallerIdentity, CallerIdentityMode, GatewayId};
     use sip_core::{parse_message, SipUri};
     use std::str::FromStr;
+
+    #[test]
+    fn caller_identity_headers_rebuild_from_and_pai_without_forwarding_display_name() {
+        let inbound = invite_request();
+        let identity = CallerIdentity {
+            original_number: "1001".to_string(),
+            presented_number: "13800138000".to_string(),
+            owner_gateway_id: GatewayId::new("gw1"),
+            mode: CallerIdentityMode::Fixed,
+        };
+        let headers = caller_identity_headers(&inbound, "edge.example.com:5060", &identity)
+            .expect("valid identity headers");
+        assert_eq!(
+            headers,
+            "From: <sip:13800138000@edge.example.com:5060>;tag=from-tag\r\n\
+             P-Asserted-Identity: <sip:13800138000@edge.example.com:5060>\r\n"
+        );
+        assert!(!headers.contains("1001"));
+    }
+
+    #[test]
+    fn caller_identity_headers_reject_header_injection() {
+        let inbound = invite_request();
+        let identity = CallerIdentity {
+            original_number: "1001".to_string(),
+            presented_number: "13800138000\r\nX-Evil: yes".to_string(),
+            owner_gateway_id: GatewayId::new("gw1"),
+            mode: CallerIdentityMode::Fixed,
+        };
+        assert!(caller_identity_headers(&inbound, "edge.example.com", &identity).is_none());
+    }
 
     #[test]
     fn builds_outbound_invite_for_gateway() {

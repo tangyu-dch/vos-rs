@@ -1,7 +1,7 @@
 use crate::config::EdgeConfig;
 use crate::edge_state::EdgeState;
 use crate::security::rules::refresh_anti_fraud_rules;
-use call_core::{Route, RouteTable, RouteTarget};
+use call_core::{CallerNumberDirectory, Route, RouteTable, RouteTarget};
 use cdr_core::PostgresCdrStore;
 use futures::StreamExt;
 use sip_core::SipUri;
@@ -20,6 +20,7 @@ pub(crate) async fn reload_routes_from_database(
 ) -> Result<(), AnyError> {
     let db_routes = db.load_routes().await?;
     let db_gateways = db.load_gateways().await?;
+    let caller_numbers = db.list_numbers().await?;
     let gateway_map = db_gateways
         .into_iter()
         .map(
@@ -48,6 +49,30 @@ pub(crate) async fn reload_routes_from_database(
         )
         .collect::<HashMap<_, _>>();
     edge_state.replace_gateway_cache(gateway_map.values().map(|(host, _, _, _, _, _)| host));
+    edge_state
+        .call_manager
+        .update_caller_numbers(CallerNumberDirectory::new(
+            caller_numbers.into_iter().filter_map(|number| {
+                let enabled = matches!(
+                    number.status.trim().to_ascii_lowercase().as_str(),
+                    "available" | "assigned" | "active"
+                );
+                let outbound = matches!(
+                    number
+                        .direction
+                        .as_deref()
+                        .unwrap_or("bidirectional")
+                        .trim()
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "outbound" | "both" | "bidirectional"
+                );
+                (enabled && outbound)
+                    .then_some(number.gateway_id)
+                    .flatten()
+                    .map(|gateway_id| (number.number, gateway_id))
+            }),
+        ));
 
     let mut routes = Vec::new();
     let now_hhmm = cdr_core::current_hhmm();
