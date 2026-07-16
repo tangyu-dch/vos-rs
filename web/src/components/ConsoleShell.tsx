@@ -19,7 +19,8 @@ const groups = [
   ] },
   { label: '中继路由', items: [
     { to: '/trunks', label: '中继管理', icon: <IconStorage /> },
-    { to: '/routing', label: '路由管理', icon: <IconBranch /> },
+    { to: '/egress-groups', label: '落地分组', icon: <IconBranch /> },
+    { to: '/caller-pools', label: '号码池组', icon: <IconApps /> },
   ] },
   { label: '通话分析', items: [{ to: '/calls', label: '通话记录', icon: <IconPhone /> }] },
   { label: '计费中心', items: [

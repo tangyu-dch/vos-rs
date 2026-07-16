@@ -65,6 +65,11 @@ button, input { letter-spacing: 0; }
 .detail-sections { display: grid; gap: 14px; }
 .muted-copy { margin: 0; color: var(--muted); font-size: 13px; }
 .settings-form { padding: 20px; }
+.trunk-workspace { min-height: 520px; padding: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.trunk-workspace > .arco-tabs .arco-tabs-header-nav { margin-bottom: 22px; }
+.trunk-empty { min-height: 320px; display: grid; place-items: center; }
+.repeat-editor { width: 100%; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: #fafbfb; }
+.repeat-editor .section-title p { margin-top: 5px; }
 .form-grid { width: 100%; }
 .settings-notice { margin-bottom: 14px; }
 .settings-form > .arco-tabs .arco-tabs-header-nav { margin-bottom: 20px; }

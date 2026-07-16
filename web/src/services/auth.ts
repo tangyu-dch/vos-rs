@@ -53,7 +53,7 @@ export function canAccessPage(role: UserRole, path: string): boolean {
   if (role === 'admin') return true;
   if (path.startsWith('/extensions') || path.startsWith('/infrastructure') || path === '/settings') return false;
   if (path.startsWith('/billing/')) return role === 'financier';
-  if (['/numbers', '/trunks', '/routing', '/security'].some((prefix) => path.startsWith(prefix))) return role === 'operator';
+  if (['/numbers', '/trunks', '/routing', '/caller-pools', '/egress-groups', '/security'].some((prefix) => path.startsWith(prefix))) return role === 'operator';
   return path === '/overview' || path.startsWith('/calls');
 }
 

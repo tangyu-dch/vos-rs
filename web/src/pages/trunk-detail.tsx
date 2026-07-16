@@ -64,7 +64,7 @@ function IpRulesEditor({ rules, onChange }: { rules: TrunkIpRule[]; onChange: (r
     { title: '启用', width: 74, render: (_: unknown, row: TrunkIpRule, index: number) => <Switch checked={row.enabled} onChange={(value) => patch(index, { enabled: value })} /> },
     { title: '', width: 58, render: (_: unknown, __: TrunkIpRule, index: number) => <Button type="text" status="danger" icon={<IconDelete />} aria-label="删除 IP 规则" onClick={() => onChange(rules.filter((_, itemIndex) => itemIndex !== index))} /> },
   ];
-  return <div className="repeat-editor"><div className="section-title"><div><h2>来源地址</h2><p className="muted-copy">支持 IPv4、IPv6 和 CIDR；端口留空表示任意来源端口。</p></div><Button icon={<IconPlus />} onClick={() => onChange([...rules, { cidr: '', source_port: null, transport: 'udp', description: '', enabled: true }])}>添加地址</Button></div><Table rowKey={(_, index) => String(index)} pagination={false} data={rules} columns={columns} scroll={{ x: 820 }} noDataElement={<Empty description="尚未配置 IP 白名单" />} /></div>;
+  return <div className="repeat-editor"><div className="section-title"><div><h2>来源地址</h2><p className="muted-copy">支持 IPv4、IPv6 和 CIDR；端口留空表示任意来源端口。</p></div><Button icon={<IconPlus />} onClick={() => onChange([...rules, { _key: crypto.randomUUID(), cidr: '', source_port: null, transport: 'udp', description: '', enabled: true }])}>添加地址</Button></div><Table rowKey={(record) => record._key || record.id || record.cidr} pagination={false} data={rules} columns={columns} scroll={{ x: 820 }} noDataElement={<Empty description="尚未配置 IP 白名单" />} /></div>;
 }
 
 function AccessAuthTab({ draft, set, rules, setRules }: { draft: Entity; set: (key: string, value: unknown) => void; rules: TrunkIpRule[]; setRules: (rules: TrunkIpRule[]) => void }) {
@@ -93,7 +93,14 @@ function AccessRegistrationStatus({ registrations }: { registrations: Entity[] }
 }
 
 function CallerTab({ policy, set }: { policy: OutboundPolicy; set: (key: keyof OutboundPolicy, value: unknown) => void }) {
-  return <Form layout="vertical"><Grid.Row className="form-grid" gutter={[18, 0]}><Field label="主叫策略" required><Select value={policy.caller_policy} options={callerOptions} onChange={(value) => set('caller_policy', value)} /></Field><Field label="失败处理" required><Select value={policy.caller_failure_action} options={[{ label: '拒绝呼叫', value: 'reject' }, { label: '固定替换', value: 'fallback_number' }, { label: '号码池替换', value: 'fallback_pool' }]} onChange={(value) => set('caller_failure_action', value)} /></Field>{policy.caller_policy === 'fixed_number' && <Field label="固定号码" required><Input value={policy.fixed_number_id} onChange={(value) => set('fixed_number_id', value)} placeholder="填写已授权真实号码" /></Field>}{policy.caller_policy === 'virtual_pool' && <Field label="主叫号码池" required><Input value={policy.caller_pool_id} onChange={(value) => set('caller_pool_id', value)} placeholder="选择或填写号码池 ID" /></Field>}{policy.caller_failure_action === 'fallback_number' && <Field label="备用号码" required><Input value={policy.fallback_number_id} onChange={(value) => set('fallback_number_id', value)} /></Field>}{policy.caller_failure_action === 'fallback_pool' && <Field label="备用号码池" required><Input value={policy.fallback_pool_id} onChange={(value) => set('fallback_pool_id', value)} /></Field></Grid.Row></Form>;
+  return <Form layout="vertical"><Grid.Row className="form-grid" gutter={[18, 0]}>
+    <Field label="主叫策略" required><Select value={policy.caller_policy} options={callerOptions} onChange={(value) => set('caller_policy', value)} /></Field>
+    <Field label="失败处理" required><Select value={policy.caller_failure_action} options={[{ label: '拒绝呼叫', value: 'reject' }, { label: '固定替换', value: 'fallback_number' }, { label: '号码池替换', value: 'fallback_pool' }]} onChange={(value) => set('caller_failure_action', value)} /></Field>
+    {policy.caller_policy === 'fixed_number' && <Field label="固定号码" required><Input value={policy.fixed_number_id} onChange={(value) => set('fixed_number_id', value)} placeholder="填写已授权真实号码" /></Field>}
+    {policy.caller_policy === 'virtual_pool' && <Field label="主叫号码池" required><Input value={policy.caller_pool_id} onChange={(value) => set('caller_pool_id', value)} placeholder="选择或填写号码池 ID" /></Field>}
+    {policy.caller_failure_action === 'fallback_number' && <Field label="备用号码" required><Input value={policy.fallback_number_id} onChange={(value) => set('fallback_number_id', value)} /></Field>}
+    {policy.caller_failure_action === 'fallback_pool' && <Field label="备用号码池" required><Input value={policy.fallback_pool_id} onChange={(value) => set('fallback_pool_id', value)} /></Field>}
+  </Grid.Row></Form>;
 }
 
 function BindingTab({ policy, set, groups, trunks }: { policy: OutboundPolicy; set: (key: keyof OutboundPolicy, value: unknown) => void; groups: Entity[]; trunks: Entity[] }) {
@@ -116,7 +123,7 @@ export default function TrunkDetailPage() {
     try {
       const workspace = await getTrunkWorkspace(id); setData(workspace); setDraft({ ...workspace.trunk, role: trunkRole(workspace.trunk) });
       const optional = await Promise.allSettled([getTrunkIpRules(id), getOutboundPolicy(id), listOptions('/egress-groups'), listOptions('/trunks')]);
-      if (optional[0].status === 'fulfilled') setRules(optional[0].value);
+      if (optional[0].status === 'fulfilled') setRules(optional[0].value.map((rule) => ({ ...rule, _key: rule.id || crypto.randomUUID() })));
       if (optional[1].status === 'fulfilled') setPolicy({ ...emptyPolicy, ...optional[1].value });
       if (optional[2].status === 'fulfilled') setGroups(optional[2].value);
       if (optional[3].status === 'fulfilled') setTrunks(optional[3].value);

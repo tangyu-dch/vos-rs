@@ -183,13 +183,12 @@ const extensions: ResourceSpec = { title: '分机', description: '管理 SIP 身
   { key: 'username', label: '分机号', required: true }, { key: 'password', label: 'SIP 密码', kind: 'secret', required: true },
 ] };
 const trunks: ResourceSpec = { title: 'SIP 中继', description: '配置运营商互联、容量和健康检查。', path: '/trunks', idKey: 'id', detailPath: '/trunks', createLabel: '新建中继', fields: [
-  { key: 'id', label: '中继 ID', required: true, placeholder: '例如 carrier-cn-01' }, { key: 'host', label: '主机地址', required: true, placeholder: 'IP 地址或域名' }, { key: 'port', label: 'SIP 端口', kind: 'number', defaultValue: 5060 },
-  { key: 'transport', label: '传输协议（TCP/TLS 待接入）', kind: 'select', required: true, options: [{ label: 'UDP', value: 'udp' }], placeholder: '当前仅支持 UDP' }, { key: 'gateway_type', label: '中继类型', kind: 'select', required: true, options: [{ label: '对等中继', value: 'peer' }, { label: '出局网关', value: 'gateway' }, { label: '注册终端', value: 'extension' }], defaultValue: 'peer' },
-  { key: 'max_capacity', label: '容量上限', kind: 'number', defaultValue: 100 }, { key: 'max_concurrent', label: '单账户并发', kind: 'number', defaultValue: 100 }, { key: 'account_id', label: '计费账户 ID', kind: 'number', placeholder: '留空表示不关联计费账户' },
-  { key: 'prefix_rules', label: '号码前缀改写', kind: 'textarea', fullWidth: true, placeholder: '格式：原前缀:新前缀，多个规则使用逗号分隔，例如 86:0086' },
-  { key: 'caller_id_mode', label: '主叫号码策略', kind: 'select', required: true, options: [{ label: '透传主叫', value: 'passthrough' }, { label: '固定虚拟主叫', value: 'virtual' }, { label: '随机虚拟主叫', value: 'random' }], defaultValue: 'passthrough' }, { key: 'virtual_caller', label: '虚拟主叫号码', placeholder: '主叫策略为固定虚拟主叫时填写' },
-  { key: 'supports_registration', label: '需要注册', kind: 'switch' }, { key: 'reg_auth_type', label: '注册认证', kind: 'select', required: true, options: [{ label: '无需认证', value: 'none' }, { label: 'IP 白名单', value: 'ip' }, { label: '用户名密码', value: 'digest' }], defaultValue: 'none' }, { key: 'reg_username', label: '注册用户名' }, { key: 'reg_password', label: '注册密码', kind: 'secret', placeholder: '编辑时留空表示不修改', preserveEmptyOnEdit: true },
-  { key: 'circuit_state', label: '熔断状态', readonly: true }, { key: 'enabled', label: '启用', kind: 'switch', defaultValue: true },
+  { key: 'id', label: '中继标识', required: true, placeholder: '例如 customer-a' }, { key: 'name', label: '中继名称', placeholder: '便于识别的业务名称' },
+  { key: 'role', label: '中继类型', kind: 'select', required: true, options: [{ label: '接入中继', value: 'access' }, { label: '落地中继', value: 'egress' }], defaultValue: 'access' },
+  { key: 'host', label: '主机地址', placeholder: '落地中继填写对端地址' }, { key: 'port', label: 'SIP 端口', kind: 'number', defaultValue: 5060 },
+  { key: 'transport', label: '传输协议', kind: 'select', required: true, options: [{ label: 'UDP', value: 'udp' }], defaultValue: 'udp' },
+  { key: 'max_capacity', label: '容量上限', kind: 'number', defaultValue: 100 }, { key: 'account_id', label: '计费账户', kind: 'number', placeholder: '可选' },
+  { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
 ] };
 const numbers: ResourceSpec = { title: '号码库存', description: '将 DID 映射到已注册分机。', path: '/numbers', idKey: 'number', createLabel: '录入号码', fields: [
   { key: 'number', label: 'DID 号码', required: true }, { key: 'username', label: '目标分机', required: true }, { key: 'status', label: '状态', kind: 'select', required: true, options: ['available', 'assigned', 'disabled'] },
@@ -214,6 +213,18 @@ export const AccountsPage = () => <ResourceWorkspace spec={accounts} />;
 export const RatesPage = () => <ResourceWorkspace spec={rates} />;
 export const TransactionsPage = () => <ResourceWorkspace spec={transactions} />;
 export const CallsPage = () => <ResourceWorkspace spec={calls} />;
+
+const callerPools: ResourceSpec = { title: '号码池组', description: '维护虚拟主叫别名、选号算法和真实号码成员。', path: '/caller-pools', idKey: 'id', createLabel: '新建号码池', fields: [
+  { key: 'id', label: '号码池 ID', required: true }, { key: 'name', label: '号码池名称', required: true },
+  { key: 'virtual_alias', label: '虚拟主叫', required: true }, { key: 'strategy', label: '选号算法', kind: 'select', required: true, options: [{ label: '均匀随机', value: 'random' }, { label: '权重随机', value: 'weighted_random' }, { label: '顺序轮询', value: 'round_robin' }, { label: '稳定哈希', value: 'stable_hash' }, { label: '优先级选', value: 'priority' }], defaultValue: 'random' },
+  { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
+] };
+const egressGroups: ResourceSpec = { title: '落地分组', description: '定义来源允许使用的落地范围、目的地能力和故障边界。', path: '/egress-groups', idKey: 'id', createLabel: '新建分组', fields: [
+  { key: 'id', label: '分组 ID', required: true }, { key: 'name', label: '分组名称', required: true },
+  { key: 'description', label: '分组说明', kind: 'textarea', fullWidth: true }, { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
+] };
+export const CallerPoolsPage = () => <ResourceWorkspace spec={callerPools} />;
+export const EgressGroupsPage = () => <ResourceWorkspace spec={egressGroups} />;
 
 interface Summary { active_calls?: number; today_total_calls?: number; answer_rate?: number; registered_users?: number; active_gateways?: number; today_failed_calls?: number; }
 export function DashboardPage() {

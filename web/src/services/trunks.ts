@@ -7,6 +7,7 @@ export type EgressConnectionType = 'static_peer' | 'client_register';
 export type CallerPolicyMode = 'strict_passthrough' | 'fixed_number' | 'virtual_pool';
 
 export interface TrunkIpRule extends Entity {
+  _key?: string;
   id?: string;
   cidr: string;
   source_port?: number | null;
@@ -59,7 +60,8 @@ export function getTrunkIpRules(id: string) {
 }
 
 export function saveTrunkIpRules(id: string, rules: TrunkIpRule[]) {
-  return api.put<TrunkIpRule[]>(`/trunks/${encodeURIComponent(id)}/ip-rules`, { items: rules });
+  const items = rules.map((rule) => { const item = { ...rule }; delete item._key; return item; });
+  return api.put<TrunkIpRule[]>(`/trunks/${encodeURIComponent(id)}/ip-rules`, { items });
 }
 
 export function getOutboundPolicy(id: string) {

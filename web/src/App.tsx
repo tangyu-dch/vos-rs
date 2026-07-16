@@ -8,8 +8,9 @@ import {
   AccountsPage, ActiveCallsPage, CallDetailPage, CallsPage, DashboardPage,
   ExtensionDetailPage, ExtensionsPage, InfrastructurePage, NumbersPage,
   RatesPage, RoutesPage, SecurityPage, SettingsPage, TransactionsPage,
-  TrunkDetailPage, TrunksPage,
+  CallerPoolsPage, EgressGroupsPage, TrunksPage,
 } from './pages/console';
+import TrunkDetailPage from './pages/trunk-detail';
 
 function PrivateConsole() {
   const { session } = useAuth();
@@ -27,6 +28,8 @@ function PrivateConsole() {
         <Route path="/numbers" element={<ProtectedPage path="/numbers"><NumbersPage /></ProtectedPage>} />
         <Route path="/trunks" element={<ProtectedPage path="/trunks"><TrunksPage /></ProtectedPage>} />
         <Route path="/trunks/:id" element={<ProtectedPage path="/trunks"><TrunkDetailPage /></ProtectedPage>} />
+        <Route path="/caller-pools" element={<ProtectedPage path="/caller-pools"><CallerPoolsPage /></ProtectedPage>} />
+        <Route path="/egress-groups" element={<ProtectedPage path="/egress-groups"><EgressGroupsPage /></ProtectedPage>} />
         <Route path="/routing" element={<ProtectedPage path="/routing"><RoutesPage /></ProtectedPage>} />
         <Route path="/billing/accounts" element={<ProtectedPage path="/billing/accounts"><AccountsPage /></ProtectedPage>} />
         <Route path="/billing/rates" element={<ProtectedPage path="/billing/rates"><RatesPage /></ProtectedPage>} />
