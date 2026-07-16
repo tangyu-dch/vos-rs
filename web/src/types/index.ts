@@ -143,7 +143,8 @@ export interface ReportSummary {
 export interface BillingRate {
   id: string;
   prefix: string;
-  rate_per_minute: number;
+  billing_interval_secs: number;
+  price_per_interval: number;
   description?: string;
   created_at?: string;
 }
@@ -158,7 +159,8 @@ export interface LedgerEntry {
   call_id: string;
   username: string;
   duration_ms: number;
-  rate_per_minute: number;
+  billing_interval_secs?: number;
+  price_per_interval?: number;
   amount: number;
   balance_after: number;
   created_at?: string;

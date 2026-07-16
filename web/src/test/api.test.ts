@@ -1,15 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ApiError, apiService, formatApiError } from '@/services/api';
-import { isForbiddenError } from '@/services/auth';
+import { describe, expect, it, vi } from 'vitest';
 
-// Mock axios
 vi.mock('axios', () => ({
   default: {
     create: vi.fn(() => ({
-      get: vi.fn(),
-      post: vi.fn(),
-      put: vi.fn(),
-      delete: vi.fn(),
+      request: vi.fn(),
       interceptors: {
         request: { use: vi.fn() },
         response: { use: vi.fn() },
@@ -18,63 +12,24 @@ vi.mock('axios', () => ({
   },
 }));
 
-describe('apiService', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+import { ApiError, unwrap } from '@/services/client';
+
+describe('v1 API client', () => {
+  it('unwraps the standard success envelope', () => {
+    expect(unwrap({ code: 0, message: 'success', data: { id: 42 }, request_id: 'req-1' })).toEqual({ id: 42 });
   });
 
-  it('has getDashboardStats method', () => {
-    expect(typeof apiService.getDashboardStats).toBe('function');
+  it('keeps backend error code and request id', () => {
+    expect(() => unwrap({ code: 40001, message: '资源不存在', data: null, request_id: 'req-2' }))
+      .toThrowError(ApiError);
+    try {
+      unwrap({ code: 40001, message: '资源不存在', data: null, request_id: 'req-2' });
+    } catch (error) {
+      expect(error).toMatchObject({ code: '40001', requestId: 'req-2' });
+    }
   });
 
-  it('has getCdrs method', () => {
-    expect(typeof apiService.getCdrs).toBe('function');
+  it('accepts an unwrapped response during migration', () => {
+    expect(unwrap(['node-a'])).toEqual(['node-a']);
   });
-
-  it('has getUsers method', () => {
-    expect(typeof apiService.getUsers).toBe('function');
-  });
-
-  it('has getGateways method', () => {
-    expect(typeof apiService.getGateways).toBe('function');
-  });
-
-  it('has getRoutes method', () => {
-    expect(typeof apiService.getRoutes).toBe('function');
-  });
-
-
-  it('has getActiveCalls method', () => {
-    expect(typeof apiService.getActiveCalls).toBe('function');
-  });
-
-  it('has terminateCall method', () => {
-    expect(typeof apiService.terminateCall).toBe('function');
-  });
-
-  it('has SIP cluster status and node control methods', () => {
-    expect(typeof apiService.getSipClusterStatus).toBe('function');
-    expect(typeof apiService.controlSipClusterNode).toBe('function');
-  });
-
-  it('formats backend errors and keeps request id', () => {
-    const error = formatApiError({
-      response: {
-        data: { error: '无权访问该接口' },
-        headers: { 'x-request-id': 'req_test_001' },
-      },
-    });
-
-    expect(error.message).toBe('无权访问该接口（请求 ID: req_test_001）');
-    expect(error).toBeInstanceOf(ApiError);
-  });
-
-  it('preserves HTTP status for permission handling', () => {
-    const error = formatApiError({
-      response: { status: 403, data: { message: '禁止访问' } },
-    });
-
-    expect(isForbiddenError(error)).toBe(true);
-  });
-
 });

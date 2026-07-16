@@ -11,7 +11,6 @@ export default defineConfig({
         manualChunks: {
           react: ['react', 'react-dom', 'react-router-dom'],
           arco: ['@arco-design/web-react', '@arco-design/web-react/icon'],
-          charts: ['echarts/core', 'echarts/charts', 'echarts/components', 'echarts/renderers'],
           http: ['axios'],
         },
       },

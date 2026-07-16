@@ -51,21 +51,17 @@ export function roleLabel(role: UserRole): string {
 
 export function canAccessPage(role: UserRole, path: string): boolean {
   if (role === 'admin') return true;
-  if (path === '/users') return false;
+  if (path.startsWith('/extensions') || path.startsWith('/infrastructure') || path === '/settings') return false;
+  if (path.startsWith('/billing/')) return role === 'financier';
+  if (['/numbers', '/trunks', '/routing', '/security'].some((prefix) => path.startsWith(prefix))) return role === 'operator';
+  return path === '/overview' || path.startsWith('/calls');
+}
 
-  if (['/rates', '/accounts'].includes(path)) return role === 'financier';
-  if (['/gateways', '/peer-gateways', '/routes', '/numbers', '/anti-fraud'].includes(path)) {
-    return role === 'operator';
-  }
-  if (path === '/audit-logs') return false;
-
-  return [
-    '/dashboard',
-    '/active-calls',
-    '/registrations',
-    '/cdr',
-    '/reports',
-  ].includes(path);
+export function canWriteDomain(role: UserRole, domain: 'extensions' | 'operations' | 'billing' | 'system'): boolean {
+  if (role === 'admin') return true;
+  if (domain === 'operations') return role === 'operator';
+  if (domain === 'billing') return role === 'financier';
+  return false;
 }
 
 export function isForbiddenError(error: unknown): boolean {

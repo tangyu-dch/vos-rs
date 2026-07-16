@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { apiService } from '@/services/api';
+import { login as createSession } from '@/services/resources';
 import { clearSession, getSession, type AuthSession } from '@/services/auth';
 
 interface AuthContextValue {
@@ -28,7 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       session,
       async login(username, password) {
-        const next = await apiService.login(username, password);
+        const next = await createSession(username, password);
         setSession(next);
       },
       logout() {

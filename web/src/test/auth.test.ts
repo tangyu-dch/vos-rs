@@ -7,13 +7,16 @@ describe('frontend RBAC', () => {
   });
 
   it('limits pages by role', () => {
-    expect(canAccessPage('admin', '/users')).toBe(true);
-    expect(canAccessPage('operator', '/routes')).toBe(true);
-    expect(canAccessPage('operator', '/accounts')).toBe(false);
-    expect(canAccessPage('financier', '/accounts')).toBe(true);
-    expect(canAccessPage('financier', '/gateways')).toBe(false);
-    expect(canAccessPage('operator', '/audit-logs')).toBe(false);
-    expect(canAccessPage('financier', '/audit-logs')).toBe(false);
+    expect(canAccessPage('admin', '/extensions')).toBe(true);
+    expect(canAccessPage('operator', '/extensions')).toBe(false);
+    expect(canAccessPage('operator', '/routing')).toBe(true);
+    expect(canAccessPage('operator', '/billing/accounts')).toBe(false);
+    expect(canAccessPage('financier', '/billing/accounts')).toBe(true);
+    expect(canAccessPage('financier', '/trunks')).toBe(false);
+    expect(canAccessPage('operator', '/infrastructure')).toBe(false);
+    expect(canAccessPage('financier', '/calls/example')).toBe(true);
+    expect(canAccessPage('operator', '/settings')).toBe(false);
+    expect(canAccessPage('financier', '/settings')).toBe(false);
   });
 
   it('persists and validates the login session', () => {
