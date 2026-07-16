@@ -22,7 +22,7 @@
 //! - **Inbound**：主叫方到软交换
 //! - **Outbound**：软交换到被叫方（网关）
 
-use crate::{CallError, CallResult, GatewayId, RouteTarget, SelectedRoute};
+use crate::{CallError, CallResult, CallerIdentity, GatewayId, RouteTarget, SelectedRoute};
 use sip_core::{SipRequest, SipUri};
 use std::time::SystemTime;
 
@@ -185,6 +185,8 @@ pub struct Call {
     pub recording_path: Option<String>,
     /// 呼叫方向（inbound/outbound）
     pub direction: String,
+    /// Resolved public caller number. Its owner gateway is pinned for this call.
+    pub caller_identity: Option<CallerIdentity>,
 }
 
 impl Call {
@@ -226,6 +228,7 @@ impl Call {
             ended_at: None,
             recording_path: None,
             direction: "outbound".to_string(),
+            caller_identity: None,
         })
     }
 
@@ -234,16 +237,21 @@ impl Call {
     }
 
     pub fn failover_to_next_at(&mut self, _now: SystemTime) -> CallResult<Option<SipUri>> {
-        if self.current_candidate_index + 1 >= self.candidates.len() {
+        let next_index = (self.current_candidate_index + 1..self.candidates.len()).find(|index| {
+            self.caller_identity.as_ref().is_none_or(|identity| {
+                self.candidates[*index].target.gateway_id == identity.owner_gateway_id
+            })
+        });
+        let Some(next_index) = next_index else {
             return Ok(None);
-        }
+        };
 
         if let Some(mut old_outbound) = self.outbound.take() {
             old_outbound.state = LegState::Failed;
             self.outbound_history.push(old_outbound);
         }
 
-        self.current_candidate_index += 1;
+        self.current_candidate_index = next_index;
         let next_route = &self.candidates[self.current_candidate_index];
 
         self.outbound = Some(CallLeg {

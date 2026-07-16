@@ -36,6 +36,7 @@ docs/
 |:---|:---|
 | [WEBHOOKS_DESIGN_COMPARISON.md](./architecture/WEBHOOKS_DESIGN_COMPARISON.md) | VCI 2.0 全栈 12 大指令集设计、事件监听与 RustPBX/Twilio 对比分析 |
 | [WEBHOOKS_EXTENSIBILITY_ARCHITECTURE.md](./architecture/WEBHOOKS_EXTENSIBILITY_ARCHITECTURE.md) | `WebhookTransport` / `VciExecutor` 插拔式多通道可扩展架构设计 |
+| [TRUNK_CALLER_TERMINATION_DESIGN.md](./architecture/TRUNK_CALLER_TERMINATION_DESIGN.md) | 接入认证、主叫号码池、唯一号码归属、分机与落地决策设计 |
 | [ARCHITECTURE.md](./architecture/ARCHITECTURE.md) | 整体平台分层架构、信令面与媒体面分离设计 |
 
 ### 开发与集成

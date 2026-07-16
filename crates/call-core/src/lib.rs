@@ -26,9 +26,11 @@
 
 mod billing;
 mod call;
+mod caller_identity;
 
 pub use billing::AtomicBillingBucket;
 pub use call::{Call, CallId, CallLeg, CallState, FailureCause, LegDirection, LegId, LegState};
+pub use caller_identity::{CallerIdentity, CallerIdentityMode, CallerNumberDirectory};
 mod cdr;
 mod error;
 mod manager;

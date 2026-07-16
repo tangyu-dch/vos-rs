@@ -15,6 +15,7 @@ pub enum CallError {
     UnknownCall(String),
     OutboundLegAlreadyExists,
     MissingOutboundLeg,
+    CallerIdentityUnavailable(String),
 }
 
 impl fmt::Display for CallError {
@@ -36,6 +37,9 @@ impl fmt::Display for CallError {
             Self::UnknownCall(call_id) => write!(f, "unknown call: {call_id}"),
             Self::OutboundLegAlreadyExists => write!(f, "outbound leg already exists"),
             Self::MissingOutboundLeg => write!(f, "missing outbound leg"),
+            Self::CallerIdentityUnavailable(reason) => {
+                write!(f, "caller identity unavailable: {reason}")
+            }
         }
     }
 }

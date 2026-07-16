@@ -23,7 +23,8 @@
 
 use crate::{
     Call, CallCdr, CallError, CallEvent, CallId, CallQualityMetrics, CallResult, CallState,
-    GatewayHealthTracker, RouteTable, WebhookEvent, WEBHOOK_SCHEMA_VERSION,
+    CallerIdentity, CallerNumberDirectory, GatewayHealthTracker, RouteTable, WebhookEvent,
+    WEBHOOK_SCHEMA_VERSION,
 };
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
@@ -108,6 +109,8 @@ pub struct InboundInviteOutcome {
     pub caller_id_mode: Option<String>,
     /// 固定虚拟主叫号码（当 caller_id_mode 为 "virtual" 时使用）
     pub virtual_caller: Option<String>,
+    /// Resolved caller number and its immutable owner gateway.
+    pub caller_identity: Option<CallerIdentity>,
 }
 
 /// 出站响应处理结果。
@@ -126,6 +129,8 @@ pub struct OutboundResponseOutcome {
     pub gateway_id: String,
     /// 发生故障切换时的新网关 ID。
     pub failover_gateway_id: Option<String>,
+    /// Caller identity to reuse on a same-gateway failover attempt.
+    pub caller_identity: Option<CallerIdentity>,
 }
 
 /// 呼叫终止结果。
@@ -160,6 +165,7 @@ pub struct CallManager {
     calls: DashMap<CallId, Call>,
     /// 路由表（支持热更新）
     routes: ArcSwap<RouteTable>,
+    caller_numbers: ArcSwap<CallerNumberDirectory>,
     /// CDR 异步写入通道
     cdr_sender: Arc<dyn CdrSink>,
     cdr_dropped: AtomicU64,
@@ -193,6 +199,7 @@ impl CallManager {
         Self {
             calls: DashMap::new(),
             routes: ArcSwap::new(Arc::new(routes)),
+            caller_numbers: ArcSwap::new(Arc::new(CallerNumberDirectory::default())),
             cdr_sender: Arc::new(cdr_sender),
             cdr_dropped: AtomicU64::new(0),
             event_sink,
@@ -240,6 +247,11 @@ impl CallManager {
         self.routes.store(Arc::new(routes));
     }
 
+    /// Atomically replaces caller-number ownership used by new calls.
+    pub fn update_caller_numbers(&self, directory: CallerNumberDirectory) {
+        self.caller_numbers.store(Arc::new(directory));
+    }
+
     pub fn handle_inbound_invite(&self, request: &SipRequest) -> CallResult<InboundInviteOutcome> {
         self.handle_inbound_invite_with_health(request, None)
     }
@@ -282,7 +294,7 @@ impl CallManager {
                     .select_candidates_for_direction(&call.inbound.remote_uri, &call.direction),
             }
         };
-        let candidates = match candidates {
+        let mut candidates = match candidates {
             Ok(candidates) => candidates,
             Err(error) => {
                 let reason = error.to_string();
@@ -304,6 +316,21 @@ impl CallManager {
             }
         };
 
+        let policy_target = &candidates[0].target;
+        let original_number = caller_number_from_request(request).ok_or_else(|| {
+            CallError::CallerIdentityUnavailable("inbound From has no caller number".to_string())
+        })?;
+        let caller_identity = self.caller_numbers.load().resolve(
+            policy_target.caller_id_mode.as_deref(),
+            policy_target.virtual_caller.as_deref(),
+            &original_number,
+            &candidates,
+            call_id.as_str(),
+        )?;
+        if let Some(identity) = &caller_identity {
+            candidates.retain(|candidate| candidate.target.gateway_id == identity.owner_gateway_id);
+        }
+        call.caller_identity = caller_identity.clone();
         call.candidates = candidates;
         call.current_candidate_index = 0;
         let outbound_uri = call.candidates[0].outbound_uri.clone();
@@ -320,6 +347,7 @@ impl CallManager {
             outbound_uri,
             caller_id_mode,
             virtual_caller,
+            caller_identity,
         })
     }
 
@@ -358,6 +386,7 @@ impl CallManager {
             outbound_uri,
             caller_id_mode: None,
             virtual_caller: None,
+            caller_identity: None,
         })
     }
 
@@ -475,6 +504,7 @@ impl CallManager {
             failover_uri,
             gateway_id: responding_gateway_id,
             failover_gateway_id,
+            caller_identity: call.caller_identity.clone(),
         };
         drop(call);
         if let Some(event) = lifecycle_event {
@@ -681,4 +711,14 @@ fn parse_uri_from_contact(raw: &str) -> Option<sip_core::SipUri> {
         value.split(';').next().unwrap_or(value).trim()
     };
     std::str::FromStr::from_str(uri_raw).ok()
+}
+
+fn caller_number_from_request(request: &SipRequest) -> Option<String> {
+    let header = request.headers.get("from")?.as_str().trim();
+    let sip_start = header.find("sip:").map(|index| index + 4)?;
+    let user = header[sip_start..]
+        .split(['@', ';', '>'])
+        .next()?
+        .trim();
+    (!user.is_empty()).then(|| user.to_string())
 }

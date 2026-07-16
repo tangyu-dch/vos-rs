@@ -141,6 +141,7 @@ make perf
 
 ### 架构与设计
 - [系统分层架构规范](docs/architecture/ARCHITECTURE.md)
+- [中继接入、主叫号码与落地设计](docs/architecture/TRUNK_CALLER_TERMINATION_DESIGN.md)
 - [SIP/RTP 协议覆盖指标一览](docs/architecture/rtp-sip-completeness.md)
 - [Webhooks 全流程控制与 VCI 2.0 指令集设计对比](docs/architecture/WEBHOOKS_DESIGN_COMPARISON.md)
 - [Webhooks 插拔式可扩展通道架构](docs/architecture/WEBHOOKS_EXTENSIBILITY_ARCHITECTURE.md)
