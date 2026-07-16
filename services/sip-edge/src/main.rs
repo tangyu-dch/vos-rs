@@ -5,6 +5,7 @@ pub(crate) mod edge_state;
 mod manage;
 pub(crate) mod media;
 pub(crate) mod net;
+pub(crate) mod number_routing;
 pub(crate) mod routing;
 pub(crate) mod security;
 pub(crate) mod sip;
@@ -13,6 +14,7 @@ mod webhook_delivery;
 mod webhooks;
 
 pub(crate) use cdr::{cdr_sinks_from_config, flush_cdr_batch_with_retry_and_wal};
+pub(crate) use number_routing::{reload_number_routes, spawn_number_route_refresh};
 pub(crate) use routing::{
     parse_gateway_target, reload_routes_from_database, route_table_from_config,
     spawn_periodic_route_refresh, spawn_route_reload_listener, warm_hot_path_redis_cache,
@@ -203,6 +205,14 @@ async fn main() -> Result<(), AnyError> {
             .await?;
     cluster::start_inter_node_egress(Arc::clone(&edge_state), &edge_config).await?;
     warm_hot_path_redis_cache(&edge_state, db_store.as_ref()).await?;
+    if let Some(ref db) = db_store {
+        reload_number_routes(&edge_state, db).await?;
+        spawn_number_route_refresh(
+            Arc::clone(&edge_state),
+            db.clone(),
+            edge_config.nats_url.clone(),
+        );
+    }
 
     // Start background task to flush CDRs in batches (every 100ms or 100 entries)
     let cdr_sinks_bg = Arc::clone(&cdr_sinks);

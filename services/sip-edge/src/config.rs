@@ -540,6 +540,33 @@ impl EdgeConfig {
                 self.session_expires_caller = v;
             }
         }
+        if let Some(val) = get_val!("database_routes_enabled").await {
+            self.database_routes_enabled = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("default_gateway").await {
+            self.default_gateway = val;
+        }
+        if let Some(val) = get_val!("sbc_rate_limit_enabled").await {
+            self.sbc_rate_limit_enabled = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("cluster_enabled").await {
+            self.cluster.enabled = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("cluster_heartbeat_interval_secs").await {
+            if let Ok(value) = val.parse::<u64>() {
+                self.cluster.heartbeat_interval_secs = value.max(1);
+            }
+        }
+        if let Some(val) = get_val!("cluster_node_timeout_secs").await {
+            if let Ok(value) = val.parse::<u64>() {
+                self.cluster.node_timeout_secs = value.max(1);
+            }
+        }
+        if let Some(val) = get_val!("cluster_dialog_ttl_secs").await {
+            if let Ok(value) = val.parse::<u64>() {
+                self.cluster.dialog_ttl_secs = value.max(1);
+            }
+        }
         if let Some(val) = get_val!("sbc_rate_limit_enabled").await {
             if let Ok(v) = val.parse() {
                 self.sbc_rate_limit_enabled = v;

@@ -365,7 +365,7 @@ pub(crate) async fn handle_invite_request(
 
     if let Some(ref caller_dom) = caller_domain {
         if callee_domain != *caller_dom {
-            let registered_contact = edge_state.lookup_contact(&request.uri).await;
+            let registered_contact = edge_state.lookup_destination_contact(&request.uri).await;
 
             if registered_contact.is_some() {
                 warn!(
@@ -389,7 +389,7 @@ pub(crate) async fn handle_invite_request(
             }
         }
     }
-    let registered_contact = edge_state.lookup_contact(&request.uri).await;
+    let registered_contact = edge_state.lookup_destination_contact(&request.uri).await;
 
     let response::RequestHandling {
         response,

@@ -1,16 +1,16 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::io;
-use tracing::{info, warn};
-use call_core::{Route, RouteTable, RouteTarget};
-use cdr_core::PostgresCdrStore;
-use sip_core::SipUri;
-use std::str::FromStr;
-use futures::StreamExt;
 use crate::config::EdgeConfig;
 use crate::edge_state::EdgeState;
 use crate::security::rules::refresh_anti_fraud_rules;
+use call_core::{Route, RouteTable, RouteTarget};
+use cdr_core::PostgresCdrStore;
+use futures::StreamExt;
+use sip_core::SipUri;
+use std::collections::HashMap;
+use std::io;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{info, warn};
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -20,41 +20,127 @@ pub(crate) async fn reload_routes_from_database(
 ) -> Result<(), AnyError> {
     let db_routes = db.load_routes().await?;
     let db_gateways = db.load_gateways().await?;
-    let gateway_map: HashMap<String, (String, Option<u16>, String, Option<u32>)> = db_gateways
+    let gateway_map = db_gateways
         .into_iter()
-        .map(|(id, host, port, transport, cap, _, _, _)| (id, (host, port, transport, cap)))
-        .collect();
-    edge_state.replace_gateway_cache(gateway_map.values().map(|(host, _, _, _)| host));
+        .map(
+            |(
+                id,
+                host,
+                port,
+                _transport,
+                max_capacity,
+                caller_id_mode,
+                virtual_caller,
+                prefix_rules,
+            )| {
+                (
+                    id,
+                    (
+                        host,
+                        port,
+                        max_capacity.filter(|capacity| *capacity > 0),
+                        caller_id_mode,
+                        virtual_caller,
+                        prefix_rules,
+                    ),
+                )
+            },
+        )
+        .collect::<HashMap<_, _>>();
+    edge_state.replace_gateway_cache(gateway_map.values().map(|(host, _, _, _, _, _)| host));
 
     let mut routes = Vec::new();
     let now_hhmm = cdr_core::current_hhmm();
     for (id, prefix, priority, gateway_id, cost, weight, time_start, time_end) in db_routes {
-        if let (Some(start), Some(end)) = (time_start.as_ref(), time_end.as_ref()) {
-            if let Some(now) = now_hhmm.as_deref() {
-                if now < start.as_str() || now > end.as_str() {
-                    continue;
-                }
-            }
+        let Ok(priority) = u16::try_from(priority) else {
+            warn!(route_id = %id, priority, "skipping route with an invalid priority");
+            continue;
+        };
+        if !cost.is_finite() || cost < 0.0 || weight <= 0 {
+            warn!(route_id = %id, cost, weight, "skipping route with invalid cost or weight");
+            continue;
         }
-        if let Some((host, port, _transport, max_capacity)) = gateway_map.get(&gateway_id) {
+        if !route_time_is_active(
+            now_hhmm.as_deref(),
+            time_start.as_deref(),
+            time_end.as_deref(),
+        ) {
+            continue;
+        }
+        if let Some((host, port, max_capacity, caller_id_mode, virtual_caller, prefix_rules)) =
+            gateway_map.get(&gateway_id)
+        {
             let mut target = RouteTarget::new(&gateway_id, host.clone(), *port);
             target.max_capacity = *max_capacity;
+            target.caller_id_mode = caller_id_mode.clone();
+            target.virtual_caller = virtual_caller.clone();
+            target.prefix_rules = prefix_rules.clone();
             routes.push(Route::with_cost_and_weight(
                 id,
                 prefix,
-                priority as u16,
+                priority,
                 cost,
-                weight.max(0) as u32,
+                weight as u32,
                 target,
             ));
         }
     }
-    if !routes.is_empty() {
-        edge_state
-            .call_manager
-            .update_routes(RouteTable::new(routes));
-    }
+    // An empty database table is authoritative and must clear stale in-memory routes.
+    edge_state
+        .call_manager
+        .update_routes(RouteTable::new(routes));
     Ok(())
+}
+
+fn route_time_is_active(
+    now: Option<&str>,
+    time_start: Option<&str>,
+    time_end: Option<&str>,
+) -> bool {
+    let (Some(now), Some(start), Some(end)) = (now, time_start, time_end) else {
+        return true;
+    };
+
+    if start <= end {
+        now >= start && now <= end
+    } else {
+        // A window such as 22:00-06:00 crosses midnight.
+        now >= start || now <= end
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::route_time_is_active;
+
+    #[test]
+    fn route_time_window_supports_same_day_and_overnight_ranges() {
+        assert!(route_time_is_active(
+            Some("12:00"),
+            Some("09:00"),
+            Some("18:00")
+        ));
+        assert!(!route_time_is_active(
+            Some("08:59"),
+            Some("09:00"),
+            Some("18:00")
+        ));
+        assert!(route_time_is_active(
+            Some("23:30"),
+            Some("22:00"),
+            Some("06:00")
+        ));
+        assert!(route_time_is_active(
+            Some("05:30"),
+            Some("22:00"),
+            Some("06:00")
+        ));
+        assert!(!route_time_is_active(
+            Some("12:00"),
+            Some("22:00"),
+            Some("06:00")
+        ));
+    }
 }
 
 pub(crate) fn spawn_route_reload_listener(

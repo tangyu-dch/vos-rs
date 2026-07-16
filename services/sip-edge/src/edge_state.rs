@@ -314,6 +314,8 @@ pub(crate) struct EdgeState {
     pub(crate) external_to_internal_call_ids: dashmap::DashMap<String, String>,
     pub(crate) internal_to_external_call_ids: dashmap::DashMap<String, String>,
     pub(crate) gateway_cache: std::sync::RwLock<HashMap<String, (bool, std::time::Instant)>>,
+    /// DID 到分机用户名的预加载映射，INVITE 热路径只进行内存读取。
+    number_routes: std::sync::RwLock<HashMap<String, String>>,
     /// 按用户名跟踪活跃并发通话数，O(1) 替代 O(n) iter 扫描
     pub(crate) user_concurrency: dashmap::DashMap<String, u32>,
     pub(crate) anti_fraud_rules: std::sync::RwLock<Vec<cdr_core::AntiFraudRule>>,
@@ -386,6 +388,7 @@ impl EdgeState {
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
+            number_routes: std::sync::RwLock::new(HashMap::new()),
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
@@ -441,6 +444,7 @@ impl EdgeState {
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
+            number_routes: std::sync::RwLock::new(HashMap::new()),
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
@@ -637,6 +641,41 @@ impl EdgeState {
         );
         self.prune_registration_lookup_cache();
         result
+    }
+
+    /// 使用号码库存解析被叫后查找注册 Contact。
+    pub(crate) async fn lookup_destination_contact(
+        &self,
+        uri: &SipUri,
+    ) -> Option<crate::sip::registrar::RegistrationContact> {
+        let resolved = self.resolve_number_destination(uri);
+        self.lookup_contact(&resolved).await
+    }
+
+    /// 原子替换 DID 到分机用户名映射。
+    pub(crate) fn replace_number_routes(&self, routes: HashMap<String, String>) {
+        if let Ok(mut current) = self.number_routes.write() {
+            *current = routes;
+        } else {
+            tracing::error!("号码路由缓存锁已损坏，忽略本次刷新");
+        }
+    }
+
+    pub(crate) fn resolve_number_destination(&self, uri: &SipUri) -> SipUri {
+        let Some(number) = uri.user.as_deref() else {
+            return uri.clone();
+        };
+        let username = self
+            .number_routes
+            .read()
+            .ok()
+            .and_then(|routes| routes.get(number).cloned());
+        let Some(username) = username else {
+            return uri.clone();
+        };
+        let mut resolved = uri.clone();
+        resolved.user = Some(username.into());
+        resolved
     }
 
     fn cached_registration_lookup(
