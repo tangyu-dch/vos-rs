@@ -253,7 +253,7 @@ impl RouteTable {
         if available.is_empty() {
             warn_all_gateways_unhealthy(&all_candidates);
             return Err(CallError::GatewayUnavailable(
-                destination_uri.user.clone().unwrap_or_default(),
+                destination_uri.user.as_deref().unwrap_or_default().to_string(),
             ));
         }
 
@@ -273,7 +273,7 @@ impl RouteTable {
                 }
             }
             return Err(CallError::GatewayUnavailable(
-                destination_uri.user.clone().unwrap_or_default(),
+                destination_uri.user.as_deref().unwrap_or_default().to_string(),
             ));
         }
 

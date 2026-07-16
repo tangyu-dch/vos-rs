@@ -326,10 +326,10 @@ fn invite_request(call_id: &str, destination: &str) -> sip_core::SipRequest {
         destination = destination
     );
 
-    let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
         panic!("expected request");
     };
-    request
+    request.into_owned()
 }
 
 fn outbound_response(
@@ -353,10 +353,10 @@ fn outbound_response(
         call_id = call_id
     );
 
-    let SipMessage::Response(response) = parse_message(raw.as_bytes()).unwrap() else {
+    let sip_core::SipMessageBorrow::Response(response) = parse_message(raw.as_bytes()).unwrap() else {
         panic!("expected response");
     };
-    response
+    response.into_owned()
 }
 
 fn bye_request(call_id: &str) -> sip_core::SipRequest {
@@ -374,10 +374,10 @@ fn bye_request(call_id: &str) -> sip_core::SipRequest {
         call_id = call_id
     );
 
-    let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
         panic!("expected request");
     };
-    request
+    request.into_owned()
 }
 
 fn cancel_request(call_id: &str) -> sip_core::SipRequest {
@@ -395,8 +395,8 @@ fn cancel_request(call_id: &str) -> sip_core::SipRequest {
         call_id = call_id
     );
 
-    let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
         panic!("expected request");
     };
-    request
+    request.into_owned()
 }

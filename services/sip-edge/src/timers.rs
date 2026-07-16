@@ -536,8 +536,8 @@ pub(crate) fn spawn_gateway_health_probe_loop(
 
                 let uri = SipUri {
                     secure: false,
-                    user: Some("health-check".to_string()),
-                    host,
+                    user: Some("health-check".to_string().into()),
+                    host: host.into(),
                     port,
                     params: Vec::new(),
                 };

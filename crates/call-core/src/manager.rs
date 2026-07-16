@@ -263,7 +263,7 @@ impl CallManager {
             &call_id,
             CallEvent::CallInitiated {
                 caller: call.caller.clone(),
-                callee: call.inbound.remote_uri.user.clone(),
+                callee: call.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
                 direction: call.direction.clone(),
             },
         );
@@ -341,7 +341,7 @@ impl CallManager {
             &call_id,
             CallEvent::CallInitiated {
                 caller: call.caller.clone(),
-                callee: call.inbound.remote_uri.user.clone(),
+                callee: call.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
                 direction: call.direction.clone(),
             },
         );
@@ -583,14 +583,14 @@ impl CallManager {
             .map(|entry| crate::ActiveCall {
                 call_id: entry.id.as_str().to_string(),
                 caller: entry.caller.clone(),
-                callee: entry.inbound.remote_uri.user.clone(),
+                callee: entry.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
                 state: entry.state.as_str().to_string(),
                 started_at_ms: sys_millis(entry.started_at),
                 answered_at_ms: entry.answered_at.map(sys_millis),
                 gateway: entry
                     .outbound
                     .as_ref()
-                    .map(|leg| leg.remote_uri.host.clone()),
+                    .map(|leg| leg.remote_uri.host.to_string()),
             })
             .collect()
     }

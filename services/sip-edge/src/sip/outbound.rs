@@ -727,9 +727,9 @@ mod tests {
     }
 
     fn request(raw: &str) -> sip_core::SipRequest {
-        let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
             panic!("expected request");
         };
-        request
+        request.into_owned()
     }
 }

@@ -75,7 +75,7 @@ pub(crate) async fn handle_in_dialog_request(
             // Rewrite Call-ID, From, To for original leg B
             mutable_request.headers.replace(
                 HeaderName::new("call-id").unwrap(),
-                HeaderValue::new(actual_cid),
+                HeaderValue::new_owned(actual_cid.to_string()),
             );
             if let Some(orig_req) = &t.original_request {
                 let (from_val, to_val) = if t.transferee_is_caller {
@@ -92,13 +92,13 @@ pub(crate) async fn handle_in_dialog_request(
                 if let Some(f) = from_val {
                     mutable_request.headers.replace(
                         HeaderName::new("from").unwrap(),
-                        HeaderValue::new(f.as_str()),
+                        f,
                     );
                 }
                 if let Some(o) = to_val {
                     mutable_request
                         .headers
-                        .replace(HeaderName::new("to").unwrap(), HeaderValue::new(o.as_str()));
+                        .replace(HeaderName::new("to").unwrap(), o);
                 }
             }
 
@@ -129,18 +129,18 @@ pub(crate) async fn handle_in_dialog_request(
                 if let Some(ref tf_cid) = t.transfer_call_id {
                     mutable_request.headers.insert(
                         HeaderName::new("call-id").unwrap(),
-                        HeaderValue::new(tf_cid),
+                        HeaderValue::new_owned(tf_cid.clone()),
                     );
                 }
                 if let Some(ref tf_from) = t.transfer_from_header {
                     mutable_request
                         .headers
-                        .insert(HeaderName::new("from").unwrap(), HeaderValue::new(tf_from));
+                        .insert(HeaderName::new("from").unwrap(), HeaderValue::new_owned(tf_from.clone()));
                 }
                 if let Some(ref tf_to) = t.transfer_to_header {
                     mutable_request
                         .headers
-                        .insert(HeaderName::new("to").unwrap(), HeaderValue::new(tf_to));
+                        .insert(HeaderName::new("to").unwrap(), HeaderValue::new_owned(tf_to.clone()));
                 }
             }
 
@@ -801,7 +801,7 @@ pub(crate) async fn handle_in_dialog_request(
         if let Some(external_cid) = edge_state.get_external_call_id(&internal_cid) {
             mutable_request.headers.replace(
                 HeaderName::new("call-id").unwrap(),
-                HeaderValue::new(&external_cid),
+                HeaderValue::new_owned(external_cid.clone()),
             );
             debug!(
                 internal_cid,

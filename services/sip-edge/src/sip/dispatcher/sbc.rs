@@ -1,4 +1,4 @@
-use sip_core::{parse_message, SipMessage};
+use sip_core::{parse_message, SipMessageBorrow};
 use std::net::SocketAddr;
 use tracing::warn;
 
@@ -21,7 +21,7 @@ pub(crate) fn check_sbc_filter(
 
     if !edge_state.sbc_engine.check_rate(peer.ip()) {
         warn!(%peer, "packet blocked by SBC rate limit");
-        if let Ok(SipMessage::Request(req)) = parse_message(packet) {
+        if let Ok(SipMessageBorrow::Request(req)) = parse_message(packet) {
             return Err(vec![PendingDatagram::new(
                 peer.to_string(),
                 response::build_response_with_owned_headers(

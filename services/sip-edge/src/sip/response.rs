@@ -191,7 +191,7 @@ fn invite_error_status(error: &CallError) -> (u16, &'static str) {
 }
 
 fn build_response(
-    request: &SipRequest,
+    request: &sip_core::SipRequestBorrow<'_>,
     status_code: u16,
     reason_phrase: &str,
     extra_headers: &[(&str, &str)],
@@ -204,7 +204,7 @@ fn build_response(
     build_response_with_owned_headers(request, status_code, reason_phrase, &extra_headers, body)
 }
 
-pub fn response_503_service_unavailable(request: &SipRequest) -> Vec<u8> {
+pub fn response_503_service_unavailable(request: &sip_core::SipRequestBorrow<'_>) -> Vec<u8> {
     build_response(
         request,
         503,
@@ -215,7 +215,7 @@ pub fn response_503_service_unavailable(request: &SipRequest) -> Vec<u8> {
 }
 
 pub fn build_response_with_owned_headers(
-    request: &SipRequest,
+    request: &sip_core::SipRequestBorrow<'_>,
     status_code: u16,
     reason_phrase: &str,
     extra_headers: &[(String, String)],

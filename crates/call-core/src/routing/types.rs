@@ -150,20 +150,24 @@ impl RouteTarget {
     pub fn outbound_uri_for(&self, inbound_uri: &SipUri) -> CallResult<SipUri> {
         let user = inbound_uri
             .user
-            .clone()
+            .as_ref()
+            .map(|u| u.to_string())
             .ok_or(CallError::InvalidDestinationUri)?;
 
         let user = self.apply_prefix_rules(&user);
 
         let mut params = Vec::new();
         if let Some(transport) = &self.transport {
-            params.push(("transport".to_string(), Some(transport.clone())));
+            params.push((
+                std::borrow::Cow::Owned("transport".to_string()),
+                Some(std::borrow::Cow::Owned(transport.clone())),
+            ));
         }
 
         Ok(SipUri {
             secure: inbound_uri.secure,
-            user: Some(user),
-            host: self.host.clone(),
+            user: Some(std::borrow::Cow::Owned(user)),
+            host: std::borrow::Cow::Owned(self.host.clone()),
             port: self.port,
             params,
         })

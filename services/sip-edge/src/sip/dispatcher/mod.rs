@@ -20,11 +20,11 @@ pub(crate) async fn handle_datagram(
     }
 
     match parse_message(packet) {
-        Ok(SipMessage::Request(request)) => {
-            request::dispatch_request(request, peer, edge_state, edge_config).await
+        Ok(sip_core::SipMessageBorrow::Request(request)) => {
+            request::dispatch_request(request.into_owned(), peer, edge_state, edge_config).await
         }
-        Ok(SipMessage::Response(response)) => {
-            response::dispatch_response(response, peer, edge_state, edge_config).await
+        Ok(sip_core::SipMessageBorrow::Response(response)) => {
+            response::dispatch_response(response.into_owned(), peer, edge_state, edge_config).await
         }
         Err(error) => {
             warn!(%error, "failed to parse SIP datagram");

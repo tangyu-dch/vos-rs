@@ -328,7 +328,7 @@ async fn play(
                 file_path.clone(),
                 mode,
                 payload.loop_playback,
-            ) {
+            ).await {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": format!("failed to play to caller: {}", e)})),
@@ -344,6 +344,7 @@ async fn play(
                 state
                     .media_relay
                     .start_playback(rtp.port, file_path, mode, payload.loop_playback)
+                    .await
             {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,

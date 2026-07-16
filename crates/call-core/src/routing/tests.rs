@@ -11,8 +11,8 @@ fn make_target(host: &str) -> RouteTarget {
 fn make_uri(user: &str) -> SipUri {
     SipUri {
         secure: false,
-        user: Some(user.to_string()),
-        host: "example.com".to_string(),
+        user: Some(user.to_string().into()),
+        host: "example.com".to_string().into(),
         port: None,
         params: vec![],
     }

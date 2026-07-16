@@ -2331,7 +2331,7 @@ fn test_scenario_runner() {
         );
         let req = sip_core::parse_message(register_req.as_bytes()).unwrap();
         let sip_req = match req {
-            sip_core::SipMessage::Request(r) => r,
+            sip_core::SipMessageBorrow::Request(r) => r.into_owned(),
             _ => panic!("expected request"),
         };
         registrar.handle_register(&sip_req, "192.0.2.11:5060".parse().unwrap(), SystemTime::now(), None).await.unwrap();
@@ -4863,7 +4863,7 @@ sip_edge:
         let mut request_correct = request.clone();
         request_correct.headers.insert(
             sip_core::HeaderName::new("proxy-authorization").unwrap(),
-            sip_core::HeaderValue::new(&auth_hdr),
+            sip_core::HeaderValue::new_owned(auth_hdr.clone()),
         );
 
         // First attempt succeeds
@@ -5243,9 +5243,10 @@ sip_edge:
         assert_eq!(datagrams[1].target, "127.0.0.1:23456");
 
         let outbound_invite = parse_message(&datagrams[1].bytes).unwrap();
-        let SipMessage::Request(outbound_req) = outbound_invite else {
+        let sip_core::SipMessageBorrow::Request(outbound_req) = outbound_invite else {
             panic!("expected request");
         };
+        let outbound_req = outbound_req.into_owned();
         let key = ClientTransactionKey::from_request(&outbound_req).unwrap();
 
         spawn_client_transaction_retransmission(
@@ -5726,7 +5727,7 @@ async fn test_playback_and_mute_control_flow() {
     assert!(!relay.muted_ports.contains(&port));
 
     // 2. 启动音频播放
-    relay.start_playback(port, wav_path.clone(), PlaybackMode::Exclusive, true).unwrap();
+    relay.start_playback(port, wav_path.clone(), PlaybackMode::Exclusive, true).await.unwrap();
     assert!(relay.playbacks.contains_key(&port));
 
     // 3. 验证接收播放的 RTP 数据包，并且验证首包 Marker Bit 为 true

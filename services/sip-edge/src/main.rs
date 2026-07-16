@@ -58,7 +58,7 @@ use call_core::CallManager;
 use config::EdgeConfig;
 use media::MediaRelayState;
 use net::{create_tls_acceptor, BufferPool, PooledBuffer, Transport};
-use sip_core::{parse_message, Method, SipMessage};
+use sip_core::{parse_message, Method, SipMessageBorrow};
 use std::{
     net::SocketAddr,
     sync::{atomic::Ordering, Arc},
@@ -523,7 +523,7 @@ async fn main() -> Result<(), AnyError> {
                         parse_message(&datagram.bytes)
                             .ok()
                             .and_then(|message| match message {
-                                SipMessage::Request(request)
+                                SipMessageBorrow::Request(request)
                                     if !matches!(&request.method, Method::Ack) =>
                                 {
                                     sip::ClientTransactionKey::from_request(&request)

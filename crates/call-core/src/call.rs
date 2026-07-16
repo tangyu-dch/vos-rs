@@ -264,7 +264,7 @@ impl Call {
             route_id: format!("redirect-{}", self.candidates.len()),
             target: RouteTarget {
                 gateway_id: GatewayId::new("redirect"),
-                host: redirect_uri.host.clone(),
+                host: redirect_uri.host.to_string(),
                 port: redirect_uri.port,
                 transport: Some("udp".to_string()),
                 max_capacity: None,

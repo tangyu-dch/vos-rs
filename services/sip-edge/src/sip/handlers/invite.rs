@@ -155,11 +155,11 @@ pub(crate) async fn handle_invite_request(
 
         // 将呼叫置为已应答/已接通
         let dummy_resp = sip_core::SipResponse {
-            version: "SIP/2.0".to_string(),
+            version: std::borrow::Cow::Borrowed("SIP/2.0"),
             status_code: 200,
-            reason_phrase: "OK".to_string(),
+            reason_phrase: std::borrow::Cow::Borrowed("OK"),
             headers: request.headers.clone(),
-            body: Vec::new(),
+            body: std::borrow::Cow::Borrowed(&[]),
         };
         let _ = edge_state
             .call_manager
@@ -573,7 +573,7 @@ pub(crate) async fn handle_invite_request(
                     rewritten_sdp
                         .as_ref()
                         .map(|sdp| sdp.body.as_slice())
-                        .unwrap_or(request.body.as_slice()),
+                        .unwrap_or(request.body.as_ref()),
                     edge_config.session_expires_gateway,
                     path,
                     &external_call_id,
@@ -612,7 +612,7 @@ pub(crate) async fn handle_invite_request(
                 rewritten_sdp
                     .as_ref()
                     .map(|sdp| sdp.body.as_slice())
-                    .unwrap_or(request.body.as_slice()),
+                    .unwrap_or(request.body.as_ref()),
                 edge_config.session_expires_gateway,
                 path,
                 &external_call_id,

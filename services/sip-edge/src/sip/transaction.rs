@@ -35,7 +35,7 @@ pub(crate) struct ClientTransactionKey {
 }
 
 impl ClientTransactionKey {
-    pub(crate) fn from_request(request: &SipRequest) -> Option<Self> {
+    pub(crate) fn from_request(request: &sip_core::SipRequestBorrow<'_>) -> Option<Self> {
         if matches!(&request.method, Method::Ack) {
             return None;
         }
@@ -89,7 +89,7 @@ pub(crate) struct InviteAckKey {
 }
 
 impl InviteAckKey {
-    pub(crate) fn from_request(request: &SipRequest, peer: SocketAddr) -> Option<Self> {
+    pub(crate) fn from_request(request: &sip_core::SipRequestBorrow<'_>, peer: SocketAddr) -> Option<Self> {
         if !matches!(&request.method, Method::Invite | Method::Ack) {
             return None;
         }
@@ -110,7 +110,7 @@ impl InviteAckKey {
 }
 
 impl RequestTransactionKey {
-    pub(crate) fn from_request(request: &SipRequest, peer: SocketAddr) -> Option<Self> {
+    pub(crate) fn from_request(request: &sip_core::SipRequestBorrow<'_>, peer: SocketAddr) -> Option<Self> {
         if matches!(&request.method, Method::Ack) {
             return None;
         }
@@ -533,10 +533,10 @@ mod tests {
     }
 
     fn request(raw: &str) -> sip_core::SipRequest {
-        let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
             panic!("expected request");
         };
-        request
+        request.into_owned()
     }
 }
 

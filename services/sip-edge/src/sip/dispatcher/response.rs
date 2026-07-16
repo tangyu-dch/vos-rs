@@ -82,7 +82,7 @@ pub(crate) async fn dispatch_response(
             if let Ok(name) = HeaderName::new("call-id") {
                 sip_response
                     .headers
-                    .replace(name, HeaderValue::new(&internal_cid));
+                    .replace(name, HeaderValue::new_owned(internal_cid.clone()));
             }
             Some(internal_cid)
         } else {
@@ -194,8 +194,8 @@ pub(crate) async fn dispatch_response(
                         if let Some(target) = gateway_target {
                             let outbound_uri = sip_core::SipUri {
                                 secure: false,
-                                user: Some(user.clone()),
-                                host: target.host.clone(),
+                                user: Some(user.clone().into()),
+                                host: target.host.clone().into(),
                                 port: target.port,
                                 params: Vec::new(),
                             };
@@ -990,7 +990,7 @@ pub(crate) async fn dispatch_response(
                         &t.inbound_route_set,
                         rewritten_sdp_bytes
                             .as_deref()
-                            .unwrap_or(sip_response.body.as_slice()),
+                            .unwrap_or(sip_response.body.as_ref()),
                         call_id.as_deref(),
                     );
                 let raw_str = String::from_utf8_lossy(&rewritten_response);
@@ -1059,7 +1059,7 @@ pub(crate) async fn dispatch_response(
                 &transaction.inbound_route_set,
                 rewritten_sdp_bytes
                     .as_deref()
-                    .unwrap_or(sip_response.body.as_slice()),
+                    .unwrap_or(sip_response.body.as_ref()),
                 call_id.as_deref(),
             );
 

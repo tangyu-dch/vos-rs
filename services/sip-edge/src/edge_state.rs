@@ -255,8 +255,8 @@ pub(crate) fn sip_uri_from_peer(peer: &str) -> SipUri {
             secure: false,
             user: None,
             host: match addr.ip() {
-                std::net::IpAddr::V4(ip) => ip.to_string(),
-                std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+                std::net::IpAddr::V4(ip) => ip.to_string().into(),
+                std::net::IpAddr::V6(ip) => format!("[{ip}]").into(),
             },
             port: Some(addr.port()),
             params: Vec::new(),
@@ -269,7 +269,8 @@ pub(crate) fn sip_uri_from_peer(peer: &str) -> SipUri {
                 .next()
                 .filter(|host| !host.is_empty())
                 .unwrap_or(peer)
-                .to_string(),
+                .to_string()
+                .into(),
             port: None,
             params: Vec::new(),
         },
