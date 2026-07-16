@@ -1,15 +1,20 @@
 use super::*;
 
 impl MediaRelayState {
-    pub fn start_playback(
+    pub async fn start_playback(
         &self,
         port: u16,
         file_path: std::path::PathBuf,
         mode: PlaybackMode,
         loop_playback: bool,
     ) -> Result<(), String> {
-        let samples = crate::media::wav::load_wav_pcm(&file_path)
-            .map_err(|e| format!("加载音频文件失败: {e}"))?;
+        let path_clone = file_path.clone();
+        let samples = tokio::task::spawn_blocking(move || {
+            crate::media::wav::load_wav_pcm(&path_clone)
+        })
+        .await
+        .map_err(|e| format!("加载音频文件线程异常: {e}"))?
+        .map_err(|e| format!("加载音频文件失败: {e}"))?;
 
         self.stop_playback(port);
 
@@ -28,6 +33,7 @@ impl MediaRelayState {
         }));
 
         self.playbacks.insert(port, Arc::clone(&playback_state));
+        self.playback_modes.insert(port, mode);
         self.mark_port_and_peer_features_changed(port);
 
         let socket = self
@@ -147,6 +153,7 @@ impl MediaRelayState {
                 }
             }
             relay.playbacks.remove(&port);
+            relay.playback_modes.remove(&port);
             relay.playback_loops.remove(&port);
             relay.mark_port_and_peer_features_changed(port);
         });
@@ -158,6 +165,7 @@ impl MediaRelayState {
         let mut changed = false;
         if let Some((_, playback_state)) = self.playbacks.remove(&port) {
             changed = true;
+            self.playback_modes.remove(&port);
             let is_exclusive = playback_state
                 .lock()
                 .map(|state| state.mode == PlaybackMode::Exclusive)

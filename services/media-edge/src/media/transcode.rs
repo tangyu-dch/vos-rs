@@ -1,5 +1,32 @@
 //! G.711 PCMA (A-law) and PCMU (u-law) transcoding conversions.
 
+use std::sync::OnceLock;
+
+static PCMA_TO_PCMU_TABLE: OnceLock<[u8; 256]> = OnceLock::new();
+static PCMU_TO_PCMA_TABLE: OnceLock<[u8; 256]> = OnceLock::new();
+
+fn get_pcma_to_pcmu_table() -> &'static [u8; 256] {
+    PCMA_TO_PCMU_TABLE.get_or_init(|| {
+        let mut table = [0u8; 256];
+        for i in 0..256 {
+            let pcm = crate::media::recording::decode_pcma(i as u8);
+            table[i] = linear_to_ulaw(pcm);
+        }
+        table
+    })
+}
+
+fn get_pcmu_to_pcma_table() -> &'static [u8; 256] {
+    PCMU_TO_PCMA_TABLE.get_or_init(|| {
+        let mut table = [0u8; 256];
+        for i in 0..256 {
+            let pcm = crate::media::recording::decode_pcmu(i as u8);
+            table[i] = linear_to_alaw(pcm);
+        }
+        table
+    })
+}
+
 pub fn linear_to_ulaw(mut pcm: i16) -> u8 {
     let sign = if pcm < 0 {
         pcm = -pcm;
@@ -48,23 +75,27 @@ pub fn linear_to_alaw(mut pcm: i16) -> u8 {
 }
 
 pub fn transcode_pcma_to_pcmu(payload: &[u8]) -> Vec<u8> {
-    payload
-        .iter()
-        .map(|&a| {
-            let pcm = crate::media::recording::decode_pcma(a);
-            linear_to_ulaw(pcm)
-        })
-        .collect()
+    let table = get_pcma_to_pcmu_table();
+    payload.iter().map(|&a| table[a as usize]).collect()
 }
 
 pub fn transcode_pcmu_to_pcma(payload: &[u8]) -> Vec<u8> {
-    payload
-        .iter()
-        .map(|&u| {
-            let pcm = crate::media::recording::decode_pcmu(u);
-            linear_to_alaw(pcm)
-        })
-        .collect()
+    let table = get_pcmu_to_pcma_table();
+    payload.iter().map(|&u| table[u as usize]).collect()
+}
+
+pub fn transcode_pcma_to_pcmu_inplace(payload: &mut [u8]) {
+    let table = get_pcma_to_pcmu_table();
+    for byte in payload.iter_mut() {
+        *byte = table[*byte as usize];
+    }
+}
+
+pub fn transcode_pcmu_to_pcma_inplace(payload: &mut [u8]) {
+    let table = get_pcmu_to_pcma_table();
+    for byte in payload.iter_mut() {
+        *byte = table[*byte as usize];
+    }
 }
 
 /// 录音后处理转码格式。

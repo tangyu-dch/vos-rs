@@ -36,6 +36,7 @@ impl MediaRelayState {
             })),
             active_sockets: Arc::new(DashMap::new()),
             playbacks: Arc::new(DashMap::new()),
+            playback_modes: Arc::new(DashMap::new()),
             playback_loops: Arc::new(DashMap::new()),
             muted_ports: Arc::new(dashmap::DashSet::new()),
             continuity: Arc::new(DashMap::new()),
