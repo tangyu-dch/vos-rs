@@ -61,6 +61,7 @@ pub async fn create_anti_fraud_rule(
         .map_err(|e| ApiError {
             error: e.to_string(),
         })?;
+    crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::CREATED)
 }
 
@@ -83,6 +84,7 @@ pub async fn update_anti_fraud_rule(
         .map_err(|e| ApiError {
             error: e.to_string(),
         })?;
+    crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }
 
@@ -98,6 +100,7 @@ pub async fn delete_anti_fraud_rule(
             error: e.to_string(),
         })?;
     if deleted {
+        crate::routes::publish_route_reload(&state.nats_client).await;
         Ok(StatusCode::OK)
     } else {
         Ok(StatusCode::NOT_FOUND)
@@ -135,6 +138,7 @@ pub async fn update_anti_fraud_config(
         })?;
 
     if updated {
+        crate::routes::publish_route_reload(&state.nats_client).await;
         Ok(StatusCode::OK)
     } else {
         Err(ApiError::internal("防盗打配置项不存在"))

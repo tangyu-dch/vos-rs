@@ -32,6 +32,22 @@ fn err(e: impl std::fmt::Display) -> E {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
+async fn publish_numbers_reload(nats: &Option<async_nats::Client>) {
+    let Some(client) = nats else {
+        tracing::warn!("NATS 未连接，号码映射重载处于 pending，数据库变更将在周期刷新后生效");
+        return;
+    };
+    if let Err(error) = client
+        .publish(
+            "vos_rs.numbers.reload",
+            axum::body::Bytes::from_static(b"reload"),
+        )
+        .await
+    {
+        tracing::warn!(%error, "号码映射重载广播失败，数据库变更已提交");
+    }
+}
+
 pub async fn list_numbers(
     State(state): State<AppState>,
     Query(query): Query<PageQuery>,
@@ -66,6 +82,7 @@ pub async fn create_number(
         )
         .await
         .map_err(err)?;
+    publish_numbers_reload(&state.nats_client).await;
     Ok(StatusCode::CREATED)
 }
 
@@ -74,18 +91,27 @@ pub async fn update_number(
     Path(number): Path<String>,
     Json(b): Json<UpdateNumberBody>,
 ) -> Result<StatusCode, E> {
+    let existing = state
+        .store
+        .list_numbers()
+        .await
+        .map_err(err)?
+        .into_iter()
+        .find(|item| item.number == number)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "号码不存在".to_string()))?;
     state
         .store
         .upsert_number(
             &number,
-            b.username.as_deref(),
-            b.gateway_id.as_deref(),
-            b.direction.as_deref(),
-            b.max_concurrent,
-            b.status.as_deref().unwrap_or("available"),
+            b.username.as_deref().or(existing.username.as_deref()),
+            b.gateway_id.as_deref().or(existing.gateway_id.as_deref()),
+            b.direction.as_deref().or(existing.direction.as_deref()),
+            b.max_concurrent.or(existing.max_concurrent),
+            b.status.as_deref().unwrap_or(&existing.status),
         )
         .await
         .map_err(err)?;
+    publish_numbers_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }
 
@@ -94,6 +120,9 @@ pub async fn delete_number(
     Path(number): Path<String>,
 ) -> Result<StatusCode, E> {
     let deleted = state.store.delete_number(&number).await.map_err(err)?;
+    if deleted {
+        publish_numbers_reload(&state.nats_client).await;
+    }
     Ok(if deleted {
         StatusCode::OK
     } else {

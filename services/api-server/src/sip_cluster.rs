@@ -48,6 +48,7 @@ pub(crate) struct SipNodeStatus {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SipClusterStatus {
+    mode: String,
     node_key_prefix: String,
     online_nodes: usize,
     active_nodes: usize,
@@ -64,7 +65,21 @@ pub(crate) struct SipNodeActionResult {
 /// 返回 Redis 心跳中仍在线的 SIP 信令节点。
 pub(crate) async fn get_sip_cluster_status(State(state): State<AppState>) -> impl IntoResponse {
     match load_status(&state.redis_client, &state.sip_node_key_prefix).await {
-        Ok(status) => (StatusCode::OK, Json(status)).into_response(),
+        Ok(mut status) => {
+            if status.nodes.is_empty() {
+                match load_standalone_node(&state).await {
+                    Ok(node) => {
+                        status.mode = "standalone".to_string();
+                        status.online_nodes = 1;
+                        status.active_nodes = usize::from(node.status == "active");
+                        status.draining_nodes = usize::from(node.status == "draining");
+                        status.nodes.push(node);
+                    }
+                    Err(error) => tracing::warn!(%error, "单机 SIP 节点状态不可用"),
+                }
+            }
+            (StatusCode::OK, Json(status)).into_response()
+        }
         Err(error) => {
             tracing::error!(%error, "读取 SIP 集群状态失败");
             (
@@ -96,12 +111,21 @@ pub(crate) async fn control_sip_cluster_node(
             );
         }
     };
-    let Some(node) = status
+    let node = status
         .nodes
         .into_iter()
-        .find(|node| node.node_id == node_id)
-    else {
-        return error_response(StatusCode::NOT_FOUND, "SIP 节点不存在或心跳已过期");
+        .find(|node| node.node_id == node_id);
+    let node = match node {
+        Some(node) => node,
+        None if node_id == "sip-edge-standalone" => match load_standalone_node(&state).await {
+            Ok(node) => node,
+            Err(_) => {
+                return error_response(StatusCode::NOT_FOUND, "单机 SIP 节点不可用");
+            }
+        },
+        None => {
+            return error_response(StatusCode::NOT_FOUND, "SIP 节点不存在或心跳已过期");
+        }
     };
     match send_node_action(&state, &node.management_url, action).await {
         Ok(result) => (StatusCode::OK, Json(result)).into_response(),
@@ -186,6 +210,7 @@ async fn load_status(
     let keys: Vec<String> = iterator.collect().await;
     if keys.is_empty() {
         return Ok(SipClusterStatus {
+            mode: "cluster".to_string(),
             node_key_prefix: prefix.to_string(),
             online_nodes: 0,
             active_nodes: 0,
@@ -223,11 +248,42 @@ async fn load_status(
         .filter(|node| node.status == "draining")
         .count();
     Ok(SipClusterStatus {
+        mode: "cluster".to_string(),
         node_key_prefix: prefix.to_string(),
         online_nodes: nodes.len(),
         active_nodes,
         draining_nodes,
         nodes,
+    })
+}
+
+async fn load_standalone_node(
+    state: &AppState,
+) -> Result<SipNodeStatus, Box<dyn std::error::Error + Send + Sync>> {
+    let mut endpoint = reqwest::Url::parse(&state.sip_manage_base)?;
+    endpoint.set_path("/manage/cluster/status");
+    endpoint.set_query(None);
+    endpoint.set_fragment(None);
+    let runtime = state
+        .internal_client
+        .get(endpoint)
+        .header("X-VOS-Token", &state.internal_secret)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<SipNodeActionResult>()
+        .await?;
+    Ok(SipNodeStatus {
+        node_id: "sip-edge-standalone".to_string(),
+        advertised_addr: "-".to_string(),
+        management_url: state.sip_manage_base.clone(),
+        router_mode: "direct".to_string(),
+        status: runtime.status,
+        active_calls: runtime.active_calls,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        started_at: 0,
+        updated_at: 0,
+        ttl_secs: -1,
     })
 }
 

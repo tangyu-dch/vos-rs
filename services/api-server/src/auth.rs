@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, Extension, Json};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -76,18 +76,28 @@ pub async fn login(
     }))
 }
 
+/// Returns the identity and role carried by the current verified session.
+pub async fn current_session(Extension(claims): Extension<Claims>) -> Json<Claims> {
+    Json(claims)
+}
+
 /// RBAC 权限检查：根据角色、HTTP 方法 and 路径判断是否允许访问。
 pub fn role_allows(role: &str, method: &str, path: &str) -> bool {
     if role == "admin" {
         return true;
     }
 
+    if path == "/api/v1/auth/me" {
+        return matches!(role, "operator" | "financier");
+    }
+
     // SIP user credentials are security-sensitive and remain administrator-only.
-    if path.starts_with("/api/users") {
+    if path.starts_with("/api/users") || path.starts_with("/api/v1/extensions") {
         return false;
     }
 
-    let finance_path = path.starts_with("/api/rates")
+    let finance_path = path.starts_with("/api/v1/billing")
+        || path.starts_with("/api/rates")
         || path.starts_with("/api/accounts")
         || path.starts_with("/api/ledger")
         || path.starts_with("/api/billing");
@@ -95,7 +105,12 @@ pub fn role_allows(role: &str, method: &str, path: &str) -> bool {
         return role == "financier";
     }
 
-    let operations_path = path.starts_with("/api/gateways")
+    let operations_path = path.starts_with("/api/v1/trunks")
+        || path.starts_with("/api/v1/routing")
+        || path.starts_with("/api/v1/numbers")
+        || path.starts_with("/api/v1/security/anti-fraud")
+        || (path.starts_with("/api/v1/calls/") && method == "POST")
+        || path.starts_with("/api/gateways")
         || path.starts_with("/api/routes")
         || path.starts_with("/api/numbers")
         || path.starts_with("/api/anti-fraud")
@@ -104,7 +119,12 @@ pub fn role_allows(role: &str, method: &str, path: &str) -> bool {
         return role == "operator";
     }
 
-    let read_only_path = path.starts_with("/api/dashboard")
+    let read_only_path = path.starts_with("/api/v1/overview")
+        || path.starts_with("/api/v1/calls")
+        || path.starts_with("/api/v1/registrations")
+        || path.starts_with("/api/v1/reports")
+        || path.starts_with("/api/v1/infrastructure/media/metrics")
+        || path.starts_with("/api/dashboard")
         || path.starts_with("/api/cdrs")
         || path.starts_with("/api/registrations")
         || path.starts_with("/api/recordings")
@@ -245,6 +265,38 @@ mod tests {
     fn operator_can_access_route_preview_and_media_metrics() {
         assert!(role_allows("operator", "GET", "/api/route-preview"));
         assert!(role_allows("operator", "GET", "/api/media/metrics"));
+    }
+
+    #[test]
+    fn authenticated_roles_can_read_their_v1_session() {
+        assert!(role_allows("admin", "GET", "/api/v1/auth/me"));
+        assert!(role_allows("operator", "GET", "/api/v1/auth/me"));
+        assert!(role_allows("financier", "GET", "/api/v1/auth/me"));
+        assert!(!role_allows("unknown", "GET", "/api/v1/auth/me"));
+    }
+
+    #[test]
+    fn v1_call_media_recording_and_controls_follow_rbac() {
+        for path in [
+            "/api/v1/calls/call-1/media",
+            "/api/v1/calls/call-1/dtmf",
+            "/api/v1/calls/call-1/recording",
+        ] {
+            assert!(role_allows("operator", "GET", path));
+            assert!(role_allows("financier", "GET", path));
+        }
+        for action in [
+            "terminate",
+            "play",
+            "stop-play",
+            "mute",
+            "unmute",
+            "monitor",
+        ] {
+            let path = format!("/api/v1/calls/call-1/actions/{action}");
+            assert!(role_allows("operator", "POST", &path));
+            assert!(!role_allows("financier", "POST", &path));
+        }
     }
 
     #[test]

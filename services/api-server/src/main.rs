@@ -10,6 +10,7 @@ mod billing;
 mod calls;
 mod cdr;
 mod dashboard;
+mod details;
 mod gateways;
 mod hot_cache;
 mod media_cluster;
@@ -22,6 +23,7 @@ mod routes;
 mod sip_cluster;
 mod system;
 mod users;
+mod v1;
 
 use axum::{
     extract::State,
@@ -72,6 +74,7 @@ use users::{create_user, delete_user, list_users, update_user};
 pub(crate) struct AppState {
     pub(crate) store: Arc<PostgresCdrStore>,
     pub(crate) recording_storage: Arc<dyn storage_core::StorageBackend>,
+    pub(crate) recording_local_dir: std::path::PathBuf,
     pub(crate) sip_manage_base: String,
     pub(crate) internal_client: reqwest::Client,
     pub(crate) nats_client: Option<async_nats::Client>,
@@ -139,6 +142,10 @@ impl IntoResponse for ApiError {
             StatusCode::UNAUTHORIZED
         } else if is_forbidden {
             StatusCode::FORBIDDEN
+        } else if self.error.contains("参数无效") {
+            StatusCode::BAD_REQUEST
+        } else if self.error.contains("不存在") {
+            StatusCode::NOT_FOUND
         } else {
             StatusCode::INTERNAL_SERVER_ERROR
         };
@@ -581,6 +588,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         store: Arc::new(store),
         recording_storage,
+        recording_local_dir: storage_config.local_dir.into(),
         sip_manage_base,
         internal_client,
         nats_client,
@@ -620,6 +628,14 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers([
             axum::http::header::AUTHORIZATION,
             axum::http::header::CONTENT_TYPE,
+            axum::http::header::RANGE,
+            axum::http::HeaderName::from_static("x-request-id"),
+        ])
+        .expose_headers([
+            axum::http::HeaderName::from_static("x-request-id"),
+            axum::http::header::ACCEPT_RANGES,
+            axum::http::header::CONTENT_RANGE,
+            axum::http::header::CONTENT_LENGTH,
         ]);
 
     let public_routes = Router::new()
@@ -627,6 +643,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/ready", get(ready))
         .route("/metrics", get(prometheus_metrics))
         .route("/api/auth/login", post(login));
+
+    let v1_public_routes = v1::public_routes();
+    let v1_protected_routes = v1::protected_routes(state.clone());
 
     let protected_routes = Router::new()
         .route(
@@ -702,6 +721,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
+        .merge(v1_public_routes)
+        .merge(v1_protected_routes)
         .with_state(state)
         .layer(cors)
         .layer(TraceLayer::new_for_http());
