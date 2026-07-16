@@ -8,7 +8,7 @@ use tracing::warn;
 impl PostgresCdrStore {
     pub async fn list_rates(&self) -> Result<Vec<BillingRate>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, rate_per_minute, description, created_at FROM billing_rates \
+            "SELECT id, prefix, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, description, created_at FROM billing_rates \
              ORDER BY length(prefix) DESC, prefix",
         )
         .fetch_all(&self.pool)
@@ -19,8 +19,10 @@ impl PostgresCdrStore {
                 id: row.get(0),
                 prefix: row.get(1),
                 rate_per_minute: row.get(2),
-                description: row.get(3),
-                created_at: row.get(4),
+                billing_interval_secs: row.get(3),
+                price_per_interval: row.get(4),
+                description: row.get(5),
+                created_at: row.get(6),
             });
         }
         Ok(rates)
@@ -33,7 +35,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<BillingRate>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, rate_per_minute, description, created_at \
+            "SELECT id, prefix, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, description, created_at \
               FROM billing_rates ORDER BY length(prefix) DESC, prefix LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -46,8 +48,10 @@ impl PostgresCdrStore {
                 id: row.get(0),
                 prefix: row.get(1),
                 rate_per_minute: row.get(2),
-                description: row.get(3),
-                created_at: row.get(4),
+                billing_interval_secs: row.get(3),
+                price_per_interval: row.get(4),
+                description: row.get(5),
+                created_at: row.get(6),
             })
             .collect())
     }
@@ -65,15 +69,19 @@ impl PostgresCdrStore {
         id: &str,
         prefix: &str,
         rate_per_minute: f64,
+        billing_interval_secs: i32,
+        price_per_interval: f64,
         description: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO billing_rates (id, prefix, rate_per_minute, description) VALUES ($1,$2,$3,$4) \
-             ON CONFLICT (id) DO UPDATE SET prefix=EXCLUDED.prefix, rate_per_minute=EXCLUDED.rate_per_minute, description=EXCLUDED.description",
+            "INSERT INTO billing_rates (id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description) VALUES ($1,$2,$3,$4,$5,$6) \
+             ON CONFLICT (id) DO UPDATE SET prefix=EXCLUDED.prefix, rate_per_minute=EXCLUDED.rate_per_minute, billing_interval_secs=EXCLUDED.billing_interval_secs, price_per_interval=EXCLUDED.price_per_interval, description=EXCLUDED.description",
         )
         .bind(id)
         .bind(prefix)
         .bind(rate_per_minute)
+        .bind(billing_interval_secs)
+        .bind(price_per_interval)
         .bind(description)
         .execute(&self.pool)
         .await?;
@@ -206,20 +214,19 @@ impl PostgresCdrStore {
             return Ok(None);
         }
 
-        let rate: f64 = sqlx::query_scalar(
-            "SELECT COALESCE(rate_per_minute, 0.0)::DOUBLE PRECISION FROM billing_rates \
+        let rate: Option<(i32, f64)> = sqlx::query_as(
+            "SELECT billing_interval_secs, price_per_interval::DOUBLE PRECISION FROM billing_rates \
               WHERE $1 LIKE prefix || '%' ORDER BY length(prefix) DESC LIMIT 1",
         )
         .bind(callee)
         .fetch_optional(&self.pool)
-        .await?
-        .unwrap_or(0.0);
+        .await?;
 
-        if rate <= 0.0 {
+        let Some((interval_secs, price)) = rate else {
             return Ok(None);
-        }
+        };
 
-        let amount = rate * duration_ms as f64 / 60000.0;
+        let amount = pulse_amount(duration_ms, interval_secs, price);
         if amount <= 0.0 {
             return Ok(None);
         }
@@ -246,13 +253,15 @@ impl PostgresCdrStore {
         };
 
         sqlx::query(
-            "INSERT INTO billing_ledger (call_id, username, duration_ms, rate_per_minute, amount, balance_after) \
-              VALUES ($1,$2,$3,$4,$5,$6)",
+            "INSERT INTO billing_ledger (call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after) \
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
         )
         .bind(call_id)
         .bind(username)
         .bind(duration_ms)
-        .bind(rate)
+        .bind(price * 60.0 / interval_secs as f64)
+        .bind(interval_secs)
+        .bind(price)
         .bind(amount)
         .bind(new_bal)
         .execute(&mut *tx)
@@ -269,7 +278,7 @@ impl PostgresCdrStore {
     ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
         let rows = if let Some(u) = username {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, amount, balance_after, created_at \
                   FROM billing_ledger WHERE username=$1 ORDER BY created_at DESC LIMIT 500",
             )
             .bind(u)
@@ -277,7 +286,7 @@ impl PostgresCdrStore {
             .await?
         } else {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, amount, balance_after, created_at \
                   FROM billing_ledger ORDER BY created_at DESC LIMIT 500",
             )
             .fetch_all(&self.pool)
@@ -291,9 +300,11 @@ impl PostgresCdrStore {
                 username: row.get(2),
                 duration_ms: row.get(3),
                 rate_per_minute: row.get(4),
-                amount: row.get(5),
-                balance_after: row.get(6),
-                created_at: row.get(7),
+                billing_interval_secs: row.get(5),
+                price_per_interval: row.get(6),
+                amount: row.get(7),
+                balance_after: row.get(8),
+                created_at: row.get(9),
             });
         }
         Ok(out)
@@ -308,7 +319,7 @@ impl PostgresCdrStore {
     ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
         let rows = if let Some(username) = username {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, amount, balance_after, created_at \
                   FROM billing_ledger WHERE username = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
             )
             .bind(username)
@@ -318,7 +329,7 @@ impl PostgresCdrStore {
             .await?
         } else {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, amount, balance_after, created_at \
                   FROM billing_ledger ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
             )
             .bind(limit)
@@ -334,9 +345,11 @@ impl PostgresCdrStore {
                 username: row.get(2),
                 duration_ms: row.get(3),
                 rate_per_minute: row.get(4),
-                amount: row.get(5),
-                balance_after: row.get(6),
-                created_at: row.get(7),
+                billing_interval_secs: row.get(5),
+                price_per_interval: row.get(6),
+                amount: row.get(7),
+                balance_after: row.get(8),
+                created_at: row.get(9),
             })
             .collect())
     }
@@ -363,13 +376,13 @@ impl PostgresCdrStore {
         end: OffsetDateTime,
     ) -> Result<ReconcileResult, sqlx::Error> {
         let rate_rows = sqlx::query(
-            "SELECT prefix, rate_per_minute FROM billing_rates ORDER BY length(prefix) DESC",
+            "SELECT prefix, billing_interval_secs, price_per_interval::DOUBLE PRECISION FROM billing_rates ORDER BY length(prefix) DESC",
         )
         .fetch_all(&self.pool)
         .await?;
-        let rates: Vec<(String, f64)> = rate_rows
+        let rates: Vec<(String, i32, f64)> = rate_rows
             .into_iter()
-            .map(|r| (r.get::<String, _>(0), r.get::<f64, _>(1)))
+            .map(|r| (r.get(0), r.get(1), r.get(2)))
             .collect();
 
         let cdr_rows = sqlx::query(
@@ -411,8 +424,11 @@ impl PostgresCdrStore {
                 continue;
             }
             let callee_str = callee.unwrap_or_default();
-            let rate = utils::match_rate(&callee_str, &rates);
-            let amount = rate * billable_ms as f64 / 60000.0;
+            let Some((interval_secs, price)) = match_pulse_rate(&callee_str, &rates) else {
+                skipped += 1;
+                continue;
+            };
+            let amount = pulse_amount(billable_ms, interval_secs, price);
 
             let updated_row = sqlx::query(
                 "UPDATE billing_accounts \
@@ -435,13 +451,15 @@ impl PostgresCdrStore {
             };
 
             sqlx::query(
-                "INSERT INTO billing_ledger (call_id, username, duration_ms, rate_per_minute, amount, balance_after) \
-                  VALUES ($1,$2,$3,$4,$5,$6)",
+                "INSERT INTO billing_ledger (call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after) \
+                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
             )
             .bind(&call_id)
             .bind(user)
             .bind(billable_ms)
-            .bind(rate)
+            .bind(price * 60.0 / interval_secs as f64)
+            .bind(interval_secs)
+            .bind(price)
             .bind(amount)
             .bind(new_bal)
             .execute(&mut *tx)
@@ -455,5 +473,35 @@ impl PostgresCdrStore {
             skipped,
             total_amount,
         })
+    }
+}
+
+/// Calculates pulse billing by rounding any partial interval upward.
+pub fn pulse_amount(duration_ms: i64, interval_secs: i32, price: f64) -> f64 {
+    if duration_ms <= 0 || interval_secs <= 0 || price <= 0.0 {
+        return 0.0;
+    }
+    let interval_ms = i64::from(interval_secs) * 1_000;
+    let pulses = duration_ms.saturating_add(interval_ms - 1) / interval_ms;
+    pulses as f64 * price
+}
+
+fn match_pulse_rate(callee: &str, rates: &[(String, i32, f64)]) -> Option<(i32, f64)> {
+    rates
+        .iter()
+        .find(|(prefix, _, _)| callee.starts_with(prefix))
+        .map(|(_, interval, price)| (*interval, *price))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pulse_amount;
+
+    #[test]
+    fn pulse_billing_rounds_partial_intervals_up() {
+        assert_eq!(pulse_amount(45_000, 60, 1.0), 1.0);
+        assert_eq!(pulse_amount(60_000, 60, 1.0), 1.0);
+        assert_eq!(pulse_amount(61_000, 60, 1.0), 2.0);
+        assert!((pulse_amount(45_000, 6, 0.05) - 0.40).abs() < f64::EPSILON);
     }
 }

@@ -105,7 +105,8 @@ impl PostgresCdrStore {
         sqlx::Error,
     > {
         let rows = sqlx::query(
-            "SELECT id, host, port, transport, max_capacity, caller_id_mode, virtual_caller, prefix_rules FROM sip_gateways",
+            "SELECT id, host, port, transport, max_capacity, caller_id_mode, virtual_caller, prefix_rules \
+             FROM sip_gateways WHERE enabled = TRUE",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -196,8 +197,8 @@ impl PostgresCdrStore {
         let port_val = gw.port.map(|p| p as i32);
         let cap_val = gw.max_capacity.map(|c| c as i32);
         sqlx::query(
-            "INSERT INTO sip_gateways (id, host, port, transport, max_capacity, gateway_type, prefix_rules, supports_registration, caller_id_mode, virtual_caller, max_concurrent, account_id, enabled) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+            "INSERT INTO sip_gateways (id, host, port, transport, max_capacity, gateway_type, prefix_rules, supports_registration, reg_auth_type, reg_username, reg_password, parent_gateway_id, caller_id_mode, virtual_caller, max_concurrent, account_id, enabled) \
+             VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'peer'), COALESCE($7, ''), COALESCE($8, FALSE), COALESCE($9, 'none'), COALESCE($10, ''), COALESCE($11, ''), $12, COALESCE($13, 'passthrough'), COALESCE($14, ''), COALESCE($15, 100), $16, COALESCE($17, TRUE)) \
              ON CONFLICT (id) DO UPDATE \
              SET host = EXCLUDED.host, \
                  port = EXCLUDED.port, \
@@ -206,6 +207,10 @@ impl PostgresCdrStore {
                  gateway_type = EXCLUDED.gateway_type, \
                  prefix_rules = EXCLUDED.prefix_rules, \
                  supports_registration = EXCLUDED.supports_registration, \
+                 reg_auth_type = EXCLUDED.reg_auth_type, \
+                 reg_username = EXCLUDED.reg_username, \
+                 reg_password = COALESCE($11, sip_gateways.reg_password), \
+                 parent_gateway_id = EXCLUDED.parent_gateway_id, \
                  caller_id_mode = EXCLUDED.caller_id_mode, \
                  virtual_caller = EXCLUDED.virtual_caller, \
                  max_concurrent = EXCLUDED.max_concurrent, \
@@ -220,6 +225,10 @@ impl PostgresCdrStore {
         .bind(&gw.gateway_type)
         .bind(&gw.prefix_rules)
         .bind(gw.supports_registration)
+        .bind(&gw.reg_auth_type)
+        .bind(&gw.reg_username)
+        .bind(&gw.reg_password)
+        .bind(&gw.parent_gateway_id)
         .bind(&gw.caller_id_mode)
         .bind(&gw.virtual_caller)
         .bind(gw.max_concurrent)
@@ -233,8 +242,9 @@ impl PostgresCdrStore {
     pub async fn list_gateways_full(&self) -> Result<Vec<SipGateway>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.prefix_rules, \
-             g.supports_registration, g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, \
-             g.enabled, g.created_at, h.active_calls, h.state \
+             g.supports_registration, g.reg_auth_type, g.reg_username, g.parent_gateway_id, \
+             g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, g.enabled, g.created_at, \
+             h.active_calls, h.state \
              FROM sip_gateways g \
              LEFT JOIN gateway_health_status h ON g.id = h.gateway_id \
              ORDER BY g.id",
@@ -243,31 +253,32 @@ impl PostgresCdrStore {
         .await?;
         let mut gateways = Vec::with_capacity(rows.len());
         for row in rows {
-            let active_calls: Option<i32> = row.get(14);
-            let state: Option<String> = row.get(15);
+            let active_calls: Option<i32> = row.get("active_calls");
+            let state: Option<String> = row.get("state");
             gateways.push(SipGateway {
-                id: row.get(0),
-                host: row.get(1),
-                port: row.get::<Option<i32>, _>(2).map(|p| p as u16),
-                transport: row.get(3),
+                id: row.get("id"),
+                host: row.get("host"),
+                port: row.get::<Option<i32>, _>("port").map(|p| p as u16),
+                transport: row.get("transport"),
                 max_capacity: row
-                    .get::<Option<i32>, _>(4)
+                    .get::<Option<i32>, _>("max_capacity")
                     .and_then(|c| u32::try_from(c).ok()),
-                gateway_type: row.get(5),
-                prefix_rules: row.get(6),
-                supports_registration: row.get(7),
-                reg_auth_type: None,
-                reg_username: None,
+                gateway_type: row.get("gateway_type"),
+                prefix_rules: row.get("prefix_rules"),
+                supports_registration: row.get("supports_registration"),
+                reg_auth_type: row.get("reg_auth_type"),
+                reg_username: row.get("reg_username"),
+                // 管理列表不返回认证密码；未传密码的更新由 upsert 保留原值。
                 reg_password: None,
-                parent_gateway_id: None,
-                caller_id_mode: row.get(8),
-                virtual_caller: row.get(9),
+                parent_gateway_id: row.get("parent_gateway_id"),
+                caller_id_mode: row.get("caller_id_mode"),
+                virtual_caller: row.get("virtual_caller"),
                 current_concurrent: Some(active_calls.unwrap_or(0)),
                 circuit_state: Some(state.unwrap_or_else(|| "closed".to_string())),
-                account_id: row.get(10),
-                max_concurrent: row.get(11),
-                enabled: row.get(12),
-                created_at: row.get(13),
+                account_id: row.get("account_id"),
+                max_concurrent: row.get("max_concurrent"),
+                enabled: row.get("enabled"),
+                created_at: row.get("created_at"),
             });
         }
         Ok(gateways)
@@ -282,8 +293,9 @@ impl PostgresCdrStore {
     ) -> Result<Vec<SipGateway>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.prefix_rules, \
-             g.supports_registration, g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, \
-             g.enabled, g.created_at, h.active_calls, h.state \
+             g.supports_registration, g.reg_auth_type, g.reg_username, g.parent_gateway_id, \
+             g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, g.enabled, g.created_at, \
+             h.active_calls, h.state \
              FROM sip_gateways g \
              LEFT JOIN gateway_health_status h ON g.id = h.gateway_id \
              WHERE ($3::TEXT IS NULL OR g.gateway_type = $3) \
@@ -297,31 +309,31 @@ impl PostgresCdrStore {
         Ok(rows
             .into_iter()
             .map(|row| SipGateway {
-                id: row.get(0),
-                host: row.get(1),
-                port: row.get::<Option<i32>, _>(2).map(|p| p as u16),
-                transport: row.get(3),
+                id: row.get("id"),
+                host: row.get("host"),
+                port: row.get::<Option<i32>, _>("port").map(|p| p as u16),
+                transport: row.get("transport"),
                 max_capacity: row
-                    .get::<Option<i32>, _>(4)
+                    .get::<Option<i32>, _>("max_capacity")
                     .and_then(|capacity| u32::try_from(capacity).ok()),
-                gateway_type: row.get(5),
-                prefix_rules: row.get(6),
-                supports_registration: row.get(7),
-                reg_auth_type: None,
-                reg_username: None,
+                gateway_type: row.get("gateway_type"),
+                prefix_rules: row.get("prefix_rules"),
+                supports_registration: row.get("supports_registration"),
+                reg_auth_type: row.get("reg_auth_type"),
+                reg_username: row.get("reg_username"),
                 reg_password: None,
-                parent_gateway_id: None,
-                caller_id_mode: row.get(8),
-                virtual_caller: row.get(9),
-                current_concurrent: Some(row.get::<Option<i32>, _>(14).unwrap_or(0)),
+                parent_gateway_id: row.get("parent_gateway_id"),
+                caller_id_mode: row.get("caller_id_mode"),
+                virtual_caller: row.get("virtual_caller"),
+                current_concurrent: Some(row.get::<Option<i32>, _>("active_calls").unwrap_or(0)),
                 circuit_state: Some(
-                    row.get::<Option<String>, _>(15)
+                    row.get::<Option<String>, _>("state")
                         .unwrap_or_else(|| "closed".to_string()),
                 ),
-                account_id: row.get(10),
-                max_concurrent: row.get(11),
-                enabled: row.get(12),
-                created_at: row.get(13),
+                account_id: row.get("account_id"),
+                max_concurrent: row.get("max_concurrent"),
+                enabled: row.get("enabled"),
+                created_at: row.get("created_at"),
             })
             .collect())
     }

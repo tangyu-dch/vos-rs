@@ -88,6 +88,38 @@ impl PostgresCdrStore {
             .await
     }
 
+    /// Updates an existing route without creating a new row when the ID is unknown.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_route_with_cost(
+        &self,
+        id: &str,
+        prefix: &str,
+        priority: i32,
+        gateway_id: &str,
+        cost: f64,
+        weight: i32,
+        time_start: Option<&str>,
+        time_end: Option<&str>,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE sip_routes \
+             SET prefix = $2, priority = $3, gateway_id = $4, cost = $5, weight = $6, \
+                 time_start = $7, time_end = $8 \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(prefix)
+        .bind(priority)
+        .bind(gateway_id)
+        .bind(cost)
+        .bind(weight)
+        .bind(time_start)
+        .bind(time_end)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn list_routes_full(&self) -> Result<Vec<SipRoute>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, created_at FROM sip_routes ORDER BY priority, id"

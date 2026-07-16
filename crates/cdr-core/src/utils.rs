@@ -30,22 +30,20 @@ pub(crate) fn extract_sip_user(value: &str) -> Option<&str> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn match_rate(callee: &str, rates: &[(String, f64)]) -> f64 {
-    let mut best_match: Option<(&str, f64)> = None;
-    let mut fallback: Option<f64> = None;
+    let mut best: Option<(&str, f64)> = None;
+    let mut fallback = 0.0;
     for (prefix, rate) in rates {
         if prefix.is_empty() {
-            fallback = Some(*rate);
-            continue;
-        }
-        if callee.starts_with(prefix.as_str()) {
-            match &best_match {
-                Some((best, _)) if best.len() >= prefix.len() => {}
-                _ => best_match = Some((prefix.as_str(), *rate)),
-            }
+            fallback = *rate;
+        } else if callee.starts_with(prefix)
+            && best.is_none_or(|(current, _)| prefix.len() > current.len())
+        {
+            best = Some((prefix, *rate));
         }
     }
-    best_match.map(|(_, r)| r).or(fallback).unwrap_or(0.0)
+    best.map_or(fallback, |(_, rate)| rate)
 }
 
 pub(crate) fn cdr_event_from_row(row: &sqlx::postgres::PgRow) -> crate::models::CdrEvent {

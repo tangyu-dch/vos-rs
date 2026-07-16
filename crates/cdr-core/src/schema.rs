@@ -89,9 +89,62 @@ CREATE TABLE IF NOT EXISTS sip_gateways (
     port INTEGER,
     transport TEXT NOT NULL DEFAULT 'udp',
     max_capacity INTEGER,
+    gateway_type VARCHAR(20) NOT NULL DEFAULT 'peer',
+    prefix_rules TEXT NOT NULL DEFAULT '',
+    supports_registration BOOLEAN NOT NULL DEFAULT FALSE,
+    reg_auth_type VARCHAR(20) NOT NULL DEFAULT 'none',
+    reg_username TEXT NOT NULL DEFAULT '',
+    reg_password TEXT NOT NULL DEFAULT '',
+    parent_gateway_id TEXT,
+    caller_id_mode VARCHAR(20) NOT NULL DEFAULT 'passthrough',
+    virtual_caller TEXT NOT NULL DEFAULT '',
+    current_concurrent INTEGER NOT NULL DEFAULT 0,
+    max_concurrent INTEGER NOT NULL DEFAULT 100,
+    account_id BIGINT,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
+
+/// 将历史网关表增量升级到管理面和 SIP 路由共同使用的规范结构。
+pub(super) const MIGRATE_SIP_GATEWAYS_SQL: &[&str] = &[
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS gateway_type VARCHAR(20) NOT NULL DEFAULT 'peer'",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS prefix_rules TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS supports_registration BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_auth_type VARCHAR(20) NOT NULL DEFAULT 'none'",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_username TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_password TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS parent_gateway_id TEXT",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS caller_id_mode VARCHAR(20) NOT NULL DEFAULT 'passthrough'",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS virtual_caller TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS current_concurrent INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS max_concurrent INTEGER NOT NULL DEFAULT 100",
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS account_id BIGINT",
+    r#"DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'sip_gateways'
+          AND column_name = 'account_id'
+          AND data_type = 'integer'
+    ) THEN
+        ALTER TABLE sip_gateways DROP CONSTRAINT IF EXISTS fk_gateway_account;
+        ALTER TABLE sip_gateways ALTER COLUMN account_id TYPE BIGINT USING account_id::BIGINT;
+    END IF;
+END $$;
+"#,
+    "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE",
+];
+
+pub(super) const CREATE_GATEWAYS_TYPE_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_gateways_type ON sip_gateways (gateway_type)";
+pub(super) const CREATE_GATEWAYS_PARENT_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_gateways_parent ON sip_gateways (parent_gateway_id)";
+pub(super) const CREATE_GATEWAYS_ACCOUNT_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_gateways_account ON sip_gateways (account_id)";
+pub(super) const CREATE_GATEWAYS_ENABLED_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_gateways_enabled ON sip_gateways (enabled)";
 
 pub(super) const CREATE_SIP_ROUTES_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS sip_routes (
@@ -159,6 +212,10 @@ pub(super) const CREATE_GATEWAY_HEALTH_STATE_INDEX_SQL: &str =
 
 pub(super) const CREATE_ROUTES_PRIORITY_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_sip_routes_priority_id ON sip_routes (priority, id)";
+pub(super) const CREATE_ROUTES_PREFIX_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_routes_prefix ON sip_routes (prefix)";
+pub(super) const CREATE_ROUTES_GATEWAY_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_routes_gateway ON sip_routes (gateway_id)";
 
 pub(super) const CREATE_ANTI_FRAUD_RULES_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS anti_fraud_rules (
@@ -213,6 +270,15 @@ BEGIN
     ) THEN
         ALTER TABLE anti_fraud_rules ADD COLUMN limit_number INTEGER;
     END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'anti_fraud_rules' AND column_name = 'value'
+    ) THEN
+        -- New writes use target_value; retain the legacy column for compatibility
+        -- without forcing callers to populate both representations.
+        ALTER TABLE anti_fraud_rules ALTER COLUMN value DROP NOT NULL;
+    END IF;
 END $$;
 "#;
 
@@ -254,6 +320,8 @@ CREATE TABLE IF NOT EXISTS billing_rates (
     id TEXT PRIMARY KEY,
     prefix TEXT NOT NULL,
     rate_per_minute NUMERIC(20, 8) NOT NULL,
+    billing_interval_secs INTEGER NOT NULL DEFAULT 60 CHECK (billing_interval_secs > 0),
+    price_per_interval NUMERIC(20, 8) NOT NULL DEFAULT 0,
     description TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
@@ -261,6 +329,7 @@ CREATE TABLE IF NOT EXISTS billing_rates (
 
 pub(super) const CREATE_BILLING_ACCOUNTS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS billing_accounts (
+    id BIGSERIAL UNIQUE,
     username TEXT PRIMARY KEY,
     balance NUMERIC(20, 8) NOT NULL DEFAULT 0.0,
     credit_limit NUMERIC(20, 8) NOT NULL DEFAULT 0.0,
@@ -276,6 +345,8 @@ CREATE TABLE IF NOT EXISTS billing_ledger (
     username TEXT NOT NULL,
     duration_ms BIGINT NOT NULL,
     rate_per_minute NUMERIC(20, 8) NOT NULL,
+    billing_interval_secs INTEGER NOT NULL DEFAULT 60,
+    price_per_interval NUMERIC(20, 8) NOT NULL DEFAULT 0,
     amount NUMERIC(20, 8) NOT NULL,
     balance_after NUMERIC(20, 8) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -287,13 +358,103 @@ pub(super) const CREATE_LEDGER_USERNAME_INDEX_SQL: &str =
 pub(super) const CREATE_LEDGER_CREATED_AT_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_billing_ledger_created_at ON billing_ledger (created_at DESC)";
 
+pub(super) const MIGRATE_BILLING_INTERVALS_SQL: &str = r#"
+ALTER TABLE billing_rates ADD COLUMN IF NOT EXISTS billing_interval_secs INTEGER;
+ALTER TABLE billing_rates ADD COLUMN IF NOT EXISTS price_per_interval NUMERIC(20, 8);
+UPDATE billing_rates SET billing_interval_secs = 60 WHERE billing_interval_secs IS NULL;
+UPDATE billing_rates SET price_per_interval = rate_per_minute WHERE price_per_interval IS NULL;
+ALTER TABLE billing_rates ALTER COLUMN billing_interval_secs SET DEFAULT 60;
+ALTER TABLE billing_rates ALTER COLUMN billing_interval_secs SET NOT NULL;
+ALTER TABLE billing_rates ALTER COLUMN price_per_interval SET DEFAULT 0;
+ALTER TABLE billing_rates ALTER COLUMN price_per_interval SET NOT NULL;
+ALTER TABLE billing_ledger ADD COLUMN IF NOT EXISTS billing_interval_secs INTEGER;
+ALTER TABLE billing_ledger ADD COLUMN IF NOT EXISTS price_per_interval NUMERIC(20, 8);
+UPDATE billing_ledger SET billing_interval_secs = 60 WHERE billing_interval_secs IS NULL;
+UPDATE billing_ledger SET price_per_interval = rate_per_minute WHERE price_per_interval IS NULL;
+ALTER TABLE billing_ledger ALTER COLUMN billing_interval_secs SET DEFAULT 60;
+ALTER TABLE billing_ledger ALTER COLUMN billing_interval_secs SET NOT NULL;
+ALTER TABLE billing_ledger ALTER COLUMN price_per_interval SET DEFAULT 0;
+ALTER TABLE billing_ledger ALTER COLUMN price_per_interval SET NOT NULL;
+"#;
+
 pub(super) const CREATE_NUMBER_INVENTORY_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS number_inventory (
     number TEXT PRIMARY KEY,
     username TEXT,
+    gateway_id TEXT,
+    direction VARCHAR(20) NOT NULL DEFAULT 'bidirectional',
+    max_concurrent INTEGER NOT NULL DEFAULT 10,
+    current_concurrent INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'available',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
+"#;
+
+pub(super) const MIGRATE_BILLING_ACCOUNTS_SQL: &[&str] = &[
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS id BIGSERIAL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_accounts_id ON billing_accounts (id)",
+];
+
+pub(super) const MIGRATE_NUMBER_INVENTORY_SQL: &[&str] = &[
+    "ALTER TABLE number_inventory ADD COLUMN IF NOT EXISTS gateway_id TEXT",
+    "ALTER TABLE number_inventory ADD COLUMN IF NOT EXISTS direction VARCHAR(20) NOT NULL DEFAULT 'bidirectional'",
+    "ALTER TABLE number_inventory ADD COLUMN IF NOT EXISTS max_concurrent INTEGER NOT NULL DEFAULT 10",
+    "ALTER TABLE number_inventory ADD COLUMN IF NOT EXISTS current_concurrent INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE number_inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+];
+
+pub(super) const CREATE_NUMBERS_GATEWAY_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_number_inventory_gateway ON number_inventory (gateway_id)";
+pub(super) const CREATE_NUMBERS_STATUS_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_number_inventory_status ON number_inventory (status)";
+pub(super) const CREATE_NUMBERS_USERNAME_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_number_inventory_username ON number_inventory (username)";
+
+pub(super) const CREATE_GATEWAY_NUMBER_ASSIGNMENTS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS gateway_number_assignments (
+    id BIGSERIAL PRIMARY KEY,
+    gateway_id TEXT NOT NULL REFERENCES sip_gateways(id) ON DELETE CASCADE,
+    number TEXT NOT NULL REFERENCES number_inventory(number) ON DELETE CASCADE,
+    direction VARCHAR(20) NOT NULL DEFAULT 'both',
+    max_concurrent INTEGER NOT NULL DEFAULT 10,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (gateway_id, number)
+)
+"#;
+
+pub(super) const CREATE_GATEWAY_PEER_LINKS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS gateway_peer_links (
+    id BIGSERIAL PRIMARY KEY,
+    gateway_id TEXT NOT NULL REFERENCES sip_gateways(id) ON DELETE CASCADE,
+    peer_gateway_id TEXT NOT NULL REFERENCES sip_gateways(id) ON DELETE CASCADE,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (gateway_id, peer_gateway_id),
+    CHECK (gateway_id <> peer_gateway_id)
+)
+"#;
+
+pub(super) const CREATE_GATEWAY_ASSIGNMENT_INDEXES_SQL: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS idx_gna_gateway ON gateway_number_assignments (gateway_id)",
+    "CREATE INDEX IF NOT EXISTS idx_gna_number ON gateway_number_assignments (number)",
+    "CREATE INDEX IF NOT EXISTS idx_gpl_gateway ON gateway_peer_links (gateway_id)",
+    "CREATE INDEX IF NOT EXISTS idx_gpl_peer_gateway ON gateway_peer_links (peer_gateway_id)",
+];
+
+pub(super) const ADD_GATEWAY_ACCOUNT_FOREIGN_KEY_SQL: &str = r#"
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fk_gateway_account'
+    ) THEN
+        ALTER TABLE sip_gateways
+            ADD CONSTRAINT fk_gateway_account
+            FOREIGN KEY (account_id) REFERENCES billing_accounts(id)
+            ON DELETE SET NULL NOT VALID;
+    END IF;
+END $$;
 "#;
 
 /// 管理 API 审计日志表。
@@ -329,6 +490,14 @@ pub const SEED_SYSTEM_CONFIGS_SQL: &str = r#"
 INSERT INTO system_configs (config_key, config_value, description) VALUES
     ('session_expires_gateway', '600', '网关会话超时时长'),
     ('session_expires_caller', '1800', '呼叫方会话超时时长'),
+    ('database_routes_enabled', 'true', '启用数据库动态路由'),
+    ('default_gateway', '', '无数据库路由时的默认网关'),
+    ('gateway_health_checks_enabled', 'true', '启用网关健康检查'),
+    ('cluster_enabled', 'false', '启用 SIP 节点集群'),
+    ('cluster_heartbeat_interval_secs', '3', 'SIP 节点心跳间隔'),
+    ('cluster_node_timeout_secs', '10', 'SIP 节点离线判定时间'),
+    ('cluster_dialog_ttl_secs', '86400', '集群对话快照保留时间'),
+    ('sbc_rate_limit_enabled', 'true', '启用 SBC 来源限速'),
     ('sbc_rate_limit_capacity', '2000.0', 'SBC 限速令牌桶容量'),
     ('sbc_rate_limit_fill_rate', '500.0', 'SBC 限速令牌填充速率'),
     ('sbc_max_concurrency', '2000', '每个分机最大并发数'),
@@ -339,6 +508,7 @@ INSERT INTO system_configs (config_key, config_value, description) VALUES
     ('udp_receive_buffer_bytes', '4194304', 'UDP接收缓冲区字节数'),
     ('udp_send_buffer_bytes', '4194304', 'UDP发送缓冲区字节数'),
     ('cdr_queue_capacity', '4096', 'CDR 内存有界队列容量'),
+    ('cdr_persistence_enabled', 'true', '启用 CDR 持久化'),
     ('rtp_symmetric_learning', 'true', '启用对称 RTP 学习'),
     ('rtp_anti_spoofing', 'true', 'RTP 源地址欺骗防护'),
     ('rtp_source_relearn_secs', '30', 'RTP 重新学习周期'),
@@ -351,6 +521,8 @@ INSERT INTO system_configs (config_key, config_value, description) VALUES
     ('recording_min_free_bytes', '536870912', '录音磁盘保护大小阀值'),
     ('recording_max_file_bytes', '134217728', '单 WAV 录音文件最大字节数'),
     ('recording_max_duration_secs', '3600', '单录音最长时长限制'),
+    ('balance_enforcement_enabled', 'true', '启用实时余额校验'),
+    ('billing_settlement_enabled', 'true', '启用通话结束计费结算'),
     ('storage_backend', 'local', '录音存储后端类型 (local/oss/dual)'),
     ('tls_bind_addr', '', 'SIP TLS 监听地址'),
     ('tls_cert_path', '', 'SIP TLS 证书路径'),
@@ -362,3 +534,31 @@ INSERT INTO system_configs (config_key, config_value, description) VALUES
     ('secret_key', 'default-fallback-secret-key-12345', 'SIP 鉴权密钥')
 ON CONFLICT (config_key) DO NOTHING
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::SEED_SYSTEM_CONFIGS_SQL;
+
+    #[test]
+    fn system_config_seed_covers_high_frequency_domains() {
+        for key in [
+            "session_expires_gateway",
+            "database_routes_enabled",
+            "gateway_health_checks_enabled",
+            "rtp_symmetric_learning",
+            "recording_enabled",
+            "balance_enforcement_enabled",
+            "billing_settlement_enabled",
+            "sbc_rate_limit_enabled",
+            "cluster_heartbeat_interval_secs",
+            "cluster_node_timeout_secs",
+            "cdr_persistence_enabled",
+        ] {
+            assert!(
+                SEED_SYSTEM_CONFIGS_SQL.contains(&format!("('{key}',")),
+                "missing default for {key}"
+            );
+        }
+        assert!(SEED_SYSTEM_CONFIGS_SQL.contains("ON CONFLICT (config_key) DO NOTHING"));
+    }
+}

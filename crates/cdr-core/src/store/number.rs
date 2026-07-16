@@ -3,6 +3,23 @@ use crate::PostgresCdrStore;
 use sqlx::Row;
 
 impl PostgresCdrStore {
+    /// 加载可用于入站呼叫的号码到分机映射。
+    ///
+    /// `available` 兼容历史上“绑定了分机但未同步改状态”的号码；明确停用的号码不会加载。
+    pub async fn load_number_routes(&self) -> Result<Vec<(String, String)>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT number, username FROM number_inventory \
+             WHERE username IS NOT NULL AND BTRIM(username) <> '' \
+               AND LOWER(status) IN ('available', 'assigned', 'active')",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("number"), row.get("username")))
+            .collect())
+    }
+
     pub async fn list_numbers(&self) -> Result<Vec<NumberInventory>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT number, username, gateway_id, direction, max_concurrent, current_concurrent, status, created_at, updated_at FROM number_inventory ORDER BY number",

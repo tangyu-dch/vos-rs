@@ -319,6 +319,8 @@ pub struct BillingRate {
     pub id: String,
     pub prefix: String,
     pub rate_per_minute: f64,
+    pub billing_interval_secs: i32,
+    pub price_per_interval: f64,
     pub description: Option<String>,
     #[serde(
         with = "time::serde::rfc3339::option",
@@ -348,6 +350,8 @@ pub struct LedgerEntry {
     pub username: String,
     pub duration_ms: i64,
     pub rate_per_minute: f64,
+    pub billing_interval_secs: i32,
+    pub price_per_interval: f64,
     pub amount: f64,
     pub balance_after: f64,
     #[serde(

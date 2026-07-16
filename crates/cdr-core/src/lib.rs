@@ -98,10 +98,27 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_SIP_GATEWAYS_TABLE_SQL)
             .execute(&self.pool)
             .await?;
+        for migration_sql in MIGRATE_SIP_GATEWAYS_SQL {
+            sqlx::query(migration_sql).execute(&self.pool).await?;
+        }
+        for index_sql in [
+            CREATE_GATEWAYS_TYPE_INDEX_SQL,
+            CREATE_GATEWAYS_PARENT_INDEX_SQL,
+            CREATE_GATEWAYS_ACCOUNT_INDEX_SQL,
+            CREATE_GATEWAYS_ENABLED_INDEX_SQL,
+        ] {
+            sqlx::query(index_sql).execute(&self.pool).await?;
+        }
         sqlx::query(CREATE_SIP_ROUTES_TABLE_SQL)
             .execute(&self.pool)
             .await?;
         sqlx::query(CREATE_ROUTES_PRIORITY_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_ROUTES_PREFIX_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_ROUTES_GATEWAY_INDEX_SQL)
             .execute(&self.pool)
             .await?;
         sqlx::query(MIGRATION_ADD_ROUTE_WEIGHT)
@@ -142,7 +159,16 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_BILLING_ACCOUNTS_TABLE_SQL)
             .execute(&self.pool)
             .await?;
+        for migration_sql in MIGRATE_BILLING_ACCOUNTS_SQL {
+            sqlx::query(migration_sql).execute(&self.pool).await?;
+        }
+        sqlx::query(ADD_GATEWAY_ACCOUNT_FOREIGN_KEY_SQL)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(CREATE_BILLING_LEDGER_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::raw_sql(MIGRATE_BILLING_INTERVALS_SQL)
             .execute(&self.pool)
             .await?;
         sqlx::query(CREATE_LEDGER_USERNAME_INDEX_SQL)
@@ -154,6 +180,25 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_NUMBER_INVENTORY_TABLE_SQL)
             .execute(&self.pool)
             .await?;
+        for migration_sql in MIGRATE_NUMBER_INVENTORY_SQL {
+            sqlx::query(migration_sql).execute(&self.pool).await?;
+        }
+        for index_sql in [
+            CREATE_NUMBERS_GATEWAY_INDEX_SQL,
+            CREATE_NUMBERS_STATUS_INDEX_SQL,
+            CREATE_NUMBERS_USERNAME_INDEX_SQL,
+        ] {
+            sqlx::query(index_sql).execute(&self.pool).await?;
+        }
+        sqlx::query(CREATE_GATEWAY_NUMBER_ASSIGNMENTS_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_GATEWAY_PEER_LINKS_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
+        for index_sql in CREATE_GATEWAY_ASSIGNMENT_INDEXES_SQL {
+            sqlx::query(index_sql).execute(&self.pool).await?;
+        }
         sqlx::query(CREATE_GATEWAY_HEALTH_TABLE_SQL)
             .execute(&self.pool)
             .await?;
@@ -294,5 +339,48 @@ mod tests {
         let json = event.to_json_bytes();
         let decoded = CdrEvent::from_json_slice(&json).unwrap();
         assert_eq!(event, decoded);
+    }
+
+    #[test]
+    fn test_runtime_schema_contains_gateway_and_number_domain_columns() {
+        for column in [
+            "gateway_type",
+            "reg_auth_type",
+            "reg_password",
+            "parent_gateway_id",
+            "account_id BIGINT",
+            "enabled BOOLEAN",
+        ] {
+            assert!(CREATE_SIP_GATEWAYS_TABLE_SQL.contains(column));
+        }
+        for column in [
+            "gateway_id TEXT",
+            "direction VARCHAR",
+            "current_concurrent INTEGER",
+            "updated_at TIMESTAMPTZ",
+        ] {
+            assert!(CREATE_NUMBER_INVENTORY_TABLE_SQL.contains(column));
+        }
+    }
+
+    #[test]
+    fn test_domain_migrations_are_non_destructive() {
+        let migrations = MIGRATE_SIP_GATEWAYS_SQL
+            .iter()
+            .chain(MIGRATE_BILLING_ACCOUNTS_SQL)
+            .chain(MIGRATE_NUMBER_INVENTORY_SQL);
+        for migration in migrations {
+            let normalized = migration.to_ascii_uppercase();
+            assert!(!normalized.contains("DROP TABLE"));
+            assert!(!normalized.contains("TRUNCATE"));
+            assert!(!normalized.contains("DELETE FROM"));
+        }
+    }
+
+    #[test]
+    fn test_legacy_anti_fraud_value_no_longer_blocks_current_writes() {
+        let normalized = MIGRATE_LEGACY_ANTI_FRAUD_RULES_SQL.to_ascii_uppercase();
+        assert!(normalized.contains("ALTER COLUMN VALUE DROP NOT NULL"));
+        assert!(normalized.contains("COLUMN_NAME = 'VALUE'"));
     }
 }
