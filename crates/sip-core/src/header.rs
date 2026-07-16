@@ -30,53 +30,64 @@ impl fmt::Display for HeaderName {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct HeaderValue(String);
+pub struct HeaderValue<'a>(pub Cow<'a, str>);
 
-impl HeaderValue {
-    pub fn new(raw: &str) -> Self {
-        Self(raw.trim().to_string())
+impl<'a> HeaderValue<'a> {
+    pub fn new(raw: &'a str) -> Self {
+        Self(Cow::Borrowed(raw.trim()))
+    }
+
+    pub fn new_owned(s: String) -> Self {
+        Self(Cow::Owned(s))
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        match &self.0 {
+            Cow::Borrowed(s) => s,
+            Cow::Owned(s) => s,
+        }
+    }
+
+    pub fn into_owned(self) -> HeaderValue<'static> {
+        HeaderValue(Cow::Owned(self.0.into_owned()))
     }
 }
 
-impl fmt::Display for HeaderValue {
+impl fmt::Display for HeaderValue<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct HeaderMap {
-    entries: Vec<(HeaderName, HeaderValue)>,
+pub struct HeaderMap<'a> {
+    entries: Vec<(HeaderName, HeaderValue<'a>)>,
 }
 
-impl HeaderMap {
+impl<'a> HeaderMap<'a> {
     pub fn new() -> Self {
-        Self::default()
+        Self { entries: Vec::new() }
     }
 
-    pub fn insert(&mut self, name: HeaderName, value: HeaderValue) {
+    pub fn insert(&mut self, name: HeaderName, value: HeaderValue<'a>) {
         self.entries.push((name, value));
     }
 
     /// Append text to the last header value (for header folding).
-    pub fn fold_last(&mut self, continuation: &str) {
+    pub fn fold_last(&mut self, continuation: &'a str) {
         if let Some((_, value)) = self.entries.last_mut() {
             let old = value.as_str();
             let mut new_val = String::with_capacity(old.len() + 1 + continuation.len());
             new_val.push_str(old);
             new_val.push(' ');
             new_val.push_str(continuation);
-            *value = HeaderValue(new_val);
+            *value = HeaderValue::new_owned(new_val);
         }
     }
 
     /// Replace the first occurrence of `name` with `value`.
     /// If no existing entry exists, the new entry is appended.
-    pub fn replace(&mut self, name: HeaderName, value: HeaderValue) {
+    pub fn replace(&mut self, name: HeaderName, value: HeaderValue<'a>) {
         let needle = canonical_header_name(name.as_str());
         if let Some(pos) = self
             .entries
@@ -89,7 +100,7 @@ impl HeaderMap {
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<&HeaderValue> {
+    pub fn get<'b>(&'b self, name: &str) -> Option<&'b HeaderValue<'a>> {
         let needle = canonical_header_name(name);
         self.entries
             .iter()
@@ -97,14 +108,14 @@ impl HeaderMap {
             .map(|(_, value)| value)
     }
 
-    pub fn get_all<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a HeaderValue> {
+    pub fn get_all<'b>(&'b self, name: &str) -> impl Iterator<Item = &'b HeaderValue<'a>> {
         let needle = canonical_header_name(name);
         self.entries.iter().filter_map(move |(header_name, value)| {
             (header_name.as_str() == needle.as_ref()).then_some(value)
         })
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &(HeaderName, HeaderValue)> {
+    pub fn iter<'b>(&'b self) -> impl Iterator<Item = &'b (HeaderName, HeaderValue<'a>)> {
         self.entries.iter()
     }
 
@@ -114,6 +125,16 @@ impl HeaderMap {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub fn into_owned(self) -> HeaderMap<'static> {
+        HeaderMap {
+            entries: self
+                .entries
+                .into_iter()
+                .map(|(n, v)| (n, v.into_owned()))
+                .collect(),
+        }
     }
 }
 

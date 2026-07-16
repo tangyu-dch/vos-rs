@@ -1,20 +1,20 @@
 use crate::{SipParseError, SipResult};
+use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SipUri {
+pub struct SipUri<'a> {
     pub secure: bool,
-    pub user: Option<String>,
-    pub host: String,
+    pub user: Option<Cow<'a, str>>,
+    pub host: Cow<'a, str>,
     pub port: Option<u16>,
-    pub params: Vec<(String, Option<String>)>,
+    pub params: Vec<(Cow<'a, str>, Option<Cow<'a, str>>)>,
 }
 
-impl FromStr for SipUri {
-    type Err = SipParseError;
 
-    fn from_str(raw: &str) -> SipResult<Self> {
+impl<'a> SipUri<'a> {
+    pub fn parse(raw: &'a str) -> SipResult<Self> {
         let (secure, rest) = if let Some(rest) = raw.strip_prefix("sip:") {
             (false, rest)
         } else if let Some(rest) = raw.strip_prefix("sips:") {
@@ -36,7 +36,7 @@ impl FromStr for SipUri {
 
         let (user, host_port) = match authority.rsplit_once('@') {
             Some((user, host_port)) if !user.is_empty() && !host_port.is_empty() => {
-                (Some(user.to_string()), host_port)
+                (Some(Cow::Borrowed(user)), host_port)
             }
             Some(_) => return Err(SipParseError::InvalidUri(raw.to_string())),
             None => (None, authority),
@@ -52,9 +52,31 @@ impl FromStr for SipUri {
             params,
         })
     }
+
+    pub fn into_owned(self) -> SipUri<'static> {
+        SipUri {
+            secure: self.secure,
+            user: self.user.map(|u| Cow::Owned(u.into_owned())),
+            host: Cow::Owned(self.host.into_owned()),
+            port: self.port,
+            params: self
+                .params
+                .into_iter()
+                .map(|(k, v)| (Cow::Owned(k.into_owned()), v.map(|x| Cow::Owned(x.into_owned()))))
+                .collect(),
+        }
+    }
 }
 
-impl fmt::Display for SipUri {
+impl FromStr for SipUri<'static> {
+    type Err = SipParseError;
+
+    fn from_str(raw: &str) -> SipResult<Self> {
+        SipUri::parse(raw).map(|uri| uri.into_owned())
+    }
+}
+
+impl fmt::Display for SipUri<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(if self.secure { "sips:" } else { "sip:" })?;
 
@@ -79,17 +101,26 @@ impl fmt::Display for SipUri {
     }
 }
 
-fn parse_param(raw: &str) -> (String, Option<String>) {
-    match raw.split_once('=') {
-        Some((name, value)) => (
-            name.trim().to_ascii_lowercase(),
-            Some(value.trim().to_string()),
-        ),
-        None => (raw.trim().to_ascii_lowercase(), None),
+fn to_lowercase_cow(s: &str) -> Cow<'_, str> {
+    let trimmed = s.trim();
+    if trimmed.chars().any(|c| c.is_ascii_uppercase()) {
+        Cow::Owned(trimmed.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(trimmed)
     }
 }
 
-fn parse_host_port(raw: &str, original: &str) -> SipResult<(String, Option<u16>)> {
+fn parse_param(raw: &str) -> (Cow<'_, str>, Option<Cow<'_, str>>) {
+    match raw.split_once('=') {
+        Some((name, value)) => (
+            to_lowercase_cow(name),
+            Some(Cow::Borrowed(value.trim())),
+        ),
+        None => (to_lowercase_cow(raw), None),
+    }
+}
+
+fn parse_host_port<'a>(raw: &'a str, original: &str) -> SipResult<(Cow<'a, str>, Option<u16>)> {
     if raw.is_empty() {
         return Err(SipParseError::InvalidUri(original.to_string()));
     }
@@ -98,7 +129,7 @@ fn parse_host_port(raw: &str, original: &str) -> SipResult<(String, Option<u16>)
         let end = raw
             .find(']')
             .ok_or_else(|| SipParseError::InvalidUri(original.to_string()))?;
-        let host = raw[..=end].to_string();
+        let host = Cow::Borrowed(&raw[..=end]);
         let rest = &raw[end + 1..];
         let port = parse_optional_port(rest, original)?;
         return Ok((host, port));
@@ -109,10 +140,10 @@ fn parse_host_port(raw: &str, original: &str) -> SipResult<(String, Option<u16>)
             let port = port
                 .parse::<u16>()
                 .map_err(|_| SipParseError::InvalidUri(original.to_string()))?;
-            Ok((host.to_ascii_lowercase(), Some(port)))
+            Ok((to_lowercase_cow(host), Some(port)))
         }
         Some(("", _)) => Err(SipParseError::InvalidUri(original.to_string())),
-        _ => Ok((raw.to_ascii_lowercase(), None)),
+        _ => Ok((to_lowercase_cow(raw), None)),
     }
 }
 
