@@ -143,10 +143,9 @@ SIP Edge 按以下顺序生成候选路由：
 实际 INVITE 的 2xx 响应计为成功，4xx 及以上响应计为失败。当前 OPTIONS 发送使用
 UDP，且探测请求的目标用户为 `health-check`。
 
-**当前限制**：`record_probe_failure` 目前只记录并持久化已有状态，没有调用健康追踪器的
-`record_failure`，因此 OPTIONS 非 2xx、发送失败或超时本身不会增加连续失败计数；OPTIONS
-2xx 会记录成功。当前熔断主要由实际 INVITE 失败响应推进，不能把 OPTIONS 日志等同于
-熔断状态已经更新。
+OPTIONS 非 2xx、发送失败和超时都会调用健康追踪器的 `record_failure`，增加连续失败
+计数并持久化最新状态；OPTIONS 2xx 会调用 `record_success`。因此主动探测和实际 INVITE
+结果都会推进中继熔断状态。
 
 ### 6.2 并发容量
 
