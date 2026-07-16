@@ -119,6 +119,7 @@ pub fn build_outbound_invite_with_body(
 }
 
 /// Topology-hiding variant that sends a different `Call-ID` on the outbound leg.
+#[allow(dead_code)]
 pub fn build_outbound_invite_with_body_and_call_id(
     inbound: &SipRequest,
     outbound_uri: &SipUri,
@@ -159,6 +160,7 @@ pub fn build_outbound_invite_with_body_call_id_and_caller(
 
 /// Topology-hiding variant of `build_outbound_invite_with_session_timer`.
 /// Sends `external_call_id` on the outbound leg instead of copying the inbound Call-ID.
+#[allow(dead_code)]
 pub fn build_outbound_invite_with_session_timer_and_call_id(
     inbound: &SipRequest,
     outbound_uri: &SipUri,
@@ -415,6 +417,7 @@ fn build_outbound_request(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_outbound_request_with_extra(
     inbound: &SipRequest,
     outbound_uri: &SipUri,
