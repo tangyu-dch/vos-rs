@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 use crate::{
     anti_fraud, audit, auth, billing, calls, cdr, dashboard, details, gateways, media_cluster,
-    numbers, recording, registrations, report, routes, sip_cluster, system, users, AppState,
+    numbers, recording, registrations, report, routes, sip_cluster, system, termination, users,
+    AppState,
 };
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -34,6 +35,7 @@ pub(crate) fn protected_routes(state: AppState) -> Router<AppState> {
         .merge(overview_routes())
         .merge(subscriber_routes())
         .merge(interconnect_routes())
+        .merge(termination_routes())
         .merge(routing_routes())
         .merge(call_routes())
         .merge(billing_routes())
@@ -97,6 +99,71 @@ fn interconnect_routes() -> Router<AppState> {
             get(details::trunk)
                 .put(gateways::update_gateway)
                 .delete(gateways::delete_gateway),
+        )
+}
+
+fn termination_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/v1/trunks/:id/ip-rules",
+            get(termination::list_ip_rules).put(termination::replace_ip_rules),
+        )
+        .route(
+            "/api/v1/trunks/:id/egress-endpoints",
+            get(termination::list_endpoints).put(termination::replace_endpoints),
+        )
+        .route(
+            "/api/v1/trunks/:id/outbound-policy",
+            get(termination::get_trunk_policy).put(termination::put_trunk_policy),
+        )
+        .route(
+            "/api/v1/numbers/:number/owner",
+            put(termination::set_number_owner),
+        )
+        .route(
+            "/api/v1/numbers/:number/allocations",
+            get(termination::list_allocations).put(termination::replace_allocations),
+        )
+        .route(
+            "/api/v1/caller-pools",
+            get(termination::list_caller_pools).post(termination::create_caller_pool),
+        )
+        .route(
+            "/api/v1/caller-pools/:id",
+            put(termination::update_caller_pool).delete(termination::delete_caller_pool),
+        )
+        .route(
+            "/api/v1/caller-pools/:id/members",
+            get(termination::list_caller_pool_members)
+                .put(termination::replace_caller_pool_members),
+        )
+        .route(
+            "/api/v1/egress-groups",
+            get(termination::list_egress_groups).post(termination::create_egress_group),
+        )
+        .route(
+            "/api/v1/egress-groups/:id",
+            put(termination::update_egress_group).delete(termination::delete_egress_group),
+        )
+        .route(
+            "/api/v1/egress-groups/:id/members",
+            get(termination::list_egress_group_members)
+                .put(termination::replace_egress_group_members),
+        )
+        .route("/api/v1/outbound-policies", get(termination::list_policies))
+        .route(
+            "/api/v1/outbound-policies/:source_type/:source_id",
+            get(termination::get_policy)
+                .put(termination::put_policy)
+                .delete(termination::delete_policy),
+        )
+        .route(
+            "/api/v1/did-destinations",
+            get(termination::list_dids).post(termination::create_did),
+        )
+        .route(
+            "/api/v1/did-destinations/:number",
+            put(termination::update_did).delete(termination::delete_did),
         )
 }
 

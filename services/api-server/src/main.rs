@@ -22,6 +22,7 @@ mod report;
 mod routes;
 mod sip_cluster;
 mod system;
+mod termination;
 mod users;
 mod v1;
 

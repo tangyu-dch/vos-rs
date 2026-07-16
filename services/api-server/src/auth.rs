@@ -108,6 +108,10 @@ pub fn role_allows(role: &str, method: &str, path: &str) -> bool {
     let operations_path = path.starts_with("/api/v1/trunks")
         || path.starts_with("/api/v1/routing")
         || path.starts_with("/api/v1/numbers")
+        || path.starts_with("/api/v1/caller-pools")
+        || path.starts_with("/api/v1/egress-groups")
+        || path.starts_with("/api/v1/outbound-policies")
+        || path.starts_with("/api/v1/did-destinations")
         || path.starts_with("/api/v1/security/anti-fraud")
         || (path.starts_with("/api/v1/calls/") && method == "POST")
         || path.starts_with("/api/gateways")
@@ -222,6 +226,26 @@ mod tests {
         assert!(!role_allows("financier", "POST", "/api/gateways"));
         assert!(!role_allows("financier", "POST", "/api/numbers"));
         assert!(!role_allows("financier", "POST", "/api/anti-fraud/rules"));
+        assert!(!role_allows("financier", "PUT", "/api/v1/caller-pools/p1"));
+        assert!(!role_allows("financier", "POST", "/api/v1/egress-groups"));
+        assert!(!role_allows(
+            "financier",
+            "PUT",
+            "/api/v1/outbound-policies/trunk/t1"
+        ));
+    }
+
+    #[test]
+    fn operator_manages_termination_domain() {
+        for path in [
+            "/api/v1/caller-pools",
+            "/api/v1/egress-groups/g1/members",
+            "/api/v1/outbound-policies/trunk/t1",
+            "/api/v1/did-destinations/10086",
+        ] {
+            assert!(role_allows("operator", "PUT", path));
+            assert!(!role_allows("financier", "PUT", path));
+        }
     }
 
     #[test]
