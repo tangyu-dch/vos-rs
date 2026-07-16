@@ -193,8 +193,15 @@ fn spawn_workers(
                 let mut write_buf = Vec::with_capacity(MAX_DATAGRAM_BYTES);
                 while let Some(datagram) = receiver.recv().await {
                     write_buf.clear();
-                    if let Err(error) =
-                        process_packet(&socket, &datagram, &config, &routes, &transactions, &mut write_buf).await
+                    if let Err(error) = process_packet(
+                        &socket,
+                        &datagram,
+                        &config,
+                        &routes,
+                        &transactions,
+                        &mut write_buf,
+                    )
+                    .await
                     {
                         metrics::udp_error();
                         tracing::warn!(

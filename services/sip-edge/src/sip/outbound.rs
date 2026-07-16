@@ -534,7 +534,7 @@ mod tests {
         build_gateway_options, build_notify_sipfrag, build_outbound_in_dialog_request,
         build_outbound_invite_with_body, target_addr_for,
     };
-    use sip_core::{parse_message, SipMessage, SipUri};
+    use sip_core::{parse_message, SipUri};
     use std::str::FromStr;
 
     #[test]
@@ -727,7 +727,8 @@ mod tests {
     }
 
     fn request(raw: &str) -> sip_core::SipRequest {
-        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap()
+        else {
             panic!("expected request");
         };
         request.into_owned()

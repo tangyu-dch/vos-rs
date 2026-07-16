@@ -66,7 +66,9 @@ pub struct HeaderMap<'a> {
 
 impl<'a> HeaderMap<'a> {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     pub fn insert(&mut self, name: HeaderName, value: HeaderValue<'a>) {

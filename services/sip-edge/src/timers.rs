@@ -582,6 +582,7 @@ fn chrono_like_epoch_millis() -> u128 {
 }
 
 pub(crate) fn record_probe_failure(edge_state: &EdgeState, gateway_id: &str, reason: String) {
+    edge_state.gateway_health.record_failure(gateway_id);
     let status = edge_state.gateway_health.get_gateway_status(gateway_id);
     warn!(gateway = gateway_id, %reason, "gateway OPTIONS health probe failed");
     if let Some(status) = status {

@@ -1,6 +1,6 @@
-use crate::{HeaderMap, HeaderName, HeaderValue, Method, SipParseError, SipResult, uri::SipUri};
-use std::str::FromStr;
+use crate::{uri::SipUri, HeaderMap, HeaderName, HeaderValue, Method, SipParseError, SipResult};
 use std::borrow::Cow;
+use std::str::FromStr;
 
 pub const SIP_VERSION: &str = "SIP/2.0";
 

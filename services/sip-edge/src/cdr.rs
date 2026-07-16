@@ -1,9 +1,9 @@
-use std::time::Duration;
-use tracing::{info, warn, debug};
-use call_core::CallCdr;
-use cdr_core::PostgresCdrStore;
 use crate::config::EdgeConfig;
 use crate::edge_state::CdrSinks;
+use call_core::CallCdr;
+use cdr_core::PostgresCdrStore;
+use std::time::Duration;
+use tracing::{debug, info, warn};
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 

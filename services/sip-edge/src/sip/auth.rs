@@ -439,7 +439,7 @@ fn parse_token_value(raw: &str) -> (String, &str) {
 #[cfg(test)]
 mod tests {
     use super::{digest_response, AuthConfig, AuthDecision};
-    use sip_core::{parse_message, SipMessage, SipRequest};
+    use sip_core::{parse_message, SipRequest};
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -541,7 +541,8 @@ mod tests {
             auth_header = auth_header
         );
 
-        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap()
+        else {
             panic!("expected request");
         };
         request.into_owned()

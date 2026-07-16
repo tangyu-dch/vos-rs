@@ -12,7 +12,6 @@ pub struct SipUri<'a> {
     pub params: Vec<(Cow<'a, str>, Option<Cow<'a, str>>)>,
 }
 
-
 impl<'a> SipUri<'a> {
     pub fn parse(raw: &'a str) -> SipResult<Self> {
         let (secure, rest) = if let Some(rest) = raw.strip_prefix("sip:") {
@@ -62,7 +61,12 @@ impl<'a> SipUri<'a> {
             params: self
                 .params
                 .into_iter()
-                .map(|(k, v)| (Cow::Owned(k.into_owned()), v.map(|x| Cow::Owned(x.into_owned()))))
+                .map(|(k, v)| {
+                    (
+                        Cow::Owned(k.into_owned()),
+                        v.map(|x| Cow::Owned(x.into_owned())),
+                    )
+                })
                 .collect(),
         }
     }
@@ -112,10 +116,7 @@ fn to_lowercase_cow(s: &str) -> Cow<'_, str> {
 
 fn parse_param(raw: &str) -> (Cow<'_, str>, Option<Cow<'_, str>>) {
     match raw.split_once('=') {
-        Some((name, value)) => (
-            to_lowercase_cow(name),
-            Some(Cow::Borrowed(value.trim())),
-        ),
+        Some((name, value)) => (to_lowercase_cow(name), Some(Cow::Borrowed(value.trim()))),
         None => (to_lowercase_cow(raw), None),
     }
 }

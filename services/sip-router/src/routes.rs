@@ -67,7 +67,8 @@ impl DialogRouteStore {
                                 .invoke_async(&mut redis)
                                 .await?;
                                 Ok(())
-                            }.await;
+                            }
+                            .await;
                             if let Err(error) = script_result {
                                 metrics::redis_error();
                                 tracing::warn!(%error, "Redis 对话归属续期失败 (后台任务)");

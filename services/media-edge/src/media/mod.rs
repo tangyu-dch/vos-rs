@@ -31,6 +31,7 @@ pub(crate) mod config;
 pub(crate) mod crypto;
 #[allow(dead_code)]
 pub(crate) mod dtmf;
+pub(crate) mod live_transcode;
 pub(crate) mod metrics;
 pub(crate) mod recording;
 pub(crate) mod relay;
@@ -38,12 +39,10 @@ pub(crate) mod rtcp_processor;
 #[allow(dead_code)]
 pub(crate) mod sdp;
 pub(crate) mod transcode;
-pub(crate) mod live_transcode;
 pub(crate) mod utils;
 #[allow(dead_code)]
 pub(crate) mod wav;
 
 pub use self::config::MediaConfig;
-pub use self::relay::MediaRelayState;
 pub use self::live_transcode::LiveTranscoder;
-
+pub use self::relay::MediaRelayState;

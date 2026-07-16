@@ -9,12 +9,11 @@ impl MediaRelayState {
         loop_playback: bool,
     ) -> Result<(), String> {
         let path_clone = file_path.clone();
-        let samples = tokio::task::spawn_blocking(move || {
-            crate::media::wav::load_wav_pcm(&path_clone)
-        })
-        .await
-        .map_err(|e| format!("加载音频文件线程异常: {e}"))?
-        .map_err(|e| format!("加载音频文件失败: {e}"))?;
+        let samples =
+            tokio::task::spawn_blocking(move || crate::media::wav::load_wav_pcm(&path_clone))
+                .await
+                .map_err(|e| format!("加载音频文件线程异常: {e}"))?
+                .map_err(|e| format!("加载音频文件失败: {e}"))?;
 
         self.stop_playback(port);
 

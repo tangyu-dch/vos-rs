@@ -411,7 +411,7 @@ fn remaining_seconds(expires_at: SystemTime, now: SystemTime) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{RegisterError, RegistrationStore};
-    use sip_core::{parse_message, SipMessage, SipRequest};
+    use sip_core::{parse_message, SipRequest};
     use std::{
         net::SocketAddr,
         time::{Duration, SystemTime},
@@ -616,7 +616,8 @@ mod tests {
     }
 
     fn request(raw: &str) -> SipRequest {
-        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap()
+        else {
             panic!("expected request");
         };
         request.into_owned()

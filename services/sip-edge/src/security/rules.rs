@@ -1,5 +1,5 @@
-use tracing::{info, warn};
 use crate::edge_state::EdgeState;
+use tracing::{info, warn};
 
 pub(crate) async fn refresh_anti_fraud_rules(edge_state: &EdgeState) {
     if let Some(ref db) = edge_state.db_store {

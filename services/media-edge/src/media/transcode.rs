@@ -8,9 +8,9 @@ static PCMU_TO_PCMA_TABLE: OnceLock<[u8; 256]> = OnceLock::new();
 fn get_pcma_to_pcmu_table() -> &'static [u8; 256] {
     PCMA_TO_PCMU_TABLE.get_or_init(|| {
         let mut table = [0u8; 256];
-        for i in 0..256 {
+        for (i, value) in table.iter_mut().enumerate() {
             let pcm = crate::media::recording::decode_pcma(i as u8);
-            table[i] = linear_to_ulaw(pcm);
+            *value = linear_to_ulaw(pcm);
         }
         table
     })
@@ -19,9 +19,9 @@ fn get_pcma_to_pcmu_table() -> &'static [u8; 256] {
 fn get_pcmu_to_pcma_table() -> &'static [u8; 256] {
     PCMU_TO_PCMA_TABLE.get_or_init(|| {
         let mut table = [0u8; 256];
-        for i in 0..256 {
+        for (i, value) in table.iter_mut().enumerate() {
             let pcm = crate::media::recording::decode_pcmu(i as u8);
-            table[i] = linear_to_alaw(pcm);
+            *value = linear_to_alaw(pcm);
         }
         table
     })
@@ -223,12 +223,12 @@ mod tests {
 
     #[test]
     fn test_transcode_payloads() {
-        let pcma = vec![0xd5, 0x55, 0x50];
-        let pcmu = transcode_pcma_to_pcmu(&pcma);
+        let mut pcmu = vec![0xd5, 0x55, 0x50];
+        transcode_pcma_to_pcmu_inplace(&mut pcmu);
         assert_eq!(pcmu.len(), 3);
 
-        let pcmu_back = vec![0xff, 0x00, 0x7f];
-        let pcma_back = transcode_pcmu_to_pcma(&pcmu_back);
+        let mut pcma_back = vec![0xff, 0x00, 0x7f];
+        transcode_pcmu_to_pcma_inplace(&mut pcma_back);
         assert_eq!(pcma_back.len(), 3);
     }
 

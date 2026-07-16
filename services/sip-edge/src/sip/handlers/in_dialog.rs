@@ -90,10 +90,9 @@ pub(crate) async fn handle_in_dialog_request(
                     )
                 };
                 if let Some(f) = from_val {
-                    mutable_request.headers.replace(
-                        HeaderName::new("from").unwrap(),
-                        f,
-                    );
+                    mutable_request
+                        .headers
+                        .replace(HeaderName::new("from").unwrap(), f);
                 }
                 if let Some(o) = to_val {
                     mutable_request
@@ -133,14 +132,16 @@ pub(crate) async fn handle_in_dialog_request(
                     );
                 }
                 if let Some(ref tf_from) = t.transfer_from_header {
-                    mutable_request
-                        .headers
-                        .insert(HeaderName::new("from").unwrap(), HeaderValue::new_owned(tf_from.clone()));
+                    mutable_request.headers.insert(
+                        HeaderName::new("from").unwrap(),
+                        HeaderValue::new_owned(tf_from.clone()),
+                    );
                 }
                 if let Some(ref tf_to) = t.transfer_to_header {
-                    mutable_request
-                        .headers
-                        .insert(HeaderName::new("to").unwrap(), HeaderValue::new_owned(tf_to.clone()));
+                    mutable_request.headers.insert(
+                        HeaderName::new("to").unwrap(),
+                        HeaderValue::new_owned(tf_to.clone()),
+                    );
                 }
             }
 

@@ -1,6 +1,6 @@
-use std::collections::VecDeque;
 use rtp_core::AudioCodec;
-use rubato::{Resampler, FftFixedOut};
+use rubato::{FftFixedOut, Resampler};
+use std::collections::VecDeque;
 
 pub struct LiveTranscoder {
     local_codec: AudioCodec,
@@ -18,10 +18,10 @@ impl LiveTranscoder {
             if peer_codec == AudioCodec::Opus {
                 g711_to_opus = Some(G711ToOpusTranscoder::new(local_codec)?);
             }
-        } else if local_codec == AudioCodec::Opus {
-            if peer_codec == AudioCodec::Pcma || peer_codec == AudioCodec::Pcmu {
-                opus_to_g711 = Some(OpusToG711Transcoder::new(peer_codec)?);
-            }
+        } else if local_codec == AudioCodec::Opus
+            && (peer_codec == AudioCodec::Pcma || peer_codec == AudioCodec::Pcmu)
+        {
+            opus_to_g711 = Some(OpusToG711Transcoder::new(peer_codec)?);
         }
 
         Ok(Self {
@@ -56,11 +56,8 @@ struct G711ToOpusTranscoder {
 impl G711ToOpusTranscoder {
     fn new(codec: AudioCodec) -> Result<Self, String> {
         let resampler = FftFixedOut::<f32>::new(
-            8000,
-            48000,
-            960, // Fixed 20ms Opus frame output size at 48kHz
-            2,
-            1,
+            8000, 48000, 960, // Fixed 20ms Opus frame output size at 48kHz
+            2, 1,
         )
         .map_err(|e| format!("Failed to create FFT resampler: {e}"))?;
 
@@ -97,7 +94,9 @@ impl G711ToOpusTranscoder {
             input_channel.push(self.fifo.pop_front().unwrap_or(0.0));
         }
 
-        let output = self.resampler.process(&[input_channel], None)
+        let output = self
+            .resampler
+            .process(&[input_channel], None)
             .map_err(|e| format!("Resampling error: {e}"))?;
         let output_pcm = &output[0];
 
@@ -110,7 +109,9 @@ impl G711ToOpusTranscoder {
 
         // 4. Encode to Opus
         let mut out_buf = vec![0u8; 1275]; // Maximum Opus packet size
-        let len = self.encoder.encode(&opus_input, &mut out_buf)
+        let len = self
+            .encoder
+            .encode(&opus_input, &mut out_buf)
             .map_err(|e| format!("Opus encode error: {e}"))?;
 
         out_buf.truncate(len);
@@ -131,11 +132,8 @@ impl OpusToG711Transcoder {
             .map_err(|e| format!("Failed to create Opus decoder: {e}"))?;
 
         let resampler = FftFixedOut::<f32>::new(
-            48000,
-            8000,
-            160, // Fixed 20ms G.711 frame output size at 8kHz
-            2,
-            1,
+            48000, 8000, 160, // Fixed 20ms G.711 frame output size at 8kHz
+            2, 1,
         )
         .map_err(|e| format!("Failed to create FFT resampler: {e}"))?;
 
@@ -150,7 +148,9 @@ impl OpusToG711Transcoder {
     fn transcode(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
         // 1. Decode Opus packet to PCM i16 (20ms mono = 960 samples)
         let mut pcm_buf = vec![0i16; 960];
-        let len = self.decoder.decode(payload, &mut pcm_buf, false)
+        let len = self
+            .decoder
+            .decode(payload, &mut pcm_buf, false)
             .map_err(|e| format!("Opus decode error: {e}"))?;
         pcm_buf.truncate(len);
 
@@ -170,7 +170,9 @@ impl OpusToG711Transcoder {
             input_channel.push(self.fifo.pop_front().unwrap_or(0.0));
         }
 
-        let output = self.resampler.process(&[input_channel], None)
+        let output = self
+            .resampler
+            .process(&[input_channel], None)
             .map_err(|e| format!("Resampling error: {e}"))?;
         let output_pcm = &output[0];
 
@@ -202,7 +204,8 @@ mod tests {
         // 模拟一个 1000Hz 正弦波信号
         let sample_rate = 8000;
         let mut pcm_samples = Vec::new();
-        for i in 0..1600 { // 200ms = 10 packets
+        for i in 0..1600 {
+            // 200ms = 10 packets
             let t = i as f32 / sample_rate as f32;
             let sample = (2.0 * std::f32::consts::PI * 1000.0 * t).sin();
             let val = (sample * 32767.0) as i16;
@@ -230,4 +233,3 @@ mod tests {
         assert!(!recovered_pcm.is_empty(), "应当能转码回 PCMA 字节");
     }
 }
-

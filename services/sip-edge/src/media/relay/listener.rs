@@ -113,15 +113,16 @@ pub(crate) async fn relay_media_port(
     metrics_flush_interval.tick().await;
     let mut source_binding = None;
     let mut learned_symmetric_source = None;
-    let mut live_transcoder = if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
-        if local_codec != peer_codec {
-            crate::media::LiveTranscoder::new(local_codec, peer_codec).ok()
+    let mut live_transcoder =
+        if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
+            if local_codec != peer_codec {
+                crate::media::LiveTranscoder::new(local_codec, peer_codec).ok()
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
     loop {
         let (mut size, mut source) = tokio::select! {
@@ -151,15 +152,16 @@ pub(crate) async fn relay_media_port(
                 fast_path_counters.flush(&relay, local_port);
                 plan = relay.relay_plan(local_port);
                 plan_epoch = current_epoch;
-                live_transcoder = if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
-                    if local_codec != peer_codec {
-                        crate::media::LiveTranscoder::new(local_codec, peer_codec).ok()
+                live_transcoder =
+                    if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
+                        if local_codec != peer_codec {
+                            crate::media::LiveTranscoder::new(local_codec, peer_codec).ok()
+                        } else {
+                            None
+                        }
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
             }
 
             let use_fast_path = packet_kind == MediaPacketKind::Rtp && plan.path == RelayPath::Fast;
@@ -212,7 +214,9 @@ pub(crate) async fn relay_media_port(
                 let packet = &buffer[..size];
                 let is_pass_through = packet
                     .first()
-                    .map(|first_byte| (0..=3).contains(first_byte) || (20..=63).contains(first_byte))
+                    .map(|first_byte| {
+                        (0..=3).contains(first_byte) || (20..=63).contains(first_byte)
+                    })
                     .unwrap_or(false);
 
                 if !is_pass_through {
@@ -306,8 +310,11 @@ pub(crate) async fn relay_media_port(
                         else {
                             continue;
                         };
-                        match MediaCryptoSession::from_sdes(&offer.suite, &offer.key_params, view.ssrc)
-                        {
+                        match MediaCryptoSession::from_sdes(
+                            &offer.suite,
+                            &offer.key_params,
+                            view.ssrc,
+                        ) {
                             Ok(session) => {
                                 relay
                                     .crypto_sessions
@@ -324,7 +331,8 @@ pub(crate) async fn relay_media_port(
                 }
                 if let Some(session) = &plan.crypto_session {
                     let mut candidate = relay.buffer_pool.copy(&buffer[..size]);
-                    let decrypted_len = match session.lock().await.decrypt(candidate.as_mut_slice()) {
+                    let decrypted_len = match session.lock().await.decrypt(candidate.as_mut_slice())
+                    {
                         Ok(length) => length,
                         Err(error) => {
                             relay.record_metric(local_port, |metrics| {
@@ -346,7 +354,9 @@ pub(crate) async fn relay_media_port(
                         }
                     };
                     if !candidate.set_len(decrypted_len) {
-                        relay.record_metric(local_port, |metrics| metrics.dropped_invalid_packets += 1);
+                        relay.record_metric(local_port, |metrics| {
+                            metrics.dropped_invalid_packets += 1
+                        });
                         match socket.try_recv_from(&mut buffer) {
                             Ok((next_size, next_source)) => {
                                 size = next_size;
@@ -467,7 +477,9 @@ pub(crate) async fn relay_media_port(
                 match packet_kind.inspect(packet) {
                     Ok(summary) => Some(summary),
                     Err(error) => {
-                        relay.record_metric(local_port, |metrics| metrics.dropped_invalid_packets += 1);
+                        relay.record_metric(local_port, |metrics| {
+                            metrics.dropped_invalid_packets += 1
+                        });
                         warn!(%error, %source, local_port, packet_kind = packet_kind.label(), "dropping invalid media packet");
                         match socket.try_recv_from(&mut buffer) {
                             Ok((next_size, next_source)) => {
@@ -578,8 +590,9 @@ pub(crate) async fn relay_media_port(
                     if let Some(leg) = &plan.recording {
                         match leg.session.try_record(leg.channel, *rtp_packet) {
                             Ok(true) => {
-                                relay
-                                    .record_metric(local_port, |metrics| metrics.recorded_packets += 1);
+                                relay.record_metric(local_port, |metrics| {
+                                    metrics.recorded_packets += 1
+                                });
                             }
                             Ok(false) => {}
                             Err(error) => {
@@ -607,16 +620,21 @@ pub(crate) async fn relay_media_port(
                             let mut success = false;
                             match (local_codec, peer_codec) {
                                 (rtp_core::AudioCodec::Pcma, rtp_core::AudioCodec::Pcmu) => {
-                                    crate::media::transcode::transcode_pcma_to_pcmu_inplace(&mut rtp.payload);
+                                    crate::media::transcode::transcode_pcma_to_pcmu_inplace(
+                                        &mut rtp.payload,
+                                    );
                                     success = true;
                                 }
                                 (rtp_core::AudioCodec::Pcmu, rtp_core::AudioCodec::Pcma) => {
-                                    crate::media::transcode::transcode_pcmu_to_pcma_inplace(&mut rtp.payload);
+                                    crate::media::transcode::transcode_pcmu_to_pcma_inplace(
+                                        &mut rtp.payload,
+                                    );
                                     success = true;
                                 }
                                 _ => {
                                     if let Some(transcoder) = &mut live_transcoder {
-                                        if let Ok(new_payload) = transcoder.transcode(&rtp.payload) {
+                                        if let Ok(new_payload) = transcoder.transcode(&rtp.payload)
+                                        {
                                             if !new_payload.is_empty() {
                                                 rtp.payload = new_payload;
                                                 success = true;

@@ -29,21 +29,21 @@ pub(crate) mod conference;
 pub(crate) mod config;
 pub(crate) mod crypto;
 pub(crate) mod dtmf;
+pub(crate) mod live_transcode;
 pub(crate) mod metrics;
 pub(crate) mod recording;
 pub(crate) mod relay;
 pub(crate) mod rtcp_processor;
 pub(crate) mod sdp;
 pub(crate) mod transcode;
-pub(crate) mod live_transcode;
 pub(crate) mod utils;
 pub(crate) mod wav;
 
 pub use self::config::MediaConfig;
+pub use self::live_transcode::LiveTranscoder;
 pub use self::metrics::RtcpQualitySnapshot;
 pub use self::recording::MediaError;
 pub use self::relay::MediaRelayState;
-pub use self::live_transcode::LiveTranscoder;
 #[cfg(test)]
 pub use self::sdp::rewrite_sdp_body;
 pub use self::sdp::{

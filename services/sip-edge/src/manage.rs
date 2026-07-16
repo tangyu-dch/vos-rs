@@ -323,12 +323,11 @@ async fn play(
     // 向主叫分支注入音频 RTP 包
     if play_caller {
         if let Some(ref rtp) = tx.caller_relay_rtp {
-            if let Err(e) = state.media_relay.start_playback(
-                rtp.port,
-                file_path.clone(),
-                mode,
-                payload.loop_playback,
-            ).await {
+            if let Err(e) = state
+                .media_relay
+                .start_playback(rtp.port, file_path.clone(), mode, payload.loop_playback)
+                .await
+            {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": format!("failed to play to caller: {}", e)})),
@@ -340,11 +339,10 @@ async fn play(
     // 向被叫分支注入音频 RTP 包
     if play_callee {
         if let Some(ref rtp) = tx.gateway_relay_rtp {
-            if let Err(e) =
-                state
-                    .media_relay
-                    .start_playback(rtp.port, file_path, mode, payload.loop_playback)
-                    .await
+            if let Err(e) = state
+                .media_relay
+                .start_playback(rtp.port, file_path, mode, payload.loop_playback)
+                .await
             {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,

@@ -77,7 +77,9 @@ pub(crate) async fn handle_request(
 
 // --- Helper functions for submodules ---
 
-pub(super) fn call_error_for_unknown_request(request: &sip_core::SipRequestBorrow<'_>) -> CallError {
+pub(super) fn call_error_for_unknown_request(
+    request: &sip_core::SipRequestBorrow<'_>,
+) -> CallError {
     match request.headers.get("call-id") {
         Some(call_id) => CallError::UnknownCall(call_id.as_str().to_string()),
         None => CallError::MissingRequiredHeader("Call-ID"),

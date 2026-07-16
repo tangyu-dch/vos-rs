@@ -89,7 +89,10 @@ pub(crate) struct InviteAckKey {
 }
 
 impl InviteAckKey {
-    pub(crate) fn from_request(request: &sip_core::SipRequestBorrow<'_>, peer: SocketAddr) -> Option<Self> {
+    pub(crate) fn from_request(
+        request: &sip_core::SipRequestBorrow<'_>,
+        peer: SocketAddr,
+    ) -> Option<Self> {
         if !matches!(&request.method, Method::Invite | Method::Ack) {
             return None;
         }
@@ -110,7 +113,10 @@ impl InviteAckKey {
 }
 
 impl RequestTransactionKey {
-    pub(crate) fn from_request(request: &sip_core::SipRequestBorrow<'_>, peer: SocketAddr) -> Option<Self> {
+    pub(crate) fn from_request(
+        request: &sip_core::SipRequestBorrow<'_>,
+        peer: SocketAddr,
+    ) -> Option<Self> {
         if matches!(&request.method, Method::Ack) {
             return None;
         }
@@ -187,7 +193,7 @@ mod tests {
         spawn_invite_server_transaction, spawn_non_invite_server_transaction, InviteAckKey,
         RequestTransactionKey, ServerTransactionEvent,
     };
-    use sip_core::{parse_message, SipMessage};
+    use sip_core::parse_message;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::net::UdpSocket;
@@ -533,7 +539,8 @@ mod tests {
     }
 
     fn request(raw: &str) -> sip_core::SipRequest {
-        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap()
+        else {
             panic!("expected request");
         };
         request.into_owned()
