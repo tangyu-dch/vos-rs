@@ -11,6 +11,7 @@ use crate::{normalize_page, ApiError, AppState, PageQuery, PaginatedResponse};
 #[derive(Debug, Deserialize)]
 pub struct CreateGatewayRequest {
     pub id: String,
+    #[serde(default)]
     pub host: String,
     pub port: Option<u16>,
     pub transport: String,
@@ -18,6 +19,9 @@ pub struct CreateGatewayRequest {
     pub gateway_type: Option<String>,
     pub role: Option<String>,
     pub access_auth_mode: Option<String>,
+    pub access_username: Option<String>,
+    pub access_realm: Option<String>,
+    pub access_password: Option<String>,
     pub prefix_rules: Option<String>,
     pub supports_registration: Option<bool>,
     pub reg_auth_type: Option<String>,
@@ -32,6 +36,7 @@ pub struct CreateGatewayRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateGatewayRequest {
+    #[serde(default)]
     pub host: String,
     pub port: Option<u16>,
     pub transport: String,
@@ -39,6 +44,9 @@ pub struct UpdateGatewayRequest {
     pub gateway_type: Option<String>,
     pub role: Option<String>,
     pub access_auth_mode: Option<String>,
+    pub access_username: Option<String>,
+    pub access_realm: Option<String>,
+    pub access_password: Option<String>,
     pub prefix_rules: Option<String>,
     pub supports_registration: Option<bool>,
     pub reg_auth_type: Option<String>,
@@ -60,11 +68,22 @@ fn validate_gateway(
     virtual_caller: Option<&str>,
     role: Option<&str>,
     access_auth_mode: Option<&str>,
+    access_username: Option<&str>,
+    access_realm: Option<&str>,
+    has_access_password: bool,
 ) -> Result<(), ApiError> {
     if id.trim().is_empty() {
         return Err(ApiError::internal("参数无效: 中继 ID 不能为空"));
     }
-    if host.trim().is_empty() || host.chars().any(char::is_whitespace) {
+    let role = role.unwrap_or("egress");
+    if !matches!(role, "access" | "egress") {
+        return Err(ApiError::internal(
+            "参数无效: 中继类型只能是 access 或 egress",
+        ));
+    }
+    if (role == "egress" && host.trim().is_empty())
+        || (!host.trim().is_empty() && host.chars().any(char::is_whitespace))
+    {
         return Err(ApiError::internal(
             "参数无效: 中继主机不能为空或包含空白字符",
         ));
@@ -91,12 +110,6 @@ fn validate_gateway(
             ));
         }
     }
-    let role = role.unwrap_or("egress");
-    if !matches!(role, "access" | "egress") {
-        return Err(ApiError::internal(
-            "参数无效: 中继类型只能是 access 或 egress",
-        ));
-    }
     let auth_mode = match access_auth_mode.unwrap_or("none") {
         "ip_whitelist" => "ip_allowlist",
         mode => mode,
@@ -112,7 +125,23 @@ fn validate_gateway(
             "参数无效: 接入中继必须选择 IP 白名单、注册认证或组合认证",
         ));
     }
+    if matches!(auth_mode, "digest_register" | "ip_and_digest")
+        && (access_username.is_none_or(|value| value.trim().is_empty())
+            || access_realm.is_none_or(|value| value.trim().is_empty())
+            || !has_access_password)
+    {
+        return Err(ApiError::internal(
+            "参数无效: 注册认证必须配置用户名、Realm 和密码",
+        ));
+    }
     Ok(())
+}
+
+fn access_ha1(username: &str, realm: &str, password: &str) -> String {
+    format!(
+        "{:x}",
+        md5::compute(format!("{username}:{realm}:{password}"))
+    )
 }
 
 pub async fn list_gateways(
@@ -141,6 +170,18 @@ pub async fn create_gateway(
     State(state): State<AppState>,
     Json(req): Json<CreateGatewayRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let role = req.role.as_deref().unwrap_or("egress");
+    let access_username = req.access_username.clone().or_else(|| {
+        (role == "access")
+            .then(|| req.reg_username.clone())
+            .flatten()
+    });
+    let access_realm = req.access_realm.clone();
+    let access_password = req.access_password.clone().or_else(|| {
+        (role == "access")
+            .then(|| req.reg_password.clone())
+            .flatten()
+    });
     validate_gateway(
         &req.id,
         &req.host,
@@ -150,7 +191,19 @@ pub async fn create_gateway(
         req.virtual_caller.as_deref(),
         req.role.as_deref(),
         req.access_auth_mode.as_deref(),
+        access_username.as_deref(),
+        access_realm.as_deref(),
+        access_password
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
     )?;
+    let access_password_hash = access_password.as_deref().and_then(|password| {
+        Some(access_ha1(
+            access_username.as_deref()?,
+            access_realm.as_deref()?,
+            password,
+        ))
+    });
     let gw = SipGateway {
         id: req.id,
         host: req.host,
@@ -166,6 +219,10 @@ pub async fn create_gateway(
                 mode
             }
         }),
+        access_username,
+        access_realm,
+        access_password_hash,
+        has_access_password: access_password.is_some(),
         prefix_rules: req.prefix_rules,
         supports_registration: req.supports_registration,
         reg_auth_type: req.reg_auth_type,
@@ -218,6 +275,19 @@ pub async fn update_gateway(
         .virtual_caller
         .clone()
         .or_else(|| old.virtual_caller.clone());
+    let role = req
+        .role
+        .as_deref()
+        .or(old.role.as_deref())
+        .unwrap_or("egress");
+    let access_username = req
+        .access_username
+        .clone()
+        .or_else(|| old.access_username.clone());
+    let access_realm = req
+        .access_realm
+        .clone()
+        .or_else(|| old.access_realm.clone());
     validate_gateway(
         &id,
         &req.host,
@@ -229,7 +299,20 @@ pub async fn update_gateway(
         req.access_auth_mode
             .as_deref()
             .or(old.access_auth_mode.as_deref()),
+        access_username.as_deref(),
+        access_realm.as_deref(),
+        req.access_password
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+            || old.has_access_password,
     )?;
+    let access_password_hash = req.access_password.as_deref().and_then(|password| {
+        Some(access_ha1(
+            access_username.as_deref()?,
+            access_realm.as_deref()?,
+            password,
+        ))
+    });
     let gw = SipGateway {
         id: id.clone(),
         host: req.host,
@@ -248,6 +331,10 @@ pub async fn update_gateway(
                     mode
                 }
             }),
+        access_username,
+        access_realm,
+        access_password_hash,
+        has_access_password: req.access_password.is_some() || old.has_access_password,
         prefix_rules: req.prefix_rules.or_else(|| old.prefix_rules.clone()),
         supports_registration: req.supports_registration.or(old.supports_registration),
         reg_auth_type: req.reg_auth_type.or_else(|| old.reg_auth_type.clone()),

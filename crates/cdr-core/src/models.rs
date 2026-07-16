@@ -232,6 +232,15 @@ pub struct SipGateway {
     pub role: Option<String>,
     /// 接入认证模式（ip_allowlist/digest_register/ip_and_digest/none）
     pub access_auth_mode: Option<String>,
+    /// 接入 Digest 用户名。
+    pub access_username: Option<String>,
+    /// 接入 Digest Realm。
+    pub access_realm: Option<String>,
+    /// 接入 Digest HA1，仅用于写入，永不序列化。
+    #[serde(skip)]
+    pub access_password_hash: Option<String>,
+    /// 是否已经配置接入密码。
+    pub has_access_password: bool,
     /// 前缀转换规则（如 "86:0086"）
     pub prefix_rules: Option<String>,
     /// 是否支持注册
