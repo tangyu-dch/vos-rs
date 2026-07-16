@@ -17,15 +17,14 @@ export interface TrunkIpRule extends Entity {
 }
 
 export interface OutboundPolicy extends Entity {
-  caller_policy: CallerPolicyMode;
-  caller_failure_action: 'reject' | 'fallback_number' | 'fallback_pool';
-  fixed_number_id?: string;
+  caller_mode: CallerPolicyMode;
+  fallback_mode: 'reject' | 'fallback_number' | 'fallback_pool';
+  fixed_number?: string;
   caller_pool_id?: string;
-  fallback_number_id?: string;
-  fallback_pool_id?: string;
-  binding_type: 'direct_trunk' | 'egress_group';
-  egress_trunk_id?: string;
+  egress_mode: 'direct' | 'group';
+  direct_egress_trunk_id?: string;
   egress_group_id?: string;
+  enabled?: boolean;
 }
 
 export interface TrunkWorkspaceData {

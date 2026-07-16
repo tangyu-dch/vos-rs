@@ -215,8 +215,10 @@ export const TransactionsPage = () => <ResourceWorkspace spec={transactions} />;
 export const CallsPage = () => <ResourceWorkspace spec={calls} />;
 
 const callerPools: ResourceSpec = { title: '号码池组', description: '维护虚拟主叫别名、选号算法和真实号码成员。', path: '/caller-pools', idKey: 'id', createLabel: '新建号码池', fields: [
-  { key: 'id', label: '号码池 ID', required: true }, { key: 'name', label: '号码池名称', required: true },
-  { key: 'virtual_alias', label: '虚拟主叫', required: true }, { key: 'strategy', label: '选号算法', kind: 'select', required: true, options: [{ label: '均匀随机', value: 'random' }, { label: '权重随机', value: 'weighted_random' }, { label: '顺序轮询', value: 'round_robin' }, { label: '稳定哈希', value: 'stable_hash' }, { label: '优先级选', value: 'priority' }], defaultValue: 'random' },
+  { key: 'id', label: '号码池 ID', required: true }, { key: 'virtual_alias', label: '虚拟主叫', required: true },
+  { key: 'owner_source_type', label: '来源类型', kind: 'select', required: true, options: [{ label: '接入中继', value: 'trunk' }, { label: '分机号码', value: 'extension' }, { label: '分机群组', value: 'extension_group' }], defaultValue: 'trunk' }, { key: 'owner_source_id', label: '来源标识', required: true },
+  { key: 'strategy', label: '选号算法', kind: 'select', required: true, options: [{ label: '均匀随机', value: 'random' }, { label: '权重随机', value: 'weighted_random' }, { label: '顺序轮询', value: 'round_robin' }, { label: '稳定哈希', value: 'stable_hash' }, { label: '优先级选', value: 'priority' }], defaultValue: 'random' },
+  { key: 'fallback_mode', label: '失败处理', kind: 'select', required: true, options: [{ label: '拒绝呼叫', value: 'reject' }, { label: '固定替换', value: 'fallback_number' }, { label: '号码池替换', value: 'fallback_pool' }], defaultValue: 'reject' },
   { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
 ] };
 const egressGroups: ResourceSpec = { title: '落地分组', description: '定义来源允许使用的落地范围、目的地能力和故障边界。', path: '/egress-groups', idKey: 'id', createLabel: '新建分组', fields: [
