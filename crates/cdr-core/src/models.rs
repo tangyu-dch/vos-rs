@@ -228,6 +228,10 @@ pub struct SipGateway {
     pub max_capacity: Option<u32>,
     /// 网关类型（如 pstn/sip/trunk）
     pub gateway_type: Option<String>,
+    /// 中继角色（access/egress）
+    pub role: Option<String>,
+    /// 接入认证模式（ip_allowlist/digest_register/ip_and_digest/none）
+    pub access_auth_mode: Option<String>,
     /// 前缀转换规则（如 "86:0086"）
     pub prefix_rules: Option<String>,
     /// 是否支持注册

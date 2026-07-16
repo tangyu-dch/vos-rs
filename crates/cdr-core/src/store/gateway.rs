@@ -197,19 +197,21 @@ impl PostgresCdrStore {
         let port_val = gw.port.map(|p| p as i32);
         let cap_val = gw.max_capacity.map(|c| c as i32);
         sqlx::query(
-            "INSERT INTO sip_gateways (id, host, port, transport, max_capacity, gateway_type, prefix_rules, supports_registration, reg_auth_type, reg_username, reg_password, parent_gateway_id, caller_id_mode, virtual_caller, max_concurrent, account_id, enabled) \
-             VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'peer'), COALESCE($7, ''), COALESCE($8, FALSE), COALESCE($9, 'none'), COALESCE($10, ''), COALESCE($11, ''), $12, COALESCE($13, 'passthrough'), COALESCE($14, ''), COALESCE($15, 100), $16, COALESCE($17, TRUE)) \
+            "INSERT INTO sip_gateways (id, host, port, transport, max_capacity, gateway_type, role, access_auth_mode, prefix_rules, supports_registration, reg_auth_type, reg_username, reg_password, parent_gateway_id, caller_id_mode, virtual_caller, max_concurrent, account_id, enabled) \
+             VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'peer'), COALESCE($7, 'egress'), COALESCE($8, 'none'), COALESCE($9, ''), COALESCE($10, FALSE), COALESCE($11, 'none'), COALESCE($12, ''), COALESCE($13, ''), $14, COALESCE($15, 'passthrough'), COALESCE($16, ''), COALESCE($17, 100), $18, COALESCE($19, TRUE)) \
              ON CONFLICT (id) DO UPDATE \
              SET host = EXCLUDED.host, \
                  port = EXCLUDED.port, \
                  transport = EXCLUDED.transport, \
                  max_capacity = EXCLUDED.max_capacity, \
                  gateway_type = EXCLUDED.gateway_type, \
+                 role = EXCLUDED.role, \
+                 access_auth_mode = EXCLUDED.access_auth_mode, \
                  prefix_rules = EXCLUDED.prefix_rules, \
                  supports_registration = EXCLUDED.supports_registration, \
                  reg_auth_type = EXCLUDED.reg_auth_type, \
                  reg_username = EXCLUDED.reg_username, \
-                 reg_password = COALESCE($11, sip_gateways.reg_password), \
+                 reg_password = COALESCE($13, sip_gateways.reg_password), \
                  parent_gateway_id = EXCLUDED.parent_gateway_id, \
                  caller_id_mode = EXCLUDED.caller_id_mode, \
                  virtual_caller = EXCLUDED.virtual_caller, \
@@ -223,6 +225,8 @@ impl PostgresCdrStore {
         .bind(&gw.transport)
         .bind(cap_val)
         .bind(&gw.gateway_type)
+        .bind(&gw.role)
+        .bind(&gw.access_auth_mode)
         .bind(&gw.prefix_rules)
         .bind(gw.supports_registration)
         .bind(&gw.reg_auth_type)
@@ -241,7 +245,7 @@ impl PostgresCdrStore {
 
     pub async fn list_gateways_full(&self) -> Result<Vec<SipGateway>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.prefix_rules, \
+            "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.role, g.access_auth_mode, g.prefix_rules, \
              g.supports_registration, g.reg_auth_type, g.reg_username, g.parent_gateway_id, \
              g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, g.enabled, g.created_at, \
              h.active_calls, h.state \
@@ -264,6 +268,8 @@ impl PostgresCdrStore {
                     .get::<Option<i32>, _>("max_capacity")
                     .and_then(|c| u32::try_from(c).ok()),
                 gateway_type: row.get("gateway_type"),
+                role: row.get("role"),
+                access_auth_mode: row.get("access_auth_mode"),
                 prefix_rules: row.get("prefix_rules"),
                 supports_registration: row.get("supports_registration"),
                 reg_auth_type: row.get("reg_auth_type"),
@@ -292,7 +298,7 @@ impl PostgresCdrStore {
         gateway_type: Option<&str>,
     ) -> Result<Vec<SipGateway>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.prefix_rules, \
+            "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.role, g.access_auth_mode, g.prefix_rules, \
              g.supports_registration, g.reg_auth_type, g.reg_username, g.parent_gateway_id, \
              g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, g.enabled, g.created_at, \
              h.active_calls, h.state \
@@ -317,6 +323,8 @@ impl PostgresCdrStore {
                     .get::<Option<i32>, _>("max_capacity")
                     .and_then(|capacity| u32::try_from(capacity).ok()),
                 gateway_type: row.get("gateway_type"),
+                role: row.get("role"),
+                access_auth_mode: row.get("access_auth_mode"),
                 prefix_rules: row.get("prefix_rules"),
                 supports_registration: row.get("supports_registration"),
                 reg_auth_type: row.get("reg_auth_type"),
