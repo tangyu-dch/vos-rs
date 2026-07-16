@@ -1,6 +1,41 @@
 use call_core::{
-    CallError, CallEvent, CallId, CallManager, CallState, CdrStatus, Route, RouteTable, RouteTarget,
+    CallError, CallEvent, CallId, CallManager, CallState, CallerNumberDirectory, CdrStatus, Route,
+    RouteTable, RouteTarget,
 };
+
+#[test]
+fn owned_caller_number_never_fails_over_to_another_gateway() {
+    let mut primary = RouteTarget::new("gw1", "gw1-primary.example.com", Some(5060));
+    primary.caller_id_mode = Some("strict_passthrough".to_string());
+    let mut other = RouteTarget::new("gw2", "gw2.example.com", Some(5060));
+    other.caller_id_mode = Some("strict_passthrough".to_string());
+    let mut same_owner_backup = RouteTarget::new("gw1", "gw1-backup.example.com", Some(5060));
+    same_owner_backup.caller_id_mode = Some("strict_passthrough".to_string());
+    let routes = RouteTable::new(vec![
+        Route::new("primary", "", 300, primary),
+        Route::new("other-gateway", "", 200, other),
+        Route::new("same-owner", "", 100, same_owner_backup),
+    ]);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = CallManager::new(routes, tx);
+    manager.update_caller_numbers(CallerNumberDirectory::new([(
+        "1001".to_string(),
+        "gw1".to_string(),
+    )]));
+    let call_id = "caller-owner-pin@example.com";
+    manager
+        .handle_inbound_invite(&invite_request(call_id, "13800138000"))
+        .expect("owned caller should route");
+
+    let outcome = manager
+        .handle_outbound_response(&outbound_response(503, "Unavailable", call_id))
+        .expect("same owner route should be used");
+    assert_eq!(outcome.failover_gateway_id.as_deref(), Some("gw1"));
+    assert_eq!(
+        outcome.failover_uri.expect("failover URI").host,
+        "gw1-backup.example.com"
+    );
+}
 use sip_core::{parse_message, SipUri};
 use std::str::FromStr;
 
