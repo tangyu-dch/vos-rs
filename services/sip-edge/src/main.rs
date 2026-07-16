@@ -1,11 +1,24 @@
+pub(crate) mod cdr;
+pub(crate) mod cluster;
 pub(crate) mod config;
 pub(crate) mod edge_state;
 mod manage;
 pub(crate) mod media;
 pub(crate) mod net;
+pub(crate) mod routing;
 pub(crate) mod security;
 pub(crate) mod sip;
 pub(crate) mod timers;
+mod webhook_delivery;
+mod webhooks;
+
+pub(crate) use cdr::{cdr_sinks_from_config, flush_cdr_batch_with_retry_and_wal};
+pub(crate) use routing::{
+    parse_gateway_target, reload_routes_from_database, route_table_from_config,
+    spawn_periodic_route_refresh, spawn_route_reload_listener, warm_hot_path_redis_cache,
+};
+pub(crate) use security::rules::refresh_anti_fraud_rules;
+pub(crate) use sip::extract_call_id_fast;
 
 // Re-export for backward compatibility with inline module references
 #[allow(unused_imports)]
@@ -41,18 +54,13 @@ pub(crate) use timers::{
     spawn_gateway_health_probe_loop, spawn_nat_keepalive_loop, spawn_session_timer_watchdog,
 };
 
-use call_core::{CallManager, Route, RouteTable, RouteTarget};
-use cdr_core::PostgresCdrStore;
+use call_core::CallManager;
 use config::EdgeConfig;
-use futures::StreamExt;
 use media::MediaRelayState;
-use net::{create_tls_acceptor, Transport};
-use sip_core::{parse_message, Method, SipMessage, SipUri};
+use net::{create_tls_acceptor, BufferPool, PooledBuffer, Transport};
+use sip_core::{parse_message, Method, SipMessageBorrow};
 use std::{
-    collections::HashMap,
-    io,
     net::SocketAddr,
-    str::FromStr,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -64,9 +72,9 @@ type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), AnyError> {
-    init_tracing();
-
     let mut edge_config = EdgeConfig::from_env();
+    init_tracing(&config_logging_filter("sip_edge=info"));
+    edge_config.validate_cluster()?;
     let bind_addr = edge_config.sip_udp_bind.clone();
     let route_table = route_table_from_config(&edge_config)?;
     if route_table.is_empty() {
@@ -84,10 +92,9 @@ async fn main() -> Result<(), AnyError> {
     let db_store = cdr_sinks.postgres.clone();
     if db_store.is_none() {
         tracing::error!("数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接！");
-        return Err(std::io::Error::other(
-            "数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接",
-        )
-        .into());
+        return Err(
+            std::io::Error::other("数据库连接未成功初始化，VOS-RS 需要强制开启数据库连接").into(),
+        );
     }
 
     // 检查并强制校验 Redis 连接
@@ -102,7 +109,8 @@ async fn main() -> Result<(), AnyError> {
             return Err(e.into());
         }
     };
-    let redis_conn_for_state = match redis_client.get_multiplexed_tokio_connection().await {
+    let redis_conn_for_state = match redis::aio::ConnectionManager::new(redis_client.clone()).await
+    {
         Ok(conn) => Some(conn),
         Err(e) => {
             tracing::error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
@@ -119,6 +127,8 @@ async fn main() -> Result<(), AnyError> {
     } else {
         info!("dynamic Redis/PostgreSQL configuration override is disabled");
     }
+    // 动态配置可能替换媒体节点池，必须在创建监听和媒体状态前再次校验。
+    edge_config.validate_cluster()?;
 
     // STUN: discover public address for media relay if configured
     if let Some(stun_server) = edge_config.stun_server.clone() {
@@ -135,7 +145,13 @@ async fn main() -> Result<(), AnyError> {
     // Wrap EdgeConfig in Arc — all mutations done, now read-only shared access
     let edge_config = Arc::new(edge_config);
 
-    let media_relay = MediaRelayState::with_recording_pool(
+    tracing::info!(
+        nodes = edge_config.media_cluster.nodes.len(),
+        strategy = ?edge_config.media_cluster.allocation_strategy,
+        "Initializing unified media node pool"
+    );
+    let media_relay = MediaRelayState::with_node_pool(
+        &edge_config.media_cluster,
         edge_config.recording_workers,
         edge_config.recording_queue_capacity,
     );
@@ -143,8 +159,32 @@ async fn main() -> Result<(), AnyError> {
 
     // 使用有界队列防止数据库/NATS 故障时 CDR 无限堆积。
     let cdr_queue_capacity = edge_config.cdr_queue_capacity;
+    let cdr_persistence_enabled = edge_config.cdr_persistence_enabled;
     let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
-    let call_manager = CallManager::new(route_table, cdr_tx);
+    let (call_manager, webhook_receiver) = if edge_config.webhooks.enabled {
+        let (event_sender, event_receiver) =
+            tokio::sync::mpsc::channel(edge_config.webhooks.queue_capacity);
+        (
+            CallManager::new_with_event_sink(route_table, cdr_tx, event_sender),
+            Some(event_receiver),
+        )
+    } else {
+        (CallManager::new(route_table, cdr_tx), None)
+    };
+
+    if let Some(event_receiver) = webhook_receiver {
+        let nats_url = edge_config
+            .nats_url
+            .as_deref()
+            .ok_or("启用 Webhook 时必须在 config.yaml 配置 connections.nats.url")?;
+        webhooks::start_pipeline(
+            edge_config.webhooks.clone(),
+            nats_url,
+            redis_client.clone(),
+            event_receiver,
+        )
+        .await?;
+    }
 
     let edge_state = Arc::new(EdgeState::with_media_relay_and_db(
         call_manager,
@@ -155,8 +195,14 @@ async fn main() -> Result<(), AnyError> {
 
     // 将 Redis 连接注入 EdgeState（用于集群注册状态共享）
     if let Some(redis_conn) = redis_conn_for_state {
-        edge_state.set_redis(redis_conn);
+        edge_state.set_redis(redis_conn.clone());
+        edge_state.set_registration_sync(cluster::start_registration_sync(redis_conn));
     }
+    let node_heartbeat =
+        cluster::spawn_node_heartbeat(&redis_client, &edge_config.cluster, Arc::clone(&edge_state))
+            .await?;
+    cluster::start_inter_node_egress(Arc::clone(&edge_state), &edge_config).await?;
+    warm_hot_path_redis_cache(&edge_state, db_store.as_ref()).await?;
 
     // Start background task to flush CDRs in batches (every 100ms or 100 entries)
     let cdr_sinks_bg = Arc::clone(&cdr_sinks);
@@ -167,14 +213,18 @@ async fn main() -> Result<(), AnyError> {
             tokio::select! {
                 Some(cdr) = cdr_rx.recv() => {
                     batch.push(cdr);
-                    if batch.len() >= 100 {
+                    if batch.len() >= 100 && cdr_persistence_enabled {
                         flush_cdr_batch_with_retry_and_wal(&cdr_sinks_bg, &batch).await;
+                        batch.clear();
+                    } else if batch.len() >= 100 {
                         batch.clear();
                     }
                 }
                 _ = interval.tick() => {
-                    if !batch.is_empty() {
+                    if !batch.is_empty() && cdr_persistence_enabled {
                         flush_cdr_batch_with_retry_and_wal(&cdr_sinks_bg, &batch).await;
+                        batch.clear();
+                    } else if !batch.is_empty() {
                         batch.clear();
                     }
                 }
@@ -216,85 +266,86 @@ async fn main() -> Result<(), AnyError> {
             }
         }
 
-        let has_gateways = sqlx::query("SELECT 1 FROM sip_gateways LIMIT 1")
-            .fetch_optional(db.pool())
-            .await?
-            .is_some();
-        let has_routes = sqlx::query("SELECT 1 FROM sip_routes LIMIT 1")
-            .fetch_optional(db.pool())
-            .await?
-            .is_some();
-        if !has_gateways {
-            if !edge_config.default_gateway.trim().is_empty() {
-                let raw_gateway = &edge_config.default_gateway;
-                let raw_gateway = raw_gateway.trim();
-                if !raw_gateway.is_empty() {
-                    if let Ok(target) = parse_gateway_target("default", raw_gateway) {
-                        db.insert_gateway("default", &target.host, target.port, "udp")
-                            .await?;
-                        db.insert_route("default", "", 100, "default").await?;
-                        info!(
-                            gateway = raw_gateway,
-                            "seeded default gateway and route into database"
-                        );
+        if edge_config.database_routes_enabled {
+            let has_gateways = sqlx::query("SELECT 1 FROM sip_gateways LIMIT 1")
+                .fetch_optional(db.pool())
+                .await?
+                .is_some();
+            let has_routes = sqlx::query("SELECT 1 FROM sip_routes LIMIT 1")
+                .fetch_optional(db.pool())
+                .await?
+                .is_some();
+            if !has_gateways {
+                if !edge_config.default_gateway.trim().is_empty() {
+                    let raw_gateway = &edge_config.default_gateway;
+                    let raw_gateway = raw_gateway.trim();
+                    if !raw_gateway.is_empty() {
+                        if let Ok(target) = parse_gateway_target("default", raw_gateway) {
+                            db.insert_gateway("default", &target.host, target.port, "udp")
+                                .await?;
+                            db.insert_route("default", "", 100, "default").await?;
+                            info!(
+                                gateway = raw_gateway,
+                                "seeded default gateway and route into database"
+                            );
+                        }
                     }
                 }
+            } else if !has_routes && !edge_config.default_gateway.trim().is_empty() {
+                db.insert_route("default", "", 100, "default").await?;
+                info!("seeded default route into database (gateway already exists)");
             }
-        } else if !has_routes && !edge_config.default_gateway.trim().is_empty() {
-            db.insert_route("default", "", 100, "default").await?;
-            info!("seeded default route into database (gateway already exists)");
-        }
 
-        if let Some(ref db) = db_store {
             match reload_routes_from_database(&edge_state, db).await {
                 Ok(()) => info!("loaded routes from database"),
                 Err(e) => warn!(%e, "failed to load routes from database"),
             }
-        }
 
-        if let Some(ref nats_url) = edge_config.nats_url {
-            spawn_route_reload_listener(
-                nats_url.clone(),
-                Arc::clone(&edge_state),
-                db_store.clone(),
-            );
-        }
+            if let Some(ref nats_url) = edge_config.nats_url {
+                spawn_route_reload_listener(
+                    nats_url.clone(),
+                    Arc::clone(&edge_state),
+                    db_store.clone(),
+                );
+            }
 
-        if let Some(ref db) = db_store {
-            match db.load_gateway_health_list().await {
-                Ok(health_list) => {
-                    let mut health = edge_state
-                        .gateway_health
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    for (
-                        gw_id,
-                        open,
-                        failures,
-                        _state,
-                        last_failure_at,
-                        half_open_successes,
-                        _last_probe_at,
-                        active_calls,
-                    ) in health_list
-                    {
-                        let last_failure_sys = last_failure_at.map(|dt| {
-                            std::time::UNIX_EPOCH
-                                + std::time::Duration::from_secs(dt.unix_timestamp() as u64)
-                        });
-                        health.restore_state(
-                            &gw_id,
+            if edge_config.gateway_health_checks_enabled {
+                match db.load_gateway_health_list().await {
+                    Ok(health_list) => {
+                        let health = &edge_state.gateway_health;
+                        for (
+                            gw_id,
                             open,
                             failures,
-                            last_failure_sys,
+                            _state,
+                            last_failure_at,
                             half_open_successes,
+                            _last_probe_at,
                             active_calls,
-                        );
+                        ) in health_list
+                        {
+                            let last_failure_sys = last_failure_at.map(|dt| {
+                                std::time::UNIX_EPOCH
+                                    + std::time::Duration::from_secs(dt.unix_timestamp() as u64)
+                            });
+                            health.restore_state(
+                                &gw_id,
+                                open,
+                                failures,
+                                last_failure_sys,
+                                half_open_successes,
+                                active_calls,
+                            );
+                        }
+                        info!("loaded and restored gateway health states from database");
                     }
-                    info!("loaded and restored gateway health states from database");
+                    Err(error) => {
+                        warn!(%error, "failed to load gateway health states from database")
+                    }
                 }
-                Err(error) => warn!(%error, "failed to load gateway health states from database"),
             }
+        } else {
+            info!("database route loading disabled; using config.yaml routing table");
         }
 
         refresh_anti_fraud_rules(&edge_state).await;
@@ -426,12 +477,16 @@ async fn main() -> Result<(), AnyError> {
     );
 
     // Start NAT keepalive background loop — sends keepalive probes to active registrations
-    let num_workers = num_cpus::get().max(4);
+    let num_workers = if edge_config.udp_workers_auto {
+        num_cpus::get().max(1)
+    } else {
+        edge_config.udp_workers.max(1)
+    };
     let queue_capacity = 10000;
     let mut worker_txs = Vec::new();
 
     for worker_id in 0..num_workers {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u8>, SocketAddr)>(queue_capacity);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(PooledBuffer, SocketAddr)>(queue_capacity);
         worker_txs.push(tx);
 
         let state = Arc::clone(&edge_state);
@@ -464,8 +519,41 @@ async fn main() -> Result<(), AnyError> {
                         Transport::Udp
                     };
 
+                    let client_transaction_key = if transport == Transport::Udp {
+                        parse_message(&datagram.bytes)
+                            .ok()
+                            .and_then(|message| match message {
+                                SipMessageBorrow::Request(request)
+                                    if !matches!(&request.method, Method::Ack) =>
+                                {
+                                    sip::ClientTransactionKey::from_request(&request)
+                                }
+                                _ => None,
+                            })
+                    } else {
+                        None
+                    };
+                    let registered_transaction = client_transaction_key.and_then(|key| {
+                        if state.client_transactions.contains_key(&key) {
+                            None
+                        } else {
+                            spawn_client_transaction_retransmission(
+                                Arc::clone(&state),
+                                Arc::clone(&sock),
+                                datagram.target.clone(),
+                                datagram.bytes.clone(),
+                                key.clone(),
+                                cfg.clone(),
+                            );
+                            Some(key)
+                        }
+                    });
+
                     if let Err(error) = state.send_sip_datagram(datagram.clone(), &sock, &cfg).await
                     {
+                        if let Some(key) = registered_transaction.as_ref() {
+                            state.cancel_client_transaction(key);
+                        }
                         warn!(target = %datagram.target, error = %error, "failed to send SIP message");
                     } else {
                         debug!(
@@ -473,28 +561,6 @@ async fn main() -> Result<(), AnyError> {
                             bytes = datagram.bytes.len(),
                             "sent SIP datagram"
                         );
-
-                        if transport == Transport::Udp {
-                            if let Ok(SipMessage::Request(req)) =
-                                sip_core::parse_message(&datagram.bytes)
-                            {
-                                if !matches!(&req.method, Method::Ack) {
-                                    if let Some(key) = sip::ClientTransactionKey::from_request(&req)
-                                    {
-                                        if !state.client_transactions.contains_key(&key) {
-                                            spawn_client_transaction_retransmission(
-                                                Arc::clone(&state),
-                                                Arc::clone(&sock),
-                                                datagram.target.clone(),
-                                                datagram.bytes.clone(),
-                                                key,
-                                                cfg.clone(),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -502,26 +568,33 @@ async fn main() -> Result<(), AnyError> {
     }
 
     spawn_nat_keepalive_loop(Arc::clone(&edge_state), Arc::clone(&socket));
-    spawn_gateway_health_probe_loop(
-        Arc::clone(&edge_state),
-        Arc::clone(&socket),
-        Arc::clone(&edge_config),
-    );
-    if let Some(ref db) = db_store {
-        spawn_periodic_route_refresh(Arc::clone(&edge_state), db.clone());
+    if edge_config.gateway_health_checks_enabled {
+        spawn_gateway_health_probe_loop(
+            Arc::clone(&edge_state),
+            Arc::clone(&socket),
+            Arc::clone(&edge_config),
+        );
+    }
+    if edge_config.dynamic_config_enabled && edge_config.database_routes_enabled {
+        if let Some(ref db) = db_store {
+            spawn_periodic_route_refresh(Arc::clone(&edge_state), db.clone());
+        }
     }
 
-    let mut buffer = [0u8; 65_535];
+    let pool_capacity = (num_workers * queue_capacity).min(4096) + 256;
+    let buffer_pool = Arc::new(BufferPool::new(pool_capacity, 65535));
     let mut shutdown_check_interval = tokio::time::interval(Duration::from_millis(500));
     let mut is_draining = false;
     let shutdown_timeout = tokio::time::sleep(Duration::from_secs(999999));
     tokio::pin!(shutdown_timeout);
 
     loop {
+        let mut raw_buf = buffer_pool.acquire();
         tokio::select! {
-            result = socket.recv_from(&mut buffer) => {
+            result = socket.recv_from(&mut raw_buf) => {
                 let (size, peer) = result?;
-                let packet = buffer[..size].to_vec();
+                raw_buf.truncate(size);
+                let packet = PooledBuffer::new(raw_buf, Arc::clone(&buffer_pool));
 
                 // 使用 Call-ID 哈希进行 worker 路由：确保同一 Dialog 的所有消息
                 // (INVITE/ACK/BYE/re-INVITE) 由同一 Worker 处理，消除跨 worker 竞态。
@@ -534,8 +607,12 @@ async fn main() -> Result<(), AnyError> {
                 }
                 let worker_idx = (hasher.finish() as usize) % num_workers;
 
-                if worker_txs[worker_idx].try_send((packet.clone(), peer)).is_err() {
-                    let _ = worker_txs[worker_idx].send((packet, peer)).await;
+                if worker_txs[worker_idx].try_send((packet, peer)).is_err() {
+                    static DROP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                    let cnt = DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if cnt % 1000 == 0 {
+                        tracing::warn!("UDP Worker {} 队列满，丢弃入站数据包 (当前累计丢包数: {})", worker_idx, cnt);
+                    }
                 }
 
                 if is_draining {
@@ -548,7 +625,12 @@ async fn main() -> Result<(), AnyError> {
             }
             _ = tokio::signal::ctrl_c(), if !is_draining => {
                 info!("Shutdown signal received. Entering graceful drain mode...");
-                edge_state.draining.store(true, Ordering::Relaxed);
+                edge_state.draining.store(true, Ordering::Release);
+                if let Some(heartbeat) = &node_heartbeat {
+                    if let Err(error) = heartbeat.refresh().await {
+                        warn!(%error, "failed to publish draining state immediately");
+                    }
+                }
                 is_draining = true;
                 shutdown_timeout.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(30));
             }
@@ -567,296 +649,45 @@ async fn main() -> Result<(), AnyError> {
         }
     }
 
+    if let Some(heartbeat) = &node_heartbeat {
+        if let Err(error) = heartbeat.unregister().await {
+            warn!(%error, "failed to unregister SIP cluster node during shutdown");
+        }
+    }
+
     Ok(())
 }
 
-fn init_tracing() {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("sip_edge=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+fn init_tracing(filter: &str) {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(filter))
+        .init();
 }
 
-async fn cdr_sinks_from_config(config: &EdgeConfig) -> Result<CdrSinks, AnyError> {
-    let postgres = match &config.database_url {
-        Some(database_url) if !database_url.trim().is_empty() => {
-            let store =
-                PostgresCdrStore::connect(database_url, config.database_max_connections).await?;
-            info!("PostgreSQL CDR persistence enabled");
-            Some(store)
-        }
-        _ => {
-            return Err("PostgreSQL 数据库连接未配置，数据库为系统运行的必须依赖项".into());
-        }
-    };
-
-    Ok(CdrSinks { postgres })
-}
-
-async fn flush_cdr_batch(
-    cdr_sinks: &CdrSinks,
-    cdrs: &[call_core::CallCdr],
-) -> Result<(), AnyError> {
-    if cdrs.is_empty() {
-        return Ok(());
-    }
-
-    if let Some(cdr_store) = &cdr_sinks.postgres {
-        for cdr in cdrs {
-            cdr_store.insert_call_cdr(cdr).await?;
-        }
-        debug!(count = cdrs.len(), "persisted batch CDRs to PostgreSQL");
-        return Ok(());
-    }
-
-    debug!(count = cdrs.len(), "discarded batch CDRs without CDR sink");
-    Ok(())
-}
-
-async fn flush_cdr_batch_with_retry_and_wal(cdr_sinks: &CdrSinks, batch: &[call_core::CallCdr]) {
-    if batch.is_empty() {
-        return;
-    }
-
-    let mut success = false;
-    for attempt in 1..=3 {
-        match flush_cdr_batch(cdr_sinks, batch).await {
-            Ok(_) => {
-                success = true;
-                break;
-            }
-            Err(e) => {
-                warn!(attempt, error = %e, "批量发送 CDR 失败，正在重试...");
-                tokio::time::sleep(Duration::from_millis(1000)).await;
-            }
-        }
-    }
-
-    if !success {
-        tracing::error!("致命错误: 连续 3 次批量刷新 CDR 失败！为防止数据丢失，正将 CDR 数据追加写入本地 logs/cdr_dlq.jsonl 死信归档...");
-
-        let _ = tokio::fs::create_dir_all("logs").await;
-        if let Ok(mut file) = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("logs/cdr_dlq.jsonl")
-            .await
-        {
-            use tokio::io::AsyncWriteExt;
-            for cdr in batch {
-                if let Ok(json_str) = serde_json::to_string(cdr) {
-                    let _ = file.write_all(format!("{}\n", json_str).as_bytes()).await;
-                }
-            }
-            let _ = file.flush().await;
-            info!(
-                count = batch.len(),
-                "已成功将未送达的批量 CDR 追加归档至本地 logs/cdr_dlq.jsonl 中"
-            );
-        } else {
-            tracing::error!(
-                count = batch.len(),
-                "极其严重: 写入本地 logs/cdr_dlq.jsonl 文件失败！CDR 数据将丢弃！"
-            );
-        }
-    }
-}
-
-async fn refresh_anti_fraud_rules(edge_state: &EdgeState) {
-    if let Some(ref db) = edge_state.db_store {
-        match db.list_anti_fraud_rules().await {
-            Ok(rules) => {
-                let enabled_rules: Vec<_> = rules.into_iter().filter(|r| r.enabled).collect();
-                let count = enabled_rules.len();
-                let mut guard = edge_state
-                    .anti_fraud_rules
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner());
-                *guard = enabled_rules;
-                info!(count, "已成功刷新防盗打控制规则缓存");
-            }
-            Err(e) => warn!("无法从数据库加载防盗打规则: {}", e),
-        }
-    }
-}
-
-/// Reload routes from database, applying time-window filtering.
-/// Used by both initial startup and NATS hot-reload.
-async fn reload_routes_from_database(
-    edge_state: &EdgeState,
-    db: &PostgresCdrStore,
-) -> Result<(), AnyError> {
-    let db_routes = db.load_routes().await?;
-    let db_gateways = db.load_gateways().await?;
-    let gateway_map: HashMap<String, (String, Option<u16>, String, Option<u32>)> = db_gateways
-        .into_iter()
-        .map(|(id, host, port, transport, cap, _, _, _)| (id, (host, port, transport, cap)))
-        .collect();
-
-    let mut routes = Vec::new();
-    let now_hhmm = cdr_core::current_hhmm();
-    for (id, prefix, priority, gateway_id, cost, weight, time_start, time_end) in db_routes {
-        if let (Some(start), Some(end)) = (time_start.as_ref(), time_end.as_ref()) {
-            if let Some(now) = now_hhmm.as_deref() {
-                if now < start.as_str() || now > end.as_str() {
-                    continue;
-                }
-            }
-        }
-        if let Some((host, port, _transport, max_capacity)) = gateway_map.get(&gateway_id) {
-            let mut target = RouteTarget::new(&gateway_id, host.clone(), *port);
-            target.max_capacity = *max_capacity;
-            routes.push(Route::with_cost_and_weight(
-                id,
-                prefix,
-                priority as u16,
-                cost,
-                weight.max(0) as u32,
-                target,
-            ));
-        }
-    }
-    if !routes.is_empty() {
-        edge_state
-            .call_manager
-            .update_routes(RouteTable::new(routes));
-    }
-    Ok(())
-}
-
-fn spawn_route_reload_listener(
-    nats_url: String,
-    edge_state: Arc<EdgeState>,
-    db_store: Option<PostgresCdrStore>,
-) {
-    tokio::spawn(async move {
-        let Ok(client) = async_nats::connect(&nats_url).await else {
-            warn!("路由重载器无法连接到 NATS");
-            return;
-        };
-
-        let Ok(mut subscriber) = client.subscribe("vos_rs.routing.reload").await else {
-            warn!("路由重载器无法订阅 NATS 主题");
-            return;
-        };
-
-        info!("已成功启动动态路由热加载监听协程");
-        while let Some(_msg) = subscriber.next().await {
-            info!("收到路由热加载 NATS 广播通知，正在从数据库刷新路由...");
-            if let Some(ref db) = db_store {
-                match reload_routes_from_database(&edge_state, db).await {
-                    Ok(()) => {
-                        refresh_anti_fraud_rules(&edge_state).await;
-                        info!("动态路由热重载成功，已加载最新路由表数据！");
-                    }
-                    Err(e) => warn!("热加载路由失败: {}", e),
-                }
-            }
-        }
-    });
-}
-
-/// Periodically reload routes from database to support time-based routing.
-/// Routes with time_start/time_end are filtered at load time, so this ensures
-/// they are automatically enabled/disabled as time windows pass.
-fn spawn_periodic_route_refresh(edge_state: Arc<EdgeState>, db: PostgresCdrStore) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-        interval.tick().await; // skip first immediate tick
-        loop {
-            interval.tick().await;
-            if let Err(e) = reload_routes_from_database(&edge_state, &db).await {
-                warn!(%e, "periodic route refresh failed");
-            }
-        }
-    });
-}
-
-fn route_table_from_config(config: &EdgeConfig) -> Result<RouteTable, AnyError> {
-    if config.default_gateway.is_empty() {
-        return Ok(RouteTable::default());
-    }
-
-    let target = parse_gateway_target("default", &config.default_gateway)?;
-    Ok(RouteTable::new(vec![Route::new(
-        "default", "", 100, target,
-    )]))
-}
-
-fn parse_gateway_target(gateway_id: &str, raw: &str) -> Result<RouteTarget, AnyError> {
-    let value = raw.trim();
-    if value.is_empty() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "sip_edge.routing.default_gateway must not be empty",
-        )));
-    }
-
-    let uri = if value.starts_with("sip:") || value.starts_with("sips:") {
-        SipUri::from_str(value)
-    } else {
-        SipUri::from_str(&format!("sip:{value}"))
-    }
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-
-    Ok(RouteTarget::new(gateway_id, uri.host, uri.port))
-}
-
-/// 快速从原始 SIP 字节中提取 Call-ID 值（无需完整解析）。
-///
-/// 按行扫描报文头部，匹配 `Call-ID:` 或紧凑形式 `i:`，
-/// 提取其值用于 Worker 路由哈希，确保同一 Dialog 的所有消息
-/// 始终路由到同一个处理 Worker，避免并发竞态。
-///
-/// # 返回
-/// - `Some(call_id)` — 成功提取
-/// - `None` — 报文格式异常或不含 Call-ID（fallback 到 peer-IP 哈希）
-fn extract_call_id_fast(packet: &[u8]) -> Option<&[u8]> {
-    // SIP 消息头部为 ASCII，每行以 CRLF 或 LF 结尾
-    let text = std::str::from_utf8(packet).ok()?;
-
-    // 跳过请求行或状态行（第一行）
-    let headers_start = text.find('\n').map(|i| i + 1)?;
-    let headers = &text[headers_start..];
-
-    // 遍历每一行，匹配 Call-ID 头（大小写不敏感）
-    for line in headers.lines() {
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            // 空行：头部结束
-            break;
-        }
-        // 匹配 "Call-ID:" 及紧凑形式 "i:"
-        let value = if trimmed.len() > 8 && trimmed[..8].eq_ignore_ascii_case("call-id:") {
-            trimmed[8..].trim()
-        } else if trimmed.len() > 2 && trimmed[..2].eq_ignore_ascii_case("i:") {
-            trimmed[2..].trim()
-        } else {
-            continue;
-        };
-
-        if value.is_empty() {
-            return None;
-        }
-        // 在原始 packet 中找到 value 的位置并返回字节切片（零拷贝）
-        if let Some(pos) = packet
-            .windows(value.len())
-            .position(|w| w == value.as_bytes())
-        {
-            return Some(&packet[pos..pos + value.len()]);
-        }
-        return None;
-    }
-    None
+fn config_logging_filter(default: &str) -> String {
+    let path = std::env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
+        .and_then(|root| {
+            root.get("logging")?
+                .get("filter")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .filter(|filter| !filter.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::auth::{digest_response, AuthConfig};
     use super::{
-        flush_cdr_batch, handle_datagram, media, response, spawn_client_transaction_retransmission,
+        handle_datagram, media, response, spawn_client_transaction_retransmission,
         spawn_nat_keepalive_loop, spawn_session_timer_watchdog, CdrSinks, ClientTransactionKey,
         EdgeConfig, EdgeState,
     };
+    use crate::cdr::flush_cdr_batch;
     use crate::edge_state::PendingDatagram;
     use crate::net::handle_ws_connection;
     use call_core::{CallId, CallManager, CallState, Route, RouteTable, RouteTarget};

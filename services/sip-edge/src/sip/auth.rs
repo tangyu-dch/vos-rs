@@ -12,6 +12,7 @@
 //! - nonce 有效期可配置
 //! - 密码使用 HA1 哈希存储
 
+#[cfg(test)]
 use cdr_core::PostgresCdrStore;
 use dashmap::DashMap;
 use sip_core::SipRequest;
@@ -130,13 +131,56 @@ impl AuthConfig {
         false
     }
 
+    #[cfg(test)]
     pub async fn verify_request(
         &self,
         request: &SipRequest,
         db_store: Option<&PostgresCdrStore>,
         replay_cache: Option<&DashMap<String, u64>>,
     ) -> AuthDecision {
-        if !self.is_enabled() && db_store.is_none() {
+        let username = self.authorization_username(request);
+        let password = if let (Some(db), Some(username)) = (db_store, username.as_deref()) {
+            match db.get_user_password(username).await {
+                Ok(Some(password)) => Some(password),
+                _ => self.configured_password(username),
+            }
+        } else {
+            username
+                .as_deref()
+                .and_then(|username| self.configured_password(username))
+        };
+        self.verify_request_with_password(
+            request,
+            password,
+            self.is_enabled() || db_store.is_some(),
+            replay_cache,
+        )
+    }
+
+    /// 提取 Digest Authorization 中的用户名。
+    pub(crate) fn authorization_username(&self, request: &SipRequest) -> Option<String> {
+        let authorization = request
+            .headers
+            .get("authorization")
+            .or_else(|| request.headers.get("proxy-authorization"))?;
+        parse_digest_authorization(authorization.as_str())
+            .and_then(|params| params.get("username").cloned())
+    }
+
+    /// 查找 config.yaml 中的静态鉴权凭据。
+    pub(crate) fn configured_password(&self, username: &str) -> Option<String> {
+        self.users.get(username).cloned()
+    }
+
+    /// 使用已从 Redis 取得的凭据验证 Digest，不访问数据库。
+    pub(crate) fn verify_request_with_password(
+        &self,
+        request: &SipRequest,
+        password: Option<String>,
+        auth_required: bool,
+        replay_cache: Option<&DashMap<String, u64>>,
+    ) -> AuthDecision {
+        if !auth_required {
             return AuthDecision::Disabled;
         }
 
@@ -203,16 +247,7 @@ impl AuthConfig {
             return AuthDecision::ChallengeWithFailure;
         };
 
-        let password_opt = if let Some(db) = db_store {
-            match db.get_user_password(username).await {
-                Ok(Some(pw)) => Some(pw),
-                _ => self.users.get(username).cloned(),
-            }
-        } else {
-            self.users.get(username).cloned()
-        };
-
-        let Some(password) = password_opt else {
+        let Some(password) = password else {
             return AuthDecision::ChallengeWithFailure;
         };
 
@@ -506,9 +541,9 @@ mod tests {
             auth_header = auth_header
         );
 
-        let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
             panic!("expected request");
         };
-        request
+        request.into_owned()
     }
 }

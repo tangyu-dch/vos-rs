@@ -36,5 +36,12 @@ toml = "0.8"
 stun = "0.17.1"
 libc = "0.2.186"
 num_cpus = "1"
-redis = { version = "0.26.0", features = ["tokio-comp"] }
+redis = { version = "0.26.0", features = ["tokio-comp", "connection-manager"] }
 storage-core = { path = "../../crates/storage-core" }
+reqwest = { version = "0.12", features = ["json"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"                                                  # ICE credential 随机生成
+opus = "0.3.0"
+rubato = "0.15"

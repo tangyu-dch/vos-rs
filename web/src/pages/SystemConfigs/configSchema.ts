@@ -31,11 +31,8 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
   {
     key: 'media',
     title: 'RTP 媒体',
-    description: '媒体通告、端口分配、NAT 学习和安全策略。',
+    description: '媒体节点地址和端口请在“媒体节点集群”中配置；这里仅管理全局媒体行为。',
     fields: [
-      { key: 'rtp_advertised_addr', label: 'RTP 通告地址', description: '写入 SDP 的媒体公网 IP，不包含端口。', type: 'string', placeholder: '例如 203.0.113.10' },
-      { key: 'rtp_port_min', label: 'RTP 最小端口', description: 'RTP 端口池起点，建议使用偶数。', type: 'integer', min: 1024, max: 65534, step: 2 },
-      { key: 'rtp_port_max', label: 'RTP 最大端口', description: 'RTP 端口池终点，必须大于最小端口。', type: 'integer', min: 1024, max: 65534, step: 2 },
       { key: 'rtp_symmetric_learning', label: '对称 RTP 学习', description: '根据收到的数据包学习远端媒体地址。', type: 'boolean' },
       { key: 'rtp_anti_spoofing', label: 'RTP 防欺骗', description: '拒绝不符合已学习源地址的媒体包。', type: 'boolean' },
       { key: 'rtp_source_relearn_secs', label: '源地址重新学习间隔', description: '允许重新学习 RTP 源地址的最短秒数。', type: 'integer', min: 1, max: 3600 },
@@ -67,6 +64,8 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
       { key: 'udp_receive_buffer_bytes', label: 'UDP 接收缓冲区', description: 'Socket 接收缓冲区字节数。', type: 'integer', min: 65536, max: 1073741824 },
       { key: 'udp_send_buffer_bytes', label: 'UDP 发送缓冲区', description: 'Socket 发送缓冲区字节数。', type: 'integer', min: 65536, max: 1073741824 },
       { key: 'cdr_queue_capacity', label: 'CDR 内存队列容量', description: '数据库或 NATS 短暂故障时的有界缓冲容量。', type: 'integer', min: 128, max: 1000000 },
+      { key: 'cdr_persistence_enabled', label: '启用 CDR 持久化', description: '关闭后仍维护呼叫状态，但不把 CDR 写入数据库或消息队列，仅建议隔离压测使用。', type: 'boolean' },
+      { key: 'gateway_health_checks_enabled', label: '启用网关健康检查', description: '控制 OPTIONS 探测以及网关健康状态的加载与持久化。', type: 'boolean' },
     ],
   },
   {
@@ -85,9 +84,10 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
   {
     key: 'billing',
     title: '实时计费',
-    description: '余额预检和余额耗尽后的强制拆线策略。关闭后仍生成 CDR 并执行正常结算。',
+    description: '余额预检、余额耗尽强制拆线及通话结束结算策略。',
     fields: [
       { key: 'balance_enforcement_enabled', label: '启用余额强制策略', description: '呼叫前检查余额，并在余额耗尽时自动拆线。压测环境可关闭。', type: 'boolean' },
+      { key: 'billing_settlement_enabled', label: '启用通话结束结算', description: '通话结束时计算费率并写入余额流水；隔离性能测试时可关闭。', type: 'boolean' },
     ],
   },
   {

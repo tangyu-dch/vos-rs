@@ -15,7 +15,7 @@
 //! 出站 INVITE 使用独立的 Call-ID（external_call_id），
 //! 隐藏内部拓扑信息，防止外部网关探测内部网络结构。
 
-use sip_core::{HeaderMap, Method, SipRequest, SipUri};
+use sip_core::{HeaderMap, Method, SipRequest, SipResponse, SipUri};
 use std::str::FromStr;
 
 const DEFAULT_SIP_PORT: u16 = 5060;
@@ -40,6 +40,43 @@ pub fn target_addr_for_str(raw_uri: &str) -> String {
             format!("{host}:{DEFAULT_SIP_PORT}")
         }
     }
+}
+
+/// Builds the ACK owned by the outbound B2BUA leg for an INVITE 2xx response.
+///
+/// The gateway leg is confirmed immediately and independently from delivery of the 2xx response
+/// on the caller leg. Repeated gateway 2xx responses produce repeated ACKs as required by UDP SIP.
+pub fn build_success_response_ack(
+    response: &SipResponse,
+    request_uri: &SipUri,
+    advertised_addr: &str,
+    call_id: &str,
+    route_set: &[String],
+) -> Vec<u8> {
+    let cseq = response
+        .headers
+        .get("cseq")
+        .and_then(|value| value.as_str().split_whitespace().next())
+        .unwrap_or("1");
+    let branch = format!("z9hG4bK-ack-{}-{cseq}", token_fragment(call_id));
+    let mut ack = format!(
+        "ACK {request_uri} SIP/2.0\r\n\
+         Via: SIP/2.0/UDP {advertised_addr};branch={branch}\r\n\
+         Max-Forwards: 70\r\n",
+    );
+    for route in route_set {
+        ack.push_str("Route: ");
+        ack.push_str(route);
+        ack.push_str("\r\n");
+    }
+    append_single_header(&mut ack, &response.headers, "from", "From");
+    append_single_header(&mut ack, &response.headers, "to", "To");
+    ack.push_str("Call-ID: ");
+    ack.push_str(call_id);
+    ack.push_str("\r\nCSeq: ");
+    ack.push_str(cseq);
+    ack.push_str(" ACK\r\nContent-Length: 0\r\n\r\n");
+    ack.into_bytes()
 }
 
 /// Builds an out-of-dialog OPTIONS request used for gateway health probing.
@@ -690,9 +727,9 @@ mod tests {
     }
 
     fn request(raw: &str) -> sip_core::SipRequest {
-        let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
             panic!("expected request");
         };
-        request
+        request.into_owned()
     }
 }

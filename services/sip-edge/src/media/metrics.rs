@@ -26,7 +26,7 @@ use serde::Serialize;
 
 pub(crate) const RTCP_QUALITY_WINDOW_MS: u128 = 60_000;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct MediaRelayMetrics {
     pub received_packets: u64,
     pub forwarded_packets: u64,
@@ -46,10 +46,36 @@ pub struct MediaRelayMetrics {
     pub recording_queue_capacity: u64,
     pub recording_workers: u64,
     pub dtmf_events: u64,
+    /// 通过轻量直转路径处理的 RTP 包数量。
+    pub fast_path_packets: u64,
+}
+
+impl MediaRelayMetrics {
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.received_packets += other.received_packets;
+        self.forwarded_packets += other.forwarded_packets;
+        self.dropped_invalid_packets += other.dropped_invalid_packets;
+        self.dropped_no_target_packets += other.dropped_no_target_packets;
+        self.send_errors += other.send_errors;
+        self.learned_source_updates += other.learned_source_updates;
+        self.dropped_spoofed_packets += other.dropped_spoofed_packets;
+        self.rtcp_quality.merge(other.rtcp_quality);
+        self.rtcp_window.merge(other.rtcp_window);
+        self.rtcp_quality_alerts += other.rtcp_quality_alerts;
+        self.rtcp_quality_degraded |= other.rtcp_quality_degraded;
+        self.recorded_packets += other.recorded_packets;
+        self.recording_dropped_packets += other.recording_dropped_packets;
+        self.recording_errors += other.recording_errors;
+        self.recording_queue_depth += other.recording_queue_depth;
+        self.recording_queue_capacity += other.recording_queue_capacity;
+        self.recording_workers += other.recording_workers;
+        self.dtmf_events += other.dtmf_events;
+        self.fast_path_packets += other.fast_path_packets;
+    }
 }
 
 /// Rolling RTCP quality aggregates for the current 60-second window.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct RtcpQualityWindow {
     pub started_at_unix_ms: u128,
     pub reports: u64,
@@ -149,7 +175,7 @@ impl RtcpQualityWindow {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct RtcpQualitySnapshot {
     pub reports: u64,
     pub sender_reports: u64,

@@ -38,6 +38,10 @@
 在项目根目录下或通过 `VOS_RS_CONFIG_FILE` 指定的路径中，`config.yaml` 必须包含以下嵌套的多级功能分级结构：
 
 ```yaml
+logging:
+  # tracing-subscriber 过滤语法；生产环境建议 info，性能压测建议 warn。
+  filter: "info"
+
 # ==========================================
 # 1. 基础设施连接配置 (Connections)
 # ==========================================
@@ -114,6 +118,10 @@ cdr_worker:
     db_retry_attempts: 5
 ```
 
+日志级别同样只从 `logging.filter` 读取，`RUST_LOG` 不再覆盖服务配置。节点级网络地址、
+证书路径、媒体端口段和密钥属于引导配置；适合在线修改的业务参数继续由 PostgreSQL 与
+Redis 热配置管理。
+
 ---
 
 ## 3. PostgreSQL 中高动态配置项对照表 (`system_configs`)
@@ -129,11 +137,11 @@ cdr_worker:
 
 ### 3.2 RTP 与媒体 Relay 规则
 
+媒体地址和端口不再使用独立的动态配置键，而是通过管理界面的“媒体节点集群”或
+`config.yaml` 中的 `sip_edge.media.nodes[]` 统一配置。单节点与多节点使用同一模型。
+
 | 配置项 Key | 典型数值 | 配置描述 |
 | :--- | :--- | :--- |
-| `rtp_advertised_addr` | `127.0.0.1` | RTP 媒体包流在 SDP 改写中通告的外部 IP 地址 |
-| `rtp_port_min` | `40000` | 中继 RTP 通道动态分配的起始 UDP 端口 |
-| `rtp_port_max` | `40100` | 中继 RTP 通道动态分配的结束 UDP 端口 |
 | `rtp_symmetric_learning` | `true` | 是否对对称 NAT 下的 RTP 音频包源地址进行自动学习改写 |
 | `rtp_anti_spoofing` | `true` | 是否启用 RTP 防欺诈攻击过滤 |
 | `rtp_source_relearn_secs` | `30` | 发生媒体切换时，RTP 重学习的锁定期限（秒） |

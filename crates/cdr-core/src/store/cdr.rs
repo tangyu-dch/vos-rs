@@ -52,45 +52,96 @@ impl PostgresCdrStore {
         if events.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await?;
+
+        let mut call_ids = Vec::with_capacity(events.len());
+        let mut callers = Vec::with_capacity(events.len());
+        let mut callees = Vec::with_capacity(events.len());
+        let mut started_ats = Vec::with_capacity(events.len());
+        let mut answered_ats = Vec::with_capacity(events.len());
+        let mut ended_ats = Vec::with_capacity(events.len());
+        let mut durations = Vec::with_capacity(events.len());
+        let mut billable_durations = Vec::with_capacity(events.len());
+        let mut statuses = Vec::with_capacity(events.len());
+        let mut failure_codes = Vec::with_capacity(events.len());
+        let mut failure_reasons = Vec::with_capacity(events.len());
+        let mut caller_loss_rates = Vec::with_capacity(events.len());
+        let mut caller_jitters = Vec::with_capacity(events.len());
+        let mut caller_rtts = Vec::with_capacity(events.len());
+        let mut gateway_loss_rates = Vec::with_capacity(events.len());
+        let mut gateway_jitters = Vec::with_capacity(events.len());
+        let mut gateway_rtts = Vec::with_capacity(events.len());
+        let mut moses = Vec::with_capacity(events.len());
+        let mut dtmf_digits_list = Vec::with_capacity(events.len());
+        let mut recording_paths = Vec::with_capacity(events.len());
+        let mut directions = Vec::with_capacity(events.len());
+
         for event in events {
-            sqlx::query(
-                r#"
-                INSERT INTO call_cdrs (
-                    call_id, caller, callee, started_at, answered_at, ended_at,
-                    duration_ms, billable_duration_ms, status, failure_status_code, failure_reason,
-                    caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms,
-                    gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
-                    mos, dtmf_digits, recording_path, direction
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-                ON CONFLICT (call_id) DO NOTHING
-                "#,
-            )
-            .bind(&event.call_id)
-            .bind(&event.caller)
-            .bind(&event.callee)
-            .bind(utils::offset_from_millis(event.started_at_ms))
-            .bind(event.answered_at_ms.map(utils::offset_from_millis))
-            .bind(utils::offset_from_millis(event.ended_at_ms))
-            .bind(event.duration_ms)
-            .bind(event.billable_duration_ms)
-            .bind(&event.status)
-            .bind(event.failure_status_code.map(|c| c as i32))
-            .bind(&event.failure_reason)
-            .bind(event.caller_rtcp_loss_rate)
-            .bind(event.caller_rtcp_jitter_ms)
-            .bind(event.caller_rtcp_rtt_ms.map(|v| v as i32))
-            .bind(event.gateway_rtcp_loss_rate)
-            .bind(event.gateway_rtcp_jitter_ms)
-            .bind(event.gateway_rtcp_rtt_ms.map(|v| v as i32))
-            .bind(event.mos)
-            .bind(&event.dtmf_digits)
-            .bind(&event.recording_path)
-            .bind(&event.direction)
-            .execute(&mut *tx)
-            .await?;
+            call_ids.push(event.call_id.clone());
+            callers.push(event.caller.clone());
+            callees.push(event.callee.clone());
+            started_ats.push(utils::offset_from_millis(event.started_at_ms));
+            answered_ats.push(event.answered_at_ms.map(utils::offset_from_millis));
+            ended_ats.push(utils::offset_from_millis(event.ended_at_ms));
+            durations.push(event.duration_ms);
+            billable_durations.push(event.billable_duration_ms);
+            statuses.push(event.status.clone());
+            failure_codes.push(event.failure_status_code.map(|c| c as i32));
+            failure_reasons.push(event.failure_reason.clone());
+            caller_loss_rates.push(event.caller_rtcp_loss_rate);
+            caller_jitters.push(event.caller_rtcp_jitter_ms);
+            caller_rtts.push(event.caller_rtcp_rtt_ms.map(|v| v as i32));
+            gateway_loss_rates.push(event.gateway_rtcp_loss_rate);
+            gateway_jitters.push(event.gateway_rtcp_jitter_ms);
+            gateway_rtts.push(event.gateway_rtcp_rtt_ms.map(|v| v as i32));
+            moses.push(event.mos);
+            dtmf_digits_list.push(event.dtmf_digits.clone());
+            recording_paths.push(event.recording_path.clone());
+            directions.push(event.direction.clone());
         }
-        tx.commit().await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO call_cdrs (
+                call_id, caller, callee, started_at, answered_at, ended_at,
+                duration_ms, billable_duration_ms, status, failure_status_code, failure_reason,
+                caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms,
+                gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
+                mos, dtmf_digits, recording_path, direction
+            )
+            SELECT * FROM UNNEST(
+                $1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::timestamptz[], $6::timestamptz[],
+                $7::int8[], $8::int8[], $9::text[], $10::int4[], $11::text[],
+                $12::float8[], $13::float8[], $14::int4[],
+                $15::float8[], $16::float8[], $17::int4[],
+                $18::float8[], $19::text[], $20::text[], $21::text[]
+            )
+            ON CONFLICT (call_id) DO NOTHING
+            "#
+        )
+        .bind(&call_ids)
+        .bind(&callers)
+        .bind(&callees)
+        .bind(&started_ats)
+        .bind(&answered_ats)
+        .bind(&ended_ats)
+        .bind(&durations)
+        .bind(&billable_durations)
+        .bind(&statuses)
+        .bind(&failure_codes)
+        .bind(&failure_reasons)
+        .bind(&caller_loss_rates)
+        .bind(&caller_jitters)
+        .bind(&caller_rtts)
+        .bind(&gateway_loss_rates)
+        .bind(&gateway_jitters)
+        .bind(&gateway_rtts)
+        .bind(&moses)
+        .bind(&dtmf_digits_list)
+        .bind(&recording_paths)
+        .bind(&directions)
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -118,23 +169,20 @@ impl PostgresCdrStore {
         if events.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await?;
-        for event in events {
-            sqlx::query(
-                "INSERT INTO dtmf_events (call_id, digit, source, timestamp_ms, rtp_timestamp, duration_ms, volume) \
-                  VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            )
-            .bind(&event.call_id)
-            .bind(&event.digit)
-            .bind(event.source.as_str())
-            .bind(event.timestamp_ms)
-            .bind(event.rtp_timestamp.map(|v| v as i64))
-            .bind(event.duration_ms.map(|v| v as i32))
-            .bind(event.volume.map(|v| v as i32))
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
+        let mut query_builder = sqlx::QueryBuilder::new(
+            "INSERT INTO dtmf_events (call_id, digit, source, timestamp_ms, rtp_timestamp, duration_ms, volume) "
+        );
+        query_builder.push_values(events, |mut b, event| {
+            b.push_bind(&event.call_id)
+                .push_bind(&event.digit)
+                .push_bind(event.source.as_str())
+                .push_bind(event.timestamp_ms)
+                .push_bind(event.rtp_timestamp.map(|v| v as i64))
+                .push_bind(event.duration_ms.map(|v| v as i32))
+                .push_bind(event.volume.map(|v| v as i32));
+        });
+        let query = query_builder.build();
+        query.execute(&self.pool).await?;
         Ok(())
     }
 

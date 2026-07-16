@@ -147,13 +147,40 @@ impl SrtpContext {
 
     /// 加密 RTP 数据包
     pub fn encrypt_rtp(&mut self, packet: &mut Vec<u8>) -> Result<usize, SrtpError> {
-        if packet.len() < 12 {
+        let packet_len = packet.len();
+        let protected_len = packet_len + self.config.profile.auth_tag_length();
+        packet.resize(protected_len, 0);
+        match self.encrypt_rtp_in_place(packet, packet_len) {
+            Ok(length) => Ok(length),
+            Err(error) => {
+                packet.truncate(packet_len);
+                Err(error)
+            }
+        }
+    }
+
+    /// 在调用方提供的固定容量缓冲区内完成 RTP 加密并追加认证标签。
+    pub fn encrypt_rtp_in_place(
+        &mut self,
+        buffer: &mut [u8],
+        packet_len: usize,
+    ) -> Result<usize, SrtpError> {
+        if packet_len < 12 {
             return Err(SrtpError::PacketTooShort);
         }
 
+        let tag_len = self.config.profile.auth_tag_length();
+        let protected_len = packet_len
+            .checked_add(tag_len)
+            .ok_or(SrtpError::BufferTooSmall)?;
+        if protected_len > buffer.len() {
+            return Err(SrtpError::BufferTooSmall);
+        }
+        let packet = &mut buffer[..protected_len];
+
         // 解析 RTP 头长度
-        let header_len = Self::rtp_header_length(packet);
-        if packet.len() < header_len {
+        let header_len = Self::rtp_header_length(&packet[..packet_len]);
+        if packet_len < header_len {
             return Err(SrtpError::PacketTooShort);
         }
 
@@ -161,23 +188,21 @@ impl SrtpContext {
             SrtpProfile::Aes128CmHmacSha1_80 | SrtpProfile::Aes128CmHmacSha1_32 => {
                 // 就地加密负载（零分配，直接在原 Vec 上做 AES-CTR keystream XOR）
                 let mut cipher = self.create_cipher(self.packet_index);
-                cipher.apply_keystream(&mut packet[header_len..]);
+                cipher.apply_keystream(&mut packet[header_len..packet_len]);
 
                 // 计算 HMAC-SHA1 认证标签
-                let auth_tag = self.compute_auth_tag(packet)?;
-                let tag_len = self.config.profile.auth_tag_length();
-                packet.extend_from_slice(&auth_tag[..tag_len]);
+                let auth_tag = self.compute_auth_tag(&packet[..packet_len])?;
+                packet[packet_len..protected_len].copy_from_slice(&auth_tag[..tag_len]);
 
                 self.packet_index += 1;
-                Ok(packet.len())
+                Ok(protected_len)
             }
             SrtpProfile::NullHmacSha1_80 => {
                 // 不加密，仅添加认证标签
-                let auth_tag = self.compute_auth_tag(packet)?;
-                let tag_len = self.config.profile.auth_tag_length();
-                packet.extend_from_slice(&auth_tag[..tag_len]);
+                let auth_tag = self.compute_auth_tag(&packet[..packet_len])?;
+                packet[packet_len..protected_len].copy_from_slice(&auth_tag[..tag_len]);
                 self.packet_index += 1;
-                Ok(packet.len())
+                Ok(protected_len)
             }
         }
     }
@@ -251,6 +276,7 @@ impl std::fmt::Debug for SrtpContext {
 #[derive(Debug, Clone)]
 pub enum SrtpError {
     PacketTooShort,
+    BufferTooSmall,
     AuthenticationFailed,
     InvalidKey,
     UnsupportedProfile,
@@ -260,6 +286,7 @@ impl std::fmt::Display for SrtpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PacketTooShort => write!(f, "SRTP packet too short"),
+            Self::BufferTooSmall => write!(f, "SRTP output buffer too small"),
             Self::AuthenticationFailed => write!(f, "SRTP authentication failed"),
             Self::InvalidKey => write!(f, "SRTP invalid key"),
             Self::UnsupportedProfile => write!(f, "SRTP unsupported profile"),
@@ -387,6 +414,45 @@ mod tests {
         let mut decrypt_ctx = SrtpContext::new(config, 12345);
         let decrypted_len = decrypt_ctx.decrypt_srtp(&mut packet).unwrap();
         assert_eq!(decrypted_len, 12 + original_payload.len());
+    }
+
+    #[test]
+    fn test_srtp_in_place_encryption_uses_caller_capacity() {
+        let config = SrtpConfig {
+            master_key: [7; 16],
+            master_salt: [3; 14],
+            profile: SrtpProfile::Aes128CmHmacSha1_80,
+        };
+        let packet = [0x80, 0x00, 0x00, 0x01, 0, 0, 0, 160, 0, 0, 0, 9, 1, 2, 3, 4];
+        let mut storage = [0_u8; 64];
+        storage[..packet.len()].copy_from_slice(&packet);
+        let mut encrypt = SrtpContext::new(config.clone(), 9);
+        let encrypted_len = encrypt
+            .encrypt_rtp_in_place(&mut storage, packet.len())
+            .expect("fixed buffer has room for authentication tag");
+        assert_eq!(encrypted_len, packet.len() + 10);
+
+        let mut decrypt = SrtpContext::new(config, 9);
+        let decrypted_len = decrypt
+            .decrypt_srtp(&mut storage[..encrypted_len])
+            .expect("encrypted packet should authenticate");
+        assert_eq!(&storage[..decrypted_len], packet);
+    }
+
+    #[test]
+    fn test_srtp_in_place_encryption_rejects_small_capacity() {
+        let config = SrtpConfig {
+            master_key: [7; 16],
+            master_salt: [3; 14],
+            profile: SrtpProfile::Aes128CmHmacSha1_80,
+        };
+        let mut packet = [0_u8; 16];
+        packet[0] = 0x80;
+        let mut context = SrtpContext::new(config, 9);
+        assert!(matches!(
+            context.encrypt_rtp_in_place(&mut packet, 16),
+            Err(SrtpError::BufferTooSmall)
+        ));
     }
 
     #[test]

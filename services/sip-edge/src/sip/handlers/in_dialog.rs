@@ -75,7 +75,7 @@ pub(crate) async fn handle_in_dialog_request(
             // Rewrite Call-ID, From, To for original leg B
             mutable_request.headers.replace(
                 HeaderName::new("call-id").unwrap(),
-                HeaderValue::new(actual_cid),
+                HeaderValue::new_owned(actual_cid.to_string()),
             );
             if let Some(orig_req) = &t.original_request {
                 let (from_val, to_val) = if t.transferee_is_caller {
@@ -92,13 +92,13 @@ pub(crate) async fn handle_in_dialog_request(
                 if let Some(f) = from_val {
                     mutable_request.headers.replace(
                         HeaderName::new("from").unwrap(),
-                        HeaderValue::new(f.as_str()),
+                        f,
                     );
                 }
                 if let Some(o) = to_val {
                     mutable_request
                         .headers
-                        .replace(HeaderName::new("to").unwrap(), HeaderValue::new(o.as_str()));
+                        .replace(HeaderName::new("to").unwrap(), o);
                 }
             }
 
@@ -129,18 +129,18 @@ pub(crate) async fn handle_in_dialog_request(
                 if let Some(ref tf_cid) = t.transfer_call_id {
                     mutable_request.headers.insert(
                         HeaderName::new("call-id").unwrap(),
-                        HeaderValue::new(tf_cid),
+                        HeaderValue::new_owned(tf_cid.clone()),
                     );
                 }
                 if let Some(ref tf_from) = t.transfer_from_header {
                     mutable_request
                         .headers
-                        .insert(HeaderName::new("from").unwrap(), HeaderValue::new(tf_from));
+                        .insert(HeaderName::new("from").unwrap(), HeaderValue::new_owned(tf_from.clone()));
                 }
                 if let Some(ref tf_to) = t.transfer_to_header {
                     mutable_request
                         .headers
-                        .insert(HeaderName::new("to").unwrap(), HeaderValue::new(tf_to));
+                        .insert(HeaderName::new("to").unwrap(), HeaderValue::new_owned(tf_to.clone()));
                 }
             }
 
@@ -201,10 +201,13 @@ pub(crate) async fn handle_in_dialog_request(
                     count = dtmf_events.len(),
                     "collected DTMF audit events for call"
                 );
-                if let Some(ref db) = edge_state.db_store {
-                    if let Err(error) = db.insert_dtmf_events_batch(&dtmf_events).await {
-                        warn!(%error, call_id = cid, "failed to persist DTMF audit events");
-                    }
+                if let Some(db) = edge_state.db_store.clone() {
+                    let call_id = cid.to_string();
+                    tokio::spawn(async move {
+                        if let Err(error) = db.insert_dtmf_events_batch(&dtmf_events).await {
+                            warn!(%error, %call_id, "failed to persist DTMF audit events");
+                        }
+                    });
                 }
             } else {
                 edge_state.media_relay.clear_dtmf_events(cid);
@@ -236,19 +239,16 @@ pub(crate) async fn handle_in_dialog_request(
                         .map(|v| v.as_str())
                         .unwrap_or("");
                     if let Some(gw_id) = edge_state.call_manager.current_gateway_id(call_id_str) {
-                        let status = {
-                            let mut health = edge_state
-                                .gateway_health
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
-                            health.decrement_active(&gw_id);
-                            health.get_gateway_status(&gw_id)
-                        };
+                        edge_state.gateway_health.decrement_active(&gw_id);
+                        let status = edge_state.gateway_health.get_gateway_status(&gw_id);
                         crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
                     }
 
                     // Real-time billing: settle the call.
-                    if let Some(ref db) = edge_state.db_store {
+                    if let (true, Some(db)) = (
+                        edge_state.billing_settlement_enabled,
+                        edge_state.db_store.as_ref(),
+                    ) {
                         let call = edge_state.call_manager.get(&outcome.call_id);
                         if let Some(call) = call {
                             let caller_user = call.caller.as_deref().and_then(|s| {
@@ -271,11 +271,21 @@ pub(crate) async fn handle_in_dialog_request(
                             if let Some(user) = caller_user {
                                 let cid = outcome.call_id.as_str().to_string();
                                 let db = db.clone();
+                                let redis_connection = edge_state.redis_connection();
                                 let user = user.to_string();
                                 let callee = callee.to_string();
                                 tokio::spawn(async move {
                                     match db.settle_call(&cid, &user, &callee, duration_ms).await {
                                         Ok(Some(new_bal)) => {
+                                            if let Some(mut connection) = redis_connection {
+                                                let _: Result<(), redis::RedisError> =
+                                                    redis::cmd("HSET")
+                                                        .arg("vos_rs:billing:balances")
+                                                        .arg(&user)
+                                                        .arg(new_bal)
+                                                        .query_async(&mut connection)
+                                                        .await;
+                                            }
                                             tracing::info!(call_id = %cid, user = %user, new_bal, "实时计费结算完成");
                                         }
                                         Ok(None) => {}
@@ -293,10 +303,9 @@ pub(crate) async fn handle_in_dialog_request(
                     // 如果是会议呼叫（单腿 UAS 呼叫），直接在本地终结并返回 200 OK，不转发给其他任何节点
                     let out_user = transaction.outbound_uri.user.as_deref().unwrap_or("");
                     if out_user.starts_with("conf_") || out_user.starts_with("room_") {
-                        let username = transaction
-                            .original_request
-                            .as_ref()
-                            .and_then(|req| crate::edge_state::EdgeState::username_from_request(req.as_ref()));
+                        let username = transaction.original_request.as_ref().and_then(|req| {
+                            crate::edge_state::EdgeState::username_from_request(req.as_ref())
+                        });
                         if let Some(ref uname) = username {
                             edge_state.decrement_user_concurrency(uname);
                         }
@@ -434,17 +443,17 @@ pub(crate) async fn handle_in_dialog_request(
                 );
                 datagrams.push(PendingDatagram::new(peer.to_string(), notify));
 
-                let outbound_uri = if let Some(contact) = edge_state.lookup_contact(&target_uri).await {
-                    SipUri::from_str(&contact.uri).ok()
-                } else {
-                    edge_state
-                        .call_manager
-                        .routes()
-                        .select(&target_uri)
-                        .ok()
-                        .map(|sr| sr.outbound_uri)
-                };
-
+                let outbound_uri =
+                    if let Some(contact) = edge_state.lookup_contact(&target_uri).await {
+                        SipUri::from_str(&contact.uri).ok()
+                    } else {
+                        edge_state
+                            .call_manager
+                            .routes()
+                            .select(&target_uri)
+                            .ok()
+                            .map(|sr| sr.outbound_uri)
+                    };
 
                 if outbound_uri.is_none() {
                     let notify_404 = outbound::build_notify_sipfrag_with_state(
@@ -471,7 +480,7 @@ pub(crate) async fn handle_in_dialog_request(
 
                 let target_relay_rtp = match edge_state
                     .media_relay
-                    .allocate_endpoint(&edge_config.media)
+                    .allocate_endpoint_for_call(&edge_config.media, call_id.as_str())
                 {
                     Ok(ep) => ep,
                     Err(error) => {
@@ -792,7 +801,7 @@ pub(crate) async fn handle_in_dialog_request(
         if let Some(external_cid) = edge_state.get_external_call_id(&internal_cid) {
             mutable_request.headers.replace(
                 HeaderName::new("call-id").unwrap(),
-                HeaderValue::new(&external_cid),
+                HeaderValue::new_owned(external_cid.clone()),
             );
             debug!(
                 internal_cid,

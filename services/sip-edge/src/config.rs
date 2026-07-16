@@ -2,16 +2,64 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+use crate::cluster::{ClusterConfig, ClusterConfigError, MediaClusterConfig};
 use crate::media;
 use crate::sip::AuthConfig;
 
 pub const DEFAULT_UDP_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+
+/// Webhook 异步投递配置。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WebhookConfig {
+    /// 是否启动 Webhook 事件流水线。
+    pub enabled: bool,
+    /// 接收呼叫事件的 HTTP 地址。
+    pub endpoint_url: String,
+    /// HMAC-SHA256 签名密钥。
+    pub signing_secret: String,
+    /// JetStream 名称。
+    pub stream: String,
+    /// NATS 事件主题。
+    pub subject: String,
+    /// JetStream Durable Consumer 名称。
+    pub consumer: String,
+    /// SIP 热路径到发布器的有界队列容量。
+    pub queue_capacity: usize,
+    /// 单次 HTTP 请求超时毫秒数。
+    pub request_timeout_ms: u64,
+    /// 单事件最大 HTTP 投递次数。
+    pub max_deliveries: u32,
+    /// 首次重试等待毫秒数，后续按指数增长。
+    pub retry_delay_ms: u64,
+    /// Redis 投递记录保留秒数。
+    pub delivery_record_ttl_secs: u64,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint_url: String::new(),
+            signing_secret: String::new(),
+            stream: "VOS_RS_WEBHOOKS".to_string(),
+            subject: "vos_rs.webhooks.calls".to_string(),
+            consumer: "vos_rs_webhook_delivery".to_string(),
+            queue_capacity: 4096,
+            request_timeout_ms: 3000,
+            max_deliveries: 5,
+            retry_delay_ms: 1000,
+            delivery_record_ttl_secs: 604_800,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EdgeConfig {
     pub sip_udp_bind: String,
     pub advertised_addr: String,
     pub default_gateway: String,
+    pub database_routes_enabled: bool,
+    pub gateway_health_checks_enabled: bool,
     pub manage_bind: String,
     pub stun_server: Option<String>,
     pub upnp_enabled: bool,
@@ -22,12 +70,15 @@ pub struct EdgeConfig {
     pub nats_cdr_stream: Option<String>,
     pub nats_cdr_subject: Option<String>,
     pub redis_url: Option<String>,
+    pub cluster: ClusterConfig,
+    pub media_cluster: MediaClusterConfig,
     pub media: media::MediaConfig,
     pub auth: AuthConfig,
     pub session_expires_gateway: u32,
     pub session_expires_caller: u32,
     pub sbc_allow_rules: Vec<String>,
     pub sbc_block_rules: Vec<String>,
+    pub sbc_rate_limit_enabled: bool,
     pub sbc_rate_limit_capacity: f64,
     pub sbc_rate_limit_fill_rate: f64,
     pub sbc_max_concurrency: u32,
@@ -46,11 +97,14 @@ pub struct EdgeConfig {
     pub internal_secret: String,
     pub bootstrap_auth_users: Option<String>,
     pub cdr_queue_capacity: usize,
+    pub cdr_persistence_enabled: bool,
     pub recording_workers: usize,
     pub recording_queue_capacity: usize,
     pub media_metrics_log: bool,
     pub dynamic_config_enabled: bool,
     pub balance_enforcement_enabled: bool,
+    pub billing_settlement_enabled: bool,
+    pub webhooks: WebhookConfig,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -94,6 +148,7 @@ struct NatsSection {
 
 #[derive(serde::Deserialize, Debug, Default)]
 struct SipEdgeConfigSection {
+    cluster: Option<ClusterConfig>,
     network: Option<NetworkSection>,
     routing: Option<RoutingSection>,
     nat_traversal: Option<NatTraversalSection>,
@@ -104,6 +159,45 @@ struct SipEdgeConfigSection {
     performance: Option<PerformanceSection>,
     dynamic_config: Option<DynamicConfigSection>,
     billing: Option<BillingSection>,
+    webhooks: Option<WebhookSection>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct WebhookSection {
+    enabled: Option<bool>,
+    endpoint_url: Option<String>,
+    signing_secret: Option<String>,
+    stream: Option<String>,
+    subject: Option<String>,
+    consumer: Option<String>,
+    queue_capacity: Option<usize>,
+    request_timeout_ms: Option<u64>,
+    max_deliveries: Option<u32>,
+    retry_delay_ms: Option<u64>,
+    delivery_record_ttl_secs: Option<u64>,
+}
+
+impl WebhookSection {
+    fn into_config(self) -> WebhookConfig {
+        let defaults = WebhookConfig::default();
+        WebhookConfig {
+            enabled: self.enabled.unwrap_or(defaults.enabled),
+            endpoint_url: self.endpoint_url.unwrap_or(defaults.endpoint_url),
+            signing_secret: self.signing_secret.unwrap_or(defaults.signing_secret),
+            stream: self.stream.unwrap_or(defaults.stream),
+            subject: self.subject.unwrap_or(defaults.subject),
+            consumer: self.consumer.unwrap_or(defaults.consumer),
+            queue_capacity: self.queue_capacity.unwrap_or(defaults.queue_capacity),
+            request_timeout_ms: self
+                .request_timeout_ms
+                .unwrap_or(defaults.request_timeout_ms),
+            max_deliveries: self.max_deliveries.unwrap_or(defaults.max_deliveries),
+            retry_delay_ms: self.retry_delay_ms.unwrap_or(defaults.retry_delay_ms),
+            delivery_record_ttl_secs: self
+                .delivery_record_ttl_secs
+                .unwrap_or(defaults.delivery_record_ttl_secs),
+        }
+    }
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -116,13 +210,14 @@ struct NetworkSection {
 
 #[derive(serde::Deserialize, Debug, Default)]
 struct MediaSection {
-    advertised_addr: Option<String>,
-    port_min: Option<u16>,
-    port_max: Option<u16>,
     symmetric_learning: Option<bool>,
     anti_spoofing: Option<bool>,
     source_relearn_secs: Option<u64>,
     metrics_log: Option<bool>,
+    allocation_strategy: Option<crate::cluster::MediaAllocationStrategy>,
+    health_check_interval_secs: Option<u64>,
+    unhealthy_threshold: Option<u32>,
+    nodes: Option<Vec<crate::cluster::MediaNodeConfig>>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -148,11 +243,16 @@ struct AuthSection {
 #[derive(serde::Deserialize, Debug, Default)]
 struct SecuritySection {
     internal_secret: Option<String>,
+    sbc_rate_limit_enabled: Option<bool>,
+    sbc_rate_limit_capacity: Option<f64>,
+    sbc_rate_limit_fill_rate: Option<f64>,
+    sbc_max_concurrency: Option<u32>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
 struct PerformanceSection {
     cdr_queue_capacity: Option<usize>,
+    cdr_persistence_enabled: Option<bool>,
     udp_workers: Option<usize>,
     udp_workers_auto: Option<bool>,
     udp_receive_buffer_bytes: Option<usize>,
@@ -167,11 +267,14 @@ struct DynamicConfigSection {
 #[derive(serde::Deserialize, Debug, Default)]
 struct BillingSection {
     balance_enforcement_enabled: Option<bool>,
+    settlement_enabled: Option<bool>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
 struct RoutingSection {
     default_gateway: Option<String>,
+    database_routes_enabled: Option<bool>,
+    gateway_health_checks_enabled: Option<bool>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -268,12 +371,23 @@ impl EdgeConfig {
         let performance_section = edge_section.performance.unwrap_or_default();
         let dynamic_config_section = edge_section.dynamic_config.unwrap_or_default();
         let billing_section = edge_section.billing.unwrap_or_default();
+        let webhook_config = edge_section.webhooks.unwrap_or_default().into_config();
+        let cluster = edge_section.cluster.unwrap_or_default();
+        let media_cluster = MediaClusterConfig {
+            allocation_strategy: media_section.allocation_strategy.unwrap_or_default(),
+            health_check_interval_secs: media_section.health_check_interval_secs.unwrap_or(3),
+            unhealthy_threshold: media_section.unhealthy_threshold.unwrap_or(3),
+            nodes: media_section.nodes.unwrap_or_default(),
+        };
+        // RTP 地址和端口只属于节点。这里的内部 MediaConfig 仅承载全局媒体行为参数，
+        // 实际分配时始终由选中的 nodes[] 配置覆盖地址与端口范围。
+        let bootstrap_media_node = media_cluster.nodes.first();
         let mut media = media::MediaConfig::new_with_symmetric_learning(
-            media_section
-                .advertised_addr
+            bootstrap_media_node
+                .map(|node| node.advertised_addr.clone())
                 .unwrap_or_else(|| "127.0.0.1".to_string()),
-            media_section.port_min.unwrap_or(40_000),
-            media_section.port_max.unwrap_or(40_100),
+            bootstrap_media_node.map_or(40_000, |node| node.port_min),
+            bootstrap_media_node.map_or(40_100, |node| node.port_max),
             media_section.symmetric_learning.unwrap_or(true),
         );
         media.anti_spoofing = media_section.anti_spoofing.unwrap_or(true);
@@ -312,6 +426,10 @@ impl EdgeConfig {
                 .advertised_addr
                 .unwrap_or_else(|| "127.0.0.1:5060".to_string()),
             default_gateway: route_section.default_gateway.unwrap_or_default(),
+            database_routes_enabled: route_section.database_routes_enabled.unwrap_or(true),
+            gateway_health_checks_enabled: route_section
+                .gateway_health_checks_enabled
+                .unwrap_or(true),
             manage_bind: net_section
                 .manage_bind
                 .unwrap_or_else(|| "127.0.0.1:8082".to_string()),
@@ -332,15 +450,18 @@ impl EdgeConfig {
                     .unwrap_or_else(|| "vos_rs.cdr".to_string()),
             ),
             redis_url,
+            cluster,
+            media_cluster,
             media,
             auth,
             session_expires_gateway: 600,
             session_expires_caller: 1800,
             sbc_allow_rules: Vec::new(),
             sbc_block_rules: Vec::new(),
-            sbc_rate_limit_capacity: 2000.0,
-            sbc_rate_limit_fill_rate: 500.0,
-            sbc_max_concurrency: 2000,
+            sbc_rate_limit_enabled: security_section.sbc_rate_limit_enabled.unwrap_or(true),
+            sbc_rate_limit_capacity: security_section.sbc_rate_limit_capacity.unwrap_or(2000.0),
+            sbc_rate_limit_fill_rate: security_section.sbc_rate_limit_fill_rate.unwrap_or(500.0),
+            sbc_max_concurrency: security_section.sbc_max_concurrency.unwrap_or(2000),
             tls_cert_path: None,
             tls_key_path: None,
             tls_bind_addr: None,
@@ -367,6 +488,7 @@ impl EdgeConfig {
                 .cdr_queue_capacity
                 .unwrap_or(4096)
                 .max(1),
+            cdr_persistence_enabled: performance_section.cdr_persistence_enabled.unwrap_or(true),
             recording_workers: recording_section.workers.unwrap_or(4).max(1),
             recording_queue_capacity: recording_section.queue_capacity.unwrap_or(10_000).max(1),
             media_metrics_log: media_section.metrics_log.unwrap_or(false),
@@ -374,6 +496,8 @@ impl EdgeConfig {
             balance_enforcement_enabled: billing_section
                 .balance_enforcement_enabled
                 .unwrap_or(true),
+            billing_settlement_enabled: billing_section.settlement_enabled.unwrap_or(true),
+            webhooks: webhook_config,
         }
     }
 
@@ -414,6 +538,11 @@ impl EdgeConfig {
         if let Some(val) = get_val!("session_expires_caller").await {
             if let Ok(v) = val.parse() {
                 self.session_expires_caller = v;
+            }
+        }
+        if let Some(val) = get_val!("sbc_rate_limit_enabled").await {
+            if let Ok(v) = val.parse() {
+                self.sbc_rate_limit_enabled = v;
             }
         }
         if let Some(val) = get_val!("sbc_rate_limit_capacity").await {
@@ -475,6 +604,9 @@ impl EdgeConfig {
                 self.cdr_queue_capacity = v.max(1);
             }
         }
+        if let Some(val) = get_val!("cdr_persistence_enabled").await {
+            self.cdr_persistence_enabled = val == "true" || val == "1";
+        }
         if let Some(val) = get_val!("recording_workers").await {
             if let Ok(v) = val.parse::<usize>() {
                 self.recording_workers = v.max(1);
@@ -488,24 +620,31 @@ impl EdgeConfig {
         if let Some(val) = get_val!("media_metrics_log").await {
             self.media_metrics_log = val == "true" || val == "1";
         }
+        if let Some(val) = get_val!("media_cluster_json").await {
+            match serde_json::from_str::<MediaClusterConfig>(&val) {
+                Ok(config)
+                    if self
+                        .cluster
+                        .validate(self.redis_url.as_deref(), self.nats_url.as_deref(), &config)
+                        .is_ok() =>
+                {
+                    self.media_cluster = config;
+                }
+                Ok(_) => tracing::warn!("忽略未通过校验的动态媒体集群配置"),
+                Err(error) => tracing::warn!(%error, "动态媒体集群配置 JSON 无效"),
+            }
+        }
         if let Some(val) = get_val!("balance_enforcement_enabled").await {
             self.balance_enforcement_enabled = val == "true" || val == "1";
         }
+        if let Some(val) = get_val!("billing_settlement_enabled").await {
+            self.billing_settlement_enabled = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("gateway_health_checks_enabled").await {
+            self.gateway_health_checks_enabled = val == "true" || val == "1";
+        }
 
-        // 覆盖 Media Config 中的相关属性
-        if let Some(val) = get_val!("rtp_advertised_addr").await {
-            self.media.advertised_addr = val;
-        }
-        if let Some(val) = get_val!("rtp_port_min").await {
-            if let Ok(v) = val.parse() {
-                self.media.port_min = v;
-            }
-        }
-        if let Some(val) = get_val!("rtp_port_max").await {
-            if let Ok(v) = val.parse() {
-                self.media.port_max = v;
-            }
-        }
+        // 地址和端口由 media_cluster_json 的 nodes[] 管理；这里只覆盖全局媒体行为。
         if let Some(val) = get_val!("rtp_symmetric_learning").await {
             self.media.symmetric_rtp_learning = val == "true" || val == "1";
         }
@@ -555,6 +694,15 @@ impl EdgeConfig {
             self.auth.secret_key = val;
         }
     }
+
+    /// 在启动网络监听前校验集群拓扑。
+    pub fn validate_cluster(&self) -> Result<(), ClusterConfigError> {
+        self.cluster.validate(
+            self.redis_url.as_deref(),
+            self.nats_url.as_deref(),
+            &self.media_cluster,
+        )
+    }
 }
 
 fn parse_auth_users(raw: &str) -> std::collections::HashMap<String, String> {
@@ -583,10 +731,25 @@ async fn get_config_val(
 
 impl Default for EdgeConfig {
     fn default() -> Self {
+        let media_cluster = MediaClusterConfig {
+            nodes: vec![crate::cluster::MediaNodeConfig {
+                id: "local-media".to_string(),
+                node_type: crate::cluster::MediaNodeType::Local,
+                control_url: None,
+                advertised_addr: "127.0.0.1".to_string(),
+                port_min: 40_000,
+                port_max: 40_100,
+                weight: 1,
+                control_token: String::new(),
+            }],
+            ..MediaClusterConfig::default()
+        };
         Self {
             sip_udp_bind: "0.0.0.0:5060".to_string(),
             advertised_addr: "127.0.0.1:5060".to_string(),
             default_gateway: String::new(),
+            database_routes_enabled: true,
+            gateway_health_checks_enabled: true,
             manage_bind: "127.0.0.1:8082".to_string(),
             stun_server: None,
             upnp_enabled: false,
@@ -597,12 +760,15 @@ impl Default for EdgeConfig {
             nats_cdr_stream: None,
             nats_cdr_subject: None,
             redis_url: None,
+            cluster: ClusterConfig::default(),
+            media_cluster,
             media: media::MediaConfig::new_with_symmetric_learning("127.0.0.1", 40000, 40100, true),
             auth: AuthConfig::disabled(),
             session_expires_gateway: 600,
             session_expires_caller: 1800,
             sbc_allow_rules: Vec::new(),
             sbc_block_rules: Vec::new(),
+            sbc_rate_limit_enabled: true,
             sbc_rate_limit_capacity: 2000.0,
             sbc_rate_limit_fill_rate: 500.0,
             sbc_max_concurrency: 2000,
@@ -621,11 +787,14 @@ impl Default for EdgeConfig {
             internal_secret: "internal-dev-secret".to_string(),
             bootstrap_auth_users: None,
             cdr_queue_capacity: 4096,
+            cdr_persistence_enabled: true,
             recording_workers: 4,
             recording_queue_capacity: 10_000,
             media_metrics_log: false,
             dynamic_config_enabled: true,
             balance_enforcement_enabled: true,
+            billing_settlement_enabled: true,
+            webhooks: WebhookConfig::default(),
         }
     }
 }

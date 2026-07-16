@@ -31,7 +31,7 @@ fn parses_invite_request() {
         request.headers.get("call-id").map(|value| value.as_str()),
         Some("call-1@example.com")
     );
-    assert_eq!(request.body, b"v=0\r\ns=-\r\n");
+    assert_eq!(request.body.as_ref(), b"v=0\r\ns=-\r\n");
 }
 
 #[test]

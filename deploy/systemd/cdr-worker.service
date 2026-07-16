@@ -7,7 +7,7 @@ Wants=postgresql.service sip-edge.service
 Type=simple
 User=vos-rs
 Group=vos-rs
-EnvironmentFile=/etc/vos-rs/cdr-worker.env
+Environment=VOS_RS_CONFIG_FILE=/etc/vos-rs/config.yaml
 ExecStart=/opt/vos-rs/bin/cdr-worker
 Restart=on-failure
 RestartSec=5

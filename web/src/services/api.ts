@@ -22,6 +22,51 @@ import type {
   AuditLog,
 } from '@/types';
 
+export interface MediaClusterNode {
+  id: string;
+  type: 'local' | 'remote';
+  control_url?: string;
+  advertised_addr: string;
+  port_min: number;
+  port_max: number;
+  weight: number;
+  control_token?: string;
+  control_token_configured: boolean;
+}
+
+export interface MediaClusterConfig {
+  allocation_strategy: 'weighted_round_robin' | 'least_sessions' | 'call_id_hash';
+  health_check_interval_secs: number;
+  unhealthy_threshold: number;
+  nodes: MediaClusterNode[];
+}
+
+export interface SipClusterNodeStatus {
+  node_id: string;
+  advertised_addr: string;
+  management_url: string;
+  router_mode: 'direct' | 'external' | 'native';
+  status: 'active' | 'draining';
+  active_calls: number;
+  version: string;
+  started_at: number;
+  updated_at: number;
+  ttl_secs: number;
+}
+
+export interface SipClusterStatus {
+  node_key_prefix: string;
+  online_nodes: number;
+  active_nodes: number;
+  draining_nodes: number;
+  nodes: SipClusterNodeStatus[];
+}
+
+export interface SipClusterNodeActionResult {
+  status: 'active' | 'draining';
+  active_calls: number;
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
@@ -385,6 +430,24 @@ export const apiService = {
   },
   async updateSystemConfigs(configs: Record<string, string>): Promise<void> {
     await api.post('/system/configs', configs);
+  },
+  async getMediaCluster(): Promise<MediaClusterConfig> {
+    const response = await api.get<MediaClusterConfig>('/system/media-cluster');
+    return response.data;
+  },
+  async updateMediaCluster(config: MediaClusterConfig): Promise<MediaClusterConfig> {
+    const response = await api.put<MediaClusterConfig>('/system/media-cluster', config);
+    return response.data;
+  },
+  async getSipClusterStatus(): Promise<SipClusterStatus> {
+    const response = await api.get<SipClusterStatus>('/system/sip-cluster/status');
+    return response.data;
+  },
+  async controlSipClusterNode(nodeId: string, action: 'drain' | 'resume'): Promise<SipClusterNodeActionResult> {
+    const response = await api.post<SipClusterNodeActionResult>(
+      `/system/sip-cluster/nodes/${encodeURIComponent(nodeId)}/${action}`,
+    );
+    return response.data;
   },
 };
 

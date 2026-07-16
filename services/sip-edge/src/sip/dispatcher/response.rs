@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use sdp_core::RtpEndpoint;
@@ -10,7 +11,6 @@ use crate::config::EdgeConfig;
 use crate::edge_state::{EdgeState, PendingDatagram};
 use crate::media;
 use crate::sip::{outbound, response, transaction, ClientTransactionKey, RequestTransactionKey};
-use crate::timers;
 
 pub(crate) async fn dispatch_response(
     mut sip_response: SipResponse,
@@ -82,7 +82,7 @@ pub(crate) async fn dispatch_response(
             if let Ok(name) = HeaderName::new("call-id") {
                 sip_response
                     .headers
-                    .replace(name, HeaderValue::new(&internal_cid));
+                    .replace(name, HeaderValue::new_owned(internal_cid.clone()));
             }
             Some(internal_cid)
         } else {
@@ -97,6 +97,45 @@ pub(crate) async fn dispatch_response(
         .get("cseq")
         .map(|cseq| cseq.as_str().contains("INVITE"))
         .unwrap_or(false);
+    let response_cseq = sip_response
+        .headers
+        .get("cseq")
+        .and_then(|value| crate::sip::dialog::cseq_number(value.as_str()));
+
+    // UDP worker tasks may finish out of order under load. Keep response ordering local to
+    // each dialog so a delayed 1xx can never be emitted after that INVITE's final response.
+    let invite_response_order = if is_invite {
+        call_id.as_deref().and_then(|cid| {
+            edge_state
+                .inbound_transactions
+                .get(cid)
+                .map(|transaction| Arc::clone(&transaction.invite_response_order))
+        })
+    } else {
+        None
+    };
+    let mut invite_response_guard = match invite_response_order.as_ref() {
+        Some(order) => Some(order.lock().await),
+        None => None,
+    };
+    if let Some(order) = invite_response_guard.as_mut() {
+        if order.cseq != response_cseq {
+            order.cseq = response_cseq;
+            order.final_response_seen = false;
+            order.final_response_send_started = false;
+        }
+        if sip_response.status_code < 200 && order.final_response_seen {
+            debug!(
+                call_id = ?call_id,
+                status = sip_response.status_code,
+                "dropping late provisional INVITE response after final response"
+            );
+            return Vec::new();
+        }
+        if sip_response.status_code >= 200 {
+            order.final_response_seen = true;
+        }
+    }
 
     let mut cancel_datagrams = Vec::new();
 
@@ -140,13 +179,8 @@ pub(crate) async fn dispatch_response(
 
                 for (fork_cid, fork_gw) in forks_to_cancel {
                     if !fork_gw.is_empty() {
-                        let mut health = edge_state
-                            .gateway_health
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        health.decrement_active(&fork_gw);
-                        let status = health.get_gateway_status(&fork_gw);
-                        drop(health);
+                        edge_state.gateway_health.decrement_active(&fork_gw);
+                        let status = edge_state.gateway_health.get_gateway_status(&fork_gw);
                         crate::timers::persist_gateway_health(edge_state, fork_gw.clone(), status);
                     }
 
@@ -160,8 +194,8 @@ pub(crate) async fn dispatch_response(
                         if let Some(target) = gateway_target {
                             let outbound_uri = sip_core::SipUri {
                                 secure: false,
-                                user: Some(user.clone()),
-                                host: target.host.clone(),
+                                user: Some(user.clone().into()),
+                                host: target.host.clone().into(),
                                 port: target.port,
                                 params: Vec::new(),
                             };
@@ -203,13 +237,8 @@ pub(crate) async fn dispatch_response(
                 }
                 if let Some(gw_id) = fork_gw_to_decrement {
                     if !gw_id.is_empty() {
-                        let mut health = edge_state
-                            .gateway_health
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        health.decrement_active(&gw_id);
-                        let status = health.get_gateway_status(&gw_id);
-                        drop(health);
+                        edge_state.gateway_health.decrement_active(&gw_id);
+                        let status = edge_state.gateway_health.get_gateway_status(&gw_id);
                         crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
                     }
                 }
@@ -585,17 +614,14 @@ pub(crate) async fn dispatch_response(
     if is_invite && !is_reinvite_response {
         let gateway_id = outbound_response_outcome.gateway_id.clone();
         if !gateway_id.is_empty() {
-            let mut health = edge_state
-                .gateway_health
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
             if sip_response.status_code >= 200 && sip_response.status_code <= 299 {
-                health.record_success(&gateway_id);
+                edge_state.gateway_health.record_success(&gateway_id);
             } else if sip_response.status_code >= 400 {
-                health.record_failure(&gateway_id);
+                edge_state.gateway_health.record_failure(&gateway_id);
             }
 
             if let (
+                true,
                 Some(db),
                 Some((
                     open,
@@ -606,8 +632,9 @@ pub(crate) async fn dispatch_response(
                     active_calls,
                 )),
             ) = (
+                edge_state.gateway_health_persistence_enabled,
                 edge_state.db_store.clone(),
-                health.get_gateway_status(&gateway_id),
+                edge_state.gateway_health.get_gateway_status(&gateway_id),
             ) {
                 let gw = gateway_id.clone();
                 let last_failure_at = last_failure_at.map(|st| {
@@ -649,18 +676,10 @@ pub(crate) async fn dispatch_response(
 
         let old_gw = &outbound_response_outcome.gateway_id;
         if !old_gw.is_empty() {
-            edge_state
-                .gateway_health
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .decrement_active(old_gw);
+            edge_state.gateway_health.decrement_active(old_gw);
         }
         let new_gw = next_uri.host.clone();
-        edge_state
-            .gateway_health
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .increment_active(&new_gw);
+        edge_state.gateway_health.increment_active(&new_gw);
 
         if let Some(transaction) = transaction.as_ref() {
             edge_state.clear_media_targets(transaction);
@@ -676,6 +695,7 @@ pub(crate) async fn dispatch_response(
                 &edge_state.media_relay,
                 &edge_config.media,
                 "failover INVITE offer",
+                call_id.as_deref().unwrap_or(""),
             ) {
                 Ok(rewritten_sdp) => rewritten_sdp,
                 Err(error) => {
@@ -752,8 +772,6 @@ pub(crate) async fn dispatch_response(
                 if !outbound_response_outcome.gateway_id.is_empty() {
                     edge_state
                         .gateway_health
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
                         .decrement_active(&outbound_response_outcome.gateway_id);
                 }
                 edge_state.inbound_transactions.remove(cid);
@@ -805,13 +823,30 @@ pub(crate) async fn dispatch_response(
     let rewritten_sdp_bytes = if mid_dialog_rewritten {
         rewritten_sdp_body
     } else {
-        match crate::sip::handlers::prepare_rewritten_sdp(
-            &sip_response.headers,
-            &sip_response.body,
-            &edge_state.media_relay,
-            &edge_config.media,
-            "outbound response answer",
-        ) {
+        let caller_is_webrtc = transaction
+            .as_ref()
+            .and_then(|value| value.original_request.as_ref())
+            .is_some_and(|request| media::is_webrtc_sdp(&request.body));
+        let prepared =
+            if caller_is_webrtc && media::is_sdp_body(&sip_response.headers, &sip_response.body) {
+                crate::sip::handlers::prepare_webrtc_answer(
+                    &sip_response.body,
+                    &edge_state.media_relay,
+                    &edge_config.media,
+                    call_id.as_deref().unwrap_or(""),
+                )
+                .map(Some)
+            } else {
+                crate::sip::handlers::prepare_rewritten_sdp(
+                    &sip_response.headers,
+                    &sip_response.body,
+                    &edge_state.media_relay,
+                    &edge_config.media,
+                    "outbound response answer",
+                    call_id.as_deref().unwrap_or(""),
+                )
+            };
+        match prepared {
             Ok(Some(sdp)) => {
                 if let (Some(call_id), Some(gateway_rtp)) =
                     (call_id.as_deref(), &sdp.original_endpoint)
@@ -955,7 +990,7 @@ pub(crate) async fn dispatch_response(
                         &t.inbound_route_set,
                         rewritten_sdp_bytes
                             .as_deref()
-                            .unwrap_or(sip_response.body.as_slice()),
+                            .unwrap_or(sip_response.body.as_ref()),
                         call_id.as_deref(),
                     );
                 let raw_str = String::from_utf8_lossy(&rewritten_response);
@@ -980,7 +1015,16 @@ pub(crate) async fn dispatch_response(
                     }
                 }
 
-                datagrams.push(PendingDatagram::new(t.peer.clone(), rewritten_response));
+                let caller_response = PendingDatagram::new(t.peer.clone(), rewritten_response);
+                let caller_response = match invite_response_order.as_ref() {
+                    Some(order) => caller_response.with_invite_response_order(
+                        Arc::clone(order),
+                        response_cseq,
+                        sip_response.status_code,
+                    ),
+                    None => caller_response,
+                };
+                datagrams.push(caller_response);
             }
             return datagrams;
         }
@@ -988,75 +1032,74 @@ pub(crate) async fn dispatch_response(
 
     match transaction {
         Some(transaction) => {
+            let gateway_success_ack = if is_invite
+                && (200..300).contains(&sip_response.status_code)
+                && !raw_external_call_id.is_empty()
+            {
+                let request_uri = transaction
+                    .callee_contact
+                    .as_ref()
+                    .unwrap_or(&transaction.outbound_uri);
+                Some(PendingDatagram::new(
+                    peer.to_string(),
+                    outbound::build_success_response_ack(
+                        &sip_response,
+                        request_uri,
+                        &edge_config.advertised_addr,
+                        &raw_external_call_id,
+                        &transaction.outbound_route_set,
+                    ),
+                ))
+            } else {
+                None
+            };
             let forwarded_bytes = response::forward_response_to_inbound_with_body_and_call_id(
                 &sip_response,
                 &transaction.vias,
                 &transaction.inbound_route_set,
                 rewritten_sdp_bytes
                     .as_deref()
-                    .unwrap_or(sip_response.body.as_slice()),
+                    .unwrap_or(sip_response.body.as_ref()),
                 call_id.as_deref(),
             );
 
-            if sip_response.status_code >= 100 && sip_response.status_code < 200 {
+            let mut delivered_by_server_transaction = false;
+            if is_invite {
                 if let (Some(ref orig_req), Ok(peer_addr)) = (
                     &transaction.original_request,
                     transaction.peer.parse::<SocketAddr>(),
                 ) {
                     if let Some(key) = RequestTransactionKey::from_request(orig_req, peer_addr) {
                         if let Some(tx) = edge_state.get_server_transaction(&key) {
-                            let _ = tx
-                                .send(transaction::ServerTransactionEvent::UpdateLastProvisional(
+                            let event = if sip_response.status_code < 200 {
+                                transaction::ServerTransactionEvent::UpdateLastProvisional(
                                     forwarded_bytes.clone(),
-                                ))
-                                .await;
+                                )
+                            } else {
+                                transaction::ServerTransactionEvent::Response(
+                                    forwarded_bytes.clone(),
+                                )
+                            };
+                            delivered_by_server_transaction =
+                                sip_response.status_code >= 200 && tx.send(event).await.is_ok();
                         }
                     }
                 }
             }
 
-            // 200 OK 接通时启动余额守护定时器（硬拆线保护）
-            if edge_config.balance_enforcement_enabled
-                && is_invite
-                && !is_reinvite_response
-                && (200..300).contains(&sip_response.status_code)
-            {
-                if let Some(cid) = call_id.as_deref() {
-                    let caller_user = transaction
-                        .original_request
-                        .as_ref()
-                        .and_then(|r| crate::edge_state::EdgeState::username_from_request(r))
-                        .unwrap_or_default();
-                    let callee_num = transaction
-                        .original_request
-                        .as_ref()
-                        .map(|r| r.uri.user.as_deref().unwrap_or("").to_string())
-                        .unwrap_or_default();
-                    if !caller_user.is_empty() && !callee_num.is_empty() {
-                        let sock_opt = edge_state.socket.get().cloned();
-                        let db_opt = edge_state.db_store.clone();
-                        if let (Some(sock), Some(db)) = (sock_opt, db_opt) {
-                            timers::spawn_billing_watchdog_simple(
-                                cid.to_string(),
-                                caller_user,
-                                callee_num,
-                                timers::BillingWatchdogContext {
-                                    db: std::sync::Arc::new(db),
-                                    socket: sock,
-                                    advertised_addr: edge_config.advertised_addr.clone(),
-                                    transactions: edge_state.inbound_transactions.clone(),
-                                    call_manager: std::sync::Arc::clone(&edge_state.call_manager),
-                                },
-                            );
-                        }
-                    }
-                }
+            let mut datagrams = gateway_success_ack.into_iter().collect::<Vec<_>>();
+            if !delivered_by_server_transaction {
+                let caller_response = PendingDatagram::new(transaction.peer, forwarded_bytes);
+                let caller_response = match invite_response_order.as_ref() {
+                    Some(order) => caller_response.with_invite_response_order(
+                        Arc::clone(order),
+                        response_cseq,
+                        sip_response.status_code,
+                    ),
+                    None => caller_response,
+                };
+                datagrams.push(caller_response);
             }
-
-
-
-
-            let mut datagrams = vec![PendingDatagram::new(transaction.peer, forwarded_bytes)];
             datagrams.extend(cancel_datagrams);
             datagrams
         }

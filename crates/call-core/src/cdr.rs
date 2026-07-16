@@ -78,7 +78,7 @@ impl CallCdr {
         Some(Self {
             call_id: call.id.clone(),
             caller: call.caller.clone(),
-            callee: call.inbound.remote_uri.user.clone(),
+            callee: call.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
             started_at: call.started_at,
             answered_at: call.answered_at,
             ended_at,

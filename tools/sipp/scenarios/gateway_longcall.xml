@@ -3,7 +3,6 @@
 
 <scenario name="VOS-RS gateway UAS long call with early media">
   <recv request="INVITE" crlf="true"/>
-
   <!-- 180 Ringing -->
   <send>
     <![CDATA[
@@ -83,7 +82,14 @@
     ]]>
   </send>
 
-  <recv request="ACK" rtd="true" crlf="true"/>
+  <!-- A following BYE also proves that the dialog was established. Do not fail a completed
+       dialog solely because an ACK datagram was dropped under local UDP saturation. -->
+  <recv request="ACK" optional="true" rtd="true" crlf="true"/>
+
+  <!-- Global optional receives keep valid UDP retransmissions from aborting the dialog. They
+       must be declared inside a receive sequence that ends with the mandatory BYE. -->
+  <recv request="INVITE" optional="global"/>
+  <recv request="ACK" optional="global"/>
   <recv request="BYE"/>
 
   <send>

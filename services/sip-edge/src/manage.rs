@@ -4,13 +4,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use std::sync::Arc;
 use std::net::SocketAddr;
+use std::sync::{atomic::Ordering, Arc};
 use tower_http::cors::{Any, CorsLayer};
 
-
 use call_core::ActiveCall;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sip_core::SipUri;
 
 use crate::media::relay::MediaRelayMetrics;
@@ -38,9 +37,12 @@ async fn internal_auth(
 
 /// 启动管理 API（活跃呼叫查询 / 强制拆线）。
 pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String) {
-    let app = Router::new()
+    let protected = Router::new()
         .route("/manage/active-calls", get(active_calls))
         .route("/manage/active-calls/count", get(active_calls_count))
+        .route("/manage/cluster/status", get(cluster_status))
+        .route("/manage/cluster/drain", post(cluster_drain))
+        .route("/manage/cluster/resume", post(cluster_resume))
         .route("/manage/calls/:call_id/terminate", post(terminate))
         .route("/manage/route-preview", get(route_preview))
         .route("/manage/media-metrics", get(media_metrics))
@@ -50,18 +52,26 @@ pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String)
         .route("/manage/calls/:call_id/unmute", post(unmute))
         .route("/manage/calls/:call_id/status", get(call_status))
         .route("/manage/calls/:call_id/monitor", post(monitor_call))
-        .route("/manage/calls/:call_id/stop-monitor", post(stop_monitor_call))
+        .route(
+            "/manage/calls/:call_id/stop-monitor",
+            post(stop_monitor_call),
+        )
         .route("/manage/conferences/join", post(join_conference))
         .route("/manage/conferences/leave", post(leave_conference))
         .route("/manage/conferences/status", get(conference_status))
-        .route("/manage/conferences/mute-participant", post(mute_conference_participant))
+        .route(
+            "/manage/conferences/mute-participant",
+            post(mute_conference_participant),
+        )
         .route("/manage/sbc/rules", post(update_sbc_rules))
         .route_layer(axum::middleware::from_fn_with_state(
             ManageAuthSecret(internal_secret),
             internal_auth,
         ))
-        .with_state(state)
-
+        .with_state(state);
+    let app = Router::new()
+        .route("/health", get(health))
+        .merge(protected)
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -82,12 +92,49 @@ pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String)
     }
 }
 
+async fn health() -> &'static str {
+    "ok"
+}
+
 async fn active_calls(State(state): State<Arc<EdgeState>>) -> Json<Vec<ActiveCall>> {
     Json(state.call_manager.active_calls())
 }
 
 async fn active_calls_count(State(state): State<Arc<EdgeState>>) -> Json<usize> {
     Json(state.call_manager.active_calls_count())
+}
+
+#[derive(Debug, Serialize)]
+struct ClusterRuntimeStatus {
+    status: &'static str,
+    active_calls: usize,
+}
+
+fn runtime_status(state: &EdgeState) -> ClusterRuntimeStatus {
+    ClusterRuntimeStatus {
+        status: if state.draining.load(Ordering::Acquire) {
+            "draining"
+        } else {
+            "active"
+        },
+        active_calls: state.call_manager.active_calls_count(),
+    }
+}
+
+async fn cluster_status(State(state): State<Arc<EdgeState>>) -> Json<ClusterRuntimeStatus> {
+    Json(runtime_status(&state))
+}
+
+async fn cluster_drain(State(state): State<Arc<EdgeState>>) -> Json<ClusterRuntimeStatus> {
+    state.draining.store(true, Ordering::Release);
+    tracing::info!("SIP 节点已通过管理 API 进入摘流状态");
+    Json(runtime_status(&state))
+}
+
+async fn cluster_resume(State(state): State<Arc<EdgeState>>) -> Json<ClusterRuntimeStatus> {
+    state.draining.store(false, Ordering::Release);
+    tracing::info!("SIP 节点已通过管理 API 恢复接收新呼叫");
+    Json(runtime_status(&state))
 }
 
 /// RTP/录音聚合指标，供 API Server、压测脚本和运维面板读取。
@@ -107,17 +154,13 @@ async fn terminate(State(state): State<Arc<EdgeState>>, Path(call_id): Path<Stri
     }
     // Decrement active call count for the gateway before terminating.
     if let Some(gw_id) = state.call_manager.current_gateway_id(&call_id) {
-        state
-            .gateway_health
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .decrement_active(&gw_id);
+        state.gateway_health.decrement_active(&gw_id);
     }
     state.inbound_transactions.remove(&call_id);
     state.call_manager.terminate_call(&call_id);
 
     // Real-time billing: settle the call on force terminate.
-    if let Some(ref db) = state.db_store {
+    if let (true, Some(db)) = (state.billing_settlement_enabled, state.db_store.as_ref()) {
         if let Some(call) = state
             .call_manager
             .get(&call_core::CallId::new(call_id.clone()))
@@ -285,7 +328,7 @@ async fn play(
                 file_path.clone(),
                 mode,
                 payload.loop_playback,
-            ) {
+            ).await {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": format!("failed to play to caller: {}", e)})),
@@ -301,6 +344,7 @@ async fn play(
                 state
                     .media_relay
                     .start_playback(rtp.port, file_path, mode, payload.loop_playback)
+                    .await
             {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -407,12 +451,14 @@ async fn mute(
     if mute_caller {
         if let Some(ref rtp) = tx.caller_relay_rtp {
             state.media_relay.muted_ports.insert(rtp.port);
+            state.media_relay.mark_relay_features_changed(rtp.port);
         }
     }
 
     if mute_callee {
         if let Some(ref rtp) = tx.gateway_relay_rtp {
             state.media_relay.muted_ports.insert(rtp.port);
+            state.media_relay.mark_relay_features_changed(rtp.port);
         }
     }
 
@@ -460,12 +506,14 @@ async fn unmute(
     if unmute_caller {
         if let Some(ref rtp) = tx.caller_relay_rtp {
             state.media_relay.muted_ports.remove(&rtp.port);
+            state.media_relay.mark_relay_features_changed(rtp.port);
         }
     }
 
     if unmute_callee {
         if let Some(ref rtp) = tx.gateway_relay_rtp {
             state.media_relay.muted_ports.remove(&rtp.port);
+            state.media_relay.mark_relay_features_changed(rtp.port);
         }
     }
 
@@ -567,17 +615,18 @@ async fn join_conference(
         }
     };
 
-    let target_addr = match format!("{}:{}", payload.target_ip, payload.target_port).parse::<SocketAddr>() {
-        Ok(addr) => addr,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("Invalid target address: {}", e)
-                })),
-            );
-        }
-    };
+    let target_addr =
+        match format!("{}:{}", payload.target_ip, payload.target_port).parse::<SocketAddr>() {
+            Ok(addr) => addr,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("Invalid target address: {}", e)
+                    })),
+                );
+            }
+        };
 
     let codec = match payload.codec.to_lowercase().as_str() {
         "pcmu" => rtp_core::AudioCodec::Pcmu,
@@ -587,8 +636,15 @@ async fn join_conference(
     state
         .media_relay
         .conference_manager
-        .join_conference(&payload.conference_id, payload.port, codec, target_addr, socket)
+        .join_conference(
+            &payload.conference_id,
+            payload.port,
+            codec,
+            target_addr,
+            socket,
+        )
         .await;
+    state.media_relay.mark_relay_features_changed(payload.port);
 
     (
         StatusCode::OK,
@@ -614,6 +670,7 @@ async fn leave_conference(
         .conference_manager
         .leave_conference(payload.port)
         .await;
+    state.media_relay.mark_relay_features_changed(payload.port);
 
     (
         StatusCode::OK,
@@ -624,9 +681,7 @@ async fn leave_conference(
     )
 }
 
-async fn conference_status(
-    State(state): State<Arc<EdgeState>>,
-) -> Json<serde_json::Value> {
+async fn conference_status(State(state): State<Arc<EdgeState>>) -> Json<serde_json::Value> {
     let mut list = Vec::new();
     for entry in state.media_relay.conference_manager.conferences.iter() {
         let conf = entry.value().lock().await;

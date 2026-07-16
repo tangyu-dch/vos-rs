@@ -52,6 +52,11 @@ describe('apiService', () => {
     expect(typeof apiService.terminateCall).toBe('function');
   });
 
+  it('has SIP cluster status and node control methods', () => {
+    expect(typeof apiService.getSipClusterStatus).toBe('function');
+    expect(typeof apiService.controlSipClusterNode).toBe('function');
+  });
+
   it('formats backend errors and keeps request id', () => {
     const error = formatApiError({
       response: {

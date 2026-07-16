@@ -22,15 +22,42 @@
 //! 呼叫结束（BYE/CANCEL/超时/failover）时调用 `decrement_active`。
 
 use crate::{
-    Call, CallCdr, CallError, CallId, CallQualityMetrics, CallResult, CallState,
-    GatewayHealthTracker, RouteTable,
+    Call, CallCdr, CallError, CallEvent, CallId, CallQualityMetrics, CallResult, CallState,
+    GatewayHealthTracker, RouteTable, WebhookEvent, WEBHOOK_SCHEMA_VERSION,
 };
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use sip_core::{SipRequest, SipResponse};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, RwLock,
+    Arc,
 };
+
+/// Webhook 事件输出通道抽象。
+///
+/// 实现必须立即返回，禁止在呼叫热路径执行网络或持久化操作。
+pub trait CallEventSink: Send + Sync + std::fmt::Debug {
+    /// 尝试投递事件到有界异步队列。
+    fn try_send_event(&self, event: WebhookEvent) -> Result<(), CallEventSendError>;
+}
+
+/// Webhook 事件进入异步队列时的失败原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallEventSendError {
+    /// 队列已满。
+    QueueFull,
+    /// 消费者已经退出。
+    ConsumerClosed,
+}
+
+impl CallEventSink for tokio::sync::mpsc::Sender<WebhookEvent> {
+    fn try_send_event(&self, event: WebhookEvent) -> Result<(), CallEventSendError> {
+        self.try_send(event).map_err(|error| match error {
+            tokio::sync::mpsc::error::TrySendError::Full(_) => CallEventSendError::QueueFull,
+            tokio::sync::mpsc::error::TrySendError::Closed(_) => CallEventSendError::ConsumerClosed,
+        })
+    }
+}
 
 /// CDR 输出通道抽象。
 ///
@@ -130,19 +157,64 @@ pub struct CallManager {
     /// 活跃呼叫表（Call-ID → Call）
     calls: DashMap<CallId, Call>,
     /// 路由表（支持热更新）
-    routes: RwLock<RouteTable>,
+    routes: ArcSwap<RouteTable>,
     /// CDR 异步写入通道
     cdr_sender: Arc<dyn CdrSink>,
     cdr_dropped: AtomicU64,
+    event_sink: Option<Arc<dyn CallEventSink>>,
+    event_sequence: AtomicU64,
+    event_dropped: AtomicU64,
+    /// 活跃呼叫计数的性能缓存（避免高并发下对 DashMap 频繁遍历产生严重的锁竞争）
+    active_calls_cache: std::sync::atomic::AtomicUsize,
+    active_calls_last_update: std::sync::atomic::AtomicU64,
 }
 
 impl CallManager {
     pub fn new<S: CdrSink + 'static>(routes: RouteTable, cdr_sender: S) -> Self {
+        Self::new_inner(routes, cdr_sender, None)
+    }
+
+    /// 创建启用异步 Webhook 事件输出的呼叫管理器。
+    pub fn new_with_event_sink<S, E>(routes: RouteTable, cdr_sender: S, event_sink: E) -> Self
+    where
+        S: CdrSink + 'static,
+        E: CallEventSink + 'static,
+    {
+        Self::new_inner(routes, cdr_sender, Some(Arc::new(event_sink)))
+    }
+
+    fn new_inner<S: CdrSink + 'static>(
+        routes: RouteTable,
+        cdr_sender: S,
+        event_sink: Option<Arc<dyn CallEventSink>>,
+    ) -> Self {
         Self {
             calls: DashMap::new(),
-            routes: RwLock::new(routes),
+            routes: ArcSwap::new(Arc::new(routes)),
             cdr_sender: Arc::new(cdr_sender),
             cdr_dropped: AtomicU64::new(0),
+            event_sink,
+            event_sequence: AtomicU64::new(0),
+            event_dropped: AtomicU64::new(0),
+            active_calls_cache: std::sync::atomic::AtomicUsize::new(0),
+            active_calls_last_update: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn push_event(&self, call_id: &CallId, event: CallEvent) {
+        let Some(sink) = &self.event_sink else {
+            return;
+        };
+        let envelope = WebhookEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            schema_version: WEBHOOK_SCHEMA_VERSION.to_string(),
+            call_id: call_id.as_str().to_string(),
+            sequence: self.event_sequence.fetch_add(1, Ordering::Relaxed) + 1,
+            occurred_at_ms: sys_millis(std::time::SystemTime::now()),
+            event,
+        };
+        if sink.try_send_event(envelope).is_err() {
+            self.event_dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -157,10 +229,13 @@ impl CallManager {
         self.cdr_dropped.load(Ordering::Relaxed)
     }
 
+    /// 返回因事件队列满或消费者退出而丢弃的 Webhook 事件数。
+    pub fn dropped_event_count(&self) -> u64 {
+        self.event_dropped.load(Ordering::Relaxed)
+    }
+
     pub fn update_routes(&self, routes: RouteTable) {
-        if let Ok(mut current) = self.routes.write() {
-            *current = routes;
-        }
+        self.routes.store(Arc::new(routes));
     }
 
     pub fn handle_inbound_invite(&self, request: &SipRequest) -> CallResult<InboundInviteOutcome> {
@@ -171,7 +246,7 @@ impl CallManager {
     pub fn handle_inbound_invite_with_health(
         &self,
         request: &SipRequest,
-        health: Option<&mut GatewayHealthTracker>,
+        health: Option<&GatewayHealthTracker>,
     ) -> CallResult<InboundInviteOutcome> {
         let mut call = Call::from_inbound_invite(request)?;
         let call_id = call.id.clone();
@@ -184,15 +259,17 @@ impl CallManager {
             }
         }
 
+        self.push_event(
+            &call_id,
+            CallEvent::CallInitiated {
+                caller: call.caller.clone(),
+                callee: call.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
+                direction: call.direction.clone(),
+            },
+        );
+
         let candidates = {
-            let routes = match self.routes.read() {
-                Ok(routes) => routes,
-                Err(_) => {
-                    return Err(CallError::NoRouteForDestination(
-                        call.inbound.remote_uri.to_string(),
-                    ));
-                }
-            };
+            let routes = self.routes.load();
             match health {
                 Some(health) => routes.select_healthy_candidates(
                     &call.inbound.remote_uri,
@@ -206,11 +283,21 @@ impl CallManager {
         let candidates = match candidates {
             Ok(candidates) => candidates,
             Err(error) => {
-                let _ = call.fail(None, error.to_string());
+                let reason = error.to_string();
+                let _ = call.fail(None, reason.clone());
                 if let Some(cdr) = CallCdr::from_completed_call(&call) {
                     self.push_cdr(cdr);
                 }
-                self.calls.insert(call_id, call);
+                self.calls.insert(call_id.clone(), call);
+                self.push_event(
+                    &call_id,
+                    CallEvent::CallFinished {
+                        duration_secs: 0,
+                        sip_status: None,
+                        q850_cause: None,
+                        reason,
+                    },
+                );
                 return Err(error);
             }
         };
@@ -250,6 +337,15 @@ impl CallManager {
             }
         }
 
+        self.push_event(
+            &call_id,
+            CallEvent::CallInitiated {
+                caller: call.caller.clone(),
+                callee: call.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
+                direction: call.direction.clone(),
+            },
+        );
+
         call.select_route(outbound_uri.clone())?;
         let state = call.state;
         self.calls.insert(call_id.clone(), call);
@@ -280,6 +376,7 @@ impl CallManager {
             .get_mut(&call_id)
             .ok_or_else(|| CallError::UnknownCall(call_id.as_str().to_string()))?;
 
+        let previous_state = call.state;
         let mut failover_uri = None;
 
         match response.status_code {
@@ -332,9 +429,36 @@ impl CallManager {
         }
 
         let state = call.state;
-
-        Ok(OutboundResponseOutcome {
-            call_id,
+        let lifecycle_event = match (previous_state, state) {
+            (previous, CallState::Ringing) if previous != CallState::Ringing => {
+                Some(CallEvent::CallRinging {
+                    sip_status: response.status_code,
+                })
+            }
+            (previous, CallState::Established) if previous != CallState::Established => {
+                Some(CallEvent::CallAnswered {
+                    sip_status: response.status_code,
+                })
+            }
+            (previous, CallState::Failed) if previous != CallState::Failed => {
+                Some(CallEvent::CallFinished {
+                    duration_secs: answered_duration_secs(&call),
+                    sip_status: call
+                        .failure_cause
+                        .as_ref()
+                        .and_then(|cause| cause.status_code),
+                    q850_cause: None,
+                    reason: call
+                        .failure_cause
+                        .as_ref()
+                        .map(|cause| cause.reason.clone())
+                        .unwrap_or_else(|| "呼叫失败".to_string()),
+                })
+            }
+            _ => None,
+        };
+        let outcome = OutboundResponseOutcome {
+            call_id: call_id.clone(),
             state,
             failover_uri,
             gateway_id: call
@@ -342,7 +466,12 @@ impl CallManager {
                 .get(call.current_candidate_index)
                 .map(|candidate| candidate.target.gateway_id.as_str().to_string())
                 .unwrap_or_default(),
-        })
+        };
+        drop(call);
+        if let Some(event) = lifecycle_event {
+            self.push_event(&call_id, event);
+        }
+        Ok(outcome)
     }
 
     pub fn handle_inbound_termination(
@@ -371,6 +500,17 @@ impl CallManager {
         }
 
         let state = call.state;
+        let duration_secs = answered_duration_secs(&call);
+        drop(call);
+        self.push_event(
+            &call_id,
+            CallEvent::CallFinished {
+                duration_secs,
+                sip_status: None,
+                q850_cause: None,
+                reason: "通话结束".to_string(),
+            },
+        );
 
         Ok(TerminationOutcome { call_id, state })
     }
@@ -395,14 +535,23 @@ impl CallManager {
     }
 
     pub fn routes(&self) -> RouteTable {
-        match self.routes.read() {
-            Ok(routes) => routes.clone(),
-            Err(_) => RouteTable::default(),
-        }
+        (**self.routes.load()).clone()
     }
 
     pub fn active_calls_count(&self) -> usize {
-        self.calls
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let last_update = self.active_calls_last_update.load(Ordering::Relaxed);
+
+        // Cache active call counts for 500ms under high load to eliminate DashMap iterations.
+        if now >= last_update && now - last_update < 500 {
+            return self.active_calls_cache.load(Ordering::Relaxed);
+        }
+
+        let count = self
+            .calls
             .iter()
             .filter(|entry| {
                 matches!(
@@ -412,7 +561,11 @@ impl CallManager {
                         | crate::CallState::Established
                 )
             })
-            .count()
+            .count();
+
+        self.active_calls_cache.store(count, Ordering::Relaxed);
+        self.active_calls_last_update.store(now, Ordering::Relaxed);
+        count
     }
 
     /// 返回所有活跃呼叫的摘要（Routing/Ringing/Established）。
@@ -430,14 +583,14 @@ impl CallManager {
             .map(|entry| crate::ActiveCall {
                 call_id: entry.id.as_str().to_string(),
                 caller: entry.caller.clone(),
-                callee: entry.inbound.remote_uri.user.clone(),
+                callee: entry.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
                 state: entry.state.as_str().to_string(),
                 started_at_ms: sys_millis(entry.started_at),
                 answered_at_ms: entry.answered_at.map(sys_millis),
                 gateway: entry
                     .outbound
                     .as_ref()
-                    .map(|leg| leg.remote_uri.host.clone()),
+                    .map(|leg| leg.remote_uri.host.to_string()),
             })
             .collect()
     }
@@ -463,6 +616,17 @@ impl CallManager {
             if let Some(cdr) = crate::cdr::CallCdr::from_completed_call(&call) {
                 self.push_cdr(cdr);
             }
+            let duration_secs = answered_duration_secs(&call);
+            drop(call);
+            self.push_event(
+                &cid,
+                CallEvent::CallFinished {
+                    duration_secs,
+                    sip_status: None,
+                    q850_cause: None,
+                    reason: reason.to_string(),
+                },
+            );
         }
     }
 
@@ -481,6 +645,17 @@ fn sys_millis(t: std::time::SystemTime) -> i64 {
     t.duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn answered_duration_secs(call: &Call) -> u64 {
+    call.answered_at
+        .and_then(|answered_at| {
+            call.ended_at
+                .unwrap_or_else(std::time::SystemTime::now)
+                .duration_since(answered_at)
+                .ok()
+        })
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn parse_uri_from_contact(raw: &str) -> Option<sip_core::SipUri> {

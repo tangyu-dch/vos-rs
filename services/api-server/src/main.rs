@@ -11,12 +11,15 @@ mod calls;
 mod cdr;
 mod dashboard;
 mod gateways;
+mod hot_cache;
+mod media_cluster;
 mod metrics;
 mod numbers;
 mod recording;
 mod registrations;
 mod report;
 mod routes;
+mod sip_cluster;
 mod system;
 mod users;
 
@@ -41,6 +44,7 @@ use billing::{
 };
 use calls::{list_active, media_metrics, route_preview, terminate_call as calls_terminate};
 use cdr_core::PostgresCdrStore;
+use media_cluster::{get_media_cluster, update_media_cluster};
 use numbers::{create_number, delete_number, list_numbers, update_number};
 use recording::get_recording_audio;
 use report::{export_cdrs_csv, get_report_summary};
@@ -59,6 +63,7 @@ use dashboard::{dashboard_events, get_dashboard_stats, get_dashboard_trend};
 use gateways::{create_gateway, delete_gateway, list_gateways, update_gateway};
 use registrations::list_registrations;
 use routes::{create_route, delete_route, list_routes, update_route};
+use sip_cluster::{control_sip_cluster_node, get_sip_cluster_status};
 use system::{get_system_configs, health, prometheus_metrics, ready, update_system_configs};
 use users::{create_user, delete_user, list_users, update_user};
 
@@ -75,7 +80,8 @@ pub(crate) struct AppState {
     pub(crate) operator_password: String,
     pub(crate) financier_password: String,
     pub(crate) internal_secret: String,
-    pub(crate) redis_client: redis::Client,
+    pub(crate) redis_client: redis::aio::ConnectionManager,
+    pub(crate) sip_node_key_prefix: String,
 }
 
 /// 管理列表统一分页参数；服务端限制单页最大 100 条，避免大响应拖慢 API。
@@ -343,11 +349,9 @@ async fn audit_log(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let logging_filter = config_logging_filter("api_server=info,tower_http=info");
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "api_server=debug,tower_http=debug,info".into()),
-        )
+        .with(tracing_subscriber::EnvFilter::new(logging_filter))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -419,10 +423,16 @@ async fn main() -> anyhow::Result<()> {
     #[derive(serde::Deserialize, Debug, Default)]
     struct SipEdgeConfigSection {
         network: Option<SipEdgeNetworkSection>,
+        cluster: Option<SipEdgeClusterSection>,
     }
     #[derive(serde::Deserialize, Debug, Default)]
     struct SipEdgeNetworkSection {
         manage_bind: Option<String>,
+    }
+    #[derive(serde::Deserialize, Debug, Default)]
+    struct SipEdgeClusterSection {
+        node_key_prefix: Option<String>,
+        management_url: Option<String>,
     }
 
     let config: ApiServerConfig = serde_yaml::from_str(&config_content).unwrap_or_default();
@@ -481,7 +491,7 @@ async fn main() -> anyhow::Result<()> {
             return Err(e.into());
         }
     };
-    let _redis_conn = match redis_client.get_multiplexed_tokio_connection().await {
+    let redis_client = match redis::aio::ConnectionManager::new(redis_client).await {
         Ok(conn) => conn,
         Err(e) => {
             tracing::error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
@@ -524,14 +534,25 @@ async fn main() -> anyhow::Result<()> {
     let nats_client = async_nats::connect(&nats_url).await.ok();
 
     let sip_edge_section = config.sip_edge.unwrap_or_default();
-    let sip_manage_base = format!(
-        "http://{}",
-        sip_edge_section
-            .network
-            .unwrap_or_default()
-            .manage_bind
-            .unwrap_or_else(|| "127.0.0.1:8082".to_string())
-    );
+    let cluster_section = sip_edge_section.cluster.unwrap_or_default();
+    let sip_node_key_prefix = cluster_section
+        .node_key_prefix
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "vos_rs:cluster:sip_nodes".to_string());
+    let sip_manage_base = cluster_section
+        .management_url
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "http://{}",
+                sip_edge_section
+                    .network
+                    .unwrap_or_default()
+                    .manage_bind
+                    .unwrap_or_else(|| "127.0.0.1:8082".to_string())
+            )
+        });
 
     let internal_client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(1))
@@ -569,6 +590,7 @@ async fn main() -> anyhow::Result<()> {
         financier_password,
         internal_secret,
         redis_client,
+        sip_node_key_prefix,
     };
 
     let cors_origins_raw = api_network.allowed_origins.clone().unwrap_or_default();
@@ -610,6 +632,18 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/system/configs",
             get(get_system_configs).post(update_system_configs),
+        )
+        .route(
+            "/api/system/media-cluster",
+            get(get_media_cluster).put(update_media_cluster),
+        )
+        .route(
+            "/api/system/sip-cluster/status",
+            get(get_sip_cluster_status),
+        )
+        .route(
+            "/api/system/sip-cluster/nodes/:node_id/:action",
+            post(control_sip_cluster_node),
         )
         .route("/api/dashboard/stats", get(get_dashboard_stats))
         .route("/api/dashboard/trend", get(get_dashboard_trend))
@@ -680,6 +714,21 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn config_logging_filter(default: &str) -> String {
+    let path = env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
+        .and_then(|root| {
+            root.get("logging")?
+                .get("filter")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .filter(|filter| !filter.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 #[cfg(test)]

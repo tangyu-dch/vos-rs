@@ -100,6 +100,9 @@ pub async fn create_rate(
         )
         .await
         .map_err(err)?;
+    crate::hot_cache::rebuild_billing_rates(&state)
+        .await
+        .map_err(|error| err(error.error))?;
     Ok(StatusCode::CREATED)
 }
 
@@ -114,6 +117,9 @@ pub async fn update_rate(
         .upsert_rate(&id, &b.prefix, b.rate_per_minute, b.description.as_deref())
         .await
         .map_err(err)?;
+    crate::hot_cache::rebuild_billing_rates(&state)
+        .await
+        .map_err(|error| err(error.error))?;
     Ok(StatusCode::OK)
 }
 
@@ -122,6 +128,11 @@ pub async fn delete_rate(
     Path(id): Path<String>,
 ) -> Result<StatusCode, E> {
     let deleted = state.store.delete_rate(&id).await.map_err(err)?;
+    if deleted {
+        crate::hot_cache::rebuild_billing_rates(&state)
+            .await
+            .map_err(|error| err(error.error))?;
+    }
     Ok(if deleted {
         StatusCode::OK
     } else {
@@ -163,6 +174,9 @@ pub async fn credit_account(
         .credit_account(&username, b.amount)
         .await
         .map_err(err)?;
+    crate::hot_cache::set_billing_balance(&state, &username, balance)
+        .await
+        .map_err(|error| err(error.error))?;
     Ok(Json(CreditResult { username, balance }))
 }
 

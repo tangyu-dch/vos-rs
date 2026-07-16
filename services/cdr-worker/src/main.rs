@@ -18,13 +18,8 @@
 //!
 //! ## 配置
 //!
-//! | 环境变量 | 说明 | 默认值 |
-//! |---------|------|--------|
-//! PostgreSQL、Redis、NATS 及批处理参数统一从 `config.yaml` 读取。
-//! | `VOS_RS_CDR_BATCH_SIZE` | 批量大小 | 50 |
-//! | `VOS_RS_CDR_BATCH_TIMEOUT_MS` | 超时刷新 | 100ms |
-//! | `VOS_RS_CDR_MAX_DELIVERIES` | 最大投递次数 | 5 |
-//! | `VOS_RS_CDR_DB_RETRY_ATTEMPTS` | DB 重试次数 | 3 |
+//! PostgreSQL、Redis、NATS、日志及批处理参数统一从 `config.yaml` 读取，
+//! 仅 `VOS_RS_CONFIG_FILE` 用于选择配置文件路径。
 
 use async_nats::jetstream::{self, consumer::PullConsumer, stream, AckKind};
 use cdr_core::{CdrEvent, PostgresCdrStore, DEFAULT_CDR_STREAM, DEFAULT_CDR_SUBJECT};
@@ -108,7 +103,7 @@ struct BatchSettingsSection {
 
 #[tokio::main]
 async fn main() -> Result<(), AnyError> {
-    init_tracing();
+    init_tracing(&config_logging_filter("cdr_worker=info"));
 
     let config_file_path =
         env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
@@ -464,10 +459,25 @@ async fn publish_to_dlq(jetstream: &jetstream::Context, dlq_subject: &str, paylo
     }
 }
 
-fn init_tracing() {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("cdr_worker=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+fn init_tracing(filter: &str) {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(filter))
+        .init();
+}
+
+fn config_logging_filter(default: &str) -> String {
+    let path = env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
+        .and_then(|root| {
+            root.get("logging")?
+                .get("filter")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .filter(|filter| !filter.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 #[allow(clippy::too_many_arguments)]

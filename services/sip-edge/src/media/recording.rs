@@ -1,4 +1,4 @@
-use rtp_core::{AudioCodec, RtpPacketView};
+use rtp_core::{AudioCodec, PacketBufferPool, ReusablePacket, RtpPacketView};
 use sdp_core::SdpError;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -15,7 +15,7 @@ use std::{fs, io};
 use tracing::warn;
 
 use crate::media::config::MediaConfig;
-use crate::media::relay::MediaRelayState;
+use crate::media::relay::{MediaRelayState, RemoteControlTarget};
 use crate::media::utils::unix_timestamp_millis;
 
 pub const RECORDING_SAMPLE_RATE: u32 = 8_000;
@@ -23,6 +23,7 @@ pub const RECORDING_CHANNELS: u16 = 2;
 pub const RECORDING_BITS_PER_SAMPLE: u16 = 16;
 pub const RECORDING_FLUSH_INTERVAL_FRAMES: u64 = RECORDING_SAMPLE_RATE as u64 * 2;
 pub const RECORDING_WORKER_DRAIN_LIMIT: usize = 256;
+const RECORDING_PACKET_POOL_CAPACITY: usize = 4_096;
 
 static NEXT_RECORDING_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -93,7 +94,7 @@ impl RecordingSession {
                 channel,
                 payload_type: packet.payload_type,
                 timestamp: packet.timestamp,
-                payload: packet.payload.to_vec(),
+                payload: self.pool.copy_payload(packet.payload),
             },
         )
     }
@@ -176,11 +177,12 @@ impl RecordingSessionInfo {
 pub struct RecordingPool {
     workers: Vec<RecordingWorkerHandle>,
     queue_capacity: usize,
+    packet_pool: PacketBufferPool,
 }
 
 #[derive(Debug)]
 pub struct RecordingWorkerHandle {
-    sender: std::sync::mpsc::SyncSender<RecordingCommand>,
+    sender: tokio::sync::mpsc::Sender<RecordingCommand>,
     pending_commands: Arc<AtomicUsize>,
 }
 
@@ -191,7 +193,7 @@ impl RecordingPool {
         let queue_capacity = queue_capacity.max(2);
         let mut workers = Vec::with_capacity(worker_count);
         for worker_index in 0..worker_count {
-            let (sender, receiver) = std::sync::mpsc::sync_channel(queue_capacity);
+            let (sender, receiver) = tokio::sync::mpsc::channel(queue_capacity);
             let pending_commands = Arc::new(AtomicUsize::new(0));
             match spawn_recording_worker(worker_index, receiver, Arc::clone(&pending_commands)) {
                 Ok(()) => workers.push(RecordingWorkerHandle {
@@ -204,6 +206,7 @@ impl RecordingPool {
         Self {
             workers,
             queue_capacity,
+            packet_pool: PacketBufferPool::new(RECORDING_PACKET_POOL_CAPACITY),
         }
     }
 
@@ -229,6 +232,10 @@ impl RecordingPool {
     ) -> io::Result<bool> {
         self.try_send_packet(session.id, RecordingCommand::Packet { session, packet })?;
         Ok(true)
+    }
+
+    fn copy_payload(&self, payload: &[u8]) -> ReusablePacket {
+        self.packet_pool.copy(payload)
     }
 
     #[cfg(test)]
@@ -283,14 +290,14 @@ impl RecordingPool {
 
         match worker.sender.try_send(command) {
             Ok(()) => Ok(()),
-            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 worker.pending_commands.fetch_sub(1, Ordering::AcqRel);
                 Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
                     "recording queue is full",
                 ))
             }
-            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                 worker.pending_commands.fetch_sub(1, Ordering::AcqRel);
                 Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
@@ -307,11 +314,11 @@ impl RecordingPool {
                 worker.pending_commands.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             }
-            Err(std::sync::mpsc::TrySendError::Full(_)) => Err(io::Error::new(
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "recording queue is full",
             )),
-            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => Err(io::Error::new(
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "recording worker is stopped",
             )),
@@ -321,7 +328,7 @@ impl RecordingPool {
     #[cfg(test)]
     fn send(&self, session_id: u64, command: RecordingCommand) -> io::Result<()> {
         let worker = self.worker(session_id)?;
-        worker.sender.send(command).map_err(|_| {
+        worker.sender.blocking_send(command).map_err(|_| {
             io::Error::new(io::ErrorKind::BrokenPipe, "recording worker is stopped")
         })?;
         worker.pending_commands.fetch_add(1, Ordering::Relaxed);
@@ -342,7 +349,7 @@ impl RecordingPool {
 
 fn spawn_recording_worker(
     worker_index: usize,
-    receiver: std::sync::mpsc::Receiver<RecordingCommand>,
+    receiver: tokio::sync::mpsc::Receiver<RecordingCommand>,
     pending_commands: Arc<AtomicUsize>,
 ) -> io::Result<()> {
     std::thread::Builder::new()
@@ -359,11 +366,11 @@ fn spawn_recording_worker(
 
 fn run_recording_worker(
     worker_index: usize,
-    receiver: std::sync::mpsc::Receiver<RecordingCommand>,
+    mut receiver: tokio::sync::mpsc::Receiver<RecordingCommand>,
     pending_commands: Arc<AtomicUsize>,
 ) {
     let mut recorders = HashMap::<u64, RecordingFile>::new();
-    while let Ok(command) = receiver.recv() {
+    while let Some(command) = receiver.blocking_recv() {
         pending_commands.fetch_sub(1, Ordering::Relaxed);
         handle_recording_command(command, &mut recorders);
 
@@ -399,7 +406,7 @@ fn handle_recording_command(
                     recording_file.recorder.would_exceed_limit(
                         packet.channel,
                         packet.timestamp,
-                        packet.payload.len(),
+                        packet.payload.as_slice().len(),
                         session.max_file_frames(),
                     )
                 })
@@ -421,7 +428,7 @@ fn handle_recording_command(
                 packet.channel,
                 packet.payload_type,
                 packet.timestamp,
-                &packet.payload,
+                packet.payload.as_slice(),
             ) {
                 warn!(%error, session_id = session.id, "failed to write RTP packet to recording");
             }
@@ -498,7 +505,7 @@ pub struct RecordedRtpPacket {
     pub channel: RecordingChannel,
     pub payload_type: u8,
     pub timestamp: u32,
-    pub payload: Vec<u8>,
+    pub payload: ReusablePacket,
 }
 
 pub enum RecordingCommand {
@@ -890,6 +897,50 @@ impl MediaRelayState {
         gateway_relay_port: u16,
         config: &MediaConfig,
     ) -> Result<Option<PathBuf>, MediaError> {
+        let caller_target = self.remote_target_for_port(caller_relay_port);
+        let gateway_target = self.remote_target_for_port(gateway_relay_port);
+        if caller_target.is_some() || gateway_target.is_some() {
+            if !config.recording_enabled {
+                return Ok(None);
+            }
+            let same_node = match (&caller_target, &gateway_target) {
+                (
+                    Some(RemoteControlTarget::Http { base_url: left, .. }),
+                    Some(RemoteControlTarget::Http {
+                        base_url: right, ..
+                    }),
+                ) => left == right,
+                (
+                    Some(RemoteControlTarget::Uds { path: left }),
+                    Some(RemoteControlTarget::Uds { path: right }),
+                ) => left == right,
+                _ => false,
+            };
+            if !same_node {
+                return Err(MediaError::Io(
+                    "录音的两个 RTP 端口不属于同一远程媒体节点".to_string(),
+                ));
+            }
+            let stem = recording_file_stem(call_id);
+            let wav_path = config.recording_dir.join(format!("{stem}.wav"));
+            let target = caller_target
+                .ok_or_else(|| MediaError::Io("找不到录音端口所属媒体节点".to_string()))?;
+            self.call_remote_target(
+                target,
+                "start_call_recording",
+                serde_json::json!({
+                    "port_a": caller_relay_port,
+                    "port_b": gateway_relay_port,
+                    "wav_path": wav_path,
+                    "min_free_bytes": config.recording_min_free_bytes,
+                    "max_file_bytes": config.recording_max_file_bytes,
+                    "max_duration_secs": config.recording_max_duration_secs,
+                    "format_str": config.recording_format
+                }),
+            )
+            .map_err(MediaError::Io)?;
+            return Ok(Some(wav_path));
+        }
         if !config.recording_enabled {
             return Ok(None);
         }
@@ -938,6 +989,8 @@ impl MediaRelayState {
                 channel: RecordingChannel::Gateway,
             },
         );
+        self.mark_relay_features_changed(caller_relay_port);
+        self.mark_relay_features_changed(gateway_relay_port);
 
         Ok(Some(wav_path))
     }
@@ -998,6 +1051,7 @@ impl MediaRelayState {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn record_rtp_packet(
         &self,
         relay_port: u16,

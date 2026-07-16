@@ -24,25 +24,30 @@
 //! 5. 健康状态过滤（Circuit Breaker）
 //! 6. 容量检查（max_capacity / max_concurrent）
 
+mod billing;
 mod call;
+
+pub use billing::AtomicBillingBucket;
+pub use call::{Call, CallId, CallLeg, CallState, FailureCause, LegDirection, LegId, LegState};
 mod cdr;
 mod error;
 mod manager;
 mod queue;
 mod routing;
+mod webhooks;
 
-pub use call::{Call, CallId, CallLeg, CallState, FailureCause, LegDirection, LegId, LegState};
 pub use cdr::{CallCdr, CallQualityMetrics, CdrStatus};
 pub use error::{CallError, CallResult};
 pub use manager::{
-    CallManager, CdrSendError, CdrSink, InboundInviteOutcome, OutboundResponseOutcome,
-    TerminationOutcome,
+    CallEventSendError, CallEventSink, CallManager, CdrSendError, CdrSink, InboundInviteOutcome,
+    OutboundResponseOutcome, TerminationOutcome,
 };
 pub use queue::{Agent, AgentState, CallQueue, QueueMetrics, QueueStrategy, QueuedCall};
 pub use routing::{
     CircuitState, GatewayHealth, GatewayHealthTracker, GatewayId, HealthThresholds, Route,
     RouteTable, RouteTarget, SelectedRoute,
 };
+pub use webhooks::{CallEvent, VciInstruction, WebhookEvent, WEBHOOK_SCHEMA_VERSION};
 
 /// 活跃呼叫摘要（供管理 API 暴露）。
 ///

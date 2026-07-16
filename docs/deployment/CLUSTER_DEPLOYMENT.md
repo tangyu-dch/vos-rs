@@ -1,0 +1,239 @@
+# VOS-RS SIP 与媒体集群部署指南
+
+VOS-RS 支持两种生产入口，二者共用同一套 `sip-edge`、Redis、NATS 和
+`media-edge` 集群协议：
+
+1. **外部路由模式**：使用 Kamailio/OpenSIPS 提供公网 SIP 入口；
+2. **原生路由模式**：使用项目内置的纯 Rust `sip-router`，不把系统可用性绑定在 Kamailio 上。
+
+单节点仍可使用 `direct` 模式，不要求部署路由器。
+
+## 集群职责
+
+```text
+SIP 终端/运营商
+        │
+        ├── Kamailio/OpenSIPS（external）
+        │          或
+        └── VOS-RS sip-router（native）
+                    │
+          ┌─────────┴─────────┐
+       sip-edge-1          sip-edge-2
+          │  └──── Redis/NATS ┘  │
+     media-edge-1          media-edge-2
+```
+
+- 路由器负责 SIP 节点健康检查、初始请求分配、事务回程和对话粘性。
+- `sip-edge` 负责 B2BUA、认证、路由、计费、CDR 和媒体节点分配。
+- Redis 保存节点心跳、注册流归属、对话快照、Call-ID 映射和媒体租约。
+- NATS 承担发往其他 SIP 节点本地 TCP/WebSocket 连接的消息。
+- `media-edge` 处理 RTP/RTCP、DTLS-SRTP、录音和媒体质量统计；RTP 热路径不查询 Redis。
+
+## SIP 节点配置
+
+每台 `sip-edge` 使用独立的 `node_id` 和内网 `advertised_addr`，但连接相同的
+PostgreSQL、Redis 和 NATS。
+
+```yaml
+connections:
+  redis:
+    host: "10.0.2.10"
+    port: 6379
+  nats:
+    url: "nats://10.0.2.11:4222"
+
+sip_edge:
+  cluster:
+    enabled: true
+    node_id: "sip-edge-1"
+    router_mode: "external" # 或 native
+    advertised_addr: "10.0.0.11:5060"
+    management_url: "http://10.0.0.11:8082"
+    node_key_prefix: "vos_rs:cluster:sip_nodes"
+    heartbeat_interval_secs: 3
+    node_timeout_secs: 10
+    dialog_ttl_secs: 86400
+    nats_subject_prefix: "vos_rs.sip.node"
+    inter_node_ack_timeout_ms: 500
+    inter_node_max_retries: 3
+    inter_node_retry_delay_ms: 50
+    inter_node_dedupe_ttl_secs: 120
+```
+
+`node_timeout_secs` 必须大于心跳周期。集群启动时如果缺少 Redis 或 NATS，服务会
+拒绝启动，防止节点在不共享状态的情况下静默分裂。
+`sip_edge.cluster.node_key_prefix` 必须与 `sip_router.node_key_prefix` 完全一致；原生
+路由器只发现 `router_mode: native` 的心跳，不会误选 direct 或 external 节点。
+`management_url` 必须是其他管理服务能够访问的 HTTP(S) 地址，不能填写
+`0.0.0.0`。心跳记录会同步发布 `active/draining` 状态、活动呼叫数、版本和启动时间；
+节点进入 draining 后不再接收新呼叫，退出前会主动注销 Redis 心跳。
+跨节点 TCP/WebSocket 投递使用带消息 UUID 的 NATS 请求确认：接收端只有在消息进入
+本地连接有界写队列后才返回成功；确认丢失会按指数退避重试，接收端在去重 TTL 内
+不会重复写入同一消息。超过重试上限会向调用链返回明确错误并记录告警。
+
+管理端可通过 `GET /api/system/sip-cluster/status` 查看 Redis 中仍有有效 TTL 的在线
+节点，Web 的“系统参数配置 → SIP 信令集群”页签展示相同信息。节点 ID、监听地址和
+路由模式是单机引导配置，必须在每台服务器的 `config.yaml` 分别维护，不能作为全局
+动态配置下发。
+
+本地双节点完整流测试可运行 `make full-flow-sip-cluster`。该场景会启动一个原生
+`sip-router`、两个 `sip-edge` 和两个 SIPp 网关，校验节点发现、稳定哈希、响应回程、
+ACK/BYE 对话路由以及 16 路通话在两个信令节点间的实际分布。
+
+压测或端到端测试如需完全使用 `config.yaml` 中的静态网关，可设置
+`sip_edge.routing.database_routes_enabled: false`，避免现有数据库路由覆盖测试网关；
+生产环境默认保持 `true`。
+
+## 多媒体节点配置
+
+```yaml
+sip_edge:
+  media:
+    allocation_strategy: "weighted_round_robin"
+    health_check_interval_secs: 3
+    unhealthy_threshold: 3
+    nodes:
+      - id: "media-edge-1"
+        type: "remote"
+        control_url: "http://10.0.1.11:3030"
+        advertised_addr: "203.0.113.11"
+        port_min: 40000
+        port_max: 40998
+        weight: 2
+        control_token: "replace-with-random-token-1"
+      - id: "media-edge-2"
+        type: "remote"
+        control_url: "http://10.0.1.12:3030"
+        advertised_addr: "203.0.113.12"
+        port_min: 41000
+        port_max: 41998
+        weight: 1
+        control_token: "replace-with-random-token-2"
+```
+
+分配策略：
+
+- `weighted_round_robin`：按权重轮询，适合节点规格不同的常规部署；
+- `least_sessions`：优先使用活跃会话最少的健康节点；
+- `call_id_hash`：按 Call-ID 稳定分配，适合需要可预测归属的部署。
+
+`nodes` 是唯一媒体服务配置入口，而且至少需要一个节点。`type: local` 表示由当前
+`sip-edge` 进程内承载媒体，不配置 `control_url`；`type: remote` 表示独立
+`media-edge`，必须提供 HTTP、HTTPS 或 UDS 控制地址。一个节点就是单媒体部署，多个
+节点组成媒体池；同一池最多包含一个 local 节点，并可与多个 remote 节点混合调度。
+所有节点的 RTP 端口段必须不重叠，以便仅凭 RTP 端口确定后续控制请求的节点归属。
+
+纯本地部署也使用相同结构：
+
+```yaml
+sip_edge:
+  media:
+    nodes:
+      - id: "local-media"
+        type: "local"
+        advertised_addr: "198.51.100.10"
+        port_min: 40000
+        port_max: 40998
+        weight: 1
+```
+
+节点列表为空、配置多个 local 节点、远程节点缺少控制地址或端口段重叠时，
+`sip-edge` 会在监听端口前拒绝启动。管理界面的“媒体节点集群”页面执行同样校验。
+
+## 两种 SIP 入口模式
+
+### external：Kamailio/OpenSIPS
+
+入口必须开启 Record-Route，并以 Call-ID/对话标识做一致性分配。初始 INVITE、
+REGISTER 和对话内请求需保持同一节点；健康检查失败后只把新会话分配给其他节点。
+后端地址使用 `sip_edge.cluster.advertised_addr`，不要使用公网 NAT 地址。
+仓库提供 `deploy/kamailio/kamailio.cfg`、`dispatcher.list` 和部署说明作为起始模板。
+多台 Kamailio 需要通过 DMQ/共享 htable 复制 Call-ID 归属，或由入口负载均衡器保持
+连接亲和，避免同一对话落到不同的路由器实例。
+
+### native：VOS-RS sip-router
+
+原生路由器与 external 模式使用相同的节点注册数据和对话归属规则。当前支持 UDP、
+TCP 节点动态发现、Call-ID 稳定选路、事务响应回程和多路由器共享对话归属。WebSocket
+连接终止在 `sip-edge`；Redis 记录连接归属，其他 SIP 节点通过 NATS 将出站消息投递给
+持有该连接的节点。路由器不做 B2BUA、计费或媒体处理，可独立水平扩容。
+
+```yaml
+sip_router:
+  udp_bind: "0.0.0.0:5060"
+  tcp_bind: "0.0.0.0:5060"
+  advertised_addr: "198.51.100.10:5060"
+  node_key_prefix: "vos_rs:cluster:sip_nodes"
+  discovery_interval_secs: 2
+  transaction_ttl_secs: 64
+  dialog_route_ttl_secs: 86400
+  udp_workers: 0 # 自动使用 CPU 核数，最多 64
+  udp_queue_capacity: 4096
+  max_transactions: 1000000
+  tcp_max_connections: 10000
+  tcp_write_queue_capacity: 1024
+  tcp_idle_timeout_secs: 300
+  tcp_connect_timeout_secs: 3
+  manage_bind: "127.0.0.1:8083"
+  acl_allow:
+    - "10.0.0.0/8"
+    - "198.51.100.0/24"
+  acl_block: []
+  rate_limit_capacity: 200
+  rate_limit_fill_rate: 100
+  rate_limit_max_entries: 100000
+```
+
+UDP 接收线程只负责收包和按 Call-ID 分配 worker，同一对话始终进入同一有界队列；
+路由选择、Redis 归属和网络发送由 worker 并行执行。队列或事务表达到上限时会快速丢弃
+并输出采样告警，避免突发流量造成内存无限增长。
+TCP 长连接会对每条 SIP 消息重新按 Call-ID 解析归属，同一运营商连接可同时承载落在
+不同 sip-edge 节点上的呼叫。每条客户端连接按后端节点复用连接，并使用有界写队列；
+客户端连接数、空闲时间以及后端连接超时均由上述参数限制。
+
+`acl_block` 优先于 `acl_allow`；`acl_allow` 为空时不启用白名单。UDP 数据报和新建 TCP
+连接共享每来源 IP 令牌桶，已发现的 sip-edge 后端回包不受入口限流影响。生产环境应将
+`manage_bind` 绑定到管理网，以下端点无需暴露到公网：
+
+- `GET /health`：进程存活检查。
+- `GET /ready`：Redis 可连接且至少发现一个活动 sip-edge 时返回 200。
+- `GET /metrics`：Prometheus 文本指标，包含 UDP 收发/丢弃、TCP 连接、ACL/限流拒绝、
+  活跃事务、已发现节点和 Redis 错误。
+
+## 故障语义
+
+- SIP 节点故障：新呼叫切换至健康节点；已建立媒体仍由原 `media-edge` 转发。
+- UDP 对话：可依据 Redis 对话快照恢复后续请求，但正在进行的 SIP 事务不迁移。
+- 对话归属会在活跃请求到达时按半 TTL 周期续期；BYE 或失败事务完成后延迟清理，
+  避免 SIP 重传窗口内提前改变节点。原归属节点失效时使用 Redis CAS 原子替换。
+- Redis 短时不可用时，路由器优先使用本地对话缓存；新呼叫根据相同节点快照执行
+  Call-ID 确定性哈希，不回退查询 PostgreSQL。Redis 恢复后重新写入共享归属。
+- TCP/WebSocket：节点故障后终端必须重连，注册流随新连接更新归属。
+- 媒体节点故障：停止分配新呼叫；现有媒体迁移需要 re-INVITE 或 ICE restart，不能只改 Redis。
+
+## 启动前校验
+
+```bash
+make cluster-check CONFIG_FILE=/etc/vos-rs/config.yaml
+```
+
+开发或发布前可在本机 Redis、NATS 和 SIPp 可用时运行故障闭环：
+
+```bash
+make full-flow-sip-cluster-failover
+```
+
+该场景会校验双路由器共享对话归属、NATS 跨节点可靠投递、节点摘流与恢复、心跳 TTL
+失效剔除，以及故障后新呼叫继续由存活节点接通。测试同时检查 sip-router 的健康、就绪
+和 Prometheus 指标端点。
+
+生产环境还应确认 Redis/NATS 为高可用部署、节点 ID 不重复、防火墙已放行对应 SIP/RTP
+端口，并通过密钥管理系统提供 `control_token` 和基础设施凭据。
+
+仓库内置以下媒体闭环测试：
+
+- `make full-flow`：单 local 节点；
+- `make full-flow-remote`：单 HTTP remote 节点；
+- `make full-flow-uds`：单 UDS remote 节点；
+- `make full-flow-cluster`：双 remote 节点；
+- `make full-flow-hybrid`：local 与 remote 混合调度。

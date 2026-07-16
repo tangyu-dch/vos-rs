@@ -1,0 +1,31 @@
+connections:
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+    database: 0
+
+sip_router:
+  udp_bind: "127.0.0.1:5260"
+  tcp_bind: "127.0.0.1:5260"
+  advertised_addr: "127.0.0.1:5260"
+  node_key_prefix: "vos_rs:test:sip_nodes"
+  discovery_interval_secs: 1
+  transaction_ttl_secs: 64
+  dialog_route_ttl_secs: 120
+  udp_workers: 2
+  udp_queue_capacity: 1024
+  max_transactions: 10000
+  tcp_max_connections: 100
+  tcp_write_queue_capacity: 128
+  tcp_idle_timeout_secs: 60
+  tcp_connect_timeout_secs: 1
+  manage_bind: "127.0.0.1:5283"
+  acl_allow:
+    - "127.0.0.0/8"
+  acl_block: []
+  rate_limit_capacity: 1000
+  rate_limit_fill_rate: 1000
+  rate_limit_max_entries: 1024
+logging:
+  filter: "sip_router=info,info"

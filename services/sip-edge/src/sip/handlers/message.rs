@@ -31,7 +31,6 @@ pub(crate) async fn handle_out_of_dialog_message(
 
     let target_contact = edge_state.lookup_contact(&request.uri).await;
 
-
     let outbound_uri = if let Some(ref contact) = target_contact {
         SipUri::from_str(&contact.uri).ok()
     } else {
@@ -112,6 +111,9 @@ pub(crate) async fn handle_out_of_dialog_message(
                 active_forks: Vec::new(),
                 max_duration_secs: None,
                 established_at: None,
+                invite_response_order: Arc::new(tokio::sync::Mutex::new(
+                    crate::edge_state::InviteResponseOrder::default(),
+                )),
             },
         );
     }

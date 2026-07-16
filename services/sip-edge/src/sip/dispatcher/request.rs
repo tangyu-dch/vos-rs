@@ -5,7 +5,7 @@ use tracing::{debug, info};
 use crate::config::EdgeConfig;
 use crate::edge_state::{EdgeState, PendingDatagram};
 use crate::sip::handlers::handle_request;
-use crate::sip::{transaction, RequestTransactionKey};
+use crate::sip::{transaction, InviteAckKey, RequestTransactionKey};
 
 pub(crate) async fn dispatch_request(
     request: SipRequest,
@@ -38,29 +38,12 @@ pub(crate) async fn dispatch_request(
 
     let is_ack = matches!(&request.method, Method::Ack);
     if is_ack {
-        let ack_branch = request
-            .headers
-            .get("via")
-            .and_then(|v| transaction::branch_param(v.as_str()));
-        let ack_call_id = request
-            .headers
-            .get("call-id")
-            .map(|v| v.as_str().to_string());
-        let ack_cseq_num = request
-            .headers
-            .get("cseq")
-            .and_then(|v| v.as_str().split_whitespace().next().map(|s| s.to_string()));
-        let invite_key = RequestTransactionKey::new_manual(
-            peer.to_string(),
-            "INVITE".to_string(),
-            ack_branch,
-            ack_call_id,
-            ack_cseq_num.map(|num| format!("{} INVITE", num)),
-        );
-        if let Some(tx) = edge_state.get_server_transaction(&invite_key) {
-            let _ = tx
-                .send(transaction::ServerTransactionEvent::Ack(request.clone()))
-                .await;
+        if let Some(ack_key) = InviteAckKey::from_request(&request, peer) {
+            if let Some(tx) = edge_state.take_invite_ack_transaction(&ack_key) {
+                let _ = tx
+                    .send(transaction::ServerTransactionEvent::Ack(request.clone()))
+                    .await;
+            }
         }
     }
 

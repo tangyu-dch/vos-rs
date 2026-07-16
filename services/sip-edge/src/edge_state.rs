@@ -1,3 +1,4 @@
+use crate::cluster::{flow_key, ClusterEgress, FlowRecord};
 use crate::handle_datagram;
 use crate::media::relay::MediaRelayMetrics;
 use crate::net::create_tls_connector;
@@ -8,7 +9,8 @@ use crate::{
     media::{MediaConfig, MediaRelayState},
     net::{handle_stream_connection, SipStream, Transport},
     sip::{
-        dialog, transaction, ClientTransactionKey, DialogValidationError, RequestTransactionKey,
+        dialog, transaction, ClientTransactionKey, DialogValidationError, InviteAckKey,
+        RequestTransactionKey,
     },
 };
 use call_core::{CallId, CallManager, GatewayHealthTracker};
@@ -17,7 +19,13 @@ use dashmap::DashMap;
 use rustls_pki_types::ServerName;
 use sdp_core::RtpEndpoint;
 use sip_core::{parse_message, Method, SipRequest, SipUri};
-use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::{debug, error, info, warn};
 
@@ -25,6 +33,7 @@ use tracing::{debug, error, info, warn};
 pub(crate) struct PendingDatagram {
     pub target: String,
     pub bytes: Vec<u8>,
+    invite_response: Option<InviteResponseMetadata>,
 }
 
 impl PendingDatagram {
@@ -32,9 +41,48 @@ impl PendingDatagram {
         Self {
             target: target.into(),
             bytes,
+            invite_response: None,
         }
     }
+
+    pub(crate) fn with_invite_response_order(
+        mut self,
+        order: Arc<tokio::sync::Mutex<InviteResponseOrder>>,
+        cseq: Option<u32>,
+        status_code: u16,
+    ) -> Self {
+        self.invite_response = Some(InviteResponseMetadata {
+            order,
+            cseq,
+            status_code,
+        });
+        self
+    }
 }
+
+#[derive(Debug, Clone)]
+struct InviteResponseMetadata {
+    order: Arc<tokio::sync::Mutex<InviteResponseOrder>>,
+    cseq: Option<u32>,
+    status_code: u16,
+}
+
+#[derive(Debug, Clone)]
+struct CachedRegistrationLookup {
+    contact: Option<crate::sip::registrar::RegistrationContact>,
+    expires_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RedisBalanceCheck {
+    pub(crate) has_balance: bool,
+    pub(crate) balance: f64,
+    pub(crate) rate: f64,
+}
+
+const POSITIVE_REGISTRATION_CACHE_TTL: Duration = Duration::from_secs(5);
+const NEGATIVE_REGISTRATION_CACHE_TTL: Duration = Duration::from_secs(1);
+const MAX_REGISTRATION_CACHE_ENTRIES: usize = 10_000;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CdrSinks {
@@ -96,6 +144,15 @@ pub(crate) struct InboundTransaction {
     pub(crate) active_forks: Vec<(String, String)>,
     pub(crate) max_duration_secs: Option<u32>,
     pub(crate) established_at: Option<std::time::Instant>,
+    /// Serializes INVITE responses for this dialog and rejects late provisional responses.
+    pub(crate) invite_response_order: Arc<tokio::sync::Mutex<InviteResponseOrder>>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct InviteResponseOrder {
+    pub(crate) cseq: Option<u32>,
+    pub(crate) final_response_seen: bool,
+    pub(crate) final_response_send_started: bool,
 }
 
 impl InboundTransaction {
@@ -198,8 +255,8 @@ pub(crate) fn sip_uri_from_peer(peer: &str) -> SipUri {
             secure: false,
             user: None,
             host: match addr.ip() {
-                std::net::IpAddr::V4(ip) => ip.to_string(),
-                std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+                std::net::IpAddr::V4(ip) => ip.to_string().into(),
+                std::net::IpAddr::V6(ip) => format!("[{ip}]").into(),
             },
             port: Some(addr.port()),
             params: Vec::new(),
@@ -212,7 +269,8 @@ pub(crate) fn sip_uri_from_peer(peer: &str) -> SipUri {
                 .next()
                 .filter(|host| !host.is_empty())
                 .unwrap_or(peer)
-                .to_string(),
+                .to_string()
+                .into(),
             port: None,
             params: Vec::new(),
         },
@@ -231,10 +289,9 @@ pub(crate) fn parse_target_addr_from_route(route: &str) -> Option<String> {
     Some(format!("{}:{}", uri.host, uri.port.unwrap_or(5060)))
 }
 
-#[derive(Debug)]
 pub(crate) struct EdgeState {
     pub(crate) call_manager: std::sync::Arc<CallManager>,
-    pub(crate) gateway_health: std::sync::Mutex<GatewayHealthTracker>,
+    pub(crate) gateway_health: GatewayHealthTracker,
     pub(crate) inbound_transactions: dashmap::DashMap<String, InboundTransaction>,
     pub(crate) media_relay: MediaRelayState,
     pub(crate) registrar: tokio::sync::RwLock<RegistrationStore>,
@@ -253,6 +310,7 @@ pub(crate) struct EdgeState {
     pub(crate) nonce_replay_cache: DashMap<String, u64>,
     pub(crate) tcp_connections: dashmap::DashMap<SocketAddr, tokio::sync::mpsc::Sender<Vec<u8>>>,
     pub(crate) sbc_engine: sbc::SbcEngine,
+    pub(crate) sbc_rate_limit_enabled: bool,
     pub(crate) external_to_internal_call_ids: dashmap::DashMap<String, String>,
     pub(crate) internal_to_external_call_ids: dashmap::DashMap<String, String>,
     pub(crate) gateway_cache: std::sync::RwLock<HashMap<String, (bool, std::time::Instant)>>,
@@ -260,14 +318,19 @@ pub(crate) struct EdgeState {
     pub(crate) user_concurrency: dashmap::DashMap<String, u32>,
     pub(crate) anti_fraud_rules: std::sync::RwLock<Vec<cdr_core::AntiFraudRule>>,
     pub(crate) media_metrics_log: bool,
+    pub(crate) billing_settlement_enabled: bool,
+    pub(crate) gateway_health_persistence_enabled: bool,
     /// Active gateway OPTIONS probes keyed by their SIP Call-ID.
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
-    /// Redis 多路复用连接，用于集群模式下的跨节点注册状态共享。可选，单节点部署不设置。
-    pub(crate) redis_conn: std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>>,
+    /// Redis 自动重连连接，用于集群状态与呼叫热路径缓存。
+    pub(crate) redis_conn: std::sync::OnceLock<redis::aio::ConnectionManager>,
+    registration_sync: std::sync::OnceLock<crate::cluster::RegistrationSyncSender>,
+    cluster_egress: std::sync::OnceLock<ClusterEgress>,
+    registration_lookup_cache: dashmap::DashMap<String, CachedRegistrationLookup>,
+    registration_lookup_locks: dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     #[cfg(test)]
     pub(crate) test_gateways: std::sync::Mutex<Vec<String>>,
 }
-
 
 impl EdgeState {
     #[cfg(test)]
@@ -304,9 +367,7 @@ impl EdgeState {
 
         Self {
             call_manager: std::sync::Arc::new(call_manager),
-            gateway_health: std::sync::Mutex::new(GatewayHealthTracker::new(
-                call_core::HealthThresholds::default(),
-            )),
+            gateway_health: GatewayHealthTracker::new(call_core::HealthThresholds::default()),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay,
             registrar: tokio::sync::RwLock::new(RegistrationStore::new()),
@@ -321,14 +382,21 @@ impl EdgeState {
             nonce_replay_cache: DashMap::new(),
             tcp_connections: dashmap::DashMap::new(),
             sbc_engine,
+            sbc_rate_limit_enabled: config.sbc_rate_limit_enabled,
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
+            billing_settlement_enabled: config.billing_settlement_enabled,
+            gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
+            registration_sync: std::sync::OnceLock::new(),
+            cluster_egress: std::sync::OnceLock::new(),
+            registration_lookup_cache: dashmap::DashMap::new(),
+            registration_lookup_locks: dashmap::DashMap::new(),
             #[cfg(test)]
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
@@ -354,7 +422,7 @@ impl EdgeState {
 
         Self {
             call_manager: std::sync::Arc::new(call_manager),
-            gateway_health: std::sync::Mutex::new(GatewayHealthTracker::default()),
+            gateway_health: GatewayHealthTracker::default(),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay: MediaRelayState::new(),
             registrar: tokio::sync::RwLock::new(RegistrationStore::new()),
@@ -369,71 +437,235 @@ impl EdgeState {
             nonce_replay_cache: DashMap::new(),
             tcp_connections: dashmap::DashMap::new(),
             sbc_engine,
+            sbc_rate_limit_enabled: config.sbc_rate_limit_enabled,
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
+            billing_settlement_enabled: config.billing_settlement_enabled,
+            gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
             gateway_probes: dashmap::DashMap::new(),
             redis_conn: std::sync::OnceLock::new(),
+            registration_sync: std::sync::OnceLock::new(),
+            cluster_egress: std::sync::OnceLock::new(),
+            registration_lookup_cache: dashmap::DashMap::new(),
+            registration_lookup_locks: dashmap::DashMap::new(),
             test_gateways: std::sync::Mutex::new(Vec::new()),
         }
     }
 
     /// 设置 Redis 连接（仅在启动阶段调用一次）。
-    pub(crate) fn set_redis(&self, conn: redis::aio::MultiplexedConnection) {
-        let _ = self.redis_conn.set(std::sync::Arc::new(tokio::sync::Mutex::new(conn)));
+    pub(crate) fn set_redis(&self, conn: redis::aio::ConnectionManager) {
+        let _ = self.redis_conn.set(conn);
     }
 
-    /// 获取克隆的 Redis Mutex Arc 连接，适用于跨线程/异步闭包。
-    pub(crate) fn get_redis_arc(&self) -> Option<std::sync::Arc<tokio::sync::Mutex<redis::aio::MultiplexedConnection>>> {
+    /// 获取 Redis 连接管理器的克隆，各请求可并发发送命令并共享重连状态。
+    pub(crate) fn redis_connection(&self) -> Option<redis::aio::ConnectionManager> {
         self.redis_conn.get().cloned()
     }
 
-    /// 查找注册绑定的 Contact 地址。首先尝试本地缓存，若未命中则回退查找 Redis，实现跨节点集群共享。
+    pub(crate) fn set_registration_sync(&self, sender: crate::cluster::RegistrationSyncSender) {
+        let _ = self.registration_sync.set(sender);
+    }
+
+    pub(crate) fn registration_sync(&self) -> Option<crate::cluster::RegistrationSyncSender> {
+        self.registration_sync.get().cloned()
+    }
+
+    pub(crate) fn set_cluster_egress(&self, egress: ClusterEgress) {
+        let _ = self.cluster_egress.set(egress);
+    }
+
+    async fn forward_to_flow_owner(
+        &self,
+        target: SocketAddr,
+        bytes: Vec<u8>,
+    ) -> Result<bool, std::io::Error> {
+        let Some(egress) = self.cluster_egress.get() else {
+            return Ok(false);
+        };
+        let Some(mut redis) = self.redis_connection() else {
+            return Ok(false);
+        };
+        let payload: Option<String> = redis::cmd("GET")
+            .arg(flow_key(target))
+            .query_async(&mut redis)
+            .await
+            .map_err(std::io::Error::other)?;
+        let Some(flow) = payload
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<FlowRecord>(value).ok())
+        else {
+            return Ok(false);
+        };
+        if flow.owner_node_id == egress.node_id {
+            return Ok(false);
+        }
+        egress
+            .publish(&flow.owner_node_id, target, bytes)
+            .await
+            .map_err(std::io::Error::other)?;
+        Ok(true)
+    }
+
+    /// 从 Redis 读取 SIP 鉴权凭据，不回退查询 PostgreSQL。
+    pub(crate) async fn redis_auth_password(&self, username: &str) -> Option<String> {
+        let mut connection = self.redis_connection()?;
+        redis::cmd("HGET")
+            .arg("vos_rs:auth_users")
+            .arg(username)
+            .query_async(&mut connection)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// 使用 Redis 凭据执行 SIP Digest 鉴权，不访问 PostgreSQL。
+    pub(crate) async fn verify_sip_auth(
+        &self,
+        auth: &crate::sip::AuthConfig,
+        request: &SipRequest,
+    ) -> crate::sip::AuthDecision {
+        let username = auth.authorization_username(request);
+        let password = if let Some(username) = username.as_deref() {
+            self.redis_auth_password(username)
+                .await
+                .or_else(|| auth.configured_password(username))
+        } else {
+            None
+        };
+        auth.verify_request_with_password(
+            request,
+            password,
+            auth.is_enabled() || self.redis_connection().is_some(),
+            Some(&self.nonce_replay_cache),
+        )
+    }
+
+    /// 从 Redis 一次读取账户余额与最长前缀费率。
+    pub(crate) async fn redis_balance_check(
+        &self,
+        username: &str,
+        callee: &str,
+    ) -> Option<RedisBalanceCheck> {
+        let mut connection = self.redis_connection()?;
+        let mut pipeline = redis::pipe();
+        pipeline
+            .cmd("HGET")
+            .arg("vos_rs:billing:balances")
+            .arg(username)
+            .cmd("HMGET")
+            .arg("vos_rs:billing:rates");
+        for index in (0..=callee.len())
+            .rev()
+            .filter(|index| callee.is_char_boundary(*index))
+        {
+            pipeline.arg(&callee[..index]);
+        }
+        let (balance, rates): (Option<f64>, Vec<Option<f64>>) =
+            pipeline.query_async(&mut connection).await.ok()?;
+        let balance = balance.unwrap_or(0.0);
+        let rate = rates.into_iter().flatten().next().unwrap_or(0.0);
+        Some(RedisBalanceCheck {
+            has_balance: balance > 0.0 || rate == 0.0,
+            balance,
+            rate,
+        })
+    }
+
+    /// 查找注册绑定的 Contact 地址。先查本地注册表，未命中再查 Redis。
+    ///
+    /// SIP 请求热路径不访问 PostgreSQL，避免数据库池等待拖慢所有呼叫。
     pub(crate) async fn lookup_contact(
         &self,
         uri: &SipUri,
     ) -> Option<crate::sip::registrar::RegistrationContact> {
+        let aor = crate::sip::registrar::canonical_aor(uri).ok()?;
+        if let Some(cached) = self.cached_registration_lookup(&aor) {
+            return cached;
+        }
+
+        let lookup_lock = self
+            .registration_lookup_locks
+            .entry(aor.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let _guard = lookup_lock.lock().await;
+        if let Some(cached) = self.cached_registration_lookup(&aor) {
+            return cached;
+        }
+
         let now = std::time::SystemTime::now();
-        // 1. 尝试本地的 RegistrationStore 查找
-        let local_res = self
+        let mut result = self
             .registrar
             .read()
             .await
-            .lookup_contact(uri, now, self.db_store.as_ref())
+            .lookup_contact(uri, now, None)
             .await;
-        if local_res.is_some() {
-            return local_res;
-        }
 
-        // 2. 尝试从 Redis 集群查找
-        if let Some(arc) = self.get_redis_arc() {
-            if let Ok(aor) = crate::sip::registrar::canonical_aor(uri) {
-                let redis_key = format!("vos_rs:reg:{}", aor);
-                let mut conn = arc.lock().await;
+        if result.is_none() {
+            if let Some(mut conn) = self.redis_connection() {
+                let redis_key = format!("vos_rs:reg:{aor}");
                 let res: Result<String, redis::RedisError> = redis::cmd("GET")
                     .arg(&redis_key)
-                    .query_async(&mut *conn)
+                    .query_async(&mut conn)
                     .await;
                 if let Ok(json_str) = res {
-                    if let Ok(contacts) = serde_json::from_str::<Vec<crate::sip::registrar::RegistrationContact>>(&json_str) {
-                        // 返回第一个还有效的联系人
-                        for contact in contacts {
-                            if contact.expires > 0 {
-                                return Some(contact);
-                            }
-                        }
+                    if let Ok(contacts) = serde_json::from_str::<
+                        Vec<crate::sip::registrar::RegistrationContact>,
+                    >(&json_str)
+                    {
+                        result = contacts.into_iter().find(|contact| contact.expires > 0);
                     }
                 }
             }
         }
 
+        let ttl = if result.is_some() {
+            POSITIVE_REGISTRATION_CACHE_TTL
+        } else {
+            NEGATIVE_REGISTRATION_CACHE_TTL
+        };
+        self.registration_lookup_cache.insert(
+            aor,
+            CachedRegistrationLookup {
+                contact: result.clone(),
+                expires_at: Instant::now() + ttl,
+            },
+        );
+        self.prune_registration_lookup_cache();
+        result
+    }
+
+    fn cached_registration_lookup(
+        &self,
+        aor: &str,
+    ) -> Option<Option<crate::sip::registrar::RegistrationContact>> {
+        let cached = self.registration_lookup_cache.get(aor)?;
+        if cached.expires_at > Instant::now() {
+            return Some(cached.contact.clone());
+        }
+        drop(cached);
+        self.registration_lookup_cache.remove(aor);
         None
     }
 
+    fn prune_registration_lookup_cache(&self) {
+        if self.registration_lookup_cache.len() <= MAX_REGISTRATION_CACHE_ENTRIES {
+            return;
+        }
+        let now = Instant::now();
+        self.registration_lookup_cache
+            .retain(|_, cached| cached.expires_at > now);
+        self.registration_lookup_locks
+            .retain(|aor, _| self.registration_lookup_cache.contains_key(aor));
+    }
 
+    pub(crate) fn invalidate_registration_lookup(&self, aor: &str) {
+        self.registration_lookup_cache.remove(aor);
+    }
 
     pub(crate) fn get_internal_call_id(&self, external_call_id: &str) -> Option<String> {
         self.external_to_internal_call_ids
@@ -544,6 +776,46 @@ impl EdgeState {
         fallback_socket: &UdpSocket,
         edge_config: &EdgeConfig,
     ) -> Result<(), std::io::Error> {
+        // The guard intentionally covers the actual socket/channel write. Merely serializing
+        // response construction still allows a suspended provisional-response task to send
+        // after a final response under high scheduler pressure.
+        let _invite_response_guard = match datagram.invite_response.as_ref() {
+            Some(metadata) => {
+                let mut order = metadata.order.lock().await;
+                if order.cseq != metadata.cseq {
+                    if order
+                        .cseq
+                        .zip(metadata.cseq)
+                        .is_some_and(|(current, pending)| pending < current)
+                    {
+                        debug!(
+                            cseq = ?metadata.cseq,
+                            current_cseq = ?order.cseq,
+                            status = metadata.status_code,
+                            "dropping response from an older INVITE transaction"
+                        );
+                        return Ok(());
+                    }
+                    order.cseq = metadata.cseq;
+                    order.final_response_seen = metadata.status_code >= 200;
+                    order.final_response_send_started = false;
+                }
+                if metadata.status_code < 200 && order.final_response_send_started {
+                    debug!(
+                        cseq = ?metadata.cseq,
+                        status = metadata.status_code,
+                        "dropping late provisional INVITE response before network send"
+                    );
+                    return Ok(());
+                }
+                if metadata.status_code >= 200 {
+                    order.final_response_send_started = true;
+                }
+                Some(order)
+            }
+            None => None,
+        };
+
         let target_addr: SocketAddr = match datagram.target.parse() {
             Ok(addr) => addr,
             Err(_) => {
@@ -574,6 +846,16 @@ impl EdgeState {
             if tx.send(datagram.bytes.clone()).await.is_ok() {
                 return Ok(());
             }
+        }
+
+        if matches!(
+            transport,
+            Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss
+        ) && self
+            .forward_to_flow_owner(target_addr, datagram.bytes.clone())
+            .await?
+        {
+            return Ok(());
         }
 
         match transport {
@@ -714,6 +996,19 @@ impl EdgeState {
         self.server_transactions.insert(key, tx);
     }
 
+    pub(crate) fn take_invite_ack_transaction(
+        &self,
+        key: &InviteAckKey,
+    ) -> Option<tokio::sync::mpsc::Sender<transaction::ServerTransactionEvent>> {
+        let transaction_key = self.server_transactions.iter().find_map(|entry| {
+            (entry.key().invite_ack_key().as_ref() == Some(key)).then(|| entry.key().clone())
+        })?;
+        self.server_transactions
+            .remove(&transaction_key)
+            .map(|(_, tx)| tx)
+            .filter(|tx| !tx.is_closed())
+    }
+
     pub(crate) fn get_server_transaction(
         &self,
         key: &RequestTransactionKey,
@@ -746,35 +1041,31 @@ impl EdgeState {
             }
         }
 
-        // Check cached result first (TTL 60s)
-        {
-            let cache = self.gateway_cache.read().unwrap();
-            if let Some(entry) = cache.get(&peer_ip) {
-                if entry.1.elapsed().as_secs() < 60 {
-                    return entry.0;
-                }
-            }
-        }
+        self.gateway_cache
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&peer_ip)
+            .map(|entry| entry.0)
+            .unwrap_or(false)
+    }
 
-        let result = if let Some(ref db) = self.db_store {
-            if let Ok(gateways) = db.load_gateways().await {
-                gateways
-                    .iter()
-                    .any(|(_, host, _, _, _, _, _, _)| host == &peer_ip)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        // Update cache
-        {
-            let mut cache = self.gateway_cache.write().unwrap();
-            cache.insert(peer_ip, (result, std::time::Instant::now()));
-        }
-
-        result
+    /// 用已加载的路由网关替换网关 IP 缓存。
+    pub(crate) fn replace_gateway_cache<'a>(
+        &self,
+        gateway_hosts: impl IntoIterator<Item = &'a String>,
+    ) {
+        let now = std::time::Instant::now();
+        let mut cache = self
+            .gateway_cache
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        cache.clear();
+        cache.extend(
+            gateway_hosts
+                .into_iter()
+                .cloned()
+                .map(|host| (host, (true, now))),
+        );
     }
 
     pub(crate) fn cancel_client_transaction(&self, key: &ClientTransactionKey) {
@@ -865,6 +1156,9 @@ impl EdgeState {
                 active_forks: Vec::new(),
                 max_duration_secs,
                 established_at: None,
+                invite_response_order: Arc::new(tokio::sync::Mutex::new(
+                    InviteResponseOrder::default(),
+                )),
             },
         );
 

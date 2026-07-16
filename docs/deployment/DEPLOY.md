@@ -8,12 +8,15 @@ VOS-RS 包含以下核心可运行组件及基础设施：
 
 | 组件/服务 | 作用 | 默认监听端口 | 核心依赖 |
 | :--- | :--- | :--- | :--- |
-| `sip-edge` | SIP 边缘网关 (B2BUA、对称 RTP 中继、录音写盘、SBC 防御) | `5060` (SIP UDP/TCP), `8082` (管理 API) | Postgres, NATS |
+| `sip-router` | 原生 SIP 集群入口、Call-ID 亲和与事务回程 | `5060` (UDP/TCP), `8083` (探针/指标) | Redis |
+| `sip-edge` | SIP B2BUA、路由、计费和媒体节点调度 | `5070` (集群内部), `5062` (WebSocket), `8082` (管理 API) | Postgres, Redis, NATS |
+| `media-edge` | RTP/RTCP、DTLS-SRTP、录音和媒体质量处理 | `3030` (控制), `40000-40100` (RTP/RTCP) | — |
 | `api-server` | REST API 服务 (Axum 后端，供 Web 管理控制台调用) | `8080` (HTTP) | Postgres, NATS |
 | `cdr-worker` | NATS 话单写入消费者，批量将内存/队列话单刷入 PG | — (后台守护进程) | Postgres, NATS |
 | `web` | Web 管理控制台前端 (React 18 + TS + Vite + Nginx) | `3000` (Nginx) | api-server |
 | `PostgreSQL` | CDR 话单、路由表、费率、账户等主数据存储 | `5432` | — |
 | `NATS Server` | 高性能流式消息队列 (JetStream 模式)，缓存与投递 CDR 话单 | `4222` / `4223` | — |
+| `Redis` | 节点心跳、对话归属、热配置和投递记录 | `6379` | — |
 
 ---
 
@@ -48,16 +51,22 @@ docker run -d --name nats-dev -p 4222:4222 -p 8222:8222 nats:latest -js
 如果您希望对单独组件进行打断点调试或单独查看日志，可以使用以下命令行分别在不同终端启动：
 
 ```bash
-# 终端 1: 启动信令/媒体网关 sip-edge
+# 终端 1: 启动媒体节点
+VOS_RS_CONFIG_FILE=config.yaml cargo run -p media-edge
+
+# 终端 2: 启动信令节点
 VOS_RS_CONFIG_FILE=config.yaml cargo run -p sip-edge
 
-# 终端 2: 启动 API 控制台后端 api-server
+# 终端 3: 启动原生 SIP 入口（native 模式）
+VOS_RS_CONFIG_FILE=config.yaml cargo run -p sip-router
+
+# 终端 4: 启动 API 控制台后端 api-server
 VOS_RS_CONFIG_FILE=config.yaml cargo run -p api-server
 
-# 终端 3: 启动异步 CDR 话单入库组件 cdr-worker
+# 终端 5: 启动异步 CDR 话单入库组件 cdr-worker
 VOS_RS_CONFIG_FILE=config.yaml cargo run -p cdr-worker
 
-# 终端 4: 启动前端 Web 控制台
+# 终端 6: 启动前端 Web 控制台
 cd web
 npm run dev
 ```
@@ -66,23 +75,37 @@ npm run dev
 
 ## 三、Docker Compose 生产环境部署
 
-生产环境下推荐使用 Docker 容器化编排，各容器的编排配置文件与 `Dockerfile` 集中管理在 `deploy/docker/` 目录下：
+生产环境下推荐使用 Docker 容器化编排。Rust 服务只接收一个环境变量
+`VOS_RS_CONFIG_FILE=/etc/vos-rs/config.yaml`，数据库、Redis、NATS、SIP、媒体、API 与
+密钥配置全部从该 YAML 读取。Compose 自身的端口映射变量不会传入 Rust 进程。
 
 ```bash
-# 1. 编译并启动所有服务 (以 daemon 模式后台运行)
+# 1. 复制配置并替换密码、密钥和对外通告地址
+cp deploy/docker/config.compose.yaml /etc/vos-rs/config.yaml
+
+# 2. 指定宿主机配置并检查最终编排
+export VOS_RS_CONFIG_FILE_HOST=/etc/vos-rs/config.yaml
+docker compose -f deploy/docker/docker-compose.yml config
+
+# 3. 编译并启动所有服务
 docker compose -f deploy/docker/docker-compose.yml up -d --build
 
-# 2. 检查各容器健康状态
+# 4. 检查各容器健康状态
 docker compose -f deploy/docker/docker-compose.yml ps
 
-# 3. 监控特定服务的日志 (如 sip-edge)
+# 5. 监控特定服务的日志
 docker compose -f deploy/docker/docker-compose.yml logs -f sip-edge
 ```
 
+默认的 `config.compose.yaml` 只用于本机开发，包含公开的开发密码。生产环境必须提供外部
+配置文件，且当 NATS 启用用户名密码时同步修改 `connections.nats.url`。多台 sip-edge
+或 media-edge 应分别使用各自的节点配置文件，不能把同一 `node_id` 或 RTP 端口段复制
+到多台服务器。
+
 容器化编排中的核心端口分布及调整点：
-*   **SIP 信令端口**: 默认宿主机映射 UDP/TCP `5060` 端口。如果在公网或云端部署，需要在 `config.yaml` 中配置 `sip_edge.network.advertised_addr` 为公网 IP。
+*   **SIP 信令端口**: 宿主机 UDP/TCP `5060` 由 `sip-router` 监听；公网部署需要将 `sip_router.advertised_addr` 配置为公网地址。
 *   **管理后台端口**: http://localhost:3000。
-*   **RTP 中继端口范围**: 默认范围为 `40000` 到 `40100`。生产环境大量通话时，请在 `docker-compose.yml` 中适当放开范围（例如 `40000-45000`），并确保云防火墙同时放行该范围的 UDP 流量。
+*   **RTP 中继端口范围**: 默认由 `media-edge` 暴露 `40000-40100/udp`。修改范围时必须同时更新 `config.yaml` 的媒体节点端口段和 Compose 端口映射，并确保各媒体节点互不重叠。
 
 ---
 

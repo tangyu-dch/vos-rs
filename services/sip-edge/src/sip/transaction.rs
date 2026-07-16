@@ -35,7 +35,7 @@ pub(crate) struct ClientTransactionKey {
 }
 
 impl ClientTransactionKey {
-    pub(crate) fn from_request(request: &SipRequest) -> Option<Self> {
+    pub(crate) fn from_request(request: &sip_core::SipRequestBorrow<'_>) -> Option<Self> {
         if matches!(&request.method, Method::Ack) {
             return None;
         }
@@ -77,8 +77,40 @@ pub(crate) struct RequestTransactionKey {
     cseq: Option<String>,
 }
 
+/// Identifies the ACK for a successful INVITE independently of its Via branch.
+///
+/// RFC 3261 defines ACK for a 2xx response as a separate transaction, so its branch normally
+/// differs from the INVITE branch. The dialog identifiers and CSeq number are the stable keys.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct InviteAckKey {
+    peer: String,
+    call_id: String,
+    cseq: String,
+}
+
+impl InviteAckKey {
+    pub(crate) fn from_request(request: &sip_core::SipRequestBorrow<'_>, peer: SocketAddr) -> Option<Self> {
+        if !matches!(&request.method, Method::Invite | Method::Ack) {
+            return None;
+        }
+        let call_id = request.headers.get("call-id")?.as_str().to_string();
+        let cseq = request
+            .headers
+            .get("cseq")?
+            .as_str()
+            .split_whitespace()
+            .next()?
+            .to_string();
+        Some(Self {
+            peer: peer.to_string(),
+            call_id,
+            cseq,
+        })
+    }
+}
+
 impl RequestTransactionKey {
-    pub(crate) fn from_request(request: &SipRequest, peer: SocketAddr) -> Option<Self> {
+    pub(crate) fn from_request(request: &sip_core::SipRequestBorrow<'_>, peer: SocketAddr) -> Option<Self> {
         if matches!(&request.method, Method::Ack) {
             return None;
         }
@@ -109,6 +141,19 @@ impl RequestTransactionKey {
         })
     }
 
+    pub(crate) fn invite_ack_key(&self) -> Option<InviteAckKey> {
+        if self.method != "INVITE" {
+            return None;
+        }
+        let cseq = self.cseq.as_deref()?.split_whitespace().next()?.to_string();
+        Some(InviteAckKey {
+            peer: self.peer.clone(),
+            call_id: self.call_id.clone()?,
+            cseq,
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn new_manual(
         peer: String,
         method: String,
@@ -139,7 +184,7 @@ pub(crate) fn branch_param(via: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        spawn_invite_server_transaction, spawn_non_invite_server_transaction,
+        spawn_invite_server_transaction, spawn_non_invite_server_transaction, InviteAckKey,
         RequestTransactionKey, ServerTransactionEvent,
     };
     use sip_core::{parse_message, SipMessage};
@@ -182,6 +227,30 @@ mod tests {
         assert!(
             RequestTransactionKey::from_request(&request, "192.0.2.10:5060".parse().unwrap())
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn invite_ack_key_ignores_the_separate_ack_branch() {
+        let peer = "192.0.2.10:5060".parse().unwrap();
+        let invite = request(concat!(
+            "INVITE sip:1002@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-invite\r\n",
+            "Call-ID: 2af167fa-2b9e-47e9-9c3a-7d20c4361f8c\r\n",
+            "CSeq: 42 INVITE\r\n",
+            "Content-Length: 0\r\n\r\n"
+        ));
+        let ack = request(concat!(
+            "ACK sip:1002@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-new-ack\r\n",
+            "Call-ID: 2af167fa-2b9e-47e9-9c3a-7d20c4361f8c\r\n",
+            "CSeq: 42 ACK\r\n",
+            "Content-Length: 0\r\n\r\n"
+        ));
+
+        assert_eq!(
+            InviteAckKey::from_request(&invite, peer),
+            InviteAckKey::from_request(&ack, peer)
         );
     }
 
@@ -386,11 +455,88 @@ mod tests {
         assert!(event_tx.is_closed());
     }
 
+    #[tokio::test]
+    async fn test_invite_2xx_transaction_retransmits_until_ack() {
+        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client_addr = client_socket.local_addr().unwrap();
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let initial_request = request(concat!(
+            "INVITE sip:1002@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 127.0.0.1:0;branch=z9hG4bK-success\r\n",
+            "Call-ID: call-success@example.com\r\n",
+            "CSeq: 1 INVITE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ));
+        let key = RequestTransactionKey::from_request(&initial_request, client_addr).unwrap();
+        let (event_tx, event_rx) = mpsc::channel(16);
+        spawn_invite_server_transaction(
+            key,
+            initial_request.clone(),
+            client_addr,
+            Some(Arc::new(server_socket)),
+            event_rx,
+        );
+
+        let provisional = b"SIP/2.0 183 Session Progress\r\nContent-Length: 0\r\n\r\n".to_vec();
+        event_tx
+            .send(ServerTransactionEvent::UpdateLastProvisional(provisional))
+            .await
+            .unwrap();
+        let final_response = b"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec();
+        event_tx
+            .send(ServerTransactionEvent::Response(final_response.clone()))
+            .await
+            .unwrap();
+
+        let mut buffer = [0_u8; 1024];
+        let (length, _) = tokio::time::timeout(
+            Duration::from_millis(100),
+            client_socket.recv_from(&mut buffer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&buffer[..length], final_response);
+
+        // A successful final response is retransmitted by the UAS core even when the caller's
+        // duplicate INVITE was lost.
+        let (length, _) = tokio::time::timeout(
+            Duration::from_millis(50),
+            client_socket.recv_from(&mut buffer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&buffer[..length], final_response);
+
+        let ack = request(concat!(
+            "ACK sip:1002@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 127.0.0.1:0;branch=z9hG4bK-separate-ack\r\n",
+            "Call-ID: call-success@example.com\r\n",
+            "CSeq: 1 ACK\r\n",
+            "Content-Length: 0\r\n\r\n"
+        ));
+        event_tx
+            .send(ServerTransactionEvent::Ack(ack))
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(60),
+                client_socket.recv_from(&mut buffer)
+            )
+            .await
+            .is_err(),
+            "2xx retransmission must stop after ACK"
+        );
+    }
+
     fn request(raw: &str) -> sip_core::SipRequest {
-        let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
             panic!("expected request");
         };
-        request
+        request.into_owned()
     }
 }
 
@@ -520,6 +666,7 @@ pub(crate) fn spawn_invite_server_transaction(
 
         let mut last_response: Option<Vec<u8>> = None;
         let mut last_provisional: Option<Vec<u8>> = None;
+        let mut successful_final = false;
 
         loop {
             tokio::select! {
@@ -545,10 +692,12 @@ pub(crate) fn spawn_invite_server_transaction(
                             } else {
                                 let is_2xx = resp_bytes.starts_with(b"SIP/2.0 2");
                                 if is_2xx {
+                                    last_response = Some(resp_bytes.clone());
                                     if let Some(ref s) = socket {
                                         let _ = s.send_to(&resp_bytes, peer).await;
                                     }
-                                    return;
+                                    successful_final = true;
+                                    break;
                                 } else {
                                     last_response = Some(resp_bytes.clone());
                                     if let Some(ref s) = socket {
@@ -565,6 +714,41 @@ pub(crate) fn spawn_invite_server_transaction(
                     }
                 }
             }
+        }
+
+        if successful_final {
+            let mut retransmit_interval = t1;
+            let timer_l = tokio::time::sleep(timer_h_duration);
+            tokio::pin!(timer_l);
+            let mut retransmit_timer = Box::pin(tokio::time::sleep(retransmit_interval));
+
+            loop {
+                tokio::select! {
+                    _ = &mut timer_l => break,
+                    _ = &mut retransmit_timer => {
+                        if let (Some(response), Some(s)) = (&last_response, &socket) {
+                            let _ = s.send_to(response, peer).await;
+                        }
+                        retransmit_interval = std::cmp::min(retransmit_interval * 2, t2);
+                        retransmit_timer = Box::pin(tokio::time::sleep(retransmit_interval));
+                    }
+                    event_opt = event_rx.recv() => {
+                        let Some(event) = event_opt else {
+                            break;
+                        };
+                        match event {
+                            ServerTransactionEvent::Request(_) => {
+                                if let (Some(response), Some(s)) = (&last_response, &socket) {
+                                    let _ = s.send_to(response, peer).await;
+                                }
+                            }
+                            ServerTransactionEvent::Ack(_) => break,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            return;
         }
 
         if let Some(final_resp) = last_response {

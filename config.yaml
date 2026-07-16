@@ -1,5 +1,8 @@
 # VOS-RS 全局引导与基础服务多级配置文件
 
+logging:
+  filter: "info"
+
 # ==========================================
 # 1. 基础设施连接配置 (Connections)
 # ==========================================
@@ -32,9 +35,60 @@ connections:
     key_prefix: "recordings/"
 
 # ==========================================
+# 独立媒体边缘服务
+# ==========================================
+media_edge:
+  control_bind: "0.0.0.0:3030"
+  control_token: "change-me"
+  uds_path: "/tmp/media-edge.sock"
+  recording_workers: 4
+  recording_queue_capacity: 10000
+
+# ==========================================
+# 原生 SIP 集群入口（router_mode=native 时启用）
+# ==========================================
+sip_router:
+  udp_bind: "0.0.0.0:5070"
+  tcp_bind: "0.0.0.0:5070"
+  advertised_addr: "127.0.0.1:5070"
+  node_key_prefix: "vos_rs:cluster:sip_nodes"
+  discovery_interval_secs: 2
+  transaction_ttl_secs: 64
+  dialog_route_ttl_secs: 86400
+  udp_workers: 0 # 0=按 CPU 核数自动，最大 64
+  udp_queue_capacity: 4096 # 每个 worker 的有界队列
+  max_transactions: 1000000
+  tcp_max_connections: 10000
+  tcp_write_queue_capacity: 1024
+  tcp_idle_timeout_secs: 300
+  tcp_connect_timeout_secs: 3
+  manage_bind: "127.0.0.1:8083" # 健康检查与 Prometheus 指标，仅建议内网暴露
+  acl_allow: [] # 空列表允许全部；生产建议配置可信运营商/内网 CIDR
+  acl_block: []
+  rate_limit_capacity: 200 # 每个来源 IP 的令牌桶容量
+  rate_limit_fill_rate: 100 # 每秒补充令牌数
+  rate_limit_max_entries: 100000
+
+# ==========================================
 # 2. sip-edge 信令边缘网关服务配置
 # ==========================================
 sip_edge:
+  # 集群关闭时保持原有单节点直连行为。生产集群可选择 external 或 native。
+  cluster:
+    enabled: false
+    node_id: "sip-edge-1"
+    router_mode: "direct" # direct | external | native
+    advertised_addr: "127.0.0.1:5060"
+    management_url: "http://127.0.0.1:8082"
+    node_key_prefix: "vos_rs:cluster:sip_nodes"
+    heartbeat_interval_secs: 3
+    node_timeout_secs: 10
+    dialog_ttl_secs: 86400
+    nats_subject_prefix: "vos_rs.sip.node"
+    inter_node_ack_timeout_ms: 500
+    inter_node_max_retries: 3
+    inter_node_retry_delay_ms: 50
+    inter_node_dedupe_ttl_secs: 120
   network:
     sip_udp_bind: "0.0.0.0:5060"
     advertised_addr: "127.0.0.1:5060"
@@ -42,6 +96,8 @@ sip_edge:
     ws_bind: "0.0.0.0:5062"
   routing:
     default_gateway: ""
+    database_routes_enabled: true
+    gateway_health_checks_enabled: true
   nat_traversal:
     stun_server: ""
     upnp_enabled: false
@@ -53,9 +109,27 @@ sip_edge:
     nonce: "vos-rs-dev-nonce"
     secret_key: "change-me"
   media:
-    advertised_addr: "127.0.0.1"
-    port_min: 40000
-    port_max: 40100
+    allocation_strategy: "weighted_round_robin" # weighted_round_robin | least_sessions | call_id_hash
+    health_check_interval_secs: 3
+    unhealthy_threshold: 3
+    # 至少配置一个节点；local 最多一个，remote 可配置多个，也可以混合调度。
+    # 当前要求各节点 RTP 端口段不重叠。
+    nodes:
+      - id: "local-media"
+        type: "local"
+        advertised_addr: "127.0.0.1"
+        port_min: 40000
+        port_max: 40100
+        weight: 1
+    # nodes:
+    #   - id: "media-edge-1"
+    #     type: "remote"
+    #     control_url: "http://10.0.1.11:3030"
+    #     advertised_addr: "203.0.113.11"
+    #     port_min: 40000
+    #     port_max: 40998
+    #     weight: 1
+    #     control_token: "replace-with-random-token"
     symmetric_learning: true
     anti_spoofing: true
     source_relearn_secs: 30
@@ -69,12 +143,30 @@ sip_edge:
     max_duration_secs: 3600
     workers: 4
     queue_capacity: 10000
+  billing:
+    balance_enforcement_enabled: true
+    settlement_enabled: true
   performance:
     cdr_queue_capacity: 4096
+    cdr_persistence_enabled: true
     udp_workers: 4
     udp_workers_auto: true
     udp_receive_buffer_bytes: 4194304
     udp_send_buffer_bytes: 4194304
+  # Webhook 最小闭环：呼叫事件 -> NATS -> 签名 HTTP -> Redis 投递记录
+  webhooks:
+    enabled: false
+    endpoint_url: "http://127.0.0.1:8090/webhooks/calls"
+    # 生产环境必须替换为至少 16 字符的随机密钥。
+    signing_secret: "change-this-webhook-secret"
+    stream: "VOS_RS_WEBHOOKS"
+    subject: "vos_rs.webhooks.calls"
+    consumer: "vos_rs_webhook_delivery"
+    queue_capacity: 4096
+    request_timeout_ms: 3000
+    max_deliveries: 5
+    retry_delay_ms: 1000
+    delivery_record_ttl_secs: 604800
 
 # ==========================================
 # 3. api-server 管理控制台后端服务配置

@@ -16,6 +16,8 @@ import {
 import { IconRefresh, IconSave } from '@arco-design/web-react/icon';
 import { apiService } from '@/services/api';
 import { CONFIG_FIELD_MAP, CONFIG_FIELDS, CONFIG_GROUPS, type ConfigField } from './configSchema';
+import MediaClusterPanel from './MediaClusterPanel';
+import SipClusterPanel from './SipClusterPanel';
 import './SystemConfigs.css';
 
 type FormValues = Record<string, boolean | number | string>;
@@ -82,10 +84,6 @@ export default function SystemConfigs() {
   const configuredCount = useMemo(() => Object.keys(loadedValues).length, [loadedValues]);
 
   const handleSubmit = async (values: FormValues) => {
-    if (Number(values.rtp_port_min) >= Number(values.rtp_port_max)) {
-      Message.error('RTP 最大端口必须大于最小端口');
-      return;
-    }
     setSubmitting(true);
     try {
       const payload = serializeConfigValues(values);
@@ -155,6 +153,12 @@ export default function SystemConfigs() {
                   </section>
                 </Tabs.TabPane>
               ))}
+              <Tabs.TabPane key="media-cluster" title="媒体节点集群">
+                <MediaClusterPanel />
+              </Tabs.TabPane>
+              <Tabs.TabPane key="sip-cluster" title="SIP 信令集群">
+                <SipClusterPanel />
+              </Tabs.TabPane>
             </Tabs>
           </Form>
         </Card>

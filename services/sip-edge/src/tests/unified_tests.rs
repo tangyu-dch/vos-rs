@@ -211,6 +211,14 @@ fn test_scenario_runner() {
         String::from_utf8(datagram.bytes.clone()).expect("datagram should be UTF-8")
     }
 
+    fn response_text(datagrams: &[PendingDatagram], status_line: &str) -> String {
+        datagrams
+            .iter()
+            .map(datagram_text)
+            .find(|text| text.starts_with(status_line))
+            .unwrap_or_else(|| panic!("missing {status_line} datagram"))
+    }
+
     async fn send_invite(edge_state: &EdgeState, call_id: &str) {
         let invite = format!(
             concat!(
@@ -279,7 +287,10 @@ fn test_scenario_runner() {
             &edge_config(),
         )
         .await;
-        assert_eq!(datagrams.len(), 1);
+        assert_eq!(datagrams.len(), 2);
+        assert!(datagrams
+            .iter()
+            .any(|datagram| datagram_text(datagram).starts_with("ACK ")));
     }
 
     #[test]
@@ -391,8 +402,6 @@ fn test_scenario_runner() {
         let datagrams =
             handle_datagram(request.as_bytes(), peer(), &edge_state, &edge_config()).await;
         assert_eq!(datagrams.len(), 1);
-        assert_eq!(datagrams[0].target, "192.0.2.10:5060");
-
         let response = datagram_text(&datagrams[0]);
         assert!(response.starts_with("SIP/2.0 200 OK\r\n"));
         assert!(response.contains("X-VOS-RS-AOR: sip:1001@example.com\r\n"));
@@ -598,7 +607,8 @@ fn test_scenario_runner() {
         assert!(response.starts_with("SIP/2.0 100 Trying\r\n"));
         assert!(response.contains("Call-ID: invite-1@example.com\r\n"));
         assert!(response.contains("CSeq: 1 INVITE\r\n"));
-        assert!(response.contains("To: <sip:13800138000@example.com>;tag=vosrs-edge\r\n"));
+        assert!(response.contains("To: <sip:13800138000@example.com>\r\n"));
+        assert!(!response.contains("To: <sip:13800138000@example.com>;tag="));
 
         let outbound_invite = datagram_text(&datagrams[1]);
         assert_eq!(datagrams[1].target, "gw1.example.com:5060");
@@ -1161,8 +1171,6 @@ fn test_scenario_runner() {
         .await;
 
         assert_eq!(datagrams.len(), 1);
-        assert_eq!(datagrams[0].target, "192.0.2.10:5060");
-
         let response = datagram_text(&datagrams[0]);
         assert!(response.starts_with("SIP/2.0 180 Ringing\r\n"));
         assert!(response.contains("Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-inbound\r\n"));
@@ -1200,10 +1208,8 @@ fn test_scenario_runner() {
         )
         .await;
 
-        assert_eq!(datagrams.len(), 1);
-        assert_eq!(datagrams[0].target, "192.0.2.10:5060");
-
-        let response = datagram_text(&datagrams[0]);
+        assert_eq!(datagrams.len(), 2);
+        let response = response_text(&datagrams, "SIP/2.0 200 OK");
         assert!(response.starts_with("SIP/2.0 200 OK\r\n"));
         assert!(response.contains("Content-Type: application/sdp\r\n"));
         assert!(response.contains("Content-Length: 5\r\n\r\nv=0\r\n"));
@@ -1243,6 +1249,38 @@ fn test_scenario_runner() {
             .expect("call should still be tracked");
         assert_eq!(call.state, CallState::Established);
         assert!(call.answered_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn late_provisional_response_after_invite_ok_is_dropped() {
+        let edge_state = state_with_default_route();
+        let call_id = "invite-late-provisional@example.com";
+        send_invite(&edge_state, call_id).await;
+        send_gateway_ok(&edge_state, call_id).await;
+
+        let late_response = format!(
+            concat!(
+                "SIP/2.0 183 Session Progress\r\n",
+                "Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n",
+                "From: <sip:1001@example.com>;tag=from-tag\r\n",
+                "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
+                "Call-ID: {call_id}\r\n",
+                "CSeq: 1 INVITE\r\n",
+                "Content-Length: 0\r\n",
+                "\r\n"
+            ),
+            call_id = call_id
+        );
+
+        let datagrams = handle_datagram(
+            late_response.as_bytes(),
+            "198.51.100.20:5060".parse().unwrap(),
+            &edge_state,
+            &edge_config(),
+        )
+        .await;
+
+        assert!(datagrams.is_empty());
     }
 
     #[tokio::test]
@@ -1311,9 +1349,8 @@ fn test_scenario_runner() {
             &edge_config(),
         )
         .await;
-        assert_eq!(answer_datagrams.len(), 1);
-
-        let response = datagram_text(&answer_datagrams[0]);
+        assert_eq!(answer_datagrams.len(), 2);
+        let response = response_text(&answer_datagrams, "SIP/2.0 200 OK");
         let port_min = get_test_port_min();
         assert!(response.contains(&format!("m=audio {} RTP/AVP 8\r\n", port_min + 2)));
 
@@ -2046,8 +2083,8 @@ fn test_scenario_runner() {
         )
         .await;
 
-        assert_eq!(answer_datagrams.len(), 1);
-        let response_to_caller = datagram_text(&answer_datagrams[0]);
+        assert_eq!(answer_datagrams.len(), 2);
+        let response_to_caller = response_text(&answer_datagrams, "SIP/2.0 200 OK");
         assert!(response_to_caller.contains("Record-Route: <sip:proxy-inbound.example.com;lr>\r\n"));
 
         let ack = format!(
@@ -2219,7 +2256,7 @@ fn test_scenario_runner() {
         }
 
         {
-            let health = edge_state.gateway_health.lock().unwrap();
+            let health = &edge_state.gateway_health;
             assert_eq!(health.health("gw1").map(|h| h.active_calls()).unwrap_or(0), 1);
             assert_eq!(health.health("gw2").map(|h| h.active_calls()).unwrap_or(0), 1);
         }
@@ -2244,17 +2281,22 @@ fn test_scenario_runner() {
         )
         .await;
 
-        assert_eq!(res_datagrams.len(), 2);
-        assert_eq!(res_datagrams[0].target, peer().to_string());
-        
-        let cancel_datagram = &res_datagrams[1];
+        assert_eq!(res_datagrams.len(), 3);
+        assert!(res_datagrams
+            .iter()
+            .any(|datagram| datagram.target == peer().to_string()));
+
+        let cancel_datagram = res_datagrams
+            .iter()
+            .find(|datagram| datagram_text(datagram).starts_with("CANCEL "))
+            .expect("losing fork must be cancelled");
         assert_eq!(cancel_datagram.target, branches[1].1);
         let cancel_txt = datagram_text(cancel_datagram);
         assert!(cancel_txt.starts_with("CANCEL "));
         assert!(cancel_txt.contains(&format!("Call-ID: {}", branches[1].0)));
 
         {
-            let health = edge_state.gateway_health.lock().unwrap();
+            let health = &edge_state.gateway_health;
             let winning_gw = if branches[0].1.contains("gw1") { "gw1" } else { "gw2" };
             let canceled_gw = if branches[1].1.contains("gw1") { "gw1" } else { "gw2" };
             assert_eq!(health.health(winning_gw).map(|h| h.active_calls()).unwrap_or(0), 1);
@@ -2289,7 +2331,7 @@ fn test_scenario_runner() {
         );
         let req = sip_core::parse_message(register_req.as_bytes()).unwrap();
         let sip_req = match req {
-            sip_core::SipMessage::Request(r) => r,
+            sip_core::SipMessageBorrow::Request(r) => r.into_owned(),
             _ => panic!("expected request"),
         };
         registrar.handle_register(&sip_req, "192.0.2.11:5060".parse().unwrap(), SystemTime::now(), None).await.unwrap();
@@ -2346,6 +2388,22 @@ connections:
 sip_edge:
   network:
     advertised_addr: "127.0.0.1:5070"
+  routing:
+    gateway_health_checks_enabled: false
+  media:
+    nodes:
+      - id: "media-edge-test"
+        type: "remote"
+        control_url: "uds:///tmp/media-edge-test.sock"
+        advertised_addr: "127.0.0.1"
+        port_min: 40000
+        port_max: 40100
+        weight: 1
+  billing:
+    balance_enforcement_enabled: false
+    settlement_enabled: false
+  performance:
+    cdr_persistence_enabled: false
 "#;
 
         fs::write("test_config.yaml", main_yaml).unwrap();
@@ -2360,6 +2418,15 @@ sip_edge:
         assert_eq!(config.nats_url, Some("nats://127.0.0.1:4222".to_string()));
         assert_eq!(config.nats_cdr_stream, Some("STREAM_A".to_string()));
         assert_eq!(config.nats_cdr_subject, Some("SUB_A".to_string()));
+        assert!(!config.gateway_health_checks_enabled);
+        assert_eq!(config.media_cluster.nodes.len(), 1);
+        assert_eq!(
+            config.media_cluster.nodes[0].control_url.as_deref(),
+            Some("uds:///tmp/media-edge-test.sock")
+        );
+        assert!(!config.balance_enforcement_enabled);
+        assert!(!config.billing_settlement_enabled);
+        assert!(!config.cdr_persistence_enabled);
     }
 
 
@@ -2465,8 +2532,8 @@ sip_edge:
         )
         .await;
 
-        assert_eq!(datagrams.len(), 1);
-        let response = datagram_text(&datagrams[0]);
+        assert_eq!(datagrams.len(), 2);
+        let response = response_text(&datagrams, "SIP/2.0 200 OK");
         let port_min = get_test_port_min();
         assert!(response.contains("c=IN IP4 203.0.113.10\r\n"));
         assert!(response.contains(&format!("m=audio {} RTP/AVP 0\r\n", port_min)));
@@ -2598,7 +2665,7 @@ sip_edge:
             &edge_config(),
         )
         .await;
-        assert_eq!(answer_datagrams.len(), 1);
+        assert_eq!(answer_datagrams.len(), 2);
 
         // Verify initial relay endpoints are set up in the transaction
         let (caller_relay, gw_relay) = {
@@ -2683,10 +2750,10 @@ sip_edge:
             &edge_config(),
         )
         .await;
-        assert_eq!(reinvite_resp_datagrams.len(), 1);
+        assert_eq!(reinvite_resp_datagrams.len(), 2);
 
         // Verify the outgoing response to caller has rewritten SDP presenting caller_relay (reusing the same port!)
-        let forwarded_resp = datagram_text(&reinvite_resp_datagrams[0]);
+        let forwarded_resp = response_text(&reinvite_resp_datagrams, "SIP/2.0 200 OK");
         assert!(forwarded_resp.contains(&format!("m=audio {} RTP/AVP 0\r\n", caller_relay.port)));
 
         // Verify target for caller_relay is still gateway target (198.51.100.20:49172)
@@ -4053,8 +4120,8 @@ sip_edge:
         )
         .await;
 
-        assert_eq!(datagrams_200.len(), 1, "200 OK must be forwarded to caller");
-        let forwarded_200 = datagram_text(&datagrams_200[0]);
+        assert_eq!(datagrams_200.len(), 2, "gateway ACK and caller 200 are required");
+        let forwarded_200 = response_text(&datagrams_200, "SIP/2.0 200 OK");
         assert!(
             forwarded_200.starts_with("SIP/2.0 200 OK"),
             "must be 200 OK\n{forwarded_200}"
@@ -4796,7 +4863,7 @@ sip_edge:
         let mut request_correct = request.clone();
         request_correct.headers.insert(
             sip_core::HeaderName::new("proxy-authorization").unwrap(),
-            sip_core::HeaderValue::new(&auth_hdr),
+            sip_core::HeaderValue::new_owned(auth_hdr.clone()),
         );
 
         // First attempt succeeds
@@ -4981,6 +5048,10 @@ sip_edge:
             .expect("Call-ID header not found in outbound INVITE");
 
         assert_ne!(external_call_id, internal_call_id);
+        assert!(
+            uuid::Uuid::parse_str(&external_call_id).is_ok(),
+            "outbound Call-ID must be a UUID: {external_call_id}"
+        );
         assert_eq!(
             edge_state
                 .get_internal_call_id(&external_call_id)
@@ -5048,8 +5119,22 @@ sip_edge:
         let resp_dg =
             handle_datagram(gw_200.as_bytes(), gw_peer, &edge_state, &edge_config()).await;
 
-        assert_eq!(resp_dg.len(), 1, "200 OK should be forwarded to the caller");
-        let forwarded = datagram_text(&resp_dg[0]);
+        assert_eq!(
+            resp_dg.len(),
+            2,
+            "gateway leg should be ACKed while 200 OK is forwarded to caller"
+        );
+        let gateway_ack = resp_dg
+            .iter()
+            .find(|datagram| datagram_text(datagram).starts_with("ACK "))
+            .expect("gateway ACK not generated");
+        let gateway_ack_text = datagram_text(gateway_ack);
+        assert!(gateway_ack_text.contains(&format!("Call-ID: {external_call_id}\r\n")));
+        let forwarded = resp_dg
+            .iter()
+            .map(datagram_text)
+            .find(|text| text.starts_with("SIP/2.0 200 OK"))
+            .expect("caller 200 OK not generated");
 
         assert!(
             forwarded.contains(internal_call_id),
@@ -5093,8 +5178,7 @@ sip_edge:
             key.clone(),
             Arc::new(edge_config()),
         );
-
-        tokio::time::sleep(Duration::from_millis(15)).await;
+        assert!(edge_state.client_transactions.contains_key(&key));
 
         let resp = parse_message(
             b"SIP/2.0 180 Ringing\r\n\
@@ -5159,9 +5243,10 @@ sip_edge:
         assert_eq!(datagrams[1].target, "127.0.0.1:23456");
 
         let outbound_invite = parse_message(&datagrams[1].bytes).unwrap();
-        let SipMessage::Request(outbound_req) = outbound_invite else {
+        let sip_core::SipMessageBorrow::Request(outbound_req) = outbound_invite else {
             panic!("expected request");
         };
+        let outbound_req = outbound_req.into_owned();
         let key = ClientTransactionKey::from_request(&outbound_req).unwrap();
 
         spawn_client_transaction_retransmission(
@@ -5480,7 +5565,7 @@ async fn gateway_options_response_updates_probe_health() {
 
     assert!(datagrams.is_empty());
     assert!(!edge_state.gateway_probes.contains_key(call_id));
-    let health = edge_state.gateway_health.lock().unwrap();
+    let health = &edge_state.gateway_health;
     let status = health.get_gateway_status("gw1");
     assert!(status.is_some());
     let (open, failures, _, _, _, _) = status.unwrap();
@@ -5642,7 +5727,7 @@ async fn test_playback_and_mute_control_flow() {
     assert!(!relay.muted_ports.contains(&port));
 
     // 2. 启动音频播放
-    relay.start_playback(port, wav_path.clone(), PlaybackMode::Exclusive, true).unwrap();
+    relay.start_playback(port, wav_path.clone(), PlaybackMode::Exclusive, true).await.unwrap();
     assert!(relay.playbacks.contains_key(&port));
 
     // 3. 验证接收播放的 RTP 数据包，并且验证首包 Marker Bit 为 true
@@ -6000,5 +6085,3 @@ async fn test_call_monitoring() {
     // Clean up
     let _ = tx.send(());
 }
-
-

@@ -55,6 +55,7 @@ pub async fn create_user(
         .map_err(|e| ApiError {
             error: e.to_string(),
         })?;
+    crate::hot_cache::set_auth_user(&state, &req.username, &ha1).await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -75,6 +76,7 @@ pub async fn update_user(
         .map_err(|e| ApiError {
             error: e.to_string(),
         })?;
+    crate::hot_cache::set_auth_user(&state, &username, &ha1).await?;
     Ok(StatusCode::OK)
 }
 
@@ -90,6 +92,7 @@ pub async fn delete_user(
             error: e.to_string(),
         })?;
     if deleted {
+        crate::hot_cache::delete_auth_user(&state, &username).await?;
         Ok(StatusCode::OK)
     } else {
         Ok(StatusCode::NOT_FOUND)

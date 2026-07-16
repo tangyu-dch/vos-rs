@@ -24,6 +24,8 @@
 //! - 录音使用独立线程池，避免阻塞 tokio runtime
 //! - Symmetric RTP 自动学习对端地址，支持 NAT 穿透
 
+pub(crate) mod cluster;
+pub(crate) mod conference;
 pub(crate) mod config;
 pub(crate) mod crypto;
 pub(crate) mod dtmf;
@@ -33,18 +35,19 @@ pub(crate) mod relay;
 pub(crate) mod rtcp_processor;
 pub(crate) mod sdp;
 pub(crate) mod transcode;
+pub(crate) mod live_transcode;
 pub(crate) mod utils;
 pub(crate) mod wav;
-pub(crate) mod conference;
-
 
 pub use self::config::MediaConfig;
 pub use self::metrics::RtcpQualitySnapshot;
 pub use self::recording::MediaError;
 pub use self::relay::MediaRelayState;
+pub use self::live_transcode::LiveTranscoder;
 #[cfg(test)]
 pub use self::sdp::rewrite_sdp_body;
 pub use self::sdp::{
-    is_sdp_body, negotiated_audio_codec, parse_sdp_dtmf_payload_type, parse_sdp_rtp_endpoint,
-    rewrite_sdp_and_extract_endpoint, validate_media_negotiation,
+    build_webrtc_answer, is_sdp_body, is_webrtc_sdp, negotiated_audio_codec,
+    parse_sdp_dtmf_payload_type, parse_sdp_rtp_endpoint, rewrite_sdp_and_extract_endpoint,
+    rewrite_webrtc_offer_for_legacy, validate_media_negotiation,
 };

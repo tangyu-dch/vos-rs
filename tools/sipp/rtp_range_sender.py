@@ -50,20 +50,33 @@ def load_pcmu_frames(path):
         frame_rate = wav.getframerate()
         raw = wav.readframes(wav.getnframes())
 
-    if frame_rate != 8000 or sample_width != 2:
-        raise ValueError(
-            f"WAV must be 8kHz 16-bit PCM, got {frame_rate}Hz {sample_width * 8}bit"
-        )
+    # Unpack raw samples to signed 16-bit integer list
+    if sample_width == 1:
+        unsigned_samples = struct.unpack(f"<{len(raw)}B", raw)
+        samples = [(x - 128) * 256 for x in unsigned_samples]
+    elif sample_width == 2:
+        samples = list(struct.unpack(f"<{len(raw) // 2}h", raw))
+    else:
+        samples = [0] * (len(raw) // max(1, sample_width))
 
-    samples = struct.unpack(f"<{len(raw) // 2}h", raw)
-    if channels == 2:
-        samples = tuple(
-            (samples[i] + samples[i + 1]) // 2 for i in range(0, len(samples), 2)
-        )
+    # Average channels down to mono
+    if channels > 1:
+        merged = []
+        for i in range(0, len(samples), channels):
+            chunk = samples[i : i + channels]
+            if chunk:
+                merged.append(sum(chunk) // len(chunk))
+        samples = merged
+
+    # Resample to 8000Hz (Nearest Neighbor)
+    if frame_rate != 8000:
+        ratio = frame_rate / 8000.0
+        new_len = int(len(samples) / ratio)
+        samples = [samples[int(i * ratio)] for i in range(new_len)]
 
     frames = []
     for offset in range(0, len(samples), SAMPLES_PER_FRAME):
-        chunk = list(samples[offset : offset + SAMPLES_PER_FRAME])
+        chunk = samples[offset : offset + SAMPLES_PER_FRAME]
         if len(chunk) < SAMPLES_PER_FRAME:
             chunk.extend([0] * (SAMPLES_PER_FRAME - len(chunk)))
         frames.append(bytes(encode_pcmu(sample) for sample in chunk))

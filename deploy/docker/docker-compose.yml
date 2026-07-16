@@ -5,6 +5,14 @@
 #   查看日志: docker-compose logs -f [service]
 #   停止服务: docker-compose down
 
+x-vos-rs-backend: &vos-rs-backend
+  image: vos-rs/backend:local
+  build:
+    context: ../..
+    dockerfile: deploy/docker/Dockerfile
+  environment:
+    VOS_RS_CONFIG_FILE: /etc/vos-rs/config.yaml
+
 services:
   # ========== 基础设施 ==========
 
@@ -55,14 +63,32 @@ services:
     networks:
       - vos_rs_network
 
+  redis:
+    image: redis:7-alpine
+    container_name: vos-rs-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - vos_rs_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
+
   # RustFS：S3 兼容对象存储，录音归档到 recordings bucket。
   rustfs:
     image: rustfs/rustfs:latest
     container_name: vos-rs-rustfs
     command: ["/data"]
     environment:
-      RUSTFS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-${VOS_RS_OSS_ACCESS_KEY:-rustfsadmin}}"
-      RUSTFS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-${VOS_RS_OSS_SECRET_KEY:-rustfsadmin}}"
+      RUSTFS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
+      RUSTFS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
       RUSTFS_CONSOLE_ENABLE: "true"
     ports:
       - "${RUSTFS_API_PORT:-9000}:9000"
@@ -89,8 +115,8 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command: >-
       "mc alias set rustfs http://rustfs:9000
-      ${RUSTFS_ACCESS_KEY:-${VOS_RS_OSS_ACCESS_KEY:-rustfsadmin}}
-      ${RUSTFS_SECRET_KEY:-${VOS_RS_OSS_SECRET_KEY:-rustfsadmin}};
+      ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      ${RUSTFS_SECRET_KEY:-rustfsadmin};
       mc mb --ignore-existing rustfs/${RUSTFS_BUCKET:-recordings}"
     restart: "no"
     networks:
@@ -98,70 +124,70 @@ services:
 
   # ========== 应用服务 ==========
 
-  sip-edge:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
-    container_name: vos-rs-sip-edge
-    command: ["./sip-edge"]
-    environment:
-      # SIP 配置
-      VOS_RS_SIP_UDP_BIND: "0.0.0.0:5060"
-      VOS_RS_SIP_ADVERTISED_ADDR: "${SIP_ADVERTISED_ADDR:-sip-edge:5060}"
-      VOS_RS_SIP_DEFAULT_GATEWAY: "${SIP_DEFAULT_GATEWAY:-127.0.0.1:5070}"
-      VOS_RS_SIP_UDP_RECEIVE_BUFFER: "${SIP_UDP_RECEIVE_BUFFER:-4194304}"
-      VOS_RS_SIP_UDP_SEND_BUFFER: "${SIP_UDP_SEND_BUFFER:-4194304}"
-
-      # RTP 配置
-      VOS_RS_RTP_ADVERTISED_ADDR: "${RTP_ADVERTISED_ADDR:-sip-edge}"
-      VOS_RS_RTP_PORT_MIN: "${RTP_PORT_MIN:-40000}"
-      VOS_RS_RTP_PORT_MAX: "${RTP_PORT_MAX:-40100}"
-      VOS_RS_RTP_SYMMETRIC_LEARNING: "${RTP_SYMMETRIC_LEARNING:-true}"
-      VOS_RS_RTP_ANTI_SPOOFING: "${RTP_ANTI_SPOOFING:-true}"
-
-      # 数据库
-      VOS_RS_DATABASE_URL: "postgres://${POSTGRES_USER:-vos_rs}:${POSTGRES_PASSWORD:-vos_rs}@postgres:5432/${POSTGRES_DB:-vos_rs}"
-
-      # NATS
-      VOS_RS_NATS_URL: "nats://nats:4222"
-      VOS_RS_NATS_CDR_STREAM: "VOS_RS_CDRS"
-      VOS_RS_NATS_CDR_SUBJECT: "vos-rs.cdrs"
-
-      # 录音
-      VOS_RS_RECORDING_ENABLED: "${RECORDING_ENABLED:-true}"
-      VOS_RS_RECORDING_DIR: /data/recordings
-      VOS_RS_RECORDING_WORKERS: "${RECORDING_WORKERS:-4}"
-      VOS_RS_RECORDING_QUEUE_CAPACITY: "${RECORDING_QUEUE_CAPACITY:-4096}"
-      VOS_RS_RECORDING_RETENTION_SECS: "${RECORDING_RETENTION_SECS:-604800}"
-
-      # 认证
-      VOS_RS_SIP_AUTH_USERS: "${SIP_AUTH_USERS:-1001:secret,1002:secret}"
-      VOS_RS_SIP_AUTH_REALM: "${SIP_AUTH_REALM:-vos-rs}"
-
-      # 内部密钥
-      VOS_RS_INTERNAL_SECRET: "${INTERNAL_SECRET:-change-me-in-production}"
-
-      # 管理 API
-      VOS_RS_MANAGE_BIND: "0.0.0.0:8082"
-
-      # 日志
-      RUST_LOG: "${RUST_LOG:-sip_edge=info}"
-
+  sip-router:
+    <<: *vos-rs-backend
+    container_name: vos-rs-sip-router
+    command: ["./sip-router"]
     ports:
       - "${SIP_UDP_PORT:-5060}:5060/udp"
       - "${SIP_TCP_PORT:-5060}:5060/tcp"
-      - "${MANAGE_PORT:-8082}:8082"
+      - "${SIP_ROUTER_MANAGE_PORT:-8083}:8083"
     volumes:
+      - "${VOS_RS_CONFIG_FILE_HOST:-./config.compose.yaml}:/etc/vos-rs/config.yaml:ro"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
+
+  media-edge:
+    <<: *vos-rs-backend
+    container_name: vos-rs-media-edge
+    command: ["./media-edge"]
+    ports:
+      - "${MEDIA_CONTROL_PORT:-3030}:3030"
+      - "${RTP_PORT_MIN:-40000}-${RTP_PORT_MAX:-40100}:40000-40100/udp"
+    volumes:
+      - "${VOS_RS_CONFIG_FILE_HOST:-./config.compose.yaml}:/etc/vos-rs/config.yaml:ro"
+      - vos_rs_recordings:/data/recordings
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3030/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - vos_rs_network
+
+  sip-edge:
+    <<: *vos-rs-backend
+    container_name: vos-rs-sip-edge
+    command: ["./sip-edge"]
+    ports:
+      - "${MANAGE_PORT:-8082}:8082"
+      - "${SIP_WS_PORT:-5062}:5062"
+    volumes:
+      - "${VOS_RS_CONFIG_FILE_HOST:-./config.compose.yaml}:/etc/vos-rs/config.yaml:ro"
       - vos_rs_recordings:/data/recordings
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       nats:
         condition: service_healthy
-      rustfs:
-        condition: service_started
+      media-edge:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -H 'X-VOS-Token: ${INTERNAL_SECRET:-change-me-in-production}' http://localhost:8082/manage/active-calls || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8082/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -171,53 +197,18 @@ services:
       - vos_rs_network
 
   api-server:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
+    <<: *vos-rs-backend
     container_name: vos-rs-api-server
     command: ["./api-server"]
-    environment:
-      # 数据库
-      VOS_RS_DATABASE_URL: "postgres://${POSTGRES_USER:-vos_rs}:${POSTGRES_PASSWORD:-vos_rs}@postgres:5432/${POSTGRES_DB:-vos_rs}"
-
-      # API 配置
-      # 容器内端口固定，宿主机端口通过 API_HOST_PORT 单独映射。
-      API_PORT: "8080"
-      VOS_RS_MANAGE_BASE: "http://sip-edge:8082"
-
-      # JWT 密钥（生产环境必须修改）
-      VOS_RS_API_JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
-
-      # 登录密码（生产环境必须修改）
-      VOS_RS_ADMIN_PASSWORD: "${ADMIN_PASSWORD:-admin123}"
-      VOS_RS_OPERATOR_PASSWORD: "${OPERATOR_PASSWORD:-operator123}"
-      VOS_RS_FINANCIER_PASSWORD: "${FINANCIER_PASSWORD:-financier123}"
-
-      # 内部密钥
-      VOS_RS_INTERNAL_SECRET: "${INTERNAL_SECRET:-change-me-in-production}"
-
-      # 录音目录
-      VOS_RS_RECORDING_DIR: /data/recordings
-      VOS_RS_STORAGE_BACKEND: "${STORAGE_BACKEND:-oss}"
-      VOS_RS_OSS_ENDPOINT: "${RUSTFS_ENDPOINT:-http://rustfs:9000}"
-      VOS_RS_OSS_BUCKET: "${RUSTFS_BUCKET:-recordings}"
-      VOS_RS_OSS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-${VOS_RS_OSS_ACCESS_KEY:-rustfsadmin}}"
-      VOS_RS_OSS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-${VOS_RS_OSS_SECRET_KEY:-rustfsadmin}}"
-      VOS_RS_OSS_KEY_PREFIX: "${RUSTFS_KEY_PREFIX:-recordings/}"
-      VOS_RS_OSS_REGION: "${RUSTFS_REGION:-us-east-1}"
-
-      # CORS 配置
-      VOS_RS_API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:80}"
-
-      # 日志
-      RUST_LOG: "${RUST_LOG:-api_server=info}"
-
     ports:
       - "${API_HOST_PORT:-8080}:8080"
     volumes:
+      - "${VOS_RS_CONFIG_FILE_HOST:-./config.compose.yaml}:/etc/vos-rs/config.yaml:ro"
       - vos_rs_recordings:/data/recordings
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       nats:
         condition: service_healthy
@@ -238,31 +229,15 @@ services:
       - vos_rs_network
 
   cdr-worker:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
+    <<: *vos-rs-backend
     container_name: vos-rs-cdr-worker
     command: ["./cdr-worker"]
-    environment:
-      # 数据库
-      VOS_RS_DATABASE_URL: "postgres://${POSTGRES_USER:-vos_rs}:${POSTGRES_PASSWORD:-vos_rs}@postgres:5432/${POSTGRES_DB:-vos_rs}"
-
-      # NATS
-      VOS_RS_NATS_URL: "nats://nats:4222"
-      VOS_RS_NATS_CDR_STREAM: "VOS_RS_CDRS"
-      VOS_RS_NATS_CDR_SUBJECT: "vos-rs.cdrs"
-      VOS_RS_NATS_CDR_CONSUMER: "vos-rs-cdr-worker"
-
-      # 批量配置
-      VOS_RS_CDR_BATCH_SIZE: "${CDR_BATCH_SIZE:-50}"
-      VOS_RS_CDR_BATCH_TIMEOUT_MS: "${CDR_BATCH_TIMEOUT_MS:-100}"
-      VOS_RS_CDR_MAX_DELIVERIES: "${CDR_MAX_DELIVERIES:-5}"
-
-      # 日志
-      RUST_LOG: "${RUST_LOG:-cdr_worker=info}"
-
+    volumes:
+      - "${VOS_RS_CONFIG_FILE_HOST:-./config.compose.yaml}:/etc/vos-rs/config.yaml:ro"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       nats:
         condition: service_healthy
@@ -308,6 +283,9 @@ volumes:
   vos_rs_nats:
     driver: local
     name: vos_rs_nats
+  vos_rs_redis:
+    driver: local
+    name: vos_rs_redis
   vos_rs_recordings:
     driver: local
     name: vos_rs_recordings

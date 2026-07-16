@@ -1,0 +1,71 @@
+connections:
+  database:
+    host: "127.0.0.1"
+    port: 5432
+    username: "tangyu"
+    password: ""
+    database: "vos_rs"
+    max_connections: 10
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+    database: 0
+    max_connections: 10
+
+sip_edge:
+  dynamic_config:
+    enabled: false
+  billing:
+    balance_enforcement_enabled: false
+  network:
+    sip_udp_bind: "127.0.0.1:5160"
+    advertised_addr: "127.0.0.1:5160"
+    manage_bind: "127.0.0.1:5182"
+    ws_bind: "127.0.0.1:5183"
+  routing:
+    default_gateway: "127.0.0.1:5170"
+  security:
+    internal_secret: "sipp-test-secret"
+  media:
+    allocation_strategy: "weighted_round_robin"
+    health_check_interval_secs: 1
+    unhealthy_threshold: 2
+    nodes:
+      - id: "media-edge-a"
+        type: "remote"
+        control_url: "http://127.0.0.1:3031"
+        advertised_addr: "127.0.0.1"
+        port_min: 40000
+        port_max: 40998
+        weight: 1
+        control_token: ""
+      - id: "media-edge-b"
+        type: "remote"
+        control_url: "http://127.0.0.1:3032"
+        advertised_addr: "127.0.0.1"
+        port_min: 41000
+        port_max: 41998
+        weight: 1
+        control_token: ""
+    symmetric_learning: true
+    anti_spoofing: true
+    source_relearn_secs: 30
+    metrics_log: false
+  recording:
+    enabled: true
+    directory: "target/test_recordings"
+    retention_secs: 0
+    min_free_bytes: 0
+    max_file_bytes: 0
+    max_duration_secs: 0
+    workers: 4
+    queue_capacity: 4096
+  performance:
+    cdr_queue_capacity: 4096
+    udp_workers: 1
+    udp_workers_auto: false
+    udp_receive_buffer_bytes: 4194304
+    udp_send_buffer_bytes: 4194304
+logging:
+  filter: "sip_edge=debug,info"

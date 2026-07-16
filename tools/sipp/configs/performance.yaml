@@ -18,6 +18,7 @@ sip_edge:
     enabled: false
   billing:
     balance_enforcement_enabled: false
+    settlement_enabled: false
   network:
     sip_udp_bind: "127.0.0.1:5160"
     advertised_addr: "127.0.0.1:5160"
@@ -25,12 +26,19 @@ sip_edge:
     ws_bind: "127.0.0.1:5183"
   routing:
     default_gateway: "127.0.0.1:5170"
+    gateway_health_checks_enabled: false
   security:
     internal_secret: "sipp-performance-secret"
+    sbc_rate_limit_enabled: false
+    sbc_max_concurrency: 100000
   media:
-    advertised_addr: "127.0.0.1"
-    port_min: 40000
-    port_max: 65000
+    nodes:
+      - id: "local-media"
+        type: "local"
+        advertised_addr: "127.0.0.1"
+        port_min: 10000
+        port_max: 38000
+        weight: 1
     symmetric_learning: true
     anti_spoofing: true
     source_relearn_secs: 30
@@ -42,7 +50,10 @@ sip_edge:
     queue_capacity: 4096
   performance:
     cdr_queue_capacity: 100000
+    cdr_persistence_enabled: false
     udp_workers: 4
     udp_workers_auto: true
     udp_receive_buffer_bytes: 4194304
     udp_send_buffer_bytes: 4194304
+logging:
+  filter: "warn"

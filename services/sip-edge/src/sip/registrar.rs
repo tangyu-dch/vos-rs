@@ -47,7 +47,6 @@ pub struct RegistrationContact {
     pub path: Vec<String>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterOutcome {
     pub aor: String,
@@ -617,10 +616,10 @@ mod tests {
     }
 
     fn request(raw: &str) -> SipRequest {
-        let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+        let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
             panic!("expected request");
         };
-        request
+        request.into_owned()
     }
 
     #[allow(dead_code)]

@@ -4,8 +4,42 @@ use crate::{CallError, CallResult};
 use sip_core::SipUri;
 
 #[derive(Debug, Clone, Default, PartialEq)]
+struct PrefixTrieNode {
+    routes: Vec<Route>,
+    children: std::collections::HashMap<char, PrefixTrieNode>,
+}
+
+impl PrefixTrieNode {
+    fn insert(&mut self, prefix: &str, route: Route) {
+        let mut current = self;
+        for c in prefix.chars() {
+            current = current.children.entry(c).or_default();
+        }
+        current.routes.push(route);
+    }
+
+    fn query(&self, destination: &str, out: &mut Vec<Route>) {
+        let mut current = self;
+        for route in &current.routes {
+            out.push(route.clone());
+        }
+        for c in destination.chars() {
+            if let Some(next) = current.children.get(&c) {
+                current = next;
+                for route in &current.routes {
+                    out.push(route.clone());
+                }
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RouteTable {
     routes: Vec<Route>,
+    trie: PrefixTrieNode,
 }
 
 fn weighted_shuffle(mut items: Vec<&Route>) -> Vec<&Route> {
@@ -36,14 +70,20 @@ fn weighted_shuffle(mut items: Vec<&Route>) -> Vec<&Route> {
 
 impl RouteTable {
     pub fn new(routes: Vec<Route>) -> Self {
-        Self { routes }
+        let mut trie = PrefixTrieNode::default();
+        for route in &routes {
+            trie.insert(&route.prefix, route.clone());
+        }
+        Self { routes, trie }
     }
 
     pub fn clear(&mut self) {
         self.routes.clear();
+        self.trie = PrefixTrieNode::default();
     }
 
     pub fn add_route(&mut self, route: Route) {
+        self.trie.insert(&route.prefix, route.clone());
         self.routes.push(route);
     }
 
@@ -58,15 +98,14 @@ impl RouteTable {
             .as_deref()
             .ok_or(CallError::InvalidDestinationUri)?;
 
-        let mut matching_routes: Vec<&Route> = self
-            .routes
-            .iter()
-            .filter(|route| route.matches(destination))
-            .collect();
+        let mut matched_buffer = Vec::new();
+        self.trie.query(destination, &mut matched_buffer);
 
-        if matching_routes.is_empty() {
+        if matched_buffer.is_empty() {
             return Err(CallError::NoRouteForDestination(destination.to_string()));
         }
+
+        let mut matching_routes: Vec<&Route> = matched_buffer.iter().collect();
 
         matching_routes.sort_by(|left, right| {
             right
@@ -128,10 +167,11 @@ impl RouteTable {
             .as_deref()
             .ok_or(CallError::InvalidDestinationUri)?;
 
-        let mut matching_routes: Vec<&Route> = self
-            .routes
+        let mut matched_buffer = Vec::new();
+        self.trie.query(destination, &mut matched_buffer);
+
+        let mut matching_routes: Vec<&Route> = matched_buffer
             .iter()
-            .filter(|route| route.matches(destination))
             .filter(|route| route.target.has_capacity(call_direction))
             .collect();
 
@@ -192,7 +232,7 @@ impl RouteTable {
     pub fn select_healthy_candidates(
         &self,
         destination_uri: &SipUri,
-        health: &mut GatewayHealthTracker,
+        health: &GatewayHealthTracker,
         call_direction: Option<&str>,
     ) -> CallResult<Vec<SelectedRoute>> {
         let all_candidates = if let Some(dir) = call_direction {
@@ -213,7 +253,7 @@ impl RouteTable {
         if available.is_empty() {
             warn_all_gateways_unhealthy(&all_candidates);
             return Err(CallError::GatewayUnavailable(
-                destination_uri.user.clone().unwrap_or_default(),
+                destination_uri.user.as_deref().unwrap_or_default().to_string(),
             ));
         }
 
@@ -233,7 +273,7 @@ impl RouteTable {
                 }
             }
             return Err(CallError::GatewayUnavailable(
-                destination_uri.user.clone().unwrap_or_default(),
+                destination_uri.user.as_deref().unwrap_or_default().to_string(),
             ));
         }
 
