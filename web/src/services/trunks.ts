@@ -18,7 +18,7 @@ export interface TrunkIpRule extends Entity {
 
 export interface OutboundPolicy extends Entity {
   caller_mode: CallerPolicyMode;
-  fallback_mode: 'reject' | 'fallback_number' | 'fallback_pool';
+  fallback_mode: 'reject' | 'fixed' | 'pool';
   fixed_number?: string;
   caller_pool_id?: string;
   egress_mode: 'direct' | 'group';
@@ -68,7 +68,16 @@ export function getOutboundPolicy(id: string) {
 }
 
 export function saveOutboundPolicy(id: string, policy: OutboundPolicy) {
-  return api.put<OutboundPolicy>(`/trunks/${encodeURIComponent(id)}/outbound-policy`, policy);
+  return api.put<OutboundPolicy>(`/trunks/${encodeURIComponent(id)}/outbound-policy`, policyForSave(policy));
+}
+
+export function policyForSave(policy: OutboundPolicy): OutboundPolicy {
+  const body = { ...policy };
+  if (body.caller_mode !== 'fixed_number') delete body.fixed_number;
+  if (body.caller_mode !== 'virtual_pool') delete body.caller_pool_id;
+  if (body.egress_mode === 'direct') delete body.egress_group_id;
+  else delete body.direct_egress_trunk_id;
+  return body;
 }
 
 export async function listOptions(path: '/caller-pools' | '/egress-groups' | '/trunks'): Promise<Entity[]> {

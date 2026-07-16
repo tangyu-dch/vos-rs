@@ -45,7 +45,6 @@ function BasicTab({ draft, set }: { draft: Entity; set: (key: string, value: unk
   const role = trunkRole(draft);
   return <Form layout="vertical"><Grid.Row className="form-grid" gutter={[18, 0]}>
     <Field label="中继标识" required><Input value={String(draft.id ?? '')} disabled /></Field>
-    <Field label="中继名称"><Input value={String(draft.name ?? '')} onChange={(value) => set('name', value)} placeholder="便于识别的业务名称" /></Field>
     <Field label="中继类型" required><Select value={role} options={roleOptions} onChange={(value) => set('role', value)} /></Field>
     <Field label="计费账户"><InputNumber value={draft.account_id as number | undefined} onChange={(value) => set('account_id', value)} placeholder="可选" style={{ width: '100%' }} /></Field>
     {role === 'egress' && <><Field label="主机地址" required><Input value={String(draft.host ?? '')} onChange={(value) => set('host', value)} /></Field><Field label="SIP 端口" required><InputNumber value={Number(draft.port ?? 5060)} min={1} max={65535} onChange={(value) => set('port', value)} style={{ width: '100%' }} /></Field></>}
@@ -73,8 +72,8 @@ function AccessAuthTab({ draft, set, rules, setRules }: { draft: Entity; set: (k
   const showDigest = mode === 'digest_register' || mode === 'ip_and_digest';
   return <Form layout="vertical"><Grid.Row className="form-grid" gutter={[18, 0]}>
     <Field label="认证方式" required><Select value={mode} options={authOptions} onChange={(value) => set('access_auth_mode', value)} /></Field>
-    <Field label="认证 Realm"><Input value={String(draft.access_realm ?? '')} disabled={!showDigest} onChange={(value) => set('access_realm', value)} placeholder="默认使用系统 Realm" /></Field>
-    {showDigest && <><Field label="注册用户" required><Input value={String(draft.reg_username ?? '')} onChange={(value) => set('reg_username', value)} /></Field><Field label="注册密码"><Input.Password value={String(draft.reg_password ?? '')} onChange={(value) => set('reg_password', value)} placeholder="编辑时留空表示不修改" /></Field><Field label="最短有效期"><InputNumber min={60} value={Number(draft.min_expires_secs ?? 60)} onChange={(value) => set('min_expires_secs', value)} style={{ width: '100%' }} /></Field><Field label="最长有效期"><InputNumber min={60} value={Number(draft.max_expires_secs ?? 3600)} onChange={(value) => set('max_expires_secs', value)} style={{ width: '100%' }} /></Field></>}
+    <Field label="认证 Realm"><Input value="继承系统 Realm" disabled /></Field>
+    {showDigest && <><Field label="注册用户" required><Input value={String(draft.reg_username ?? '')} onChange={(value) => set('reg_username', value)} /></Field><Field label="注册密码"><Input.Password value={String(draft.reg_password ?? '')} onChange={(value) => set('reg_password', value)} placeholder="编辑时留空表示不修改" /></Field></>}
     {showIp && <Field label="IP 白名单" fullWidth><IpRulesEditor rules={rules} onChange={setRules} /></Field>}
   </Grid.Row></Form>;
 }
@@ -92,12 +91,14 @@ function AccessRegistrationStatus({ registrations }: { registrations: Entity[] }
   return <div className="section-block"><div className="section-title"><div><h2>注册终端</h2><p className="muted-copy">仅注册认证或 IP 加认证模式会产生第三方注册状态。</p></div><Tag color={registrations.length ? 'green' : 'gray'}>{registrations.length ? `${registrations.length} 个在线注册` : '暂无注册'}</Tag></div>{registrations.length ? <Table pagination={false} data={registrations} columns={[{ title: '联系地址', dataIndex: 'contact' }, { title: '所在节点', dataIndex: 'node' }, { title: '过期时间', dataIndex: 'expires_at' }]} /> : <Empty description="暂无第三方注册终端" />}</div>;
 }
 
-function CallerTab({ policy, set }: { policy: OutboundPolicy; set: (key: keyof OutboundPolicy, value: unknown) => void }) {
+function CallerTab({ policy, set, pools, numbers }: { policy: OutboundPolicy; set: (key: keyof OutboundPolicy, value: unknown) => void; pools: Entity[]; numbers: Entity[] }) {
+  const numberOptions = numbers.map((item) => ({ label: String(item.number), value: String(item.number) }));
+  const poolOptions = pools.map((item) => ({ label: String(item.virtual_alias || item.id), value: String(item.id) }));
   return <Form layout="vertical"><Grid.Row className="form-grid" gutter={[18, 0]}>
     <Field label="主叫策略" required><Select value={policy.caller_mode} options={callerOptions} onChange={(value) => set('caller_mode', value)} /></Field>
-    <Field label="失败处理" required><Select value={policy.fallback_mode} options={[{ label: '拒绝呼叫', value: 'reject' }, { label: '固定替换', value: 'fallback_number' }, { label: '号码池替换', value: 'fallback_pool' }]} onChange={(value) => set('fallback_mode', value)} /></Field>
-    {policy.caller_mode === 'fixed_number' && <Field label="固定号码" required><Input value={policy.fixed_number} onChange={(value) => set('fixed_number', value)} placeholder="填写已授权真实号码" /></Field>}
-    {policy.caller_mode === 'virtual_pool' && <Field label="主叫号码池" required><Input value={policy.caller_pool_id} onChange={(value) => set('caller_pool_id', value)} placeholder="选择或填写号码池 ID" /></Field>}
+    <Field label="失败处理" required><Select value={policy.fallback_mode} options={[{ label: '拒绝呼叫', value: 'reject' }, { label: '固定替换', value: 'fixed' }, { label: '号码池替换', value: 'pool' }]} onChange={(value) => set('fallback_mode', value)} /></Field>
+    {policy.caller_mode === 'fixed_number' && <Field label="固定号码" required><Select value={policy.fixed_number} options={numberOptions} onChange={(value) => set('fixed_number', value)} placeholder="选择已授权真实号码" /></Field>}
+    {policy.caller_mode === 'virtual_pool' && <Field label="主叫号码池" required><Select value={policy.caller_pool_id} options={poolOptions} onChange={(value) => set('caller_pool_id', value)} placeholder="选择当前来源的号码池" /></Field>}
     {policy.fallback_mode !== 'reject' && <Field label="失败替换"><Alert type="info" content="替换号码或备用池将在号码池成员配置中指定，并记录到 CDR。" /></Field>}
   </Grid.Row></Form>;
 }
@@ -114,6 +115,7 @@ export default function TrunkDetailPage() {
   const [rules, setRules] = useState<TrunkIpRule[]>([]);
   const [policy, setPolicy] = useState<OutboundPolicy>(emptyPolicy);
   const [groups, setGroups] = useState<Entity[]>([]);
+  const [pools, setPools] = useState<Entity[]>([]);
   const [trunks, setTrunks] = useState<Entity[]>([]);
   const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState('');
   const role = trunkRole(draft);
@@ -121,11 +123,12 @@ export default function TrunkDetailPage() {
     setLoading(true); setError('');
     try {
       const workspace = await getTrunkWorkspace(id); setData(workspace); setDraft({ ...workspace.trunk, role: trunkRole(workspace.trunk) });
-      const optional = await Promise.allSettled([getTrunkIpRules(id), getOutboundPolicy(id), listOptions('/egress-groups'), listOptions('/trunks')]);
+      const optional = await Promise.allSettled([getTrunkIpRules(id), getOutboundPolicy(id), listOptions('/egress-groups'), listOptions('/trunks'), listOptions('/caller-pools')]);
       if (optional[0].status === 'fulfilled') setRules(optional[0].value.map((rule) => ({ ...rule, _key: rule.id || crypto.randomUUID() })));
       if (optional[1].status === 'fulfilled') setPolicy({ ...emptyPolicy, ...optional[1].value });
       if (optional[2].status === 'fulfilled') setGroups(optional[2].value);
       if (optional[3].status === 'fulfilled') setTrunks(optional[3].value);
+      if (optional[4].status === 'fulfilled') setPools(optional[4].value.filter((pool) => pool.owner_source_type === 'trunk' && pool.owner_source_id === id));
     } catch (reason) { setError(reason instanceof Error ? reason.message : '中继加载失败'); }
     finally { setLoading(false); }
   }, [id]);
@@ -134,7 +137,11 @@ export default function TrunkDetailPage() {
   const setPolicyField = (key: keyof OutboundPolicy, value: unknown) => setPolicy((current) => ({ ...current, [key]: value }));
   const save = async () => {
     if (role === 'access' && ['ip_allowlist', 'ip_and_digest'].includes(String(draft.access_auth_mode)) && (!rules.length || rules.some((rule) => !rule.cidr.trim()))) { Message.error('请至少配置一条完整的 IP 白名单'); return; }
-    try { setSaving(true); const body = { ...draft, supports_registration: ['digest_register', 'ip_and_digest'].includes(String(draft.access_auth_mode)), reg_auth_type: String(draft.access_auth_mode).includes('digest') ? 'digest' : 'ip' }; delete body.register_password; if (draft.register_password) body.register_password = draft.register_password; await updateTrunk(id, body); if (role === 'access') await Promise.all([saveTrunkIpRules(id, rules), saveOutboundPolicy(id, policy)]); Message.success('中继配置已保存'); await load(); }
+    if (role === 'access' && policy.caller_mode === 'fixed_number' && !policy.fixed_number?.trim()) { Message.error('固定号码策略必须选择真实号码'); return; }
+    if (role === 'access' && policy.caller_mode === 'virtual_pool' && !policy.caller_pool_id?.trim()) { Message.error('虚拟主叫策略必须选择号码池'); return; }
+    if (role === 'access' && policy.egress_mode === 'direct' && !policy.direct_egress_trunk_id?.trim()) { Message.error('请选择直接绑定的落地中继'); return; }
+    if (role === 'access' && policy.egress_mode === 'group' && !policy.egress_group_id?.trim()) { Message.error('请选择允许使用的落地分组'); return; }
+    try { setSaving(true); const body = { ...draft, supports_registration: ['digest_register', 'ip_and_digest'].includes(String(draft.access_auth_mode)), reg_auth_type: String(draft.access_auth_mode).includes('digest') ? 'digest' : 'ip' }; await updateTrunk(id, body); if (role === 'access') await Promise.all([saveTrunkIpRules(id, rules), saveOutboundPolicy(id, policy)]); Message.success('中继配置已保存'); await load(); }
     catch (reason) { Message.error(reason instanceof Error ? reason.message : '保存失败'); }
     finally { setSaving(false); }
   };
@@ -142,9 +149,9 @@ export default function TrunkDetailPage() {
     { key: 'basic', title: '基本配置', content: <BasicTab draft={draft} set={set} /> },
     { key: 'auth', title: '接入认证', content: role === 'access' ? <AccessAuthTab draft={draft} set={set} rules={rules} setRules={setRules} /> : <EmptyTab text="落地中继不配置第三方接入认证" /> },
     { key: 'registration', title: '注册状态', content: role === 'egress' ? <RegistrationTab draft={draft} set={set} registrations={data?.registrations || []} /> : <AccessRegistrationStatus registrations={data?.registrations || []} /> },
-    { key: 'caller', title: '主叫策略', content: role === 'access' ? <CallerTab policy={policy} set={setPolicyField} /> : <EmptyTab text="主叫策略属于接入来源或分机，不配置在落地中继" /> },
+    { key: 'caller', title: '主叫策略', content: role === 'access' ? <CallerTab policy={policy} set={setPolicyField} pools={pools} numbers={data?.numbers || []} /> : <EmptyTab text="主叫策略属于接入来源或分机，不配置在落地中继" /> },
     { key: 'pool', title: '号码池组', content: role === 'access' ? <div className="section-block"><div className="section-title"><h2>号码池组</h2><Tag>{policy.caller_mode === 'virtual_pool' ? policy.caller_pool_id || '尚未绑定' : '当前策略不使用号码池'}</Tag></div><p className="muted-copy">号码池成员是唯一归属于落地中继的真实号码。请在“号码池组”页面维护成员和选号算法。</p></div> : <div className="section-block"><h2>归属号码</h2>{data?.numbers?.length ? <Table pagination={false} data={data.numbers} columns={[{ title: '真实号码', dataIndex: 'number' }, { title: '可做主叫', dataIndex: 'can_present' }, { title: '可接呼入', dataIndex: 'can_receive' }]} /> : <Empty description="该落地中继暂无归属号码" />}</div> },
     { key: 'binding', title: '落地绑定', content: role === 'access' ? <BindingTab policy={policy} set={setPolicyField} groups={groups} trunks={trunks} /> : <EmptyTab text="落地中继是出口资源，不再绑定其他落地中继" /> },
-  ], [data, draft, groups, policy, role, rules, trunks]);
-  return <section className="workspace"><Header title={String(draft.name || draft.id || '中继详情')} loading={loading} saving={saving} onRefresh={load} onSave={save} />{error ? <Alert type="error" title="数据加载失败" content={error} /> : <Spin loading={loading} block><div className="trunk-workspace"><Tabs defaultActiveTab="basic">{tabs.map((tab) => <Tabs.TabPane key={tab.key} title={tab.title}>{tab.content}</Tabs.TabPane>)}</Tabs></div></Spin>}</section>;
+  ], [data, draft, groups, policy, pools, role, rules, trunks]);
+  return <section className="workspace"><Header title={String(draft.id || '中继详情')} loading={loading} saving={saving} onRefresh={load} onSave={save} />{error ? <Alert type="error" title="数据加载失败" content={error} /> : <Spin loading={loading} block><div className="trunk-workspace"><Tabs defaultActiveTab="basic">{tabs.map((tab) => <Tabs.TabPane key={tab.key} title={tab.title}>{tab.content}</Tabs.TabPane>)}</Tabs></div></Spin>}</section>;
 }
