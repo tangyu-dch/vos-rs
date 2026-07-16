@@ -6,4 +6,5 @@ pub mod gateway;
 pub mod number;
 pub mod registration;
 pub mod route;
+pub mod termination;
 pub mod user;

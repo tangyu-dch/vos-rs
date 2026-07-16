@@ -40,9 +40,12 @@
 mod models;
 mod schema;
 pub mod store;
+mod termination_models;
+mod termination_schema;
 mod utils;
 
 pub use models::*;
+pub use termination_models::*;
 pub use utils::current_hhmm;
 
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -262,6 +265,9 @@ impl PostgresCdrStore {
         sqlx::query(SEED_SYSTEM_CONFIGS_SQL)
             .execute(&self.pool)
             .await?;
+        for migration_sql in termination_schema::MIGRATE_TERMINATION_DOMAIN_SQL {
+            sqlx::query(migration_sql).execute(&self.pool).await?;
+        }
         Ok(())
     }
 
