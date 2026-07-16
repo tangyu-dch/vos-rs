@@ -1,6 +1,6 @@
 use crate::{
-    CallerPool, CallerPoolMember, DidDestination, EgressEndpoint, EgressGroup,
-    EgressGroupMember, NumberAllocation, PostgresCdrStore, SourceOutboundPolicy, TrunkIpRule,
+    CallerPool, CallerPoolMember, DidDestination, EgressEndpoint, EgressGroup, EgressGroupMember,
+    NumberAllocation, PostgresCdrStore, SourceOutboundPolicy, TrunkIpRule,
 };
 
 impl PostgresCdrStore {
@@ -10,7 +10,7 @@ impl PostgresCdrStore {
         trunk_id: &str,
     ) -> Result<Vec<TrunkIpRule>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT id, trunk_id, cidr::text AS cidr, source_port, transport, enabled \
+            "SELECT id, trunk_id, cidr::text AS cidr, source_port, transport, description, enabled \
              FROM trunk_ip_rules WHERE trunk_id=$1 ORDER BY id",
         )
         .bind(trunk_id)
@@ -25,7 +25,30 @@ impl PostgresCdrStore {
         rules: &[TrunkIpRule],
     ) -> Result<(), sqlx::Error> {
         let mut transaction = self.pool.begin().await?;
+        for (index, rule) in rules.iter().enumerate().filter(|(_, rule)| rule.enabled) {
+            for other in rules.iter().skip(index + 1).filter(|rule| rule.enabled) {
+                let ports_overlap = rule.source_port.is_none()
+                    || other.source_port.is_none()
+                    || rule.source_port == other.source_port;
+                if rule.transport == other.transport && ports_overlap {
+                    let overlaps: bool = sqlx::query_scalar("SELECT $1::cidr && $2::cidr")
+                        .bind(&rule.cidr)
+                        .bind(&other.cidr)
+                        .fetch_one(&mut *transaction)
+                        .await?;
+                    if overlaps {
+                        return Err(sqlx::Error::Protocol(format!(
+                            "同一批次 IP 规则 {} 与 {} 重叠",
+                            rule.cidr, other.cidr
+                        )));
+                    }
+                }
+            }
+        }
         for rule in rules {
+            if !rule.enabled {
+                continue;
+            }
             let conflict: Option<(String,)> = sqlx::query_as(
                 "SELECT trunk_id FROM trunk_ip_rules \
                  WHERE trunk_id <> $1 AND enabled AND cidr && $2::cidr \
@@ -51,13 +74,14 @@ impl PostgresCdrStore {
             .await?;
         for rule in rules {
             sqlx::query(
-                "INSERT INTO trunk_ip_rules (trunk_id,cidr,source_port,transport,enabled) \
-                 VALUES ($1,$2::cidr,$3,$4,$5)",
+                "INSERT INTO trunk_ip_rules (trunk_id,cidr,source_port,transport,description,enabled) \
+                 VALUES ($1,$2::cidr,$3,$4,$5,$6)",
             )
             .bind(trunk_id)
             .bind(&rule.cidr)
             .bind(rule.source_port)
             .bind(&rule.transport)
+            .bind(&rule.description)
             .bind(rule.enabled)
             .execute(&mut *transaction)
             .await?;
@@ -216,7 +240,10 @@ impl PostgresCdrStore {
         members: &[CallerPoolMember],
     ) -> Result<(), sqlx::Error> {
         let mut transaction = self.pool.begin().await?;
-        sqlx::query("DELETE FROM caller_pool_members WHERE pool_id=$1").bind(pool_id).execute(&mut *transaction).await?;
+        sqlx::query("DELETE FROM caller_pool_members WHERE pool_id=$1")
+            .bind(pool_id)
+            .execute(&mut *transaction)
+            .await?;
         for member in members {
             sqlx::query("INSERT INTO caller_pool_members(pool_id,number,priority,weight,max_concurrent,enabled) VALUES($1,$2,$3,$4,$5,$6)")
                 .bind(pool_id).bind(&member.number).bind(member.priority).bind(member.weight)
@@ -227,7 +254,9 @@ impl PostgresCdrStore {
 
     /// Lists egress authorization groups.
     pub async fn list_egress_groups(&self) -> Result<Vec<EgressGroup>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM egress_groups ORDER BY id").fetch_all(&self.pool).await
+        sqlx::query_as("SELECT * FROM egress_groups ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
     }
 
     /// Creates or updates an egress authorization group.
@@ -239,20 +268,33 @@ impl PostgresCdrStore {
 
     /// Deletes an egress group unless a policy still references it.
     pub async fn delete_egress_group(&self, id: &str) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM egress_groups WHERE id=$1").bind(id).execute(&self.pool).await?;
+        let result = sqlx::query("DELETE FROM egress_groups WHERE id=$1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected() > 0)
     }
 
     /// Lists members of an egress group.
-    pub async fn list_egress_group_members(&self, group_id: &str) -> Result<Vec<EgressGroupMember>, sqlx::Error> {
+    pub async fn list_egress_group_members(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<EgressGroupMember>, sqlx::Error> {
         sqlx::query_as("SELECT id,group_id,egress_trunk_id,destination_prefix,priority,weight,time_start,time_end,enabled FROM egress_group_members WHERE group_id=$1 ORDER BY priority DESC,id")
             .bind(group_id).fetch_all(&self.pool).await
     }
 
     /// Replaces members of an egress group.
-    pub async fn replace_egress_group_members(&self, group_id: &str, members: &[EgressGroupMember]) -> Result<(), sqlx::Error> {
+    pub async fn replace_egress_group_members(
+        &self,
+        group_id: &str,
+        members: &[EgressGroupMember],
+    ) -> Result<(), sqlx::Error> {
         let mut transaction = self.pool.begin().await?;
-        sqlx::query("DELETE FROM egress_group_members WHERE group_id=$1").bind(group_id).execute(&mut *transaction).await?;
+        sqlx::query("DELETE FROM egress_group_members WHERE group_id=$1")
+            .bind(group_id)
+            .execute(&mut *transaction)
+            .await?;
         for member in members {
             sqlx::query("INSERT INTO egress_group_members(group_id,egress_trunk_id,destination_prefix,priority,weight,time_start,time_end,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
                 .bind(group_id).bind(&member.egress_trunk_id).bind(&member.destination_prefix)
@@ -263,12 +305,19 @@ impl PostgresCdrStore {
     }
 
     /// Lists source outbound policies.
-    pub async fn list_source_outbound_policies(&self) -> Result<Vec<SourceOutboundPolicy>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM source_outbound_policies ORDER BY source_type,source_id").fetch_all(&self.pool).await
+    pub async fn list_source_outbound_policies(
+        &self,
+    ) -> Result<Vec<SourceOutboundPolicy>, sqlx::Error> {
+        sqlx::query_as("SELECT * FROM source_outbound_policies ORDER BY source_type,source_id")
+            .fetch_all(&self.pool)
+            .await
     }
 
     /// Creates or updates a source outbound policy.
-    pub async fn upsert_source_outbound_policy(&self, policy: &SourceOutboundPolicy) -> Result<(), sqlx::Error> {
+    pub async fn upsert_source_outbound_policy(
+        &self,
+        policy: &SourceOutboundPolicy,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT INTO source_outbound_policies(source_type,source_id,caller_mode,fixed_number,caller_pool_id,egress_mode,direct_egress_trunk_id,egress_group_id,fallback_mode,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(source_type,source_id) DO UPDATE SET caller_mode=EXCLUDED.caller_mode,fixed_number=EXCLUDED.fixed_number,caller_pool_id=EXCLUDED.caller_pool_id,egress_mode=EXCLUDED.egress_mode,direct_egress_trunk_id=EXCLUDED.direct_egress_trunk_id,egress_group_id=EXCLUDED.egress_group_id,fallback_mode=EXCLUDED.fallback_mode,enabled=EXCLUDED.enabled,updated_at=now()")
             .bind(&policy.source_type).bind(&policy.source_id).bind(&policy.caller_mode)
             .bind(&policy.fixed_number).bind(&policy.caller_pool_id).bind(&policy.egress_mode)
@@ -278,19 +327,33 @@ impl PostgresCdrStore {
     }
 
     /// Deletes one source outbound policy.
-    pub async fn delete_source_outbound_policy(&self, source_type: &str, source_id: &str) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM source_outbound_policies WHERE source_type=$1 AND source_id=$2")
-            .bind(source_type).bind(source_id).execute(&self.pool).await?;
+    pub async fn delete_source_outbound_policy(
+        &self,
+        source_type: &str,
+        source_id: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "DELETE FROM source_outbound_policies WHERE source_type=$1 AND source_id=$2",
+        )
+        .bind(source_type)
+        .bind(source_id)
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 
     /// Lists DID destinations.
     pub async fn list_did_destinations(&self) -> Result<Vec<DidDestination>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM did_destinations ORDER BY number").fetch_all(&self.pool).await
+        sqlx::query_as("SELECT * FROM did_destinations ORDER BY number")
+            .fetch_all(&self.pool)
+            .await
     }
 
     /// Creates or updates a DID destination.
-    pub async fn upsert_did_destination(&self, destination: &DidDestination) -> Result<(), sqlx::Error> {
+    pub async fn upsert_did_destination(
+        &self,
+        destination: &DidDestination,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT INTO did_destinations(number,tenant_id,target_type,target_id,enabled) VALUES($1,$2,$3,$4,$5) ON CONFLICT(number) DO UPDATE SET tenant_id=EXCLUDED.tenant_id,target_type=EXCLUDED.target_type,target_id=EXCLUDED.target_id,enabled=EXCLUDED.enabled,updated_at=now()")
             .bind(&destination.number).bind(&destination.tenant_id).bind(&destination.target_type)
             .bind(&destination.target_id).bind(destination.enabled).execute(&self.pool).await?;
@@ -299,7 +362,10 @@ impl PostgresCdrStore {
 
     /// Deletes one DID destination.
     pub async fn delete_did_destination(&self, number: &str) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM did_destinations WHERE number=$1").bind(number).execute(&self.pool).await?;
+        let result = sqlx::query("DELETE FROM did_destinations WHERE number=$1")
+            .bind(number)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected() > 0)
     }
 }

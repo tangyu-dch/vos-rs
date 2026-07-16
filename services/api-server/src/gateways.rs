@@ -93,17 +93,24 @@ fn validate_gateway(
     }
     let role = role.unwrap_or("egress");
     if !matches!(role, "access" | "egress") {
-        return Err(ApiError::internal("参数无效: 中继类型只能是 access 或 egress"));
+        return Err(ApiError::internal(
+            "参数无效: 中继类型只能是 access 或 egress",
+        ));
     }
     let auth_mode = match access_auth_mode.unwrap_or("none") {
         "ip_whitelist" => "ip_allowlist",
         mode => mode,
     };
-    if !matches!(auth_mode, "none" | "ip_allowlist" | "digest_register" | "ip_and_digest") {
+    if !matches!(
+        auth_mode,
+        "none" | "ip_allowlist" | "digest_register" | "ip_and_digest"
+    ) {
         return Err(ApiError::internal("参数无效: 注册认证模式不受支持"));
     }
     if role == "access" && auth_mode == "none" {
-        return Err(ApiError::internal("参数无效: 接入中继必须选择 IP 白名单、注册认证或组合认证"));
+        return Err(ApiError::internal(
+            "参数无效: 接入中继必须选择 IP 白名单、注册认证或组合认证",
+        ));
     }
     Ok(())
 }
@@ -152,7 +159,13 @@ pub async fn create_gateway(
         max_capacity: req.max_capacity.filter(|capacity| *capacity > 0),
         gateway_type: req.gateway_type,
         role: req.role,
-        access_auth_mode: req.access_auth_mode.map(|mode| if mode == "ip_whitelist" { "ip_allowlist".to_string() } else { mode }),
+        access_auth_mode: req.access_auth_mode.map(|mode| {
+            if mode == "ip_whitelist" {
+                "ip_allowlist".to_string()
+            } else {
+                mode
+            }
+        }),
         prefix_rules: req.prefix_rules,
         supports_registration: req.supports_registration,
         reg_auth_type: req.reg_auth_type,
@@ -213,7 +226,9 @@ pub async fn update_gateway(
         caller_id_mode.as_deref(),
         virtual_caller.as_deref(),
         req.role.as_deref().or(old.role.as_deref()),
-        req.access_auth_mode.as_deref().or(old.access_auth_mode.as_deref()),
+        req.access_auth_mode
+            .as_deref()
+            .or(old.access_auth_mode.as_deref()),
     )?;
     let gw = SipGateway {
         id: id.clone(),
@@ -223,7 +238,16 @@ pub async fn update_gateway(
         max_capacity: req.max_capacity.filter(|capacity| *capacity > 0),
         gateway_type: req.gateway_type.or_else(|| old.gateway_type.clone()),
         role: req.role.or_else(|| old.role.clone()),
-        access_auth_mode: req.access_auth_mode.or_else(|| old.access_auth_mode.clone()).map(|mode| if mode == "ip_whitelist" { "ip_allowlist".to_string() } else { mode }),
+        access_auth_mode: req
+            .access_auth_mode
+            .or_else(|| old.access_auth_mode.clone())
+            .map(|mode| {
+                if mode == "ip_whitelist" {
+                    "ip_allowlist".to_string()
+                } else {
+                    mode
+                }
+            }),
         prefix_rules: req.prefix_rules.or_else(|| old.prefix_rules.clone()),
         supports_registration: req.supports_registration.or(old.supports_registration),
         reg_auth_type: req.reg_auth_type.or_else(|| old.reg_auth_type.clone()),
@@ -257,15 +281,59 @@ mod tests {
 
     #[test]
     fn validates_transport_port_and_virtual_caller() {
-        assert!(validate_gateway("gw", "127.0.0.1", Some(5060), "udp", None, None, Some("egress"), None).is_ok());
-        assert!(validate_gateway("gw", "127.0.0.1", Some(0), "udp", None, None, None, None).is_err());
-        assert!(validate_gateway("gw", "127.0.0.1", Some(5060), "ws", None, None, None, None).is_err());
-        assert!(validate_gateway("gw", "127.0.0.1", Some(5060), "tcp", None, None, None, None).is_err());
+        assert!(validate_gateway(
+            "gw",
+            "127.0.0.1",
+            Some(5060),
+            "udp",
+            None,
+            None,
+            Some("egress"),
+            None
+        )
+        .is_ok());
         assert!(
-            validate_gateway("gw", "127.0.0.1", Some(5060), "udp", Some("virtual"), None, None, None).is_err()
+            validate_gateway("gw", "127.0.0.1", Some(0), "udp", None, None, None, None).is_err()
         );
-        assert!(validate_gateway("access", "127.0.0.1", Some(5060), "udp", None, None, Some("access"), Some("none")).is_err());
-        assert!(validate_gateway("access", "127.0.0.1", Some(5060), "udp", None, None, Some("access"), Some("ip_allowlist")).is_ok());
+        assert!(
+            validate_gateway("gw", "127.0.0.1", Some(5060), "ws", None, None, None, None).is_err()
+        );
+        assert!(
+            validate_gateway("gw", "127.0.0.1", Some(5060), "tcp", None, None, None, None).is_err()
+        );
+        assert!(validate_gateway(
+            "gw",
+            "127.0.0.1",
+            Some(5060),
+            "udp",
+            Some("virtual"),
+            None,
+            None,
+            None
+        )
+        .is_err());
+        assert!(validate_gateway(
+            "access",
+            "127.0.0.1",
+            Some(5060),
+            "udp",
+            None,
+            None,
+            Some("access"),
+            Some("none")
+        )
+        .is_err());
+        assert!(validate_gateway(
+            "access",
+            "127.0.0.1",
+            Some(5060),
+            "udp",
+            None,
+            None,
+            Some("access"),
+            Some("ip_allowlist")
+        )
+        .is_ok());
     }
 }
 
