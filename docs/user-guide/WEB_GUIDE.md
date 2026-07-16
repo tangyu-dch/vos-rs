@@ -2,6 +2,9 @@
 
 本指引涵盖 `vos-rs` 管理后台的各个功能模块、前端 React（Vite + TS + Arco Design）项目架构以及后台 REST API 与可编程媒体 API 接口细节。
 
+中继字段、路由排序、健康检查、故障切换和配置示例详见
+[《VOS-RS 中继与路由配置指南》](./ROUTING_TRUNK_GUIDE.md)。
+
 ---
 
 ## 一、系统构成与开发路径
