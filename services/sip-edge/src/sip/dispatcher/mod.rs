@@ -1,4 +1,4 @@
-use sip_core::{parse_message, SipMessage};
+use sip_core::parse_message;
 use std::net::SocketAddr;
 use tracing::warn;
 

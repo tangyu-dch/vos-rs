@@ -74,16 +74,6 @@ pub fn linear_to_alaw(mut pcm: i16) -> u8 {
     alaw ^ 0x55
 }
 
-pub fn transcode_pcma_to_pcmu(payload: &[u8]) -> Vec<u8> {
-    let table = get_pcma_to_pcmu_table();
-    payload.iter().map(|&a| table[a as usize]).collect()
-}
-
-pub fn transcode_pcmu_to_pcma(payload: &[u8]) -> Vec<u8> {
-    let table = get_pcmu_to_pcma_table();
-    payload.iter().map(|&u| table[u as usize]).collect()
-}
-
 pub fn transcode_pcma_to_pcmu_inplace(payload: &mut [u8]) {
     let table = get_pcma_to_pcmu_table();
     for byte in payload.iter_mut() {
