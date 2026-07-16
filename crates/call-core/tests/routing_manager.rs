@@ -1,7 +1,7 @@
 use call_core::{
     CallError, CallEvent, CallId, CallManager, CallState, CdrStatus, Route, RouteTable, RouteTarget,
 };
-use sip_core::{parse_message, SipMessage, SipUri};
+use sip_core::{parse_message, SipUri};
 use std::str::FromStr;
 
 #[test]
@@ -291,6 +291,41 @@ fn watchdog_termination_before_answer_generates_failed_cdr() {
     );
 }
 
+#[test]
+fn failover_outcome_distinguishes_failed_and_replacement_gateways() {
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let routes = RouteTable::new(vec![
+        Route::new(
+            "primary",
+            "",
+            200,
+            RouteTarget::new("gw-primary", "primary.example.com", Some(5060)),
+        ),
+        Route::new(
+            "backup",
+            "",
+            100,
+            RouteTarget::new("gw-backup", "backup.example.com", Some(5060)),
+        ),
+    ]);
+    let manager = CallManager::new(routes, tx);
+    let call_id = "call-failover@example.com";
+    manager
+        .handle_inbound_invite(&invite_request(call_id, "13800138000"))
+        .expect("call should select the primary gateway");
+
+    let outcome = manager
+        .handle_outbound_response(&outbound_response(503, "Service Unavailable", call_id))
+        .expect("retryable response should select the backup gateway");
+
+    assert_eq!(outcome.gateway_id, "gw-primary");
+    assert_eq!(outcome.failover_gateway_id.as_deref(), Some("gw-backup"));
+    assert_eq!(
+        outcome.failover_uri.as_ref().map(|uri| uri.host.as_ref()),
+        Some("backup.example.com")
+    );
+}
+
 fn test_routes() -> RouteTable {
     RouteTable::new(vec![Route::new(
         "default",
@@ -326,7 +361,8 @@ fn invite_request(call_id: &str, destination: &str) -> sip_core::SipRequest {
         destination = destination
     );
 
-    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap()
+    else {
         panic!("expected request");
     };
     request.into_owned()
@@ -353,7 +389,8 @@ fn outbound_response(
         call_id = call_id
     );
 
-    let sip_core::SipMessageBorrow::Response(response) = parse_message(raw.as_bytes()).unwrap() else {
+    let sip_core::SipMessageBorrow::Response(response) = parse_message(raw.as_bytes()).unwrap()
+    else {
         panic!("expected response");
     };
     response.into_owned()
@@ -374,7 +411,8 @@ fn bye_request(call_id: &str) -> sip_core::SipRequest {
         call_id = call_id
     );
 
-    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap()
+    else {
         panic!("expected request");
     };
     request.into_owned()
@@ -395,7 +433,8 @@ fn cancel_request(call_id: &str) -> sip_core::SipRequest {
         call_id = call_id
     );
 
-    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap()
+    else {
         panic!("expected request");
     };
     request.into_owned()

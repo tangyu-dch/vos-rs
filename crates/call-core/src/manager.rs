@@ -122,8 +122,10 @@ pub struct OutboundResponseOutcome {
     pub state: CallState,
     /// Failover URI（如果需要切换网关）
     pub failover_uri: Option<sip_core::SipUri>,
-    /// 当前网关 ID（用于健康状态更新）
+    /// 返回当前响应的网关 ID（用于健康状态更新）
     pub gateway_id: String,
+    /// 发生故障切换时的新网关 ID。
+    pub failover_gateway_id: Option<String>,
 }
 
 /// 呼叫终止结果。
@@ -377,6 +379,11 @@ impl CallManager {
             .ok_or_else(|| CallError::UnknownCall(call_id.as_str().to_string()))?;
 
         let previous_state = call.state;
+        let responding_gateway_id = call
+            .candidates
+            .get(call.current_candidate_index)
+            .map(|candidate| candidate.target.gateway_id.as_str().to_string())
+            .unwrap_or_default();
         let mut failover_uri = None;
 
         match response.status_code {
@@ -457,15 +464,17 @@ impl CallManager {
             }
             _ => None,
         };
+        let failover_gateway_id = failover_uri.as_ref().and_then(|_| {
+            call.candidates
+                .get(call.current_candidate_index)
+                .map(|candidate| candidate.target.gateway_id.as_str().to_string())
+        });
         let outcome = OutboundResponseOutcome {
             call_id: call_id.clone(),
             state,
             failover_uri,
-            gateway_id: call
-                .candidates
-                .get(call.current_candidate_index)
-                .map(|candidate| candidate.target.gateway_id.as_str().to_string())
-                .unwrap_or_default(),
+            gateway_id: responding_gateway_id,
+            failover_gateway_id,
         };
         drop(call);
         if let Some(event) = lifecycle_event {
@@ -583,7 +592,12 @@ impl CallManager {
             .map(|entry| crate::ActiveCall {
                 call_id: entry.id.as_str().to_string(),
                 caller: entry.caller.clone(),
-                callee: entry.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
+                callee: entry
+                    .inbound
+                    .remote_uri
+                    .user
+                    .as_ref()
+                    .map(|u| u.to_string()),
                 state: entry.state.as_str().to_string(),
                 started_at_ms: sys_millis(entry.started_at),
                 answered_at_ms: entry.answered_at.map(sys_millis),

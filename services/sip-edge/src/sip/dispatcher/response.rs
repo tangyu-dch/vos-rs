@@ -194,7 +194,7 @@ pub(crate) async fn dispatch_response(
                         if let Some(target) = gateway_target {
                             let outbound_uri = sip_core::SipUri {
                                 secure: false,
-                                user: Some(user.clone().into()),
+                                user: Some(user.clone()),
                                 host: target.host.clone().into(),
                                 port: target.port,
                                 params: Vec::new(),
@@ -592,6 +592,7 @@ pub(crate) async fn dispatch_response(
                     state: call_core::CallState::Established,
                     failover_uri: None,
                     gateway_id: String::new(),
+                    failover_gateway_id: None,
                 }
             }
         }
@@ -608,6 +609,7 @@ pub(crate) async fn dispatch_response(
             state: call_core::CallState::Established,
             failover_uri: None,
             gateway_id: String::new(),
+            failover_gateway_id: None,
         }
     };
 
@@ -678,8 +680,9 @@ pub(crate) async fn dispatch_response(
         if !old_gw.is_empty() {
             edge_state.gateway_health.decrement_active(old_gw);
         }
-        let new_gw = next_uri.host.clone();
-        edge_state.gateway_health.increment_active(&new_gw);
+        if let Some(new_gateway_id) = outbound_response_outcome.failover_gateway_id.as_deref() {
+            edge_state.gateway_health.increment_active(new_gateway_id);
+        }
 
         if let Some(transaction) = transaction.as_ref() {
             edge_state.clear_media_targets(transaction);
