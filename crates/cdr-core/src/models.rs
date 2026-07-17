@@ -387,6 +387,8 @@ pub struct NumberInventory {
     pub number: String,
     pub username: Option<String>,
     pub gateway_id: Option<String>,
+    /// 唯一物理归属的落地中继。
+    pub owner_egress_trunk_id: Option<String>,
     pub direction: Option<String>,
     pub max_concurrent: Option<i32>,
     pub current_concurrent: Option<i32>,
@@ -451,4 +453,18 @@ pub struct AuditLogInput<'a> {
     pub request_body: Option<&'a str>,
     pub status_code: u16,
     pub source_ip: Option<&'a str>,
+}
+
+/// 真实 SIP 信令抓包记录。
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, PartialEq)]
+pub struct SipFlowRecord {
+    pub id: i64,
+    pub call_id: String,
+    pub method: String,
+    pub direction: String,
+    pub from_addr: String,
+    pub to_addr: String,
+    pub raw_message: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: OffsetDateTime,
 }

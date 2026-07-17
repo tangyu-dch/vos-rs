@@ -265,6 +265,15 @@ impl PostgresCdrStore {
         sqlx::query(SEED_SYSTEM_CONFIGS_SQL)
             .execute(&self.pool)
             .await?;
+        sqlx::query(CREATE_SIP_FLOWS_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_SIP_FLOWS_CALL_ID_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_SIP_FLOWS_TIMESTAMP_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
         for migration_sql in termination_schema::MIGRATE_TERMINATION_DOMAIN_SQL {
             sqlx::query(migration_sql).execute(&self.pool).await?;
         }

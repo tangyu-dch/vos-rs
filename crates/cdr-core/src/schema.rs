@@ -477,6 +477,25 @@ CREATE TABLE IF NOT EXISTS api_audit_logs (
 pub(super) const CREATE_AUDIT_LOGS_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_api_audit_logs_created_at ON api_audit_logs (created_at DESC)";
 
+pub(super) const CREATE_SIP_FLOWS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS sip_flows (
+    id BIGSERIAL PRIMARY KEY,
+    call_id TEXT NOT NULL,
+    method TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    from_addr TEXT NOT NULL,
+    to_addr TEXT NOT NULL,
+    raw_message TEXT NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+pub(super) const CREATE_SIP_FLOWS_CALL_ID_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_flows_call_id ON sip_flows (call_id)";
+
+pub(super) const CREATE_SIP_FLOWS_TIMESTAMP_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_flows_timestamp ON sip_flows (timestamp)";
+
 pub const CREATE_SYSTEM_CONFIGS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS system_configs (
     config_key TEXT PRIMARY KEY,
@@ -531,7 +550,10 @@ INSERT INTO system_configs (config_key, config_value, description) VALUES
     ('tls_server_name', '', '上游 TLS Server Name'),
     ('realm', 'vos-rs', 'SIP 挑战认证 Realm'),
     ('nonce', 'vos-rs-dev-nonce', 'SIP 静态 Nonce'),
-    ('secret_key', 'default-fallback-secret-key-12345', 'SIP 鉴权密钥')
+    ('secret_key', 'default-fallback-secret-key-12345', 'SIP 鉴权密钥'),
+    ('sipflow_enabled', 'true', '启用 SipFlow 信令抓包'),
+    ('sipflow_whitelist', '1001,1002', 'SipFlow 抓包白名单（分机号/号码/网关，逗号分隔）'),
+    ('sipflow_retention_days', '7', 'SipFlow 信令数据留存天数')
 ON CONFLICT (config_key) DO NOTHING
 "#;
 
