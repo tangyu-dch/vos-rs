@@ -58,6 +58,8 @@ impl DtlsTransport {
         socket: Arc<UdpSocket>,
         identity: DtlsIdentity,
         crypto: Arc<RwLock<Option<Arc<SrtpContexts>>>>,
+        dtls_connected: Arc<std::sync::atomic::AtomicBool>,
+        dtls_failed: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         let (inbound_tx, inbound_rx) = mpsc::channel(128);
         let peer = Arc::new(RwLock::new(None));
@@ -66,7 +68,7 @@ impl DtlsTransport {
             inbound_rx: Mutex::new(inbound_rx),
             peer: Arc::clone(&peer),
         });
-        tokio::spawn(run_handshake(connection, identity, crypto));
+        tokio::spawn(run_handshake(connection, identity, crypto, dtls_connected, dtls_failed));
         Self { inbound_tx, peer }
     }
 
@@ -85,6 +87,8 @@ async fn run_handshake(
     connection: Arc<ChannelConn>,
     identity: DtlsIdentity,
     crypto: Arc<RwLock<Option<Arc<SrtpContexts>>>>,
+    dtls_connected: Arc<std::sync::atomic::AtomicBool>,
+    dtls_failed: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let config = Config {
         certificates: vec![identity.certificate],
@@ -107,12 +111,19 @@ async fn run_handshake(
             match contexts {
                 Ok(contexts) => {
                     *crypto.write().await = Some(Arc::new(contexts));
+                    dtls_connected.store(true, std::sync::atomic::Ordering::Release);
                     tracing::info!("WebRTC DTLS 握手完成，SRTP 密钥已安装");
                 }
-                Err(error) => tracing::warn!(%error, "WebRTC SRTP 密钥派生失败"),
+                Err(error) => {
+                    dtls_failed.store(true, std::sync::atomic::Ordering::Release);
+                    tracing::warn!(%error, "WebRTC SRTP 密钥派生失败");
+                }
             }
         }
-        Err(error) => tracing::warn!(%error, "WebRTC DTLS 握手失败"),
+        Err(error) => {
+            dtls_failed.store(true, std::sync::atomic::Ordering::Release);
+            tracing::warn!(%error, "WebRTC DTLS 握手失败");
+        }
     }
 }
 

@@ -46,8 +46,11 @@ pub struct MediaRelayMetrics {
     pub recording_queue_capacity: u64,
     pub recording_workers: u64,
     pub dtmf_events: u64,
-    /// 通过轻量直转路径处理的 RTP 包数量。
+    /// 通过轻量直转路径处理 of RTP 包数量。
     pub fast_path_packets: u64,
+    pub webrtc_ice_connected: bool,
+    pub webrtc_dtls_connected: bool,
+    pub webrtc_dtls_failed: bool,
 }
 
 impl MediaRelayMetrics {
@@ -71,6 +74,9 @@ impl MediaRelayMetrics {
         self.recording_workers += other.recording_workers;
         self.dtmf_events += other.dtmf_events;
         self.fast_path_packets += other.fast_path_packets;
+        self.webrtc_ice_connected |= other.webrtc_ice_connected;
+        self.webrtc_dtls_connected |= other.webrtc_dtls_connected;
+        self.webrtc_dtls_failed |= other.webrtc_dtls_failed;
     }
 }
 

@@ -26,6 +26,9 @@ pub struct WebRtcSession {
     ice: IceCredentials,
     dtls: Arc<DtlsTransport>,
     crypto: Arc<RwLock<Option<Arc<SrtpContexts>>>>,
+    pub ice_connected: Arc<std::sync::atomic::AtomicBool>,
+    pub dtls_connected: Arc<std::sync::atomic::AtomicBool>,
+    pub dtls_failed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl WebRtcSession {
@@ -41,13 +44,26 @@ impl WebRtcSession {
             dtls_setup: "passive",
         };
         let crypto = Arc::new(RwLock::new(None));
-        let dtls = Arc::new(DtlsTransport::start(socket, identity, Arc::clone(&crypto)));
+        let ice_connected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dtls_connected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dtls_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let dtls = Arc::new(DtlsTransport::start(
+            socket,
+            identity,
+            Arc::clone(&crypto),
+            Arc::clone(&dtls_connected),
+            Arc::clone(&dtls_failed),
+        ));
         Ok((
             Self {
                 local_port,
                 ice: description.ice.clone(),
                 dtls,
                 crypto,
+                ice_connected,
+                dtls_connected,
+                dtls_failed,
             },
             description,
         ))
@@ -61,6 +77,7 @@ impl WebRtcSession {
     ) -> Result<Vec<u8>, String> {
         let response = binding_success_response(packet, source, &self.ice)?;
         self.dtls.set_peer(source).await;
+        self.ice_connected.store(true, std::sync::atomic::Ordering::Release);
         Ok(response)
     }
 

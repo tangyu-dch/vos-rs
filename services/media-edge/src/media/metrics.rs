@@ -48,6 +48,9 @@ pub struct MediaRelayMetrics {
     pub dtmf_events: u64,
     /// 通过轻量直转路径处理的 RTP 包数量。
     pub fast_path_packets: u64,
+    pub webrtc_ice_connected: bool,
+    pub webrtc_dtls_connected: bool,
+    pub webrtc_dtls_failed: bool,
 }
 
 /// Rolling RTCP quality aggregates for the current 60-second window.
