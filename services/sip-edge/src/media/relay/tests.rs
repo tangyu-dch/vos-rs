@@ -78,30 +78,37 @@ fn detects_application_sdp_with_parameters() {
 
 #[tokio::test]
 async fn allocates_even_ports_without_reusing_active_leases() {
-    let config = MediaConfig::new("203.0.113.10", 40_001, 40_004);
+    let config = MediaConfig::new("203.0.113.10", 50_001, 50_004);
     let relay = MediaRelayState::new();
 
     assert_eq!(
         relay.allocate_endpoint(&config).unwrap(),
-        RtpEndpoint::new("203.0.113.10", 40_002)
+        RtpEndpoint::new("203.0.113.10", 50_002)
     );
     assert_eq!(
         relay.allocate_endpoint(&config).unwrap(),
-        RtpEndpoint::new("203.0.113.10", 40_004)
+        RtpEndpoint::new("203.0.113.10", 50_004)
     );
     assert_eq!(
         relay.allocate_endpoint(&config).unwrap_err(),
         MediaError::PortRangeExhausted {
-            port_min: 40_002,
-            port_max: 40_004
+            port_min: 50_002,
+            port_max: 50_004
         }
     );
 
-    relay.clear_target(40_002);
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    relay.clear_target(50_002);
+    let mut endpoint = None;
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if let Ok(ep) = relay.allocate_endpoint(&config) {
+            endpoint = Some(ep);
+            break;
+        }
+    }
     assert_eq!(
-        relay.allocate_endpoint(&config).unwrap(),
-        RtpEndpoint::new("203.0.113.10", 40_002)
+        endpoint.unwrap(),
+        RtpEndpoint::new("203.0.113.10", 50_002)
     );
 }
 

@@ -6085,3 +6085,303 @@ async fn test_call_monitoring() {
     // Clean up
     let _ = tx.send(());
 }
+
+#[tokio::test]
+async fn test_http_webhook_call_control() {
+    use call_core::{WebhookEvent, CallEvent, VciInstruction};
+    use std::sync::Arc;
+    use axum::{routing::post, Json, Router};
+
+    // 1. Setup local mock webhook server
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local_port = listener.local_addr().unwrap().port();
+    
+    // We will use a channel to receive the incoming webhook event so we can assert on it!
+    let (tx_event, mut rx_event) = tokio::sync::mpsc::channel(10);
+    
+    let app = Router::new().route("/webhook", post(move |Json(event): Json<WebhookEvent>| {
+        let tx = tx_event.clone();
+        async move {
+            let _ = tx.send(event).await;
+            Json(VciInstruction::Play {
+                url: "http://example.com/test.wav".to_string(),
+                loop_count: 1,
+            })
+        }
+    }));
+    
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // 2. Setup EdgeConfig with HTTP webhook mode
+    let mut edge_config = EdgeConfig::default();
+    edge_config.webhooks.control_mode = "http".to_string();
+    edge_config.webhooks.endpoint_url = format!("http://127.0.0.1:{}/webhook", local_port);
+    edge_config.webhooks.signing_secret = "test-secret".to_string();
+    edge_config.media.advertised_addr = "127.0.0.1".to_string();
+    
+    let edge_state = Arc::new(state_with_default_route_and_config(&edge_config));
+    edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
+    let sip_socket = Arc::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    edge_state.set_socket(sip_socket);
+
+    // 3. Send INVITE request to trigger VCI
+    let invite = concat!(
+        "INVITE sip:1001@example.com SIP/2.0\r\n",
+        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-invite-vci\r\n",
+        "Max-Forwards: 70\r\n",
+        "From: <sip:1001@example.com>;tag=from-tag\r\n",
+        "To: <sip:1001@example.com>\r\n",
+        "Call-ID: invite-vci-1@example.com\r\n",
+        "CSeq: 1 INVITE\r\n",
+        "Content-Type: application/sdp\r\n",
+        "Content-Length: 125\r\n",
+        "\r\n",
+        "v=0\r\n",
+        "o=alice 2890844526 2890844526 IN IP4 192.0.2.10\r\n",
+        "s=-\r\n",
+        "c=IN IP4 192.0.2.10\r\n",
+        "t=0 0\r\n",
+        "m=audio 49170 RTP/AVP 8\r\n",
+        "a=rtpmap:8 PCMA/8000\r\n"
+    );
+
+    let datagrams = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config).await;
+    // VCI intercepts the INVITE and sends SIP response via command_listener, returning empty datagram list
+    assert!(datagrams.is_empty());
+
+    // 4. Verify that the webhook server received CallInitiated event
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx_event.recv())
+        .await
+        .expect("Timeout waiting for webhook event")
+        .expect("Webhook event channel closed");
+        
+    assert_eq!(event.call_id, "invite-vci-1@example.com");
+    assert!(matches!(event.event, CallEvent::CallInitiated { .. }));
+
+    // 5. Clean up
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_http_webhook_stream_instruction() {
+    use call_core::{WebhookEvent, VciInstruction};
+    use std::sync::Arc;
+    use axum::{routing::post, Json, Router};
+
+    // 1. Setup mock WebSocket server
+    let ws_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_port = ws_listener.local_addr().unwrap().port();
+    let ws_url = format!("ws://127.0.0.1:{}/stream", ws_port);
+
+    let (ws_done_tx, mut ws_done_rx) = tokio::sync::mpsc::channel(1);
+    let ws_server_handle = tokio::spawn(async move {
+        if let Ok((stream, _)) = ws_listener.accept().await {
+            if let Ok(_ws_stream) = tokio_tungstenite::accept_async(stream).await {
+                let _ = ws_done_tx.send(()).await;
+            }
+        }
+    });
+
+    // 2. Setup local mock webhook server
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local_port = listener.local_addr().unwrap().port();
+    
+    let ws_url_clone = ws_url.clone();
+    let app = Router::new().route("/webhook", post(move |Json(_event): Json<WebhookEvent>| {
+        let ws_url_inner = ws_url_clone.clone();
+        async move {
+            Json(VciInstruction::Stream {
+                websocket_url: ws_url_inner,
+                format: "raw".to_string(),
+                barge_in: false,
+            })
+        }
+    }));
+    
+    let webhook_server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // 3. Setup EdgeConfig with HTTP webhook mode
+    let mut edge_config = EdgeConfig::default();
+    edge_config.webhooks.control_mode = "http".to_string();
+    edge_config.webhooks.endpoint_url = format!("http://127.0.0.1:{}/webhook", local_port);
+    edge_config.webhooks.signing_secret = "test-secret".to_string();
+    edge_config.media.advertised_addr = "127.0.0.1".to_string();
+    
+    let edge_state = Arc::new(state_with_default_route_and_config(&edge_config));
+    edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
+    let sip_socket = Arc::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    edge_state.set_socket(sip_socket);
+
+    // 4. Send INVITE request to trigger VCI
+    let invite = concat!(
+        "INVITE sip:1001@example.com SIP/2.0\r\n",
+        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-invite-vci-stream\r\n",
+        "Max-Forwards: 70\r\n",
+        "From: <sip:1001@example.com>;tag=from-tag-stream\r\n",
+        "To: <sip:1001@example.com>\r\n",
+        "Call-ID: invite-vci-stream-1@example.com\r\n",
+        "CSeq: 1 INVITE\r\n",
+        "Content-Type: application/sdp\r\n",
+        "Content-Length: 125\r\n",
+        "\r\n",
+        "v=0\r\n",
+        "o=alice 2890844526 2890844526 IN IP4 192.0.2.10\r\n",
+        "s=-\r\n",
+        "c=IN IP4 192.0.2.10\r\n",
+        "t=0 0\r\n",
+        "m=audio 49170 RTP/AVP 8\r\n",
+        "a=rtpmap:8 PCMA/8000\r\n"
+    );
+
+    let datagrams = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config).await;
+    assert!(datagrams.is_empty());
+
+    // 5. Verify WebSocket connection was successfully accepted
+    tokio::time::timeout(std::time::Duration::from_secs(3), ws_done_rx.recv())
+        .await
+        .expect("Timeout waiting for WebSocket connection to be established")
+        .expect("WebSocket done channel closed");
+
+    // 6. Cleanup
+    webhook_server_handle.abort();
+    ws_server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_sip_flow_packet_capture() {
+    let config = EdgeConfig {
+        sipflow_enabled: true,
+        sipflow_whitelist: "1001,1002".to_string(),
+        ..EdgeConfig::default()
+    };
+
+
+
+    let edge_state = Arc::new(state_with_default_route_and_config(&config));
+    edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+    edge_state.sip_flow_tx.set(tx).unwrap();
+
+    let invite = concat!(
+        "INVITE sip:1001@example.com SIP/2.0\r\n",
+        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-invite-vci-stream\r\n",
+        "Max-Forwards: 70\r\n",
+        "From: <sip:1001@example.com>;tag=from-tag-stream\r\n",
+        "To: <sip:1002@example.com>\r\n",
+        "Call-ID: sipflow-test-1@example.com\r\n",
+        "CSeq: 1 INVITE\r\n",
+        "Content-Length: 0\r\n",
+        "\r\n"
+    );
+
+    // Capture incoming packet (simulated)
+    let peer_addr = "192.0.2.10:5060".parse::<std::net::SocketAddr>().unwrap();
+    edge_state.capture_sip_packet(invite.as_bytes(), "in", peer_addr);
+
+    // It should match the whitelist (1001 is in the From header) and write to channel
+    let record = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+        .await
+        .expect("Timeout waiting for captured SIP flow record")
+        .expect("Channel closed");
+
+    assert_eq!(record.call_id, "sipflow-test-1@example.com");
+    assert_eq!(record.method, "INVITE");
+    assert_eq!(record.direction, "uac_to_b2bua");
+    assert_eq!(record.from_addr, peer_addr.to_string());
+
+    // Non-whitelisted caller
+    let invite_non_white = concat!(
+        "INVITE sip:9999@example.com SIP/2.0\r\n",
+        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-invite-vci-stream2\r\n",
+        "Max-Forwards: 70\r\n",
+        "From: <sip:9999@example.com>;tag=from-tag-stream2\r\n",
+        "To: <sip:8888@example.com>\r\n",
+        "Call-ID: sipflow-test-2@example.com\r\n",
+        "CSeq: 1 INVITE\r\n",
+        "Content-Length: 0\r\n",
+        "\r\n"
+    );
+    edge_state.capture_sip_packet(invite_non_white.as_bytes(), "in", peer_addr);
+
+    // It should NOT match and thus NOT be in the channel
+    let result = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
+    assert!(result.is_err(), "Non-whitelisted call should not be captured");
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_nats_webhook_call_control() {
+    use call_core::{WebhookEvent, VciInstruction};
+    use std::sync::Arc;
+    use futures::StreamExt;
+
+    // 1. Connect to NATS
+    let nats_url = "nats://127.0.0.1:4222";
+    let nats_client = async_nats::connect(nats_url).await.expect("Failed to connect to NATS");
+
+    // 2. Setup EdgeConfig with NATS webhook mode
+    let mut edge_config = EdgeConfig::default();
+    edge_config.webhooks.control_mode = "nats".to_string();
+    edge_config.webhooks.control_incoming_subject = "test.vos_rs.call.incoming".to_string();
+    edge_config.media.advertised_addr = "127.0.0.1".to_string();
+
+    let edge_state = Arc::new(state_with_default_route_and_config(&edge_config));
+    edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
+    edge_state.set_nats(nats_client.clone());
+    let sip_socket = Arc::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    edge_state.set_socket(sip_socket);
+
+    // 3. Subscribe to the NATS incoming subject to act as the controller responder
+    let mut subscriber = nats_client.subscribe("test.vos_rs.call.incoming".to_string()).await.unwrap();
+    let nats_client_clone = nats_client.clone();
+    let controller_handle = tokio::spawn(async move {
+        if let Some(msg) = subscriber.next().await {
+            let event: WebhookEvent = serde_json::from_slice(&msg.payload).unwrap();
+            assert_eq!(event.call_id, "invite-vci-nats-1@example.com");
+            
+            // Reply with VCI Play instruction
+            let reply_payload = serde_json::to_vec(&VciInstruction::Play {
+                url: "http://example.com/test.wav".to_string(),
+                loop_count: 1,
+            }).unwrap();
+            
+            if let Some(reply_to) = msg.reply {
+                let _ = nats_client_clone.publish(reply_to, reply_payload.into()).await;
+            }
+        }
+    });
+
+    // 4. Send INVITE request to trigger VCI
+    let invite = concat!(
+        "INVITE sip:1001@example.com SIP/2.0\r\n",
+        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-invite-vci-nats\r\n",
+        "Max-Forwards: 70\r\n",
+        "From: <sip:1001@example.com>;tag=from-tag-nats\r\n",
+        "To: <sip:1001@example.com>\r\n",
+        "Call-ID: invite-vci-nats-1@example.com\r\n",
+        "CSeq: 1 INVITE\r\n",
+        "Content-Type: application/sdp\r\n",
+        "Content-Length: 125\r\n",
+        "\r\n",
+        "v=0\r\n",
+        "o=alice 2890844526 2890844526 IN IP4 192.0.2.10\r\n",
+        "s=-\r\n",
+        "c=IN IP4 192.0.2.10\r\n",
+        "t=0 0\r\n",
+        "m=audio 49170 RTP/AVP 8\r\n",
+        "a=rtpmap:8 PCMA/8000\r\n"
+    );
+
+    let datagrams = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config).await;
+    assert!(datagrams.is_empty());
+
+    // 5. Wait for controller handle
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), controller_handle).await;
+}
+
+

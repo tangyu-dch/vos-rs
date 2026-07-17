@@ -58,7 +58,7 @@ async fn test_pipeline_delivers_signed_event_and_records_result() {
         call_id: "pipeline-test-call".to_string(),
         sequence: 1,
         occurred_at_ms: 1,
-        event: CallEvent::CallAnswered { sip_status: 200 },
+        event: CallEvent::CallAnswered { sip_status: 200, leg: "b_leg".to_string() },
     };
     event_tx.send(event.clone()).await.expect("事件应进入队列");
     let (headers, body) = tokio::time::timeout(Duration::from_secs(5), request_rx.recv())
@@ -178,7 +178,7 @@ fn test_event(call_id: &str) -> WebhookEvent {
         call_id: call_id.to_string(),
         sequence: 1,
         occurred_at_ms: 1,
-        event: CallEvent::CallAnswered { sip_status: 200 },
+        event: CallEvent::CallAnswered { sip_status: 200, leg: "b_leg".to_string() },
     }
 }
 

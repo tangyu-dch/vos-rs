@@ -204,21 +204,6 @@ pub async fn update_route(
     Ok(StatusCode::OK)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{is_hhmm, validate_route};
-
-    #[test]
-    fn validates_route_ranges_and_time_pairs() {
-        assert!(validate_route("r1", "86", 100, "gw1", 0.1, Some(100), None, None).is_ok());
-        assert!(validate_route("r1", "86", -1, "gw1", 0.1, None, None, None).is_err());
-        assert!(validate_route("r1", "86", 100, "gw1", -0.1, None, None, None).is_err());
-        assert!(validate_route("r1", "86", 100, "gw1", 0.1, None, Some("09:00"), None).is_err());
-        assert!(is_hhmm("23:59"));
-        assert!(!is_hhmm("24:00"));
-    }
-}
-
 pub async fn delete_route(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -231,5 +216,20 @@ pub async fn delete_route(
         Ok(StatusCode::OK)
     } else {
         Ok(StatusCode::NOT_FOUND)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_hhmm, validate_route};
+
+    #[test]
+    fn validates_route_ranges_and_time_pairs() {
+        assert!(validate_route("r1", "86", 100, "gw1", 0.1, Some(100), None, None).is_ok());
+        assert!(validate_route("r1", "86", -1, "gw1", 0.1, None, None, None).is_err());
+        assert!(validate_route("r1", "86", 100, "gw1", -0.1, None, None, None).is_err());
+        assert!(validate_route("r1", "86", 100, "gw1", 0.1, None, Some("09:00"), None).is_err());
+        assert!(is_hhmm("23:59"));
+        assert!(!is_hhmm("24:00"));
     }
 }
