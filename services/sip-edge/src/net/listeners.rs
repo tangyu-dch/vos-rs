@@ -1,6 +1,7 @@
 use crate::config::EdgeConfig;
 use crate::edge_state::EdgeState;
 use crate::net::{handle_stream_connection, handle_ws_connection, SipStream};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{debug, error, warn};
@@ -107,6 +108,7 @@ pub(crate) fn start_tls_listener(
 
 pub(crate) fn start_ws_listener(
     ws_listener: TcpListener,
+    acceptor: Option<tokio_rustls::TlsAcceptor>,
     edge_state: Arc<EdgeState>,
     edge_config: Arc<EdgeConfig>,
 ) {
@@ -117,39 +119,32 @@ pub(crate) fn start_ws_listener(
                     debug!(%peer, "accepted WebSocket TCP connection");
                     let state_clone = Arc::clone(&edge_state);
                     let config_clone = Arc::clone(&edge_config);
+                    let acceptor_clone = acceptor.clone();
                     tokio::spawn(async move {
-                        match tokio_tungstenite::accept_async(stream).await {
-                            Ok(ws_stream) => {
-                                debug!(%peer, "WebSocket handshake succeeded");
-                                let (tx, rx) = tokio::sync::mpsc::channel(100);
-                                state_clone.register_tcp_connection(peer, tx.clone());
-
-                                let on_msg_state = Arc::clone(&state_clone);
-                                let on_msg_config = Arc::clone(&config_clone);
-
-                                handle_ws_connection(
-                                    ws_stream,
-                                    peer,
-                                    tx,
-                                    rx,
-                                    move |msg_bytes, peer_addr, connection_tx| {
-                                        let state = Arc::clone(&on_msg_state);
-                                        let config = Arc::clone(&on_msg_config);
-                                        async move {
-                                            let datagrams = crate::sip::handle_datagram(
-                                                &msg_bytes, peer_addr, &state, &config,
-                                            )
-                                            .await;
-                                            for d in datagrams {
-                                                let _ = connection_tx.send(d.bytes).await;
-                                            }
+                        if let Some(acc) = acceptor_clone {
+                            match acc.accept(stream).await {
+                                Ok(tls_stream) => {
+                                    match tokio_tungstenite::accept_async(tls_stream).await {
+                                        Ok(ws_stream) => {
+                                            setup_ws_connection(ws_stream, peer, state_clone, config_clone).await;
                                         }
-                                    },
-                                )
-                                .await;
+                                        Err(e) => {
+                                            warn!(%peer, error = %e, "WSS handshake failed");
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(%peer, error = %e, "WSS TLS accept failed");
+                                }
                             }
-                            Err(e) => {
-                                warn!(%peer, error = %e, "WebSocket handshake failed");
+                        } else {
+                            match tokio_tungstenite::accept_async(stream).await {
+                                Ok(ws_stream) => {
+                                    setup_ws_connection(ws_stream, peer, state_clone, config_clone).await;
+                                }
+                                Err(e) => {
+                                    warn!(%peer, error = %e, "WS handshake failed");
+                                }
                             }
                         }
                     });
@@ -160,4 +155,41 @@ pub(crate) fn start_ws_listener(
             }
         }
     });
+}
+
+async fn setup_ws_connection<S>(
+    ws_stream: tokio_tungstenite::WebSocketStream<S>,
+    peer: SocketAddr,
+    state_clone: Arc<EdgeState>,
+    config_clone: Arc<EdgeConfig>,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    debug!(%peer, "WebSocket handshake succeeded");
+    let (tx, rx) = tokio::sync::mpsc::channel(100);
+    state_clone.register_tcp_connection(peer, tx.clone());
+
+    let on_msg_state = Arc::clone(&state_clone);
+    let on_msg_config = Arc::clone(&config_clone);
+
+    handle_ws_connection(
+        ws_stream,
+        peer,
+        tx,
+        rx,
+        move |msg_bytes, peer_addr, connection_tx| {
+            let state = Arc::clone(&on_msg_state);
+            let config = Arc::clone(&on_msg_config);
+            async move {
+                let datagrams = crate::sip::handle_datagram(
+                    &msg_bytes, peer_addr, &state, &config,
+                )
+                .await;
+                for d in datagrams {
+                    let _ = connection_tx.send(d.bytes).await;
+                }
+            }
+        },
+    )
+    .await;
 }

@@ -461,7 +461,7 @@ async fn main() -> Result<(), AnyError> {
             }
         });
 
-    match create_tls_acceptor(
+    let tls_acceptor = match create_tls_acceptor(
         edge_config.tls_cert_path.as_deref(),
         edge_config.tls_key_path.as_deref(),
         edge_config.tls_allow_test_certificate,
@@ -473,7 +473,7 @@ async fn main() -> Result<(), AnyError> {
                         info!(%tls_addr, "sip-edge TLS listener started");
                         net::start_tls_listener(
                             Arc::new(l),
-                            acceptor,
+                            acceptor.clone(),
                             Arc::clone(&edge_state),
                             Arc::clone(&edge_config),
                         );
@@ -483,14 +483,17 @@ async fn main() -> Result<(), AnyError> {
                     }
                 }
             }
+            Some(acceptor)
         }
         Ok(None) => {
             info!("SIP TLS listener disabled; configure TLS cert/key paths in config.yaml");
+            None
         }
         Err(e) => {
             warn!(error = %e, "failed to create TLS acceptor; TLS listener disabled");
+            None
         }
-    }
+    };
 
     // Start WebSocket listener
     let ws_bind_addr = edge_config.ws_bind_addr.clone().unwrap_or_else(|| {
@@ -507,6 +510,7 @@ async fn main() -> Result<(), AnyError> {
         info!(%ws_bind_addr, "sip-edge WebSocket listener started");
         net::start_ws_listener(
             ws_listener,
+            tls_acceptor,
             Arc::clone(&edge_state),
             Arc::clone(&edge_config),
         );

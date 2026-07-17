@@ -883,12 +883,13 @@ impl EdgeState {
         }
     }
 
-    pub(crate) async fn send_sip_datagram(
-        self: &Arc<Self>,
+    pub(crate) fn send_sip_datagram<'a>(
+        self: &'a Arc<Self>,
         datagram: PendingDatagram,
-        fallback_socket: &UdpSocket,
-        edge_config: &EdgeConfig,
-    ) -> Result<(), std::io::Error> {
+        fallback_socket: &'a UdpSocket,
+        edge_config: &'a EdgeConfig,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), std::io::Error>> + Send + 'a>> {
+        Box::pin(async move {
         // The guard intentionally covers the actual socket/channel write. Merely serializing
         // response construction still allows a suspended provisional-response task to send
         // after a final response under high scheduler pressure.
@@ -993,14 +994,15 @@ impl EdgeState {
                             move |msg_bytes, peer_addr, connection_tx| {
                                 let state = Arc::clone(&state_clone);
                                 let config = config_clone.clone();
-                                async move {
+                                let fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(async move {
                                     let datagrams =
                                         handle_datagram(&msg_bytes, peer_addr, &state, &config)
                                             .await;
                                     for d in datagrams {
                                         let _ = connection_tx.send(d.bytes).await;
                                     }
-                                }
+                                });
+                                fut
                             },
                         ));
 
@@ -1046,7 +1048,7 @@ impl EdgeState {
                                     move |msg_bytes, peer_addr, connection_tx| {
                                         let state = Arc::clone(&state_clone);
                                         let config = config_clone.clone();
-                                        async move {
+                                        let fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(async move {
                                             let datagrams = handle_datagram(
                                                 &msg_bytes, peer_addr, &state, &config,
                                             )
@@ -1054,7 +1056,8 @@ impl EdgeState {
                                             for d in datagrams {
                                                 let _ = connection_tx.send(d.bytes).await;
                                             }
-                                        }
+                                        });
+                                        fut
                                     },
                                 ));
 
@@ -1090,7 +1093,8 @@ impl EdgeState {
                 Ok(())
             }
         }
-    }
+    })
+}
 
     pub async fn send_keepalive_probe(&self, target_str: &str, fallback_socket: &UdpSocket) {
         let Ok(target_addr) = target_str.parse::<SocketAddr>() else {

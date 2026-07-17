@@ -587,6 +587,23 @@ pub(crate) async fn relay_media_port(
             if let Some(s) = &summary {
                 if let Some(rtp_packet) = s.rtp_packet.as_ref() {
                     relay.process_dtmf_packet(local_port, *rtp_packet);
+                    if let Some(ws_tx) = relay.websockets.get(&local_port) {
+                        let codec = relay.codecs.get(&local_port).map(|v| *v).unwrap_or(rtp_core::AudioCodec::Pcma);
+                        let pcm_samples: Vec<i16> = match codec {
+                            rtp_core::AudioCodec::Pcma => {
+                                rtp_packet.payload.iter().map(|&b| crate::media::recording::decode_pcma(b)).collect()
+                            }
+                            rtp_core::AudioCodec::Pcmu => {
+                                rtp_packet.payload.iter().map(|&b| crate::media::recording::decode_pcmu(b)).collect()
+                            }
+                            _ => Vec::new(),
+                        };
+                        let mut pcm_bytes = Vec::with_capacity(pcm_samples.len() * 2);
+                        for s in pcm_samples {
+                            pcm_bytes.extend_from_slice(&s.to_le_bytes());
+                        }
+                        let _ = ws_tx.try_send(pcm_bytes);
+                    }
                     if let Some(leg) = &plan.recording {
                         match leg.session.try_record(leg.channel, *rtp_packet) {
                             Ok(true) => {

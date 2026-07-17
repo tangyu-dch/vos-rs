@@ -32,6 +32,7 @@ mod path;
 mod playback;
 mod source;
 mod state;
+mod stream;
 
 pub(crate) use listener::relay_media_port;
 #[allow(unused_imports)]
@@ -140,6 +141,8 @@ pub struct MediaRelayState {
     pub(crate) playbacks: Arc<DashMap<u16, Arc<std::sync::Mutex<PlaybackState>>>>,
     pub(crate) playback_modes: Arc<DashMap<u16, PlaybackMode>>,
     pub(crate) playback_loops: Arc<DashMap<u16, tokio::sync::oneshot::Sender<()>>>,
+    pub(crate) websockets: Arc<DashMap<u16, tokio::sync::mpsc::Sender<Vec<u8>>>>,
+    pub(crate) websocket_loops: Arc<DashMap<u16, tokio::sync::oneshot::Sender<()>>>,
     pub(crate) muted_ports: Arc<dashmap::DashSet<u16>>,
     continuity: Arc<DashMap<u16, RtpContinuityState>>,
     pub(crate) conference_manager: Arc<crate::media::conference::ConferenceManager>,
@@ -170,6 +173,8 @@ impl Clone for MediaRelayState {
             playbacks: Arc::clone(&self.playbacks),
             playback_modes: Arc::clone(&self.playback_modes),
             playback_loops: Arc::clone(&self.playback_loops),
+            websockets: Arc::clone(&self.websockets),
+            websocket_loops: Arc::clone(&self.websocket_loops),
             muted_ports: Arc::clone(&self.muted_ports),
             continuity: Arc::clone(&self.continuity),
             conference_manager: Arc::clone(&self.conference_manager),
