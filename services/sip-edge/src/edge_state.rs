@@ -354,6 +354,13 @@ pub(crate) struct EdgeState {
     registration_lookup_locks: dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     #[cfg(test)]
     pub(crate) test_gateways: std::sync::Mutex<Vec<String>>,
+    pub(crate) sipflow_enabled: std::sync::atomic::AtomicBool,
+    pub(crate) sipflow_whitelist: std::sync::RwLock<String>,
+    pub(crate) sipflow_retention_days: std::sync::atomic::AtomicI32,
+    pub(crate) sip_flow_tx: std::sync::OnceLock<tokio::sync::mpsc::Sender<cdr_core::SipFlowRecord>>,
+    pub(crate) call_caller_addrs: dashmap::DashMap<String, std::net::SocketAddr>,
+    pub(crate) matched_call_ids: dashmap::DashMap<String, std::time::Instant>,
+    pub(crate) self_weak: std::sync::OnceLock<std::sync::Weak<EdgeState>>,
 }
 
 impl EdgeState {
@@ -427,8 +434,17 @@ impl EdgeState {
             cluster_egress: std::sync::OnceLock::new(),
             registration_lookup_cache: dashmap::DashMap::new(),
             registration_lookup_locks: dashmap::DashMap::new(),
+            parked_calls: std::sync::Arc::new(dashmap::DashMap::new()),
+            nats_client: std::sync::OnceLock::new(),
             #[cfg(test)]
             test_gateways: std::sync::Mutex::new(Vec::new()),
+            self_weak: std::sync::OnceLock::new(),
+            sipflow_enabled: std::sync::atomic::AtomicBool::new(config.sipflow_enabled),
+            sipflow_whitelist: std::sync::RwLock::new(config.sipflow_whitelist.clone()),
+            sipflow_retention_days: std::sync::atomic::AtomicI32::new(config.sipflow_retention_days),
+            sip_flow_tx: std::sync::OnceLock::new(),
+            call_caller_addrs: dashmap::DashMap::new(),
+            matched_call_ids: dashmap::DashMap::new(),
         }
     }
 
@@ -488,7 +504,16 @@ impl EdgeState {
             cluster_egress: std::sync::OnceLock::new(),
             registration_lookup_cache: dashmap::DashMap::new(),
             registration_lookup_locks: dashmap::DashMap::new(),
+            parked_calls: std::sync::Arc::new(dashmap::DashMap::new()),
+            nats_client: std::sync::OnceLock::new(),
             test_gateways: std::sync::Mutex::new(Vec::new()),
+            self_weak: std::sync::OnceLock::new(),
+            sipflow_enabled: std::sync::atomic::AtomicBool::new(config.sipflow_enabled),
+            sipflow_whitelist: std::sync::RwLock::new(config.sipflow_whitelist.clone()),
+            sipflow_retention_days: std::sync::atomic::AtomicI32::new(config.sipflow_retention_days),
+            sip_flow_tx: std::sync::OnceLock::new(),
+            call_caller_addrs: dashmap::DashMap::new(),
+            matched_call_ids: dashmap::DashMap::new(),
         }
     }
 
@@ -905,6 +930,10 @@ impl EdgeState {
                 ));
             }
         };
+
+        if self.sipflow_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            self.capture_sip_packet(&datagram.bytes, "out", target_addr);
+        }
 
         let mut transport = Transport::Udp;
         if let Ok(msg) = parse_message(&datagram.bytes) {

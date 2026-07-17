@@ -194,6 +194,7 @@ async fn main() -> Result<(), AnyError> {
         db_store.clone(),
         &edge_config,
     ));
+    edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
 
     // 将 Redis 连接注入 EdgeState（用于集群注册状态共享）
     if let Some(redis_conn) = redis_conn_for_state {
@@ -213,6 +214,13 @@ async fn main() -> Result<(), AnyError> {
             edge_config.nats_url.clone(),
         );
     }
+
+    // Start background task to capture SIP packet trace flow (SipFlow)
+    let sip_flow_tx = sip::sip_flow::SipFlowWriter::start(
+        Arc::clone(&edge_state),
+        10000, // queue capacity
+    );
+    edge_state.sip_flow_tx.set(sip_flow_tx).ok();
 
     // Start background task to flush CDRs in batches (every 100ms or 100 entries)
     let cdr_sinks_bg = Arc::clone(&cdr_sinks);

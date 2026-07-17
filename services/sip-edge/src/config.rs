@@ -105,6 +105,9 @@ pub struct EdgeConfig {
     pub balance_enforcement_enabled: bool,
     pub billing_settlement_enabled: bool,
     pub webhooks: WebhookConfig,
+    pub sipflow_enabled: bool,
+    pub sipflow_whitelist: String,
+    pub sipflow_retention_days: i32,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -498,6 +501,9 @@ impl EdgeConfig {
                 .unwrap_or(true),
             billing_settlement_enabled: billing_section.settlement_enabled.unwrap_or(true),
             webhooks: webhook_config,
+            sipflow_enabled: true,
+            sipflow_whitelist: "1001,1002".to_string(),
+            sipflow_retention_days: 7,
         }
     }
 
@@ -670,6 +676,17 @@ impl EdgeConfig {
         if let Some(val) = get_val!("gateway_health_checks_enabled").await {
             self.gateway_health_checks_enabled = val == "true" || val == "1";
         }
+        if let Some(val) = get_val!("sipflow_enabled").await {
+            self.sipflow_enabled = val == "true" || val == "1";
+        }
+        if let Some(val) = get_val!("sipflow_whitelist").await {
+            self.sipflow_whitelist = val;
+        }
+        if let Some(val) = get_val!("sipflow_retention_days").await {
+            if let Ok(v) = val.parse() {
+                self.sipflow_retention_days = v;
+            }
+        }
 
         // 地址和端口由 media_cluster_json 的 nodes[] 管理；这里只覆盖全局媒体行为。
         if let Some(val) = get_val!("rtp_symmetric_learning").await {
@@ -822,6 +839,9 @@ impl Default for EdgeConfig {
             balance_enforcement_enabled: true,
             billing_settlement_enabled: true,
             webhooks: WebhookConfig::default(),
+            sipflow_enabled: true,
+            sipflow_whitelist: "1001,1002".to_string(),
+            sipflow_retention_days: 7,
         }
     }
 }
