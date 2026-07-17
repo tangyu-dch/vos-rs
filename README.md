@@ -16,6 +16,8 @@
 - **PostgreSQL UNNEST 批量写入**：CDR 批量入库抛弃了常规 QueryBuilder 动态拼接 SQL，重构为 **静态 UNNEST 数组绑定模式**，降低客户端序列化成本和 PostgreSQL 语法解析器负载达 90% 以上。
 - **NATS JetStream 话单事件流**：异步批量缓冲与流式入库，保障信令与媒体节点不受外部数据库 I/O 阻塞影响。
 - **Opus ↔ G.711 实时高性能转码**：集成了 Rust 社区顶尖的 `opus`（支持 `bundled` 静态编译以完全免除系统 FFI 开发包依赖）与 `rubato`（高性能重采样引擎），内置 `fifo` 环形缓冲区对抗网络包抖动。
+- **VCI 2.0 NATS 呼叫控制总线**：全面采用 NATS 消息队列作为信令与媒体的统一控制总线，支持同步交互式路由与带外异步指令控制。在呼叫事件中清晰标注 A-Leg (主叫侧) 与 B-Leg (被叫侧)，内置了“先呼分机再呼被叫”、“先呼被叫再呼分机”及“多方会议室混音”等电信级业务场景控制。
+- **网络拓扑与静态 IP 绑定**：在 Docker 部署体系中引入容器静态 IP 网络分配与物理绑定，彻底规避了高并发下容器 DNS Plumbing 导致的解析延迟、解析失败与早期信令丢包。
 
 ---
 
@@ -145,6 +147,7 @@ make perf
 - [SIP/RTP 协议覆盖指标一览](docs/architecture/rtp-sip-completeness.md)
 - [Webhooks 全流程控制与 VCI 2.0 指令集设计对比](docs/architecture/WEBHOOKS_DESIGN_COMPARISON.md)
 - [Webhooks 插拔式可扩展通道架构](docs/architecture/WEBHOOKS_EXTENSIBILITY_ARCHITECTURE.md)
+- [NATS 会话控制协议与命令设计规范](docs/architecture/NATS_VCI_COMMAND_DESIGN.md)
 
 ### 开发与集成
 - [AI 语音插件标准接入协议（UDS 二进制流 + OpenAI/Gemini 接入示例）](docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md)
@@ -153,5 +156,6 @@ make perf
 ### 部署与运维
 - [部署与调优指南](docs/deployment/DEPLOY.md)
 - [Web 后台管理系统指引](docs/user-guide/WEB_GUIDE.md)
+- [中继与路由配置指南](docs/user-guide/ROUTING_TRUNK_GUIDE.md)
 
 > 完整文档索引见 [docs/README.md](docs/README.md)。
