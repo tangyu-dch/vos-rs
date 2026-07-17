@@ -117,12 +117,20 @@ fn termination_routes() -> Router<AppState> {
             get(termination::get_trunk_policy).put(termination::put_trunk_policy),
         )
         .route(
+            "/api/v1/extensions/:username/outbound-policy",
+            get(termination::get_extension_policy).put(termination::put_extension_policy),
+        )
+        .route(
             "/api/v1/numbers/:number/owner",
             put(termination::set_number_owner),
         )
         .route(
             "/api/v1/numbers/:number/allocations",
             get(termination::list_allocations).put(termination::replace_allocations),
+        )
+        .route(
+            "/api/v1/numbers/:number/did-destination",
+            get(termination::get_number_did).put(termination::put_number_did),
         )
         .route(
             "/api/v1/caller-pools",

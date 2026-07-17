@@ -91,6 +91,10 @@ pub fn role_allows(role: &str, method: &str, path: &str) -> bool {
         return matches!(role, "operator" | "financier");
     }
 
+    if path.starts_with("/api/v1/extensions/") && path.ends_with("/outbound-policy") {
+        return role == "operator";
+    }
+
     // SIP user credentials are security-sensitive and remain administrator-only.
     if path.starts_with("/api/users") || path.starts_with("/api/v1/extensions") {
         return false;
@@ -242,6 +246,7 @@ mod tests {
             "/api/v1/egress-groups/g1/members",
             "/api/v1/outbound-policies/trunk/t1",
             "/api/v1/did-destinations/10086",
+            "/api/v1/extensions/1001/outbound-policy",
         ] {
             assert!(role_allows("operator", "PUT", path));
             assert!(!role_allows("financier", "PUT", path));
