@@ -47,6 +47,9 @@ pub struct Metrics {
     pub media_rtcp_window_r_factor: Gauge,
     pub media_rtcp_window_mos: Gauge,
     pub media_rtcp_quality_alerts: Gauge,
+    pub webrtc_ice_connected: Gauge,
+    pub webrtc_dtls_connected: Gauge,
+    pub webrtc_dtls_failed: Gauge,
 }
 
 static METRICS: OnceLock<Metrics> = OnceLock::new();
@@ -73,6 +76,12 @@ pub struct MediaMetricsSnapshot {
     rtcp_window: RtcpQualityWindow,
     #[serde(default)]
     rtcp_quality_alerts: u64,
+    #[serde(default)]
+    pub webrtc_ice_connected: u64,
+    #[serde(default)]
+    pub webrtc_dtls_connected: u64,
+    #[serde(default)]
+    pub webrtc_dtls_failed: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -339,6 +348,27 @@ impl Metrics {
             media_rtcp_quality_alerts.clone(),
         );
 
+        let webrtc_ice_connected = Gauge::default();
+        registry.register(
+            "webrtc_ice_connected",
+            "Current active WebRTC ICE connections",
+            webrtc_ice_connected.clone(),
+        );
+
+        let webrtc_dtls_connected = Gauge::default();
+        registry.register(
+            "webrtc_dtls_connected",
+            "Current active WebRTC DTLS connections",
+            webrtc_dtls_connected.clone(),
+        );
+
+        let webrtc_dtls_failed = Gauge::default();
+        registry.register(
+            "webrtc_dtls_failed",
+            "Total failed WebRTC DTLS connections",
+            webrtc_dtls_failed.clone(),
+        );
+
         Self {
             registry,
             http_requests_total,
@@ -377,6 +407,9 @@ impl Metrics {
             media_rtcp_window_r_factor,
             media_rtcp_window_mos,
             media_rtcp_quality_alerts,
+            webrtc_ice_connected,
+            webrtc_dtls_connected,
+            webrtc_dtls_failed,
         }
     }
 
@@ -457,6 +490,15 @@ impl Metrics {
         metrics
             .media_rtcp_quality_alerts
             .set(saturating_i64(snapshot.rtcp_quality_alerts));
+        metrics
+            .webrtc_ice_connected
+            .set(saturating_i64(snapshot.webrtc_ice_connected));
+        metrics
+            .webrtc_dtls_connected
+            .set(saturating_i64(snapshot.webrtc_dtls_connected));
+        metrics
+            .webrtc_dtls_failed
+            .set(saturating_i64(snapshot.webrtc_dtls_failed));
     }
 
     pub fn encode_metrics() -> String {
@@ -500,6 +542,9 @@ mod tests {
             },
             rtcp_window: RtcpQualityWindow::default(),
             rtcp_quality_alerts: 0,
+            webrtc_ice_connected: 0,
+            webrtc_dtls_connected: 0,
+            webrtc_dtls_failed: 0,
         });
 
         let output = Metrics::encode_metrics();
