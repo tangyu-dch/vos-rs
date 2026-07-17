@@ -289,6 +289,22 @@ pub(crate) fn parse_target_addr_from_route(route: &str) -> Option<String> {
     Some(format!("{}:{}", uri.host, uri.port.unwrap_or(5060)))
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct AccessIpRule {
+    pub(crate) trunk_id: String,
+    pub(crate) network: sbc::IpNet,
+    pub(crate) source_port: Option<u16>,
+    pub(crate) transport: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct ParkedCall {
+    pub(crate) invite_request: sip_core::SipRequest,
+    pub(crate) peer_addr: std::net::SocketAddr,
+    pub(crate) caller_relay_port: u16,
+    pub(crate) created_at: std::time::Instant,
+}
+
 pub(crate) struct EdgeState {
     pub(crate) call_manager: std::sync::Arc<CallManager>,
     pub(crate) gateway_health: GatewayHealthTracker,
@@ -313,14 +329,20 @@ pub(crate) struct EdgeState {
     pub(crate) sbc_rate_limit_enabled: bool,
     pub(crate) external_to_internal_call_ids: dashmap::DashMap<String, String>,
     pub(crate) internal_to_external_call_ids: dashmap::DashMap<String, String>,
-    pub(crate) gateway_cache: std::sync::RwLock<HashMap<String, (bool, std::time::Instant)>>,
-    /// DID 到分机用户名的预加载映射，INVITE 热路径只进行内存读取。
-    number_routes: std::sync::RwLock<HashMap<String, String>>,
+    pub(crate) gateway_cache: std::sync::RwLock<HashMap<String, String>>,
+    pub(crate) access_trunk_auth_modes: std::sync::RwLock<HashMap<String, String>>,
+    pub(crate) access_username_to_trunk_id: std::sync::RwLock<HashMap<String, String>>,
+    pub(crate) trunk_billing_accounts: std::sync::RwLock<HashMap<String, String>>,
+    pub(crate) did_destinations: std::sync::RwLock<HashMap<String, cdr_core::DidDestination>>,
+    access_ip_rules: std::sync::RwLock<Vec<AccessIpRule>>,
+    registered_access_users: std::sync::RwLock<Vec<String>>,
     /// 按用户名跟踪活跃并发通话数，O(1) 替代 O(n) iter 扫描
     pub(crate) user_concurrency: dashmap::DashMap<String, u32>,
     pub(crate) anti_fraud_rules: std::sync::RwLock<Vec<cdr_core::AntiFraudRule>>,
     pub(crate) media_metrics_log: bool,
     pub(crate) billing_settlement_enabled: bool,
+    pub(crate) parked_calls: std::sync::Arc<dashmap::DashMap<String, ParkedCall>>,
+    pub(crate) nats_client: std::sync::OnceLock<async_nats::Client>,
     pub(crate) gateway_health_persistence_enabled: bool,
     /// Active gateway OPTIONS probes keyed by their SIP Call-ID.
     pub(crate) gateway_probes: dashmap::DashMap<String, String>,
@@ -388,7 +410,12 @@ impl EdgeState {
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
-            number_routes: std::sync::RwLock::new(HashMap::new()),
+            access_trunk_auth_modes: std::sync::RwLock::new(HashMap::new()),
+            access_username_to_trunk_id: std::sync::RwLock::new(HashMap::new()),
+            trunk_billing_accounts: std::sync::RwLock::new(HashMap::new()),
+            did_destinations: std::sync::RwLock::new(HashMap::new()),
+            access_ip_rules: std::sync::RwLock::new(Vec::new()),
+            registered_access_users: std::sync::RwLock::new(Vec::new()),
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
@@ -444,7 +471,12 @@ impl EdgeState {
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(HashMap::new()),
-            number_routes: std::sync::RwLock::new(HashMap::new()),
+            access_trunk_auth_modes: std::sync::RwLock::new(HashMap::new()),
+            access_username_to_trunk_id: std::sync::RwLock::new(HashMap::new()),
+            trunk_billing_accounts: std::sync::RwLock::new(HashMap::new()),
+            did_destinations: std::sync::RwLock::new(HashMap::new()),
+            access_ip_rules: std::sync::RwLock::new(Vec::new()),
+            registered_access_users: std::sync::RwLock::new(Vec::new()),
             user_concurrency: dashmap::DashMap::new(),
             anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
             media_metrics_log: config.media_metrics_log,
@@ -515,10 +547,15 @@ impl EdgeState {
     }
 
     /// 从 Redis 读取 SIP 鉴权凭据，不回退查询 PostgreSQL。
-    pub(crate) async fn redis_auth_password(&self, username: &str) -> Option<String> {
+    pub(crate) async fn redis_auth_password(&self, username: &str, is_trunk: bool) -> Option<String> {
         let mut connection = self.redis_connection()?;
+        let hash_key = if is_trunk {
+            "vos_rs:auth:trunks"
+        } else {
+            "vos_rs:auth:extensions"
+        };
         redis::cmd("HGET")
-            .arg("vos_rs:auth_users")
+            .arg(hash_key)
             .arg(username)
             .query_async(&mut connection)
             .await
@@ -531,10 +568,11 @@ impl EdgeState {
         &self,
         auth: &crate::sip::AuthConfig,
         request: &SipRequest,
+        is_trunk: bool,
     ) -> crate::sip::AuthDecision {
         let username = auth.authorization_username(request);
         let password = if let Some(username) = username.as_deref() {
-            self.redis_auth_password(username)
+            self.redis_auth_password(username, is_trunk)
                 .await
                 .or_else(|| auth.configured_password(username))
         } else {
@@ -652,12 +690,11 @@ impl EdgeState {
         self.lookup_contact(&resolved).await
     }
 
-    /// 原子替换 DID 到分机用户名映射。
-    pub(crate) fn replace_number_routes(&self, routes: HashMap<String, String>) {
-        if let Ok(mut current) = self.number_routes.write() {
-            *current = routes;
+    pub(crate) fn replace_did_destinations(&self, dids: HashMap<String, cdr_core::DidDestination>) {
+        if let Ok(mut current) = self.did_destinations.write() {
+            *current = dids;
         } else {
-            tracing::error!("号码路由缓存锁已损坏，忽略本次刷新");
+            tracing::error!("DID 目标路由缓存锁已损坏，忽略本次刷新");
         }
     }
 
@@ -665,16 +702,20 @@ impl EdgeState {
         let Some(number) = uri.user.as_deref() else {
             return uri.clone();
         };
-        let username = self
-            .number_routes
+        let target_id = self
+            .did_destinations
             .read()
             .ok()
-            .and_then(|routes| routes.get(number).cloned());
-        let Some(username) = username else {
+            .and_then(|dids| {
+                dids.get(number)
+                    .filter(|did| did.enabled && did.target_type == "extension")
+                    .map(|did| did.target_id.clone())
+            });
+        let Some(target_id) = target_id else {
             return uri.clone();
         };
         let mut resolved = uri.clone();
-        resolved.user = Some(username.into());
+        resolved.user = Some(target_id.into());
         resolved
     }
 
@@ -1065,9 +1106,8 @@ impl EdgeState {
         }
     }
 
-    pub(crate) async fn is_peer_gateway(&self, peer: SocketAddr) -> bool {
+    pub(crate) async fn identify_egress_trunk(&self, peer: SocketAddr) -> Option<String> {
         let peer_ip = peer.ip().to_string();
-
         #[cfg(test)]
         {
             if self
@@ -1076,35 +1116,98 @@ impl EdgeState {
                 .unwrap_or_else(|e| e.into_inner())
                 .contains(&peer_ip)
             {
-                return true;
+                return Some("test-gateway".to_string());
             }
         }
-
         self.gateway_cache
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .get(&peer_ip)
-            .map(|entry| entry.0)
-            .unwrap_or(false)
+            .cloned()
     }
 
     /// 用已加载的路由网关替换网关 IP 缓存。
-    pub(crate) fn replace_gateway_cache<'a>(
+    pub(crate) fn replace_gateway_cache(
         &self,
-        gateway_hosts: impl IntoIterator<Item = &'a String>,
+        gateways: impl IntoIterator<Item = (String, String)>,
     ) {
-        let now = std::time::Instant::now();
         let mut cache = self
             .gateway_cache
             .write()
             .unwrap_or_else(|error| error.into_inner());
         cache.clear();
-        cache.extend(
-            gateway_hosts
-                .into_iter()
-                .cloned()
-                .map(|host| (host, (true, now))),
-        );
+        cache.extend(gateways);
+    }
+
+    pub(crate) fn access_trunk_auth_mode(&self, trunk_id: &str) -> String {
+        self.access_trunk_auth_modes
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(trunk_id)
+            .cloned()
+            .unwrap_or_else(|| "none".to_string())
+    }
+
+    pub(crate) fn resolve_access_username_to_trunk(&self, username: &str) -> Option<String> {
+        self.access_username_to_trunk_id
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(username)
+            .cloned()
+    }
+
+    pub(crate) fn resolve_trunk_billing_account(&self, trunk_id: &str) -> Option<String> {
+        self.trunk_billing_accounts
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(trunk_id)
+            .cloned()
+    }
+
+    pub(crate) fn replace_access_sources(
+        &self,
+        rules: Vec<AccessIpRule>,
+        registered_users: Vec<String>,
+    ) {
+        *self
+            .access_ip_rules
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = rules;
+        *self
+            .registered_access_users
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = registered_users;
+    }
+
+    /// Returns a unique IP-authenticated access trunk. Overlap is rejected at runtime too.
+    pub(crate) fn identify_access_trunk(
+        &self,
+        peer: SocketAddr,
+        transport: &str,
+    ) -> Result<Option<String>, ()> {
+        let matches = self
+            .access_ip_rules
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .filter(|rule| rule.transport.eq_ignore_ascii_case(transport))
+            .filter(|rule| rule.source_port.is_none_or(|port| port == peer.port()))
+            .filter(|rule| rule.network.contains(&peer.ip()))
+            .map(|rule| rule.trunk_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.into_iter().next()),
+            _ => Err(()),
+        }
+    }
+
+    pub(crate) fn is_registered_access_username(&self, username: &str) -> bool {
+        self.registered_access_users
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .any(|configured| configured == username)
     }
 
     pub(crate) fn cancel_client_transaction(&self, key: &ClientTransactionKey) {

@@ -3,7 +3,6 @@
 use crate::EdgeState;
 use cdr_core::PostgresCdrStore;
 use futures::StreamExt;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -18,9 +17,9 @@ pub(crate) async fn reload_number_routes(
     edge_state: &EdgeState,
     database: &PostgresCdrStore,
 ) -> Result<(), AnyError> {
-    let routes = database.load_number_routes().await?;
-    let count = routes.len();
-    edge_state.replace_number_routes(routes.into_iter().collect::<HashMap<_, _>>());
+    let dids = database.list_did_destinations().await?;
+    let count = dids.len();
+    edge_state.replace_did_destinations(dids.into_iter().map(|d| (d.number.clone(), d)).collect());
     info!(count, "号码路由缓存已刷新");
     Ok(())
 }
@@ -70,6 +69,7 @@ mod tests {
     use super::*;
     use call_core::{CallManager, RouteTable};
     use sip_core::{parse_message, SipMessageBorrow, SipRequest};
+    use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::time::SystemTime;
 
@@ -100,7 +100,15 @@ mod tests {
     #[test]
     fn mapped_did_resolves_to_extension_and_preserves_domain() {
         let state = state();
-        state.replace_number_routes(HashMap::from([("4008001".to_string(), "1001".to_string())]));
+        let did = cdr_core::DidDestination {
+            number: "4008001".to_string(),
+            tenant_id: None,
+            target_type: "extension".to_string(),
+            target_id: "1001".to_string(),
+            enabled: true,
+            updated_at: time::OffsetDateTime::now_utc(),
+        };
+        state.replace_did_destinations(HashMap::from([("4008001".to_string(), did)]));
         let destination = "sip:4008001@tenant.example:5060;transport=udp"
             .parse()
             .expect("valid destination URI");
@@ -139,7 +147,15 @@ mod tests {
             )
             .await
             .expect("registration succeeds");
-        state.replace_number_routes(HashMap::from([("4008001".to_string(), "1001".to_string())]));
+        let did_dest = cdr_core::DidDestination {
+            number: "4008001".to_string(),
+            tenant_id: None,
+            target_type: "extension".to_string(),
+            target_id: "1001".to_string(),
+            enabled: true,
+            updated_at: time::OffsetDateTime::now_utc(),
+        };
+        state.replace_did_destinations(HashMap::from([("4008001".to_string(), did_dest)]));
         let did = "sip:4008001@tenant.example".parse().expect("valid DID");
 
         let contact = state

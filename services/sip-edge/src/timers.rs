@@ -519,6 +519,8 @@ pub(crate) fn spawn_gateway_health_probe_loop(
                 _caller_mode,
                 _virtual_caller,
                 _prefix_rules,
+                _max_concurrent,
+                _role,
             ) in gateways
             {
                 if edge_state

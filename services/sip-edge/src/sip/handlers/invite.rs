@@ -337,10 +337,95 @@ pub(crate) async fn handle_invite_request(
         }
     }
 
-    let from_gw = edge_state.is_peer_gateway(peer).await;
-    if edge_config.balance_enforcement_enabled && !from_gw {
+    let transport = if request
+        .headers
+        .get("via")
+        .is_some_and(|v| v.as_str().to_ascii_uppercase().contains("TCP"))
+    {
+        "tcp"
+    } else {
+        "udp"
+    };
+
+    let egress_trunk_id = edge_state.identify_egress_trunk(peer).await;
+    let from_gw = egress_trunk_id.is_some();
+
+    let mut call_source: Option<call_core::CallSource> = None;
+
+    if let Some(ref trunk_id) = egress_trunk_id {
+        let number = request.uri.user.as_deref().unwrap_or("");
+        if trunk_id != "test-gateway" && trunk_id != "default" && !edge_state.call_manager.owns_number(number, trunk_id) {
+            warn!(trunk_id = %trunk_id, number = %number, "egress trunk does not own callee number");
+            return vec![PendingDatagram::new(
+                peer.to_string(),
+                response::build_response_with_owned_headers(
+                    &request,
+                    403,
+                    "Forbidden - Number Ownership Validation Failed",
+                    &[],
+                    "",
+                ),
+            )];
+        }
+        call_source = Some(call_core::CallSource::new("trunk", trunk_id));
+    }
+
+    if call_source.is_none() {
+        match edge_state.identify_access_trunk(peer, transport) {
+            Ok(Some(trunk_id)) => {
+                let mode = edge_state.access_trunk_auth_mode(&trunk_id);
+                if mode == "ip_allowlist" {
+                    call_source = Some(call_core::CallSource::new("trunk", trunk_id));
+                } else if mode == "ip_and_digest" {
+                    let auth_res = edge_state
+                        .verify_sip_auth(&edge_config.auth, &request, true)
+                        .await;
+                    match auth_res {
+                        AuthDecision::Challenge => {
+                            return vec![PendingDatagram::new(
+                                peer.to_string(),
+                                proxy_unauthorized_for_request(&request, &edge_config.auth),
+                            )];
+                        }
+                        AuthDecision::ChallengeWithFailure => {
+                            edge_state.sbc_engine.register_auth_failure(peer.ip());
+                            return vec![PendingDatagram::new(
+                                peer.to_string(),
+                                proxy_unauthorized_for_request(&request, &edge_config.auth),
+                            )];
+                        }
+                        _ => {
+                            call_source = Some(call_core::CallSource::new("trunk", trunk_id));
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                warn!(?peer, "overlapping access trunk IP rules matched");
+                return vec![PendingDatagram::new(
+                    peer.to_string(),
+                    response::build_response_with_owned_headers(
+                        &request,
+                        403,
+                        "Forbidden - Overlapping IP Rules",
+                        &[],
+                        "",
+                    ),
+                )];
+            }
+            _ => {}
+        }
+    }
+
+    if call_source.is_none() {
+        let username_opt = edge_config.auth.authorization_username(&request);
+        let username = username_opt
+            .clone()
+            .or_else(|| EdgeState::username_from_request(&request))
+            .unwrap_or_default();
+        let is_trunk = edge_state.is_registered_access_username(&username);
         let auth_res = edge_state
-            .verify_sip_auth(&edge_config.auth, &request)
+            .verify_sip_auth(&edge_config.auth, &request, is_trunk)
             .await;
         match auth_res {
             AuthDecision::Challenge => {
@@ -356,9 +441,21 @@ pub(crate) async fn handle_invite_request(
                     proxy_unauthorized_for_request(&request, &edge_config.auth),
                 )];
             }
-            _ => {}
+            _ => {
+                if is_trunk {
+                    if let Some(trunk_id) = edge_state.resolve_access_username_to_trunk(&username) {
+                        call_source = Some(call_core::CallSource::new("trunk", trunk_id));
+                    } else {
+                        call_source = Some(call_core::CallSource::new("trunk", username));
+                    }
+                } else {
+                    call_source = Some(call_core::CallSource::new("extension", username));
+                }
+            }
         }
     }
+
+    let source = call_source.expect("source must be resolved here");
 
     let caller_domain = EdgeState::domain_from_request(&request);
     let callee_domain = request.uri.host.clone();
@@ -401,6 +498,7 @@ pub(crate) async fn handle_invite_request(
             response::response_for_request_with_health(
                 &request,
                 &edge_state.call_manager,
+                Some(&source),
                 Some(&edge_state.gateway_health),
             )
         }
@@ -408,6 +506,7 @@ pub(crate) async fn handle_invite_request(
         response::response_for_request_with_health(
             &request,
             &edge_state.call_manager,
+            Some(&source),
             Some(&edge_state.gateway_health),
         )
     };
@@ -452,7 +551,11 @@ pub(crate) async fn handle_invite_request(
 
     // 呼叫热路径只从 Redis 读取余额和费率，不回退查询 PostgreSQL。
     if edge_config.balance_enforcement_enabled && !from_gw && outbound_invite.is_some() {
-        let caller_user = EdgeState::username_from_request(&request).unwrap_or_default();
+        let caller_user = if source.source_type == "extension" {
+            source.source_id.clone()
+        } else {
+            edge_state.resolve_trunk_billing_account(&source.source_id).unwrap_or_default()
+        };
         let callee = request.uri.user.as_deref().unwrap_or("");
         if !caller_user.is_empty() {
             match edge_state.redis_balance_check(&caller_user, callee).await {

@@ -20,7 +20,7 @@
 //! - 检查网关容量
 //! - 应用前缀规则和 Caller ID 重写
 
-use call_core::{CallError, CallManager, CallerIdentity, GatewayHealthTracker};
+use call_core::{CallError, CallManager, CallerIdentity, GatewayHealthTracker, CallSource};
 use sip_core::{HeaderMap, Method, SipRequest, SipResponse, SipUri};
 
 const SERVER_HEADER: &str = "VOS-RS sip-edge/0.1";
@@ -52,6 +52,7 @@ pub struct OutboundInvitePlan {
 pub fn response_for_request_with_health(
     request: &SipRequest,
     call_manager: &CallManager,
+    source: Option<&CallSource>,
     health: Option<&GatewayHealthTracker>,
 ) -> RequestHandling {
     match &request.method {
@@ -63,17 +64,18 @@ pub fn response_for_request_with_health(
             "",
         )
         .into(),
-        Method::Invite => response_for_invite(request, call_manager, health),
+        Method::Invite => response_for_invite_with_source(request, call_manager, source, health),
         _ => build_response(request, 501, "Not Implemented", &[], "").into(),
     }
 }
 
-fn response_for_invite(
+fn response_for_invite_with_source(
     request: &SipRequest,
     call_manager: &CallManager,
+    source: Option<&CallSource>,
     health: Option<&GatewayHealthTracker>,
 ) -> RequestHandling {
-    match call_manager.handle_inbound_invite_with_health(request, health) {
+    match call_manager.handle_inbound_invite_with_source_and_health(request, source, health) {
         Ok(outcome) => {
             let gateway_id = call_manager
                 .current_gateway_id(outcome.call_id.as_str())
@@ -216,6 +218,10 @@ pub fn response_503_service_unavailable(request: &sip_core::SipRequestBorrow<'_>
         &[("Retry-After", "30")],
         "",
     )
+}
+
+pub fn response_100_trying(request: &sip_core::SipRequestBorrow<'_>) -> Vec<u8> {
+    build_response(request, 100, "Trying", &[], "")
 }
 
 pub fn build_response_with_owned_headers(
@@ -409,7 +415,7 @@ mod tests {
 
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let call_manager = CallManager::new(RouteTable::default(), tx);
-        let handling = response_for_request_with_health(&request, &call_manager, None);
+        let handling = response_for_request_with_health(&request, &call_manager, None, None);
         let response = String::from_utf8(handling.response.clone()).unwrap();
 
         assert!(response.starts_with("SIP/2.0 501 Not Implemented\r\n"));
