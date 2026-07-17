@@ -2,8 +2,42 @@ use crate::{
     CallerPool, CallerPoolMember, DidDestination, EgressEndpoint, EgressGroup, EgressGroupMember,
     NumberAllocation, PostgresCdrStore, SourceOutboundPolicy, TrunkIpRule,
 };
+use sqlx::Row;
 
 impl PostgresCdrStore {
+    /// Loads every enabled IP rule for SIP edge source identification.
+    pub async fn list_enabled_trunk_ip_rules(&self) -> Result<Vec<TrunkIpRule>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id,trunk_id,cidr::text AS cidr,source_port,transport,description,enabled \
+             FROM trunk_ip_rules WHERE enabled ORDER BY trunk_id,id",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Loads every enabled egress endpoint for route target construction.
+    pub async fn list_enabled_egress_endpoints(&self) -> Result<Vec<EgressEndpoint>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id,trunk_id,host,port,transport,priority,enabled FROM egress_endpoints \
+             WHERE enabled ORDER BY trunk_id,priority DESC,id",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Loads active number ownership, preferring the canonical owner column over the legacy one.
+    pub async fn list_runtime_number_owners(
+        &self,
+    ) -> Result<Vec<(String, String)>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT number,COALESCE(NULLIF(owner_egress_trunk_id,''),NULLIF(gateway_id,'')) \
+             FROM number_inventory WHERE LOWER(status) IN ('available','assigned','active') \
+               AND COALESCE(NULLIF(owner_egress_trunk_id,''),NULLIF(gateway_id,'')) IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
     /// Lists IP authentication rules for one ingress trunk.
     pub async fn list_trunk_ip_rules(
         &self,
@@ -233,6 +267,18 @@ impl PostgresCdrStore {
             .bind(pool_id).fetch_all(&self.pool).await
     }
 
+    /// Loads all enabled caller pool members for the SIP edge runtime snapshot.
+    pub async fn list_enabled_caller_pool_members(
+        &self,
+    ) -> Result<Vec<CallerPoolMember>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id,pool_id,number,priority,weight,max_concurrent,enabled \
+             FROM caller_pool_members WHERE enabled ORDER BY pool_id,priority DESC,id",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
     /// Replaces members of a caller pool.
     pub async fn replace_caller_pool_members(
         &self,
@@ -282,6 +328,18 @@ impl PostgresCdrStore {
     ) -> Result<Vec<EgressGroupMember>, sqlx::Error> {
         sqlx::query_as("SELECT id,group_id,egress_trunk_id,destination_prefix,priority,weight,time_start,time_end,enabled FROM egress_group_members WHERE group_id=$1 ORDER BY priority DESC,id")
             .bind(group_id).fetch_all(&self.pool).await
+    }
+
+    /// Loads all enabled egress group members for the SIP edge runtime snapshot.
+    pub async fn list_enabled_egress_group_members(
+        &self,
+    ) -> Result<Vec<EgressGroupMember>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id,group_id,egress_trunk_id,destination_prefix,priority,weight,time_start,time_end,enabled \
+             FROM egress_group_members WHERE enabled ORDER BY group_id,priority DESC,id",
+        )
+        .fetch_all(&self.pool)
+        .await
     }
 
     /// Replaces members of an egress group.
@@ -367,5 +425,36 @@ impl PostgresCdrStore {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Lists all trunk credentials for registered access trunks.
+    pub async fn list_trunk_credentials(&self) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, access_username, access_password_hash FROM sip_gateways \
+             WHERE role = 'access' AND enabled = TRUE \
+               AND access_auth_mode IN ('digest_register', 'ip_and_digest') \
+               AND access_username <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .collect())
+    }
+
+    /// Lists trunk billing account mappings.
+    pub async fn list_trunk_billing_accounts(&self) -> Result<Vec<(String, String)>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT g.id, a.username FROM sip_gateways g \
+             JOIN billing_accounts a ON g.account_id = a.id \
+             WHERE g.enabled = TRUE",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect())
     }
 }

@@ -101,11 +101,13 @@ impl PostgresCdrStore {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<u32>,
+            Option<String>,
         )>,
         sqlx::Error,
     > {
         let rows = sqlx::query(
-            "SELECT id, host, port, transport, max_capacity, caller_id_mode, virtual_caller, prefix_rules \
+            "SELECT id, host, port, transport, max_capacity, caller_id_mode, virtual_caller, prefix_rules, max_concurrent, role \
              FROM sip_gateways WHERE enabled = TRUE",
         )
         .fetch_all(&self.pool)
@@ -120,6 +122,8 @@ impl PostgresCdrStore {
             let caller_id_mode: Option<String> = row.get(5);
             let virtual_caller: Option<String> = row.get(6);
             let prefix_rules: Option<String> = row.get(7);
+            let max_concurrent: Option<i32> = row.get(8);
+            let role: Option<String> = row.get(9);
             gateways.push((
                 id,
                 host,
@@ -129,6 +133,8 @@ impl PostgresCdrStore {
                 caller_id_mode,
                 virtual_caller,
                 prefix_rules,
+                max_concurrent.and_then(|c| u32::try_from(c).ok()),
+                role,
             ));
         }
         Ok(gateways)
@@ -306,6 +312,7 @@ impl PostgresCdrStore {
         limit: i64,
         offset: i64,
         gateway_type: Option<&str>,
+        role: Option<&str>,
     ) -> Result<Vec<SipGateway>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.role, g.access_auth_mode, g.access_username, g.access_realm, (g.access_password_hash <> '') AS has_access_password, g.prefix_rules, \
@@ -315,11 +322,13 @@ impl PostgresCdrStore {
              FROM sip_gateways g \
              LEFT JOIN gateway_health_status h ON g.id = h.gateway_id \
              WHERE ($3::TEXT IS NULL OR g.gateway_type = $3) \
+             AND ($4::TEXT IS NULL OR g.role = $4) \
              ORDER BY g.id LIMIT $1 OFFSET $2",
         )
         .bind(limit)
         .bind(offset)
         .bind(gateway_type)
+        .bind(role)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -361,11 +370,12 @@ impl PostgresCdrStore {
     }
 
     /// 返回网关总数。
-    pub async fn count_gateways(&self, gateway_type: Option<&str>) -> Result<i64, sqlx::Error> {
+    pub async fn count_gateways(&self, gateway_type: Option<&str>, role: Option<&str>) -> Result<i64, sqlx::Error> {
         let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM sip_gateways WHERE ($1::TEXT IS NULL OR gateway_type = $1)",
+            "SELECT COUNT(*) FROM sip_gateways WHERE ($1::TEXT IS NULL OR gateway_type = $1) AND ($2::TEXT IS NULL OR role = $2)",
         )
         .bind(gateway_type)
+        .bind(role)
         .fetch_one(&self.pool)
         .await?;
         Ok(row.0)

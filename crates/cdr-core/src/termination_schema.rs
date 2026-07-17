@@ -151,3 +151,27 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
         END IF;
     END $$"#,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::MIGRATE_TERMINATION_DOMAIN_SQL;
+
+    #[test]
+    fn migration_is_progressive_and_idempotent() {
+        let sql = MIGRATE_TERMINATION_DOMAIN_SQL
+            .join("\n")
+            .to_ascii_uppercase();
+        assert!(!sql.contains("DROP TABLE"));
+        assert!(!sql.contains("DROP COLUMN"));
+        assert!(sql.contains("IF NOT EXISTS"));
+    }
+
+    #[test]
+    fn policy_and_number_constraints_are_present() {
+        let sql = MIGRATE_TERMINATION_DOMAIN_SQL.join("\n");
+        assert!(sql.contains("idx_number_allocations_one_active"));
+        assert!(sql.contains("chk_source_policy_caller_fields"));
+        assert!(sql.contains("chk_source_policy_egress_fields"));
+        assert!(sql.contains("owner_egress_trunk_id"));
+    }
+}

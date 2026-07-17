@@ -22,7 +22,7 @@ impl PostgresCdrStore {
 
     pub async fn list_numbers(&self) -> Result<Vec<NumberInventory>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT number, username, gateway_id, direction, max_concurrent, current_concurrent, status, created_at, updated_at FROM number_inventory ORDER BY number",
+            "SELECT number, username, gateway_id, owner_egress_trunk_id, direction, max_concurrent, current_concurrent, status, created_at, updated_at FROM number_inventory ORDER BY number",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -32,12 +32,13 @@ impl PostgresCdrStore {
                 number: row.get(0),
                 username: row.get(1),
                 gateway_id: row.get(2),
-                direction: row.get(3),
-                max_concurrent: row.get(4),
-                current_concurrent: row.get(5),
-                status: row.get(6),
-                created_at: row.get(7),
-                updated_at: row.get(8),
+                owner_egress_trunk_id: row.get(3),
+                direction: row.get(4),
+                max_concurrent: row.get(5),
+                current_concurrent: row.get(6),
+                status: row.get(7),
+                created_at: row.get(8),
+                updated_at: row.get(9),
             });
         }
         Ok(numbers)
@@ -50,7 +51,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<NumberInventory>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT number, username, gateway_id, direction, max_concurrent, current_concurrent, status, created_at, updated_at \
+            "SELECT number, username, gateway_id, owner_egress_trunk_id, direction, max_concurrent, current_concurrent, status, created_at, updated_at \
              FROM number_inventory ORDER BY number LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -63,12 +64,13 @@ impl PostgresCdrStore {
                 number: row.get(0),
                 username: row.get(1),
                 gateway_id: row.get(2),
-                direction: row.get(3),
-                max_concurrent: row.get(4),
-                current_concurrent: row.get(5),
-                status: row.get(6),
-                created_at: row.get(7),
-                updated_at: row.get(8),
+                owner_egress_trunk_id: row.get(3),
+                direction: row.get(4),
+                max_concurrent: row.get(5),
+                current_concurrent: row.get(6),
+                status: row.get(7),
+                created_at: row.get(8),
+                updated_at: row.get(9),
             })
             .collect())
     }
@@ -81,24 +83,28 @@ impl PostgresCdrStore {
         Ok(row.0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_number(
         &self,
         number: &str,
         username: Option<&str>,
         gateway_id: Option<&str>,
+        owner_egress_trunk_id: Option<&str>,
         direction: Option<&str>,
         max_concurrent: Option<i32>,
         status: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO number_inventory (number, username, gateway_id, direction, max_concurrent, status, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, now()) \
+            "INSERT INTO number_inventory (number, username, gateway_id, owner_egress_trunk_id, direction, max_concurrent, status, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, now()) \
              ON CONFLICT (number) DO UPDATE SET username=EXCLUDED.username, gateway_id=EXCLUDED.gateway_id, \
-             direction=EXCLUDED.direction, max_concurrent=EXCLUDED.max_concurrent, status=EXCLUDED.status, updated_at=now()",
+             owner_egress_trunk_id=EXCLUDED.owner_egress_trunk_id, direction=EXCLUDED.direction, \
+             max_concurrent=EXCLUDED.max_concurrent, status=EXCLUDED.status, updated_at=now()",
         )
         .bind(number)
         .bind(username)
         .bind(gateway_id)
+        .bind(owner_egress_trunk_id)
         .bind(direction)
         .bind(max_concurrent)
         .bind(status)
