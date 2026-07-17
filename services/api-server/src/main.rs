@@ -94,6 +94,7 @@ pub(crate) struct PageQuery {
     pub page: Option<i64>,
     pub page_size: Option<i64>,
     pub gateway_type: Option<String>,
+    pub role: Option<String>,
 }
 
 pub(crate) fn normalize_page(query: &PageQuery) -> (i64, i64, i64) {
@@ -215,18 +216,21 @@ fn redact_sensitive_json_value(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(object) => {
             for (key, child) in object.iter_mut() {
-                if matches!(
-                    key.to_ascii_lowercase().as_str(),
-                    "password"
-                        | "passwd"
-                        | "secret"
-                        | "token"
-                        | "access_token"
-                        | "refresh_token"
-                        | "api_key"
-                        | "authorization"
-                        | "ha1"
-                ) {
+                let normalized_key = key.to_ascii_lowercase();
+                if normalized_key.ends_with("password")
+                    || matches!(
+                        normalized_key.as_str(),
+                        "password"
+                            | "passwd"
+                            | "secret"
+                            | "token"
+                            | "access_token"
+                            | "refresh_token"
+                            | "api_key"
+                            | "authorization"
+                            | "ha1"
+                    )
+                {
                     *child = serde_json::Value::String("[已脱敏]".to_string());
                 } else {
                     redact_sensitive_json_value(child);
@@ -789,6 +793,7 @@ mod tests {
             page: Some(0),
             page_size: Some(10_000),
             gateway_type: None,
+            role: None,
         };
 
         assert_eq!(normalize_page(&query), (1, 100, 0));

@@ -22,6 +22,7 @@ pub async fn list_registrations(
         page: query.page,
         page_size: query.page_size,
         gateway_type: None,
+        role: None,
     };
     let (page, page_size, offset) = normalize_page(&page_query);
     let (items, total) = tokio::try_join!(

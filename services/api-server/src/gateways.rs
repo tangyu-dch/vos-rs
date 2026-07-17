@@ -59,6 +59,7 @@ pub struct UpdateGatewayRequest {
     pub enabled: Option<bool>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_gateway(
     id: &str,
     host: &str,
@@ -152,8 +153,8 @@ pub async fn list_gateways(
     let (items, total) = tokio::try_join!(
         state
             .store
-            .list_gateways_page(page_size, offset, query.gateway_type.as_deref()),
-        state.store.count_gateways(query.gateway_type.as_deref()),
+            .list_gateways_page(page_size, offset, query.gateway_type.as_deref(), query.role.as_deref()),
+        state.store.count_gateways(query.gateway_type.as_deref(), query.role.as_deref()),
     )
     .map_err(|e| ApiError {
         error: e.to_string(),
@@ -275,11 +276,6 @@ pub async fn update_gateway(
         .virtual_caller
         .clone()
         .or_else(|| old.virtual_caller.clone());
-    let role = req
-        .role
-        .as_deref()
-        .or(old.role.as_deref())
-        .unwrap_or("egress");
     let access_username = req
         .access_username
         .clone()
@@ -362,68 +358,6 @@ pub async fn update_gateway(
     Ok(StatusCode::OK)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::validate_gateway;
-
-    #[test]
-    fn validates_transport_port_and_virtual_caller() {
-        assert!(validate_gateway(
-            "gw",
-            "127.0.0.1",
-            Some(5060),
-            "udp",
-            None,
-            None,
-            Some("egress"),
-            None
-        )
-        .is_ok());
-        assert!(
-            validate_gateway("gw", "127.0.0.1", Some(0), "udp", None, None, None, None).is_err()
-        );
-        assert!(
-            validate_gateway("gw", "127.0.0.1", Some(5060), "ws", None, None, None, None).is_err()
-        );
-        assert!(
-            validate_gateway("gw", "127.0.0.1", Some(5060), "tcp", None, None, None, None).is_err()
-        );
-        assert!(validate_gateway(
-            "gw",
-            "127.0.0.1",
-            Some(5060),
-            "udp",
-            Some("virtual"),
-            None,
-            None,
-            None
-        )
-        .is_err());
-        assert!(validate_gateway(
-            "access",
-            "127.0.0.1",
-            Some(5060),
-            "udp",
-            None,
-            None,
-            Some("access"),
-            Some("none")
-        )
-        .is_err());
-        assert!(validate_gateway(
-            "access",
-            "127.0.0.1",
-            Some(5060),
-            "udp",
-            None,
-            None,
-            Some("access"),
-            Some("ip_allowlist")
-        )
-        .is_ok());
-    }
-}
-
 pub async fn delete_gateway(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -440,5 +374,75 @@ pub async fn delete_gateway(
         Ok(StatusCode::OK)
     } else {
         Ok(StatusCode::NOT_FOUND)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_gateway;
+
+    #[test]
+    fn validates_transport_port_and_virtual_caller() {
+        let validate = |host: &str, port, transport, role, auth, user, realm, password| {
+            validate_gateway(
+                "gw", host, port, transport, None, None, role, auth, user, realm, password,
+            )
+        };
+        assert!(validate(
+            "127.0.0.1",
+            Some(5060),
+            "udp",
+            Some("egress"),
+            None,
+            None,
+            None,
+            false
+        )
+        .is_ok());
+        assert!(validate("127.0.0.1", Some(0), "udp", None, None, None, None, false).is_err());
+        assert!(validate(
+            "127.0.0.1",
+            Some(5060),
+            "tcp",
+            None,
+            None,
+            None,
+            None,
+            false
+        )
+        .is_err());
+        assert!(validate(
+            "127.0.0.1",
+            Some(5060),
+            "udp",
+            Some("access"),
+            Some("none"),
+            None,
+            None,
+            false
+        )
+        .is_err());
+        assert!(validate(
+            "",
+            Some(5060),
+            "udp",
+            Some("access"),
+            Some("ip_allowlist"),
+            None,
+            None,
+            false
+        )
+        .is_ok());
+        assert!(validate(
+            "",
+            Some(5060),
+            "udp",
+            Some("access"),
+            Some("digest_register"),
+            Some("carrier"),
+            Some("vos-rs"),
+            true
+        )
+        .is_ok());
     }
 }

@@ -257,6 +257,7 @@ pub async fn list_ledger(
         page: q.page,
         page_size: q.page_size,
         gateway_type: None,
+        role: None,
     };
     let (page, page_size, offset) = normalize_page(&page_query);
     let (items, total) = tokio::try_join!(
