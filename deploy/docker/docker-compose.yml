@@ -37,7 +37,8 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.4
 
   nats:
     image: nats:2.10-alpine
@@ -61,7 +62,8 @@ services:
       start_period: 5s
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.3
 
   redis:
     image: redis:7-alpine
@@ -79,7 +81,8 @@ services:
       start_period: 5s
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.6
 
   # RustFS：S3 兼容对象存储，录音归档到 recordings bucket。
   rustfs:
@@ -103,7 +106,8 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.2
 
   # 首次启动时创建录音桶；mc mb --ignore-existing 保证重复启动幂等。
   rustfs-init:
@@ -120,7 +124,8 @@ services:
       mc mb --ignore-existing rustfs/${RUSTFS_BUCKET:-recordings}"
     restart: "no"
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.12
 
   # ========== 应用服务 ==========
 
@@ -145,7 +150,8 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.11
 
   media-edge:
     <<: *vos-rs-backend
@@ -165,7 +171,8 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.5
 
   sip-edge:
     <<: *vos-rs-backend
@@ -194,7 +201,8 @@ services:
       start_period: 20s
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.9
 
   api-server:
     <<: *vos-rs-backend
@@ -226,7 +234,8 @@ services:
       start_period: 15s
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.8
 
   cdr-worker:
     <<: *vos-rs-backend
@@ -243,7 +252,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.7
 
   # ========== 前端 ==========
 
@@ -265,7 +275,8 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - vos_rs_network
+      vos_rs_network:
+        ipv4_address: 192.168.117.10
 
 # ========== 网络 ==========
 
@@ -273,6 +284,10 @@ networks:
   vos_rs_network:
     driver: bridge
     name: vos_rs_network
+    ipam:
+      driver: default
+      config:
+        - subnet: 192.168.117.0/24
 
 # ========== 卷 ==========
 

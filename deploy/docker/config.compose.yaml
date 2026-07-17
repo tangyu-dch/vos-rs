@@ -7,26 +7,26 @@ logging:
 
 connections:
   database:
-    host: "postgres"
+    host: "192.168.117.4"
     port: 5432
     username: "vos_rs"
     password: "vos_rs"
     database: "vos_rs"
     max_connections: 50
   redis:
-    host: "redis"
+    host: "192.168.117.6"
     port: 6379
     password: ""
     database: 0
     max_connections: 50
   nats:
-    url: "nats://nats:4222"
+    url: "nats://192.168.117.3:4222"
     cdr_stream: "VOS_RS_CDR"
     cdr_subject: "vos_rs.cdr"
   s3:
     backend: "s3"
     local_dir: "/data/recordings"
-    endpoint: "http://rustfs:9000"
+    endpoint: "http://192.168.117.2:9000"
     bucket: "recordings"
     access_key: "rustfsadmin"
     secret_key: "rustfsadmin"
@@ -67,8 +67,8 @@ sip_edge:
     enabled: true
     node_id: "sip-edge-compose-1"
     router_mode: "native"
-    advertised_addr: "sip-edge:5070"
-    management_url: "http://sip-edge:8082"
+    advertised_addr: "192.168.117.9:5070"
+    management_url: "http://192.168.117.9:8082"
     node_key_prefix: "vos_rs:cluster:sip_nodes"
     heartbeat_interval_secs: 3
     node_timeout_secs: 10
@@ -106,7 +106,7 @@ sip_edge:
     nodes:
       - id: "media-edge-compose-1"
         type: "remote"
-        control_url: "http://media-edge:3030"
+        control_url: "http://192.168.117.5:3030"
         advertised_addr: "127.0.0.1"
         port_min: 40000
         port_max: 40100
@@ -136,7 +136,8 @@ sip_edge:
     udp_receive_buffer_bytes: 4194304
     udp_send_buffer_bytes: 4194304
   webhooks:
-    enabled: false
+    enabled: true
+    control_mode: "nats"
     endpoint_url: "http://webhook-receiver:8090/webhooks/calls"
     signing_secret: "compose-webhook-secret-change-me"
     stream: "VOS_RS_WEBHOOKS"
