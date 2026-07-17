@@ -22,9 +22,9 @@
 //! 呼叫结束（BYE/CANCEL/超时/failover）时调用 `decrement_active`。
 
 use crate::{
-    Call, CallCdr, CallError, CallEvent, CallId, CallQualityMetrics, CallResult, CallState,
-    CallerIdentity, CallerNumberDirectory, GatewayHealthTracker, RouteTable, WebhookEvent,
-    WEBHOOK_SCHEMA_VERSION,
+    Call, CallCdr, CallError, CallEvent, CallId, CallQualityMetrics, CallResult, CallSource,
+    CallState, CallerIdentity, CallerNumberDirectory, GatewayHealthTracker,
+    OutboundPolicyDirectory, RouteTable, WebhookEvent, WEBHOOK_SCHEMA_VERSION,
 };
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
@@ -166,6 +166,7 @@ pub struct CallManager {
     /// 路由表（支持热更新）
     routes: ArcSwap<RouteTable>,
     caller_numbers: ArcSwap<CallerNumberDirectory>,
+    outbound_policies: ArcSwap<OutboundPolicyDirectory>,
     /// CDR 异步写入通道
     cdr_sender: Arc<dyn CdrSink>,
     cdr_dropped: AtomicU64,
@@ -200,6 +201,7 @@ impl CallManager {
             calls: DashMap::new(),
             routes: ArcSwap::new(Arc::new(routes)),
             caller_numbers: ArcSwap::new(Arc::new(CallerNumberDirectory::default())),
+            outbound_policies: ArcSwap::new(Arc::new(OutboundPolicyDirectory::default())),
             cdr_sender: Arc::new(cdr_sender),
             cdr_dropped: AtomicU64::new(0),
             event_sink,
@@ -208,6 +210,10 @@ impl CallManager {
             active_calls_cache: std::sync::atomic::AtomicUsize::new(0),
             active_calls_last_update: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    pub fn owns_number(&self, number: &str, gateway_id: &str) -> bool {
+        self.caller_numbers.load().owns_number(number, gateway_id)
     }
 
     fn push_event(&self, call_id: &CallId, event: CallEvent) {
@@ -252,6 +258,11 @@ impl CallManager {
         self.caller_numbers.store(Arc::new(directory));
     }
 
+    /// Atomically replaces source-owned outbound policies used by new calls.
+    pub fn update_outbound_policies(&self, directory: OutboundPolicyDirectory) {
+        self.outbound_policies.store(Arc::new(directory));
+    }
+
     pub fn handle_inbound_invite(&self, request: &SipRequest) -> CallResult<InboundInviteOutcome> {
         self.handle_inbound_invite_with_health(request, None)
     }
@@ -260,6 +271,16 @@ impl CallManager {
     pub fn handle_inbound_invite_with_health(
         &self,
         request: &SipRequest,
+        health: Option<&GatewayHealthTracker>,
+    ) -> CallResult<InboundInviteOutcome> {
+        self.handle_inbound_invite_with_source_and_health(request, None, health)
+    }
+
+    /// Handles an INVITE for an authenticated extension or access trunk source.
+    pub fn handle_inbound_invite_with_source_and_health(
+        &self,
+        request: &SipRequest,
+        source: Option<&CallSource>,
         health: Option<&GatewayHealthTracker>,
     ) -> CallResult<InboundInviteOutcome> {
         let mut call = Call::from_inbound_invite(request)?;
@@ -279,6 +300,7 @@ impl CallManager {
                 caller: call.caller.clone(),
                 callee: call.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
                 direction: call.direction.clone(),
+                leg: "a_leg".to_string(),
             },
         );
 
@@ -310,26 +332,46 @@ impl CallManager {
                         sip_status: None,
                         q850_cause: None,
                         reason,
+                        leg: "a_leg".to_string(),
                     },
                 );
                 return Err(error);
             }
         };
 
-        let policy_target = &candidates[0].target;
         let original_number = caller_number_from_request(request).ok_or_else(|| {
             CallError::CallerIdentityUnavailable("inbound From has no caller number".to_string())
         })?;
-        let caller_identity = self.caller_numbers.load().resolve(
-            policy_target.caller_id_mode.as_deref(),
-            policy_target.virtual_caller.as_deref(),
-            &original_number,
-            &candidates,
-            call_id.as_str(),
-        )?;
-        if let Some(identity) = &caller_identity {
-            candidates.retain(|candidate| candidate.target.gateway_id == identity.owner_gateway_id);
-        }
+        let source_resolution = source
+            .map(|source| {
+                self.outbound_policies.load().resolve(
+                    source,
+                    &original_number,
+                    request.uri.user.as_deref().unwrap_or(""),
+                    &candidates,
+                    call_id.as_str(),
+                )
+            })
+            .transpose()?
+            .flatten();
+        let caller_identity = if let Some((identity, source_candidates)) = source_resolution {
+            candidates = source_candidates;
+            Some(identity)
+        } else {
+            let policy_target = &candidates[0].target;
+            let identity = self.caller_numbers.load().resolve(
+                policy_target.caller_id_mode.as_deref(),
+                policy_target.virtual_caller.as_deref(),
+                &original_number,
+                &candidates,
+                call_id.as_str(),
+            )?;
+            if let Some(identity) = &identity {
+                candidates
+                    .retain(|candidate| candidate.target.gateway_id == identity.owner_gateway_id);
+            }
+            identity
+        };
         call.caller_identity = caller_identity.clone();
         call.candidates = candidates;
         call.current_candidate_index = 0;
@@ -373,6 +415,7 @@ impl CallManager {
                 caller: call.caller.clone(),
                 callee: call.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
                 direction: call.direction.clone(),
+                leg: "a_leg".to_string(),
             },
         );
 
@@ -469,11 +512,13 @@ impl CallManager {
             (previous, CallState::Ringing) if previous != CallState::Ringing => {
                 Some(CallEvent::CallRinging {
                     sip_status: response.status_code,
+                    leg: "b_leg".to_string(),
                 })
             }
             (previous, CallState::Established) if previous != CallState::Established => {
                 Some(CallEvent::CallAnswered {
                     sip_status: response.status_code,
+                    leg: "b_leg".to_string(),
                 })
             }
             (previous, CallState::Failed) if previous != CallState::Failed => {
@@ -489,6 +534,7 @@ impl CallManager {
                         .as_ref()
                         .map(|cause| cause.reason.clone())
                         .unwrap_or_else(|| "呼叫失败".to_string()),
+                    leg: "b_leg".to_string(),
                 })
             }
             _ => None,
@@ -548,6 +594,7 @@ impl CallManager {
                 sip_status: None,
                 q850_cause: None,
                 reason: "通话结束".to_string(),
+                leg: "a_leg".to_string(),
             },
         );
 
@@ -669,6 +716,7 @@ impl CallManager {
                     sip_status: None,
                     q850_cause: None,
                     reason: reason.to_string(),
+                    leg: "a_leg".to_string(),
                 },
             );
         }

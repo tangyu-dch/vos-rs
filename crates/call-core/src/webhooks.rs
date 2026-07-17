@@ -29,24 +29,53 @@ pub struct WebhookEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event_type", content = "data", rename_all = "snake_case")]
 pub enum CallEvent {
-    /// 已接收呼叫并完成初始路由选择。
+    /// 已接收呼叫并完成初始路由选择（A-leg 入局）。
     CallInitiated {
         /// 主叫标识，通常来自 SIP From。
         caller: Option<String>,
         /// 被叫号码。
         callee: Option<String>,
-        /// 呼叫方向。
+        /// 呼叫方向：`"inbound"` 表示外部呼入，`"outbound"` 表示平台主动外呼。
         direction: String,
+        /// 腿标识：`"a_leg"`（主叫侧）或 `"b_leg"`（被叫侧）。
+        leg: String,
+    },
+    /// 通过 `originate` 命令向目标发起了外呼（B-leg 发起）。
+    CallOriginated {
+        /// 被叫目标 URI。
+        target_uri: String,
+        /// 使用的主叫号码。
+        caller_id: String,
+        /// 腿标识，固定为 `"b_leg"`。
+        leg: String,
     },
     /// 被叫开始振铃。
     CallRinging {
         /// 触发事件的 SIP 状态码。
         sip_status: u16,
+        /// 腿标识：`"a_leg"` 或 `"b_leg"`。
+        leg: String,
     },
     /// 被叫已经接通。
     CallAnswered {
         /// 触发事件的 SIP 状态码。
         sip_status: u16,
+        /// 腿标识：`"a_leg"` 或 `"b_leg"`。
+        leg: String,
+    },
+    /// 两路呼叫已通过 `bridge` 命令完成媒体桥接。
+    CallBridged {
+        /// A-leg 的 Call-ID。
+        call_id_a: String,
+        /// B-leg 的 Call-ID。
+        call_id_b: String,
+    },
+    /// 接收到 DTMF 按键。
+    DtmfReceived {
+        /// 按键字符序列（例如 `"1"`、`"123#"`）。
+        digits: String,
+        /// 腿标识：`"a_leg"` 或 `"b_leg"`。
+        leg: String,
     },
     /// 呼叫正常结束或失败。
     CallFinished {
@@ -58,8 +87,11 @@ pub enum CallEvent {
         q850_cause: Option<u8>,
         /// 可读的结束原因。
         reason: String,
+        /// 腿标识：`"a_leg"` 或 `"b_leg"`。
+        leg: String,
     },
 }
+
 
 /// VCI（VOS Call Instruction）2.0 呼叫控制动作协议。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -142,7 +174,7 @@ mod tests {
             call_id: "call-1".to_string(),
             sequence: 42,
             occurred_at_ms: 1_720_000_000_123,
-            event: CallEvent::CallAnswered { sip_status: 200 },
+            event: CallEvent::CallAnswered { sip_status: 200, leg: "b_leg".to_string() },
         };
 
         let json = serde_json::to_string(&event).expect("事件应可序列化");

@@ -34,6 +34,7 @@ pub use caller_identity::{CallerIdentity, CallerIdentityMode, CallerNumberDirect
 mod cdr;
 mod error;
 mod manager;
+mod outbound_policy;
 mod queue;
 mod routing;
 mod webhooks;
@@ -43,6 +44,10 @@ pub use error::{CallError, CallResult};
 pub use manager::{
     CallEventSendError, CallEventSink, CallManager, CdrSendError, CdrSink, InboundInviteOutcome,
     OutboundResponseOutcome, TerminationOutcome,
+};
+pub use outbound_policy::{
+    CallSource, OutboundPolicyDirectory, RuntimeCallerPool, RuntimeCallerPoolMember,
+    RuntimeEgressGroupMember, RuntimeEgressPolicy, RuntimeSourcePolicy,
 };
 pub use queue::{Agent, AgentState, CallQueue, QueueMetrics, QueueStrategy, QueuedCall};
 pub use routing::{

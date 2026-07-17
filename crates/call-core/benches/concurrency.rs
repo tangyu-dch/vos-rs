@@ -28,7 +28,8 @@ fn invite_request(call_id: &str, destination: &str) -> sip_core::SipRequest {
         destination = destination
     );
 
-    let SipMessage::Request(request) = parse_message(raw.as_bytes()).unwrap() else {
+    let leaked = Box::leak(raw.into_boxed_str());
+    let SipMessage::Request(request) = parse_message(leaked.as_bytes()).unwrap() else {
         panic!("expected request");
     };
     request
@@ -55,7 +56,8 @@ fn outbound_response(
         call_id = call_id
     );
 
-    let SipMessage::Response(response) = parse_message(raw.as_bytes()).unwrap() else {
+    let leaked = Box::leak(raw.into_boxed_str());
+    let SipMessage::Response(response) = parse_message(leaked.as_bytes()).unwrap() else {
         panic!("expected response");
     };
     response
@@ -195,8 +197,9 @@ fn bench_full_call_lifecycle(c: &mut Criterion) {
                                     ),
                                     i
                                 );
+                                let leaked_bye = Box::leak(bye_raw.into_boxed_str());
                                 let SipMessage::Request(bye) =
-                                    parse_message(bye_raw.as_bytes()).unwrap()
+                                    parse_message(leaked_bye.as_bytes()).unwrap()
                                 else {
                                     panic!()
                                 };

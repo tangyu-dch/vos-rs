@@ -26,6 +26,10 @@ pub struct CallerNumberDirectory {
 }
 
 impl CallerNumberDirectory {
+    pub fn owns_number(&self, number: &str, gateway_id: &str) -> bool {
+        self.owners.get(number).is_some_and(|gid| gid.as_str() == gateway_id)
+    }
+
     pub fn new(entries: impl IntoIterator<Item = (String, String)>) -> Self {
         let mut directory = Self::default();
         for (number, gateway_id) in entries {
