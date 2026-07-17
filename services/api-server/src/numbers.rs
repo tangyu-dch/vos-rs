@@ -13,6 +13,7 @@ pub struct CreateNumberBody {
     pub number: String,
     pub username: Option<String>,
     pub gateway_id: Option<String>,
+    pub owner_egress_trunk_id: Option<String>,
     pub direction: Option<String>,
     pub max_concurrent: Option<i32>,
     pub status: String,
@@ -22,6 +23,7 @@ pub struct CreateNumberBody {
 pub struct UpdateNumberBody {
     pub username: Option<String>,
     pub gateway_id: Option<String>,
+    pub owner_egress_trunk_id: Option<String>,
     pub direction: Option<String>,
     pub max_concurrent: Option<i32>,
     pub status: Option<String>,
@@ -70,12 +72,18 @@ pub async fn create_number(
     State(state): State<AppState>,
     Json(b): Json<CreateNumberBody>,
 ) -> Result<StatusCode, E> {
+    let owner = b
+        .owner_egress_trunk_id
+        .as_deref()
+        .or(b.gateway_id.as_deref());
+    validate_owner(&state, owner).await?;
     state
         .store
         .upsert_number(
             &b.number,
             b.username.as_deref(),
-            b.gateway_id.as_deref(),
+            b.gateway_id.as_deref().or(owner),
+            owner,
             b.direction.as_deref(),
             b.max_concurrent,
             &b.status,
@@ -99,12 +107,22 @@ pub async fn update_number(
         .into_iter()
         .find(|item| item.number == number)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "号码不存在".to_string()))?;
+    let owner = b
+        .owner_egress_trunk_id
+        .as_deref()
+        .or(b.gateway_id.as_deref())
+        .or(existing.owner_egress_trunk_id.as_deref());
+    validate_owner(&state, owner).await?;
     state
         .store
         .upsert_number(
             &number,
             b.username.as_deref().or(existing.username.as_deref()),
-            b.gateway_id.as_deref().or(existing.gateway_id.as_deref()),
+            b.gateway_id
+                .as_deref()
+                .or(owner)
+                .or(existing.gateway_id.as_deref()),
+            owner,
             b.direction.as_deref().or(existing.direction.as_deref()),
             b.max_concurrent.or(existing.max_concurrent),
             b.status.as_deref().unwrap_or(&existing.status),
@@ -113,6 +131,27 @@ pub async fn update_number(
         .map_err(err)?;
     publish_numbers_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
+}
+
+async fn validate_owner(state: &AppState, owner: Option<&str>) -> Result<(), E> {
+    let Some(owner) = owner else {
+        return Ok(());
+    };
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sip_gateways WHERE id=$1 AND role='egress')",
+    )
+    .bind(owner)
+    .fetch_one(state.store.pool())
+    .await
+    .map_err(err)?;
+    if valid {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "号码 owner 必须是已存在的落地中继".to_string(),
+        ))
+    }
 }
 
 pub async fn delete_number(

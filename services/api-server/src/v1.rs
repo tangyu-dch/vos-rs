@@ -195,6 +195,7 @@ fn call_routes() -> Router<AppState> {
         .route("/api/v1/calls/:call_id", get(calls::call_detail))
         .route("/api/v1/calls/:call_id/media", get(calls::call_media))
         .route("/api/v1/calls/:call_id/dtmf", get(cdr::get_dtmf_events))
+        .route("/api/v1/calls/:call_id/sipflow", get(calls::call_sipflow))
         .route(
             "/api/v1/calls/:call_id/recording",
             get(recording::get_recording_audio),

@@ -47,10 +47,11 @@ pub(crate) async fn trunk(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DetailError> {
-    let (gateways, numbers, routes) = tokio::try_join!(
+    let (gateways, numbers, routes, registrations) = tokio::try_join!(
         state.store.list_gateways_full(),
         state.store.list_numbers(),
         state.store.list_routes_full(),
+        state.store.list_registrations(),
     )
     .map_err(database_error)?;
     let trunk = gateways
@@ -65,6 +66,17 @@ pub(crate) async fn trunk(
         .into_iter()
         .filter(|route| route.gateway_id == id)
         .collect::<Vec<_>>();
+    let registrations = registrations
+        .into_iter()
+        .filter(|r| {
+            if let Some(ref reg_user) = trunk.reg_username {
+                if aor_username(&r.aor) == reg_user {
+                    return true;
+                }
+            }
+            false
+        })
+        .collect::<Vec<_>>();
     let health = json!({
         "state": trunk.circuit_state,
         "active_calls": trunk.current_concurrent,
@@ -76,6 +88,7 @@ pub(crate) async fn trunk(
         "health": health,
         "numbers": numbers,
         "routes": routes,
+        "registrations": registrations,
     })))
 }
 
