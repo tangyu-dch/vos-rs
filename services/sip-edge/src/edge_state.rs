@@ -527,6 +527,14 @@ impl EdgeState {
         self.redis_conn.get().cloned()
     }
 
+    pub(crate) fn set_nats(&self, conn: async_nats::Client) {
+        let _ = self.nats_client.set(conn);
+    }
+
+    pub(crate) fn nats_connection(&self) -> Option<async_nats::Client> {
+        self.nats_client.get().cloned()
+    }
+
     pub(crate) fn set_registration_sync(&self, sender: crate::cluster::RegistrationSyncSender) {
         let _ = self.registration_sync.set(sender);
     }

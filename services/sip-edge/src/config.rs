@@ -33,6 +33,14 @@ pub struct WebhookConfig {
     pub retry_delay_ms: u64,
     /// Redis 投递记录保留秒数。
     pub delivery_record_ttl_secs: u64,
+    /// 呼叫控制模式: disabled / nats
+    pub control_mode: String,
+    /// 呼入事件通知发送的 NATS 主题
+    pub control_incoming_subject: String,
+    /// 呼叫控制命令接收的 NATS 主题
+    pub control_command_subject: String,
+    /// DTMF按键事件通知发送的 NATS 主题
+    pub control_dtmf_subject: String,
 }
 
 impl Default for WebhookConfig {
@@ -49,6 +57,10 @@ impl Default for WebhookConfig {
             max_deliveries: 5,
             retry_delay_ms: 1000,
             delivery_record_ttl_secs: 604_800,
+            control_mode: "disabled".to_string(),
+            control_incoming_subject: "vos_rs.call.incoming".to_string(),
+            control_command_subject: "vos_rs.call.commands".to_string(),
+            control_dtmf_subject: "vos_rs.call.dtmf".to_string(),
         }
     }
 }
@@ -178,6 +190,10 @@ struct WebhookSection {
     max_deliveries: Option<u32>,
     retry_delay_ms: Option<u64>,
     delivery_record_ttl_secs: Option<u64>,
+    control_mode: Option<String>,
+    control_incoming_subject: Option<String>,
+    control_command_subject: Option<String>,
+    control_dtmf_subject: Option<String>,
 }
 
 impl WebhookSection {
@@ -199,6 +215,10 @@ impl WebhookSection {
             delivery_record_ttl_secs: self
                 .delivery_record_ttl_secs
                 .unwrap_or(defaults.delivery_record_ttl_secs),
+            control_mode: self.control_mode.unwrap_or(defaults.control_mode),
+            control_incoming_subject: self.control_incoming_subject.unwrap_or(defaults.control_incoming_subject),
+            control_command_subject: self.control_command_subject.unwrap_or(defaults.control_command_subject),
+            control_dtmf_subject: self.control_dtmf_subject.unwrap_or(defaults.control_dtmf_subject),
         }
     }
 }

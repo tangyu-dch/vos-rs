@@ -486,6 +486,22 @@ pub(crate) async fn handle_invite_request(
             }
         }
     }
+    if edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats" {
+        let edge_state_arc = match edge_state.self_weak.get().and_then(|w| w.upgrade()) {
+            Some(arc) => arc,
+            None => {
+                warn!("self_weak not initialized inside handle_invite_request for VCI control");
+                return Vec::new();
+            }
+        };
+        return crate::sip::handlers::interactive_control::handle_interactive_webhook_call(
+            request,
+            peer,
+            &edge_state_arc,
+            edge_config,
+        ).await;
+    }
+
     let registered_contact = edge_state.lookup_destination_contact(&request.uri).await;
 
     let response::RequestHandling {

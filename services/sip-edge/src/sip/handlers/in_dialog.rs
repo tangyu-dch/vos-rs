@@ -303,12 +303,38 @@ pub(crate) async fn handle_in_dialog_request(
 
                     // 如果是会议呼叫（单腿 UAS 呼叫），直接在本地终结并返回 200 OK，不转发给其他任何节点
                     let out_user = transaction.outbound_uri.user.as_deref().unwrap_or("");
-                    if out_user.starts_with("conf_") || out_user.starts_with("room_") {
+                    if out_user.starts_with("conf_") || out_user.starts_with("room_") || out_user == "vosrs-playback" || out_user == "vosrs-gather" || out_user == "vosrs-stream" {
                         let username = transaction.original_request.as_ref().and_then(|req| {
                             crate::edge_state::EdgeState::username_from_request(req.as_ref())
                         });
                         if let Some(ref uname) = username {
                             edge_state.decrement_user_concurrency(uname);
+                        }
+                        let duration_secs = transaction.established_at.map(|i| i.elapsed().as_secs()).unwrap_or(0);
+                        if edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats" {
+                            let edge_state_clone = edge_state.self_weak.get().and_then(|w| w.upgrade()).unwrap();
+                            let edge_config_clone = edge_config.clone();
+                            let cid_clone = call_id.to_string();
+                            tokio::spawn(async move {
+                                let event = call_core::WebhookEvent {
+                                    event_id: uuid::Uuid::new_v4().to_string(),
+                                    schema_version: "1.0".to_string(),
+                                    call_id: cid_clone,
+                                    sequence: 5,
+                                    occurred_at_ms: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as i64,
+                                    event: call_core::CallEvent::CallFinished {
+                                        duration_secs,
+                                        sip_status: Some(200),
+                                        q850_cause: Some(16),
+                                        reason: "Normal clearing (local session ended)".to_string(),
+                                        leg: "a_leg".to_string(),
+                                    },
+                                };
+                                let _ = crate::sip::handlers::interactive_control::post_webhook_event(&edge_state_clone, &edge_config_clone, &event).await;
+                            });
                         }
                         edge_state.inbound_transactions.remove(call_id.as_str());
 
@@ -836,6 +862,32 @@ pub(crate) async fn handle_in_dialog_request(
             .and_then(|req| crate::edge_state::EdgeState::username_from_request(req.as_ref()));
         if let Some(ref uname) = username {
             edge_state.decrement_user_concurrency(uname);
+        }
+        let duration_secs = transaction.established_at.map(|i| i.elapsed().as_secs()).unwrap_or(0);
+        if edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats" {
+            let edge_state_clone = edge_state.self_weak.get().and_then(|w| w.upgrade()).unwrap();
+            let edge_config_clone = edge_config.clone();
+            let cid_clone = call_id.clone();
+            tokio::spawn(async move {
+                let event = call_core::WebhookEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    schema_version: "1.0".to_string(),
+                    call_id: cid_clone,
+                    sequence: 5,
+                    occurred_at_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64,
+                    event: call_core::CallEvent::CallFinished {
+                        duration_secs,
+                        sip_status: Some(200),
+                        q850_cause: Some(16),
+                        reason: "Normal clearing".to_string(),
+                        leg: "a_leg".to_string(),
+                    },
+                };
+                let _ = crate::sip::handlers::interactive_control::post_webhook_event(&edge_state_clone, &edge_config_clone, &event).await;
+            });
         }
         edge_state.inbound_transactions.remove(call_id.as_str());
     }

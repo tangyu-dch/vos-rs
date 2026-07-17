@@ -158,8 +158,11 @@ pub(crate) fn retry_delay(base_ms: u64, attempt: u64) -> Duration {
 fn event_type(event: &call_core::CallEvent) -> &'static str {
     match event {
         call_core::CallEvent::CallInitiated { .. } => "call_initiated",
+        call_core::CallEvent::CallOriginated { .. } => "call_originated",
         call_core::CallEvent::CallRinging { .. } => "call_ringing",
         call_core::CallEvent::CallAnswered { .. } => "call_answered",
+        call_core::CallEvent::CallBridged { .. } => "call_bridged",
+        call_core::CallEvent::DtmfReceived { .. } => "dtmf_received",
         call_core::CallEvent::CallFinished { .. } => "call_finished",
     }
 }

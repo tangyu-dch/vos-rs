@@ -15,6 +15,8 @@ pub mod in_dialog;
 pub mod invite;
 pub mod message;
 pub mod register;
+pub mod command_listener;
+pub mod interactive_control;
 
 pub(crate) use in_dialog::handle_in_dialog_request;
 pub(crate) use invite::handle_invite_request;
@@ -70,6 +72,7 @@ pub(crate) async fn handle_request(
     let handling = response::response_for_request_with_health(
         &request,
         &edge_state.call_manager,
+        None,
         Some(&edge_state.gateway_health),
     );
     vec![PendingDatagram::new(peer.to_string(), handling.response)]

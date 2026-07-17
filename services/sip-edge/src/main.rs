@@ -399,6 +399,33 @@ async fn main() -> Result<(), AnyError> {
     edge_state.set_socket(Arc::clone(&socket));
     info!(%bind_addr, "sip-edge UDP listener started");
 
+    if let Some(ref nats_url) = edge_config.nats_url {
+        let nats_url_clone = nats_url.clone();
+        let edge_state_clone = Arc::clone(&edge_state);
+        let edge_config_clone = Arc::clone(&edge_config);
+        tokio::spawn(async move {
+            match async_nats::connect(&nats_url_clone).await {
+                Ok(client) => {
+                    info!("NATS call control client successfully connected");
+                    edge_state_clone.set_nats(client.clone());
+                    if edge_config_clone.webhooks.control_mode == "nats" {
+                        if let Err(e) = crate::sip::handlers::command_listener::start_command_listener(
+                            edge_state_clone,
+                            edge_config_clone,
+                            client,
+                        )
+                        .await {
+                            tracing::error!("NATS VCI command listener failed: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("failed to connect to NATS for call control: {:?}", e);
+                }
+            }
+        });
+    }
+
     // Start TCP listener
     let tcp_listener = match tokio::net::TcpListener::bind(&bind_addr).await {
         Ok(l) => {
