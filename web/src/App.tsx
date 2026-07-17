@@ -5,12 +5,15 @@ import { canAccessPage } from './services/auth';
 import ConsoleShell from './components/ConsoleShell';
 import Login from './pages/Login';
 import {
-  AccountsPage, ActiveCallsPage, CallDetailPage, CallsPage, DashboardPage,
-  ExtensionDetailPage, ExtensionsPage, InfrastructurePage, NumbersPage,
+  AccountsPage, ActiveCallsPage, CallDetailPage, CallsPage, DashboardPage, DidDestinationsPage,
+  ExtensionsPage, InfrastructurePage, NumbersPage,
   RatesPage, RoutesPage, SecurityPage, SettingsPage, TransactionsPage,
-  CallerPoolsPage, EgressGroupsPage, TrunksPage,
+  CallerPoolsPage, EgressGroupsPage, AccessTrunksPage, EgressTrunksPage,
 } from './pages/console';
 import TrunkDetailPage from './pages/trunk-detail';
+import ExtensionDetailPage from './pages/extension-detail';
+import EgressGroupDetailPage from './pages/egress-group-detail';
+import CallerPoolDetailPage from './pages/caller-pool-detail';
 
 function PrivateConsole() {
   const { session } = useAuth();
@@ -26,10 +29,17 @@ function PrivateConsole() {
         <Route path="/extensions" element={<ProtectedPage path="/extensions"><ExtensionsPage /></ProtectedPage>} />
         <Route path="/extensions/:id" element={<ProtectedPage path="/extensions"><ExtensionDetailPage /></ProtectedPage>} />
         <Route path="/numbers" element={<ProtectedPage path="/numbers"><NumbersPage /></ProtectedPage>} />
-        <Route path="/trunks" element={<ProtectedPage path="/trunks"><TrunksPage /></ProtectedPage>} />
+        <Route path="/did-destinations" element={<ProtectedPage path="/did-destinations"><DidDestinationsPage /></ProtectedPage>} />
+        <Route path="/trunks/access" element={<ProtectedPage path="/trunks"><AccessTrunksPage /></ProtectedPage>} />
+        <Route path="/trunks/egress" element={<ProtectedPage path="/trunks"><EgressTrunksPage /></ProtectedPage>} />
+        <Route path="/trunks/access/:id" element={<ProtectedPage path="/trunks"><TrunkDetailPage /></ProtectedPage>} />
+        <Route path="/trunks/egress/:id" element={<ProtectedPage path="/trunks"><TrunkDetailPage /></ProtectedPage>} />
         <Route path="/trunks/:id" element={<ProtectedPage path="/trunks"><TrunkDetailPage /></ProtectedPage>} />
         <Route path="/caller-pools" element={<ProtectedPage path="/caller-pools"><CallerPoolsPage /></ProtectedPage>} />
+        <Route path="/caller-pools/:id" element={<ProtectedPage path="/caller-pools"><CallerPoolDetailPage /></ProtectedPage>} />
         <Route path="/egress-groups" element={<ProtectedPage path="/egress-groups"><EgressGroupsPage /></ProtectedPage>} />
+        <Route path="/egress-groups/:id" element={<ProtectedPage path="/egress-groups"><EgressGroupDetailPage /></ProtectedPage>} />
+
         <Route path="/routing" element={<ProtectedPage path="/routing"><RoutesPage /></ProtectedPage>} />
         <Route path="/billing/accounts" element={<ProtectedPage path="/billing/accounts"><AccountsPage /></ProtectedPage>} />
         <Route path="/billing/rates" element={<ProtectedPage path="/billing/rates"><RatesPage /></ProtectedPage>} />

@@ -9,11 +9,12 @@ import { api } from '../services/client';
 import { useAuth } from '../auth/AuthContext';
 import { canWriteDomain } from '../services/auth';
 import { createResource, deleteResource, getResource, listResource, updateResource, type Entity } from '../services/resources';
+import { listOptions, trunkRole } from '../services/trunks';
 
 type FieldKind = 'text' | 'textarea' | 'number' | 'duration' | 'switch' | 'select' | 'secret';
 interface SelectOptionSpec { label: string; value: string; }
-interface FieldSpec { key: string; label: string; kind?: FieldKind; required?: boolean; options?: Array<string | SelectOptionSpec>; readonly?: boolean; defaultValue?: unknown; fullWidth?: boolean; min?: number; placeholder?: string; pattern?: RegExp; patternMessage?: string; preserveEmptyOnEdit?: boolean; }
-interface ResourceSpec { title: string; description: string; path: string; idKey: string; fields: FieldSpec[]; detailPath?: string; createLabel?: string; readOnly?: boolean; action?: 'credit'; }
+interface FieldSpec { key: string; label: string; kind?: FieldKind; required?: boolean; options?: Array<string | SelectOptionSpec>; optionsResource?: 'egress-trunks'; readonly?: boolean; defaultValue?: unknown; fullWidth?: boolean; min?: number; placeholder?: string; pattern?: RegExp; patternMessage?: string; preserveEmptyOnEdit?: boolean; }
+interface ResourceSpec { title: string; description: string; path: string; params?: Record<string, string>; idKey: string; fields: FieldSpec[]; detailPath?: string; createLabel?: string; readOnly?: boolean; action?: 'credit'; }
 
 const valueText = (value: unknown) => value === null || value === undefined || value === '' ? '—' : String(value);
 const moneyFields = new Set(['balance', 'credit_limit', 'price_per_interval', 'amount', 'balance_after', 'cost']);
@@ -57,7 +58,13 @@ function FormControl({ field, disabled = false, value, onChange }: { field: Fiel
 }
 
 export function resourceFormValues(spec: ResourceSpec, row: Entity | null): Entity {
-  if (row) return { ...row };
+  if (row) {
+    if (spec.path === '/numbers') {
+      const direction = String(row.direction ?? 'both');
+      return { ...row, can_receive: row.can_receive ?? ['inbound', 'both', 'bidirectional'].includes(direction), can_present: row.can_present ?? ['outbound', 'both', 'bidirectional'].includes(direction) };
+    }
+    return { ...row };
+  }
   return spec.fields.reduce<Entity>((defaults, field) => {
     if (field.defaultValue !== undefined) defaults[field.key] = field.defaultValue;
     else if (field.kind === 'switch') defaults[field.key] = false;
@@ -70,8 +77,9 @@ export function resourceFormValues(spec: ResourceSpec, row: Entity | null): Enti
 }
 
 export function resourceSaveValues(spec: ResourceSpec, values: Entity, editing: boolean): Entity {
-  if (!editing) return values;
   const result = { ...values };
+  if (spec.path === '/numbers') result.direction = result.can_receive ? (result.can_present ? 'both' : 'inbound') : (result.can_present ? 'outbound' : 'disabled');
+  if (!editing) return result;
   spec.fields.filter((field) => field.kind === 'secret' && field.preserveEmptyOnEdit).forEach((field) => {
     if (result[field.key] === '' || result[field.key] === undefined) delete result[field.key];
   });
@@ -82,6 +90,7 @@ function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
   const [rows, setRows] = useState<Entity[]>([]);
   const [pagination, setPagination] = useState({ page: 1, page_size: 20, total: 0, total_pages: 0 });
   const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -90,16 +99,21 @@ function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [actionRow, setActionRow] = useState<Entity | null>(null);
   const [amount, setAmount] = useState<number>(100);
+  const [fieldOptions, setFieldOptions] = useState<Record<string, SelectOptionSpec[]>>({});
   const navigate = useNavigate();
   const load = useCallback(async (page = pagination.page) => {
     setLoading(true); setError('');
     try {
-      const result = await listResource(spec.path, { page, page_size: pagination.page_size });
+      const result = await listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params });
       setRows(result.items || []); setPagination(result.pagination || { page, page_size: 20, total: result.items?.length || 0, total_pages: 1 });
     } catch (reason) { setError(reason instanceof Error ? reason.message : '加载失败'); }
     finally { setLoading(false); }
-  }, [pagination.page, pagination.page_size, spec.path]);
+  }, [pagination.page, pagination.page_size, spec.path, spec.params]);
   useEffect(() => { void load(1); }, [spec.path]);
+  useEffect(() => {
+    if (!spec.fields.some((field) => field.optionsResource === 'egress-trunks')) return;
+    void listOptions('/trunks').then((items) => setFieldOptions((current) => ({ ...current, owner_egress_trunk_id: items.filter((item) => trunkRole(item) === 'egress').map((item) => ({ label: String(item.id), value: String(item.id) })) }))).catch(() => setFieldOptions((current) => ({ ...current, owner_egress_trunk_id: [] })));
+  }, [spec.path]);
 
   const isEditing = editing !== undefined && editing !== null;
   const openForm = (row: Entity | null) => {
@@ -128,7 +142,7 @@ function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
         return result;
       }, {});
       if (Object.keys(errors).length) { setValidationErrors(errors); return; }
-      const values = resourceSaveValues(spec, draft, isEditing); setSaving(true);
+      const values = { ...resourceSaveValues(spec, draft, isEditing), ...spec.params }; setSaving(true);
       if (isEditing) await updateResource(spec.path, entityId(editing, spec.idKey), values);
       else await createResource(spec.path, values);
       Message.success(isEditing ? '已保存更改' : '已创建'); setEditing(undefined); await load();
@@ -148,9 +162,9 @@ function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
   const columns = [
     ...spec.fields.filter((field) => field.kind !== 'secret').slice(0, 7).map((field) => ({
       title: field.label, dataIndex: field.key, ellipsis: true,
-      render: (value: unknown) => ['status', 'state', 'enabled', 'health'].includes(field.key)
+      render: (value: unknown, row: Entity) => ['status', 'state', 'enabled', 'health'].includes(field.key)
         ? <Tag color={statusColor(value)}>{typeof value === 'boolean' ? (value ? '启用' : '停用') : valueText(value)}</Tag>
-        : <span className={field.key.includes('id') || field.key.includes('number') ? 'mono' : ''}>{field.kind === 'duration' ? durationSecondsText(value) : moneyFields.has(field.key) ? moneyText(value) : valueText(value)}</span>,
+        : <span className={field.key.includes('id') || field.key.includes('number') ? 'mono' : ''}>{field.kind === 'duration' ? durationSecondsText(value) : moneyFields.has(field.key) ? moneyText(value) : field.kind === 'select' ? valueText((field.options || fieldOptions[field.key] || []).map((option) => typeof option === 'string' ? { label: option, value: option } : option).find((option) => option.value === String(field.key === 'role' ? trunkRole(row) : value))?.label ?? (field.key === 'role' ? (trunkRole(row) === 'access' ? '接入中继' : '落地中继') : value)) : valueText(value)}</span>,
     })),
     { title: '', width: spec.readOnly ? 74 : 142, fixed: 'right' as const, render: (_: unknown, row: Entity) => <Space>
       {spec.detailPath && <Button type="text" icon={<IconEye />} aria-label="查看详情" onClick={() => navigate(`${spec.detailPath}/${entityId(row, spec.idKey)}`)} />}
@@ -160,19 +174,33 @@ function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
     </Space> },
   ];
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleRows = normalizedQuery ? rows.filter((row) => Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery))) : rows;
+  let visibleRows = normalizedQuery ? rows.filter((row) => Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery))) : rows;
+  if (statusFilter !== 'all') {
+    const target = statusFilter === 'enabled';
+    visibleRows = visibleRows.filter((row) => (row.enabled === target || (row.enabled === undefined && target)));
+  }
   return <section className="workspace">
     <PageHeader title={spec.title} description={spec.description} actions={<Space>
       <Button icon={<IconRefresh />} onClick={() => load()} loading={loading}>刷新</Button>
       {!spec.readOnly && <Button type="primary" icon={<IconPlus />} onClick={() => openForm(null)}>{spec.createLabel || '新建'}</Button>}
     </Space>} />
-    <div className="toolbar"><Input prefix={<IconSearch />} value={query} onChange={setQuery} allowClear placeholder={`筛选当前页${spec.title}`} /><span>{normalizedQuery ? `本页 ${visibleRows.length} 条` : `${pagination.total} 条记录`}</span></div>
+    <div className="toolbar">
+      <Space>
+        <Input prefix={<IconSearch />} value={query} onChange={setQuery} allowClear placeholder={`过滤当前页...`} style={{ width: 220 }} />
+        <Select value={statusFilter} onChange={setStatusFilter} style={{ width: 120 }}>
+          <Select.Option value="all">所有状态</Select.Option>
+          <Select.Option value="enabled">已启用</Select.Option>
+          <Select.Option value="disabled">已禁用</Select.Option>
+        </Select>
+      </Space>
+      <span>{normalizedQuery || statusFilter !== 'all' ? `筛选后 ${visibleRows.length} 条` : `${pagination.total} 条记录`}</span>
+    </div>
     {error ? <ErrorState error={error} retry={() => load()} /> : <div className="data-table"><Table rowKey={(row) => entityId(row, spec.idKey)} loading={loading} columns={columns} data={visibleRows} pagination={false} scroll={{ x: 900 }} noDataElement={<Empty description="暂无数据" />} /></div>}
     {pagination.total > pagination.page_size && <Pagination current={pagination.page} pageSize={pagination.page_size} total={pagination.total} onChange={(page) => load(page)} showTotal />}
     <Modal className="resource-form-modal" style={{ width: 760 }} title={isEditing ? `编辑${spec.title}` : `新建${spec.title}`} visible={editing !== undefined} onCancel={() => setEditing(undefined)} onOk={save} confirmLoading={saving} unmountOnExit>
       <Form layout="vertical"><Grid.Row className="form-grid" gutter={[18, 0]}>{spec.fields.filter((field) => !field.readonly).map((field) => {
         const error = validationErrors[field.key];
-        return <Grid.Col key={field.key} xs={24} md={field.fullWidth ? 24 : 12}><Form.Item label={field.label} required={field.required && !(isEditing && field.preserveEmptyOnEdit)} validateStatus={error ? 'error' : undefined} help={error}><FormControl field={field} disabled={isEditing && field.key === spec.idKey} value={draft[field.key]} onChange={(value) => updateDraft(field.key, value)} /></Form.Item></Grid.Col>;
+        return <Grid.Col key={field.key} xs={24} md={field.fullWidth ? 24 : 12}><Form.Item label={field.label} required={field.required && !(isEditing && field.preserveEmptyOnEdit)} validateStatus={error ? 'error' : undefined} help={error}><FormControl field={field.optionsResource ? { ...field, options: fieldOptions[field.key] || [] } : field} disabled={isEditing && field.key === spec.idKey} value={draft[field.key]} onChange={(value) => updateDraft(field.key, value)} /></Form.Item></Grid.Col>;
       })}</Grid.Row></Form>
     </Modal>
     <Modal title={`账户充值 · ${actionRow ? entityId(actionRow, spec.idKey) : ''}`} visible={Boolean(actionRow)} onCancel={() => setActionRow(null)} onOk={runAction} confirmLoading={saving} unmountOnExit><Form layout="vertical"><Form.Item label="充值金额"><InputNumber min={0.001} max={100000000} precision={3} value={amount} onChange={(value) => setAmount(Number(value))} style={{ width: '100%' }} /></Form.Item></Form></Modal>
@@ -182,17 +210,28 @@ function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
 const extensions: ResourceSpec = { title: '分机', description: '管理 SIP 身份、凭据状态和呼叫策略。', path: '/extensions', idKey: 'username', detailPath: '/extensions', createLabel: '新建分机', fields: [
   { key: 'username', label: '分机号', required: true }, { key: 'password', label: 'SIP 密码', kind: 'secret', required: true },
 ] };
-const trunks: ResourceSpec = { title: 'SIP 中继', description: '配置运营商互联、容量和健康检查。', path: '/trunks', idKey: 'id', detailPath: '/trunks', createLabel: '新建中继', fields: [
+const accessTrunks: ResourceSpec = { title: '接入中继', description: '配置客户接入认证、安全防范与主叫匹配规则。', path: '/trunks', params: { role: 'access' }, idKey: 'id', detailPath: '/trunks/access', createLabel: '新建接入中继', fields: [
   { key: 'id', label: '中继标识', required: true, placeholder: '例如 customer-a' },
-  { key: 'role', label: '中继类型', kind: 'select', required: true, options: [{ label: '接入中继', value: 'access' }, { label: '落地中继', value: 'egress' }], defaultValue: 'access' },
-  { key: 'access_auth_mode', label: '注册认证', kind: 'select', required: true, options: [{ label: 'IP 白名单', value: 'ip_allowlist' }, { label: '注册认证', value: 'digest_register' }, { label: 'IP 加认证', value: 'ip_and_digest' }], defaultValue: 'ip_allowlist' },
-  { key: 'host', label: '主机地址', placeholder: '落地中继填写对端地址' }, { key: 'port', label: 'SIP 端口', kind: 'number', defaultValue: 5060 },
-  { key: 'transport', label: '传输协议', kind: 'select', required: true, options: [{ label: 'UDP', value: 'udp' }], defaultValue: 'udp' },
-  { key: 'max_capacity', label: '容量上限', kind: 'number', defaultValue: 100 }, { key: 'account_id', label: '计费账户', kind: 'number', placeholder: '可选' },
+  { key: 'access_auth_mode', label: '认证方式', kind: 'select', required: true, options: [{ label: 'IP 白名单', value: 'ip_allowlist' }, { label: '注册认证', value: 'digest_register' }, { label: 'IP 加认证', value: 'ip_and_digest' }], defaultValue: 'ip_allowlist' },
+  { key: 'max_capacity', label: '容量上限', kind: 'number', defaultValue: 100 },
+  { key: 'account_id', label: '计费账户', kind: 'number', placeholder: '可选（对应计费账户用户名）' },
   { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
 ] };
-const numbers: ResourceSpec = { title: '号码库存', description: '将 DID 映射到已注册分机。', path: '/numbers', idKey: 'number', createLabel: '录入号码', fields: [
-  { key: 'number', label: 'DID 号码', required: true }, { key: 'username', label: '目标分机', required: true }, { key: 'status', label: '状态', kind: 'select', required: true, options: ['available', 'assigned', 'disabled'] },
+
+const egressTrunks: ResourceSpec = { title: '落地中继', description: '管理对接上游运营商网关端点与容量上限。', path: '/trunks', params: { role: 'egress' }, idKey: 'id', detailPath: '/trunks/egress', createLabel: '新建落地中继', fields: [
+  { key: 'id', label: '中继标识', required: true, placeholder: '例如 carrier-a' },
+  { key: 'host', label: '对端主机地址', required: true, placeholder: '对端 IP 地址' },
+  { key: 'port', label: 'SIP 端口', kind: 'number', defaultValue: 5060, required: true },
+  { key: 'transport', label: '传输协议', kind: 'select', required: true, options: [{ label: 'UDP', value: 'udp' }], defaultValue: 'udp' },
+  { key: 'max_capacity', label: '容量上限', kind: 'number', defaultValue: 100 },
+  { key: 'account_id', label: '计费账户', kind: 'number', placeholder: '可选' },
+  { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
+] };
+const numbers: ResourceSpec = { title: '号码库存', description: '管理真实号码的唯一落地归属、使用方向和分机授权。', path: '/numbers', idKey: 'number', createLabel: '录入号码', fields: [
+  { key: 'number', label: '真实号码', required: true }, { key: 'owner_egress_trunk_id', label: '落地中继', kind: 'select', optionsResource: 'egress-trunks', required: true, placeholder: '选择号码的唯一物理归属' },
+  { key: 'username', label: '授权分机', placeholder: '可选；号码使用授权与物理归属分离' }, { key: 'max_concurrent', label: '号码并发', kind: 'number', defaultValue: 1 },
+  { key: 'can_receive', label: '允许呼入', kind: 'switch', defaultValue: true }, { key: 'can_present', label: '允许显号', kind: 'switch', defaultValue: true },
+  { key: 'status', label: '号码状态', kind: 'select', required: true, options: [{ label: '可用号码', value: 'available' }, { label: '已分配', value: 'assigned' }, { label: '停用号码', value: 'disabled' }], defaultValue: 'available' },
 ] };
 const accounts: ResourceSpec = { title: '计费账户', description: '查看余额、币种和账户可用状态。', path: '/billing/accounts', idKey: 'username', readOnly: true, action: 'credit', fields: [
   { key: 'username', label: '账户' }, { key: 'balance', label: '余额', kind: 'number' }, { key: 'currency', label: '币种' }, { key: 'created_at', label: '创建时间' },
@@ -208,26 +247,35 @@ const calls: ResourceSpec = { title: '通话记录', description: '查询呼叫�
 ] };
 
 export const ExtensionsPage = () => <ResourceWorkspace spec={extensions} />;
-export const TrunksPage = () => <ResourceWorkspace spec={trunks} />;
+export const AccessTrunksPage = () => <ResourceWorkspace spec={accessTrunks} />;
+export const EgressTrunksPage = () => <ResourceWorkspace spec={egressTrunks} />;
 export const NumbersPage = () => <ResourceWorkspace spec={numbers} />;
 export const AccountsPage = () => <ResourceWorkspace spec={accounts} />;
 export const RatesPage = () => <ResourceWorkspace spec={rates} />;
 export const TransactionsPage = () => <ResourceWorkspace spec={transactions} />;
 export const CallsPage = () => <ResourceWorkspace spec={calls} />;
 
-const callerPools: ResourceSpec = { title: '号码池组', description: '维护虚拟主叫别名、选号算法和真实号码成员。', path: '/caller-pools', idKey: 'id', createLabel: '新建号码池', fields: [
+const didDestinations: ResourceSpec = { title: '呼入目标', description: '真实 DID 通过归属落地中继校验后转入指定业务目标。', path: '/did-destinations', idKey: 'number', createLabel: '新建目标', fields: [
+  { key: 'number', label: 'DID 号码', required: true }, { key: 'tenant_id', label: '租户标识', placeholder: '可选' },
+  { key: 'target_type', label: '目标类型', kind: 'select', required: true, options: [{ label: '分机号码', value: 'extension' }, { label: '分机群组', value: 'extension_group' }, { label: '语音导航', value: 'ivr' }, { label: '拒绝呼叫', value: 'reject' }], defaultValue: 'extension' },
+  { key: 'target_id', label: '目标标识', required: true }, { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
+] };
+export const DidDestinationsPage = () => <ResourceWorkspace spec={didDestinations} />;
+
+const callerPools: ResourceSpec = { title: '号码池组', description: '维护虚拟主叫别名、选号算法和真实号码成员。', path: '/caller-pools', idKey: 'id', detailPath: '/caller-pools', createLabel: '新建号码池', fields: [
   { key: 'id', label: '号码池 ID', required: true }, { key: 'virtual_alias', label: '虚拟主叫', required: true },
   { key: 'owner_source_type', label: '来源类型', kind: 'select', required: true, options: [{ label: '接入中继', value: 'trunk' }, { label: '分机号码', value: 'extension' }, { label: '分机群组', value: 'extension_group' }], defaultValue: 'trunk' }, { key: 'owner_source_id', label: '来源标识', required: true },
   { key: 'strategy', label: '选号算法', kind: 'select', required: true, options: [{ label: '均匀随机', value: 'random' }, { label: '权重随机', value: 'weighted_random' }, { label: '顺序轮询', value: 'round_robin' }, { label: '稳定哈希', value: 'stable_hash' }, { label: '优先级选', value: 'priority' }], defaultValue: 'random' },
   { key: 'fallback_mode', label: '失败处理', kind: 'select', required: true, options: [{ label: '拒绝呼叫', value: 'reject' }, { label: '固定替换', value: 'fixed' }, { label: '号码池替换', value: 'pool' }], defaultValue: 'reject' },
   { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
 ] };
-const egressGroups: ResourceSpec = { title: '落地分组', description: '定义来源允许使用的落地范围、目的地能力和故障边界。', path: '/egress-groups', idKey: 'id', createLabel: '新建分组', fields: [
+const egressGroups: ResourceSpec = { title: '落地分组', description: '定义来源允许使用的落地范围、目的地能力和故障边界。', path: '/egress-groups', idKey: 'id', detailPath: '/egress-groups', createLabel: '新建分组', fields: [
   { key: 'id', label: '分组 ID', required: true }, { key: 'name', label: '分组名称', required: true },
   { key: 'description', label: '分组说明', kind: 'textarea', fullWidth: true }, { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
 ] };
 export const CallerPoolsPage = () => <ResourceWorkspace spec={callerPools} />;
 export const EgressGroupsPage = () => <ResourceWorkspace spec={egressGroups} />;
+
 
 interface Summary { active_calls?: number; today_total_calls?: number; answer_rate?: number; registered_users?: number; active_gateways?: number; today_failed_calls?: number; }
 export function DashboardPage() {
@@ -263,6 +311,120 @@ function detailValue(value: unknown, key?: string): ReactNode {
   return String(value);
 }
 
+interface SipFlowEvent { offset_ms: number; message: string; direction: string; note: string; raw_message?: string; }
+
+const PARTIES = ['UAC', 'B2BUA', 'UAS'] as const;
+type Party = typeof PARTIES[number];
+const PARTY_LABELS: Record<Party, string> = { UAC: '主叫 (UAC)', B2BUA: 'vos-rs (B2BUA)', UAS: '落地中继 (UAS)' };
+const PARTY_COLORS: Record<Party, string> = { UAC: '#4f8ef7', B2BUA: '#22c55e', UAS: '#f59e0b' };
+
+function directionToParties(direction: string): [Party, Party] {
+  const map: Record<string, [Party, Party]> = {
+    uac_to_b2bua: ['UAC', 'B2BUA'],
+    b2bua_to_uac: ['B2BUA', 'UAC'],
+    b2bua_to_uas: ['B2BUA', 'UAS'],
+    uas_to_b2bua: ['UAS', 'B2BUA'],
+  };
+  return map[direction] ?? ['UAC', 'B2BUA'];
+}
+
+function msgColor(msg: string): string {
+  if (/^INVITE|^ACK|^BYE|^CANCEL/.test(msg)) return '#4f8ef7';
+  if (/^100|^180/.test(msg)) return '#94a3b8';
+  if (/^200/.test(msg)) return '#22c55e';
+  if (/^4|^5|^6/.test(msg)) return '#ef4444';
+  return '#a78bfa';
+}
+
+function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
+  const [selectedEvent, setSelectedEvent] = useState<SipFlowEvent | null>(null);
+
+  const COL = [80, 320, 560];  // x positions for UAC, B2BUA, UAS
+  const ROW_H = 58;
+  const HEADER_H = 60;
+  const LANE_W = 24;
+  const svgWidth = 680;
+  const svgHeight = HEADER_H + events.length * ROW_H + 24;
+
+  const colFor = (party: Party) => COL[PARTIES.indexOf(party)];
+
+  return (
+    <div className="sipflow-wrap" style={{ overflowX: 'auto' }}>
+      <svg width={svgWidth} height={svgHeight} style={{ fontFamily: 'Inter, system-ui, sans-serif', display: 'block', margin: '0 auto' }}>
+        {/* Party header boxes */}
+        {PARTIES.map((party, i) => (
+          <g key={party}>
+            <rect x={COL[i] - 60} y={8} width={120} height={36} rx={8} fill={PARTY_COLORS[party]} fillOpacity={0.15} stroke={PARTY_COLORS[party]} strokeWidth={1.5} />
+            <text x={COL[i]} y={30} textAnchor="middle" fill={PARTY_COLORS[party]} fontSize={13} fontWeight={600}>{PARTY_LABELS[party]}</text>
+          </g>
+        ))}
+
+        {/* Vertical lifelines */}
+        {PARTIES.map((party, i) => (
+          <line key={`line-${party}`} x1={COL[i]} y1={HEADER_H} x2={COL[i]} y2={svgHeight - 8} stroke={PARTY_COLORS[party]} strokeWidth={1} strokeOpacity={0.3} strokeDasharray="4 3" />
+        ))}
+
+        {/* Events */}
+        {events.map((event, idx) => {
+          const y = HEADER_H + idx * ROW_H + ROW_H / 2;
+          const [from, to] = directionToParties(event.direction);
+          const x1 = colFor(from);
+          const x2 = colFor(to);
+          const rightward = x2 > x1;
+          const color = msgColor(event.message);
+          const midX = (x1 + x2) / 2;
+          const arrowPad = LANE_W;
+          const lineX1 = rightward ? x1 + arrowPad / 2 : x1 - arrowPad / 2;
+          const lineX2 = rightward ? x2 - arrowPad : x2 + arrowPad;
+          const arrowTip = rightward ? lineX2 + 8 : lineX2 - 8;
+          const [ay1, ay2] = rightward ? [y - 5, y + 5] : [y + 5, y - 5];
+
+          const hasRaw = !!event.raw_message;
+
+          return (
+            <g
+              key={idx}
+              style={{ cursor: hasRaw ? 'pointer' : 'default' }}
+              onClick={() => { if (hasRaw) setSelectedEvent(event); }}
+            >
+              {/* time offset label (left margin) */}
+              <text x={12} y={y + 4} fontSize={10} fill="#64748b" textAnchor="start">+{event.offset_ms}ms</text>
+              {/* arrow line */}
+              <line x1={lineX1} y1={y} x2={lineX2} y2={y} stroke={color} strokeWidth={2} />
+              {/* arrowhead */}
+              <polygon points={`${arrowTip},${y} ${lineX2},${ay1} ${lineX2},${ay2}`} fill={color} />
+              {/* message label above line */}
+              <text x={midX} y={y - 7} textAnchor="middle" fontSize={12} fontWeight={600} fill={color}>{event.message}</text>
+              {/* note label below line */}
+              {event.note && <text x={midX} y={y + 16} textAnchor="middle" fontSize={10} fill="#94a3b8">{event.note}</text>}
+            </g>
+          );
+        })}
+      </svg>
+
+      <Modal
+        title={`SIP 信令报文详情 - ${selectedEvent?.message}`}
+        visible={!!selectedEvent}
+        onOk={() => setSelectedEvent(null)}
+        onCancel={() => setSelectedEvent(null)}
+        style={{ width: 720 }}
+        footer={[
+          <Button key="close" type="primary" onClick={() => setSelectedEvent(null)}>
+            关闭
+          </Button>
+        ]}
+      >
+        <div style={{ maxHeight: '500px', overflowY: 'auto', background: '#f4f4f5', padding: '16px', borderRadius: '8px', border: '1px solid #e4e4e7' }}>
+          <pre style={{ margin: 0, fontFamily: 'Fira Code, Courier New, monospace', fontSize: '12px', whiteSpace: 'pre-wrap', color: '#18181b' }}>
+            {selectedEvent?.raw_message}
+          </pre>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+
 function DetailFields({ value, empty }: { value: unknown; empty: string }) {
   if (!value || typeof value !== 'object') return <Empty description={empty} />;
   return <Descriptions column={2} border data={Object.entries(value as Entity).map(([label, fieldValue]) => ({ label, value: detailValue(fieldValue, label) }))} />;
@@ -281,9 +443,9 @@ function EntityDetail({ path, title, rootKey, tabs }: { path: string; title: str
   const load = useCallback(async () => { setLoading(true); setError(''); try { setEntity(await getResource(path, id)); } catch (e) { setError(e instanceof Error ? e.message : '加载失败'); } finally { setLoading(false); } }, [id, path]);
   useEffect(() => { void load(); }, [load]);
   const loadTab = async (key: string, subpath?: string, sourceKey?: string) => { if (related[key] !== undefined) return; if (sourceKey && entity) { setRelated((old) => ({ ...old, [key]: entity[sourceKey] })); return; } if (!subpath) return; try { const value = subpath === 'recording' ? URL.createObjectURL(await api.blob(`${path}/${encodeURIComponent(id)}/${subpath}`)) : await api.get(`${path}/${encodeURIComponent(id)}/${subpath}`); setRelated((old) => ({ ...old, [key]: value })); } catch (e) { setRelated((old) => ({ ...old, [key]: { error: e instanceof Error ? e.message : '加载失败' } })); } };
-  const renderObject = (value: unknown) => { if (value === undefined) return <Spin />; if (typeof value === 'string' && value.startsWith('blob:')) return <audio className="recording-player" controls src={value} />; if (value && typeof value === 'object' && 'error' in value) return <Alert type="error" content={String((value as Entity).error)} />; const list = Array.isArray(value) ? value : [value]; return <div className="related-list">{list.map((item, index) => <DetailFields key={index} value={item} empty="暂无数据" />)}</div>; };
+  const renderObject = (value: unknown, tabKey?: string) => { if (value === undefined) return <Spin />; if (typeof value === 'string' && value.startsWith('blob:')) return <audio className="recording-player" controls src={value} />; if (value && typeof value === 'object' && 'error' in value) return <Alert type="error" content={String((value as Entity).error)} />; if (tabKey === 'sipflow' && Array.isArray(value)) return <SipFlowDiagram events={value as SipFlowEvent[]} />; const list = Array.isArray(value) ? value : [value]; return <div className="related-list">{list.map((item, index) => <DetailFields key={index} value={item} empty="暂无数据" />)}</div>; };
   const root = rootKey && entity?.[rootKey] && typeof entity[rootKey] === 'object' ? entity[rootKey] as Entity : entity;
-  return <section className="workspace"><PageHeader title={root ? valueText(root.name || root.username || root.id || id) : title} description={`${title}详情与关联运行状态。`} actions={<Button icon={<IconRefresh />} onClick={load}>刷新</Button>} />{error ? <ErrorState error={error} retry={load} /> : <Spin loading={loading} block>{entity && <Tabs defaultActiveTab="summary" onChange={(key) => { const tab = tabs.find((t) => t.key === key); void loadTab(key, tab?.path, tab?.sourceKey); }}>{tabs.map((tab) => <Tabs.TabPane key={tab.key} title={tab.title}>{tab.key === 'summary' && path === '/calls' ? <CallSummary entity={entity} /> : tab.key === 'summary' && root ? <DetailFields value={root} empty="暂无详情" /> : renderObject(related[tab.key])}</Tabs.TabPane>)}</Tabs>}</Spin>}</section>;
+  return <section className="workspace"><PageHeader title={root ? valueText(root.name || root.username || root.id || id) : title} description={`${title}详情与关联运行状态。`} actions={<Button icon={<IconRefresh />} onClick={load}>刷新</Button>} />{error ? <ErrorState error={error} retry={load} /> : <Spin loading={loading} block>{entity && <Tabs defaultActiveTab="summary" onChange={(key) => { const tab = tabs.find((t) => t.key === key); void loadTab(key, tab?.path, tab?.sourceKey); }}>{tabs.map((tab) => <Tabs.TabPane key={tab.key} title={tab.title}>{tab.key === 'summary' && path === '/calls' ? <CallSummary entity={entity} /> : tab.key === 'summary' && root ? <DetailFields value={root} empty="暂无详情" /> : renderObject(related[tab.key], tab.key)}</Tabs.TabPane>)}</Tabs>}</Spin>}</section>;
 }
 export const ExtensionDetailPage = () => <EntityDetail path="/extensions" title="分机" rootKey="extension" tabs={[{ key: 'summary', title: '概览' }, { key: 'registrations', title: '注册终端', sourceKey: 'registrations' }, { key: 'numbers', title: '号码', sourceKey: 'numbers' }, { key: 'credential', title: '凭据', sourceKey: 'credential' }]} />;
 export const TrunkDetailPage = () => <EntityDetail path="/trunks" title="中继" rootKey="trunk" tabs={[{ key: 'summary', title: '概览' }, { key: 'health', title: '健康状态', sourceKey: 'health' }, { key: 'numbers', title: '号码', sourceKey: 'numbers' }, { key: 'routes', title: '依赖路由', sourceKey: 'routes' }]} />;

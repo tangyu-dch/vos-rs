@@ -16,6 +16,16 @@ export interface TrunkIpRule extends Entity {
   enabled: boolean;
 }
 
+export interface EgressEndpoint extends Entity {
+  _key?: string;
+  id?: string;
+  host: string;
+  port?: number | null;
+  transport: 'udp';
+  priority?: number;
+  enabled: boolean;
+}
+
 export interface OutboundPolicy extends Entity {
   caller_mode: CallerPolicyMode;
   fallback_mode: 'reject' | 'fixed' | 'pool';
@@ -63,6 +73,15 @@ export function saveTrunkIpRules(id: string, rules: TrunkIpRule[]) {
   return api.put<TrunkIpRule[]>(`/trunks/${encodeURIComponent(id)}/ip-rules`, { items });
 }
 
+export function getTrunkEgressEndpoints(id: string) {
+  return api.get<EgressEndpoint[]>(`/trunks/${encodeURIComponent(id)}/egress-endpoints`);
+}
+
+export function saveTrunkEgressEndpoints(id: string, endpoints: EgressEndpoint[]) {
+  const items = endpoints.map((ep) => { const item = { ...ep }; delete item._key; return item; });
+  return api.put<EgressEndpoint[]>(`/trunks/${encodeURIComponent(id)}/egress-endpoints`, { items });
+}
+
 export function getOutboundPolicy(id: string) {
   return api.get<OutboundPolicy>(`/trunks/${encodeURIComponent(id)}/outbound-policy`);
 }
@@ -80,7 +99,16 @@ export function policyForSave(policy: OutboundPolicy): OutboundPolicy {
   return body;
 }
 
-export async function listOptions(path: '/caller-pools' | '/egress-groups' | '/trunks'): Promise<Entity[]> {
+export function policyValidationError(policy: OutboundPolicy): string | null {
+  if (policy.caller_mode === 'fixed_number' && !policy.fixed_number?.trim()) return '固定号码策略必须选择真实号码';
+  if (policy.caller_mode === 'virtual_pool' && !policy.caller_pool_id?.trim()) return '虚拟主叫策略必须选择号码池';
+  if (policy.egress_mode === 'direct' && !policy.direct_egress_trunk_id?.trim()) return '请选择直接绑定的落地中继';
+  if (policy.egress_mode === 'group' && !policy.egress_group_id?.trim()) return '请选择允许使用的落地分组';
+  return null;
+}
+
+export async function listOptions(path: '/caller-pools' | '/egress-groups' | '/trunks' | '/numbers'): Promise<Entity[]> {
   const result = await api.get<PageResult<Entity> | Entity[]>(path, { page: 1, page_size: 200 });
   return Array.isArray(result) ? result : result.items || [];
 }
+

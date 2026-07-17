@@ -9,26 +9,28 @@ import { useAuth } from '../auth/AuthContext';
 import { canAccessPage, roleLabel, type UserRole } from '../services/auth';
 
 const groups = [
-  { label: '运行中心', items: [
+  { label: '运行中心', icon: <IconDashboard />, items: [
     { to: '/overview', label: '运行总览', icon: <IconDashboard /> },
     { to: '/calls/active', label: '活跃通话', icon: <IconPhone /> },
   ] },
-  { label: '号码分机', items: [
+  { label: '号码分机', icon: <IconUserGroup />, items: [
     { to: '/extensions', label: '分机管理', icon: <IconUserGroup /> },
     { to: '/numbers', label: '号码管理', icon: <IconBook /> },
+    { to: '/did-destinations', label: '呼入目标', icon: <IconBranch /> },
   ] },
-  { label: '中继路由', items: [
-    { to: '/trunks', label: '中继管理', icon: <IconStorage /> },
+  { label: '中继路由', icon: <IconStorage />, items: [
+    { to: '/trunks/access', label: '接入中继', icon: <IconStorage /> },
+    { to: '/trunks/egress', label: '落地中继', icon: <IconStorage /> },
     { to: '/egress-groups', label: '落地分组', icon: <IconBranch /> },
     { to: '/caller-pools', label: '号码池组', icon: <IconApps /> },
   ] },
-  { label: '通话分析', items: [{ to: '/calls', label: '通话记录', icon: <IconPhone /> }] },
-  { label: '计费中心', items: [
+  { label: '通话分析', icon: <IconPhone />, items: [{ to: '/calls', label: '通话记录', icon: <IconPhone /> }] },
+  { label: '计费中心', icon: <IconBook />, items: [
     { to: '/billing/accounts', label: '计费账户', icon: <IconUser /> },
     { to: '/billing/rates', label: '费率管理', icon: <IconApps /> },
     { to: '/billing/transactions', label: '账务流水', icon: <IconBook /> },
   ] },
-  { label: '安全系统', items: [
+  { label: '安全系统', icon: <IconSafe />, items: [
     { to: '/security', label: '安全策略', icon: <IconSafe /> },
     { to: '/infrastructure', label: '集群节点', icon: <IconBug /> },
     { to: '/settings', label: '系统设置', icon: <IconSettings /> },
@@ -41,11 +43,14 @@ function Navigation({ role, close }: { role: UserRole; close?: () => void }) {
   const activeGroup = visibleGroups.find((group) => group.items.some((item) => location.pathname.startsWith(item.to)))?.label;
   const [expanded, setExpanded] = useState(() => new Set(activeGroup ? [activeGroup] : [visibleGroups[0]?.label]));
   useEffect(() => {
-    if (activeGroup) setExpanded((current) => new Set(current).add(activeGroup));
+    if (activeGroup) setExpanded(new Set([activeGroup]));
   }, [activeGroup]);
-  const toggle = (label: string) => setExpanded((current) => {
-    const next = new Set(current);
-    if (next.has(label)) next.delete(label); else next.add(label);
+  const toggle = (label: string) => setExpanded(() => {
+    const next = new Set<string>();
+    if (activeGroup) {
+      next.add(activeGroup);
+    }
+    next.add(label);
     return next;
   });
   const isCurrent = (path: string) => path === '/calls'
@@ -55,7 +60,11 @@ function Navigation({ role, close }: { role: UserRole; close?: () => void }) {
     const isExpanded = expanded.has(group.label);
     return <section key={group.label} className={isExpanded ? 'expanded' : ''}>
       <button type="button" className="console-nav-group" aria-expanded={isExpanded} onClick={() => toggle(group.label)}>
-        <span>{group.label}</span><IconDown />
+        <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {group.icon}
+          <span>{group.label}</span>
+        </span>
+        <IconDown />
       </button>
       <div className="console-nav-items">{group.items.map((item) => (
         <NavLink key={item.to} to={item.to} onClick={close} className={isCurrent(item.to) ? 'active' : ''}>
