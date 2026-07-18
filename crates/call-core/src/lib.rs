@@ -35,6 +35,7 @@ mod cdr;
 mod error;
 mod manager;
 mod outbound_policy;
+mod pool_selection;
 mod queue;
 mod routing;
 mod webhooks;
@@ -49,6 +50,7 @@ pub use outbound_policy::{
     CallSource, OutboundPolicyDirectory, RuntimeCallerPool, RuntimeCallerPoolMember,
     RuntimeEgressGroupMember, RuntimeEgressPolicy, RuntimeSourcePolicy,
 };
+pub use pool_selection::CallerPoolStrategy;
 pub use queue::{Agent, AgentState, CallQueue, QueueMetrics, QueueStrategy, QueuedCall};
 pub use routing::{
     CircuitState, GatewayHealth, GatewayHealthTracker, GatewayId, HealthThresholds, Route,

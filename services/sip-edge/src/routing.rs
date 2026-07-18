@@ -1,11 +1,11 @@
 use crate::config::EdgeConfig;
 use crate::edge_state::{AccessIpRule, EdgeState};
-use crate::security::sbc::IpNet;
 use crate::security::rules::refresh_anti_fraud_rules;
+use crate::security::sbc::IpNet;
 use call_core::{
-    CallSource, CallerNumberDirectory, OutboundPolicyDirectory, Route, RouteTable, RouteTarget,
-    RuntimeCallerPool, RuntimeCallerPoolMember, RuntimeEgressGroupMember, RuntimeEgressPolicy,
-    RuntimeSourcePolicy,
+    CallSource, CallerNumberDirectory, CallerPoolStrategy, OutboundPolicyDirectory, Route,
+    RouteTable, RouteTarget, RuntimeCallerPool, RuntimeCallerPoolMember, RuntimeEgressGroupMember,
+    RuntimeEgressPolicy, RuntimeSourcePolicy,
 };
 use cdr_core::PostgresCdrStore;
 use futures::StreamExt;
@@ -70,7 +70,11 @@ pub(crate) async fn reload_routes_from_database(
             gateway.2 = endpoint.transport;
         }
     }
-    edge_state.replace_gateway_cache(gateway_map.iter().map(|(id, (host, _, _, _, _, _, _, _))| (host.clone(), id.clone())));
+    edge_state.replace_gateway_cache(
+        gateway_map
+            .iter()
+            .map(|(id, (host, _, _, _, _, _, _, _))| (host.clone(), id.clone())),
+    );
     edge_state
         .call_manager
         .update_caller_numbers(CallerNumberDirectory::new(
@@ -115,8 +119,16 @@ pub(crate) async fn reload_routes_from_database(
         ) {
             continue;
         }
-        if let Some((host, port, transport, max_capacity, caller_id_mode, virtual_caller, prefix_rules, max_concurrent)) =
-            gateway_map.get(&gateway_id)
+        if let Some((
+            host,
+            port,
+            transport,
+            max_capacity,
+            caller_id_mode,
+            virtual_caller,
+            prefix_rules,
+            max_concurrent,
+        )) = gateway_map.get(&gateway_id)
         {
             let mut target = RouteTarget::new(&gateway_id, host.clone(), *port);
             target.transport = Some(transport.clone());
@@ -163,26 +175,40 @@ async fn refresh_termination_runtime(
         .filter(|group| group.enabled)
         .map(|group| group.id)
         .collect::<std::collections::HashSet<_>>();
-    edge_state.call_manager.update_outbound_policies(OutboundPolicyDirectory::new(
-        owners,
-        allocations.into_iter().filter(|item| item.enabled).map(|item| {
-            (item.number, CallSource::new(item.source_type, item.source_id))
-        }),
-        policies.into_iter().filter(|item| item.enabled).filter_map(runtime_policy),
-        runtime_pools(pools, pool_members),
-        group_members.into_iter().filter(|member| {
-            enabled_groups.contains(&member.group_id)
-                && route_time_is_active(
-                    Some(now_hhmm),
-                    member.time_start.as_deref(),
-                    member.time_end.as_deref(),
-                )
-        }).map(|member| RuntimeEgressGroupMember {
-            group_id: member.group_id,
-            gateway_id: member.egress_trunk_id,
-            destination_prefix: member.destination_prefix,
-        }),
-    ));
+    edge_state
+        .call_manager
+        .update_outbound_policies(OutboundPolicyDirectory::new(
+            owners,
+            allocations
+                .into_iter()
+                .filter(|item| item.enabled)
+                .map(|item| {
+                    (
+                        item.number,
+                        CallSource::new(item.source_type, item.source_id),
+                    )
+                }),
+            policies
+                .into_iter()
+                .filter(|item| item.enabled)
+                .filter_map(runtime_policy),
+            runtime_pools(pools, pool_members),
+            group_members
+                .into_iter()
+                .filter(|member| {
+                    enabled_groups.contains(&member.group_id)
+                        && route_time_is_active(
+                            Some(now_hhmm),
+                            member.time_start.as_deref(),
+                            member.time_end.as_deref(),
+                        )
+                })
+                .map(|member| RuntimeEgressGroupMember {
+                    group_id: member.group_id,
+                    gateway_id: member.egress_trunk_id,
+                    destination_prefix: member.destination_prefix,
+                }),
+        ));
 
     edge_state.replace_did_destinations(dids.into_iter().map(|d| (d.number.clone(), d)).collect());
     if let Ok(mut current) = edge_state.trunk_billing_accounts.write() {
@@ -213,17 +239,35 @@ fn runtime_pools(
 ) -> Vec<RuntimeCallerPool> {
     let mut members_by_pool = HashMap::<String, Vec<RuntimeCallerPoolMember>>::new();
     for member in members {
-        members_by_pool.entry(member.pool_id).or_default().push(RuntimeCallerPoolMember {
-            number: member.number,
-            priority: member.priority,
-            weight: u32::try_from(member.weight).unwrap_or(1),
-        });
+        members_by_pool
+            .entry(member.pool_id)
+            .or_default()
+            .push(RuntimeCallerPoolMember {
+                number: member.number,
+                priority: member.priority,
+                weight: u32::try_from(member.weight).unwrap_or(1),
+            });
     }
-    pools.into_iter().filter(|pool| pool.enabled).map(|pool| RuntimeCallerPool {
-        id: pool.id.clone(),
-        owner: CallSource::new(pool.owner_source_type, pool.owner_source_id),
-        members: members_by_pool.remove(&pool.id).unwrap_or_default(),
-    }).collect()
+    pools
+        .into_iter()
+        .filter(|pool| pool.enabled)
+        .filter_map(|pool| {
+            let Some(strategy) = CallerPoolStrategy::from_config(&pool.strategy) else {
+                tracing::warn!(
+                    pool_id = %pool.id,
+                    strategy = %pool.strategy,
+                    "skipping caller pool with unsupported selection strategy"
+                );
+                return None;
+            };
+            Some(RuntimeCallerPool {
+                id: pool.id.clone(),
+                owner: CallSource::new(pool.owner_source_type, pool.owner_source_id),
+                strategy,
+                members: members_by_pool.remove(&pool.id).unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 async fn refresh_access_sources(
@@ -231,17 +275,33 @@ async fn refresh_access_sources(
     db: &PostgresCdrStore,
     gateways: &[cdr_core::SipGateway],
 ) -> Result<(), AnyError> {
-    let access_trunks = gateways.iter().filter(|gateway| {
-        gateway.enabled.unwrap_or(true) && gateway.role.as_deref() == Some("access")
-    }).collect::<Vec<_>>();
+    let access_trunks = gateways
+        .iter()
+        .filter(|gateway| {
+            gateway.enabled.unwrap_or(true) && gateway.role.as_deref() == Some("access")
+        })
+        .collect::<Vec<_>>();
 
-    let access_modes = access_trunks.iter().map(|gateway| {
-        (gateway.id.clone(), gateway.access_auth_mode.clone().unwrap_or_default())
-    }).collect::<HashMap<_, _>>();
+    let access_modes = access_trunks
+        .iter()
+        .map(|gateway| {
+            (
+                gateway.id.clone(),
+                gateway.access_auth_mode.clone().unwrap_or_default(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
 
-    let username_to_trunk_id = access_trunks.iter().filter_map(|gateway| {
-        gateway.access_username.clone().filter(|u| !u.trim().is_empty()).map(|u| (u, gateway.id.clone()))
-    }).collect::<HashMap<_, _>>();
+    let username_to_trunk_id = access_trunks
+        .iter()
+        .filter_map(|gateway| {
+            gateway
+                .access_username
+                .clone()
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| (u, gateway.id.clone()))
+        })
+        .collect::<HashMap<_, _>>();
 
     if let Ok(mut current) = edge_state.access_trunk_auth_modes.write() {
         *current = access_modes.clone();
@@ -250,27 +310,35 @@ async fn refresh_access_sources(
         *current = username_to_trunk_id;
     }
 
-    let rules = db.list_enabled_trunk_ip_rules().await?.into_iter().filter_map(|rule| {
-        let mode = access_modes.get(&rule.trunk_id)?;
-        if mode == "ip_allowlist" || mode == "ip_and_digest" {
-            let network = IpNet::parse(&rule.cidr).ok()?;
-            Some(AccessIpRule {
-                trunk_id: rule.trunk_id,
-                network,
-                source_port: rule.source_port.and_then(|port| u16::try_from(port).ok()),
-                transport: rule.transport,
-            })
-        } else {
-            None
-        }
-    }).collect();
+    let rules = db
+        .list_enabled_trunk_ip_rules()
+        .await?
+        .into_iter()
+        .filter_map(|rule| {
+            let mode = access_modes.get(&rule.trunk_id)?;
+            if mode == "ip_allowlist" || mode == "ip_and_digest" {
+                let network = IpNet::parse(&rule.cidr).ok()?;
+                Some(AccessIpRule {
+                    trunk_id: rule.trunk_id,
+                    network,
+                    source_port: rule.source_port.and_then(|port| u16::try_from(port).ok()),
+                    transport: rule.transport,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    let registered_users = access_trunks.iter().filter_map(|gateway| {
-        let mode = gateway.access_auth_mode.as_deref().unwrap_or("none");
-        let username = gateway.access_username.as_deref().unwrap_or("");
-        (matches!(mode, "digest_register" | "ip_and_digest") && !username.is_empty())
-            .then(|| username.to_string())
-    }).collect();
+    let registered_users = access_trunks
+        .iter()
+        .filter_map(|gateway| {
+            let mode = gateway.access_auth_mode.as_deref().unwrap_or("none");
+            let username = gateway.access_username.as_deref().unwrap_or("");
+            (matches!(mode, "digest_register" | "ip_and_digest") && !username.is_empty())
+                .then(|| username.to_string())
+        })
+        .collect();
 
     edge_state.replace_access_sources(rules, registered_users);
     Ok(())
@@ -296,8 +364,6 @@ fn route_time_is_active(
         now >= start || now <= end
     }
 }
-
-
 
 pub(crate) fn spawn_route_reload_listener(
     nats_url: String,

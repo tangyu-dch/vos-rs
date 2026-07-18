@@ -259,7 +259,8 @@ impl CallManager {
     }
 
     /// Atomically replaces source-owned outbound policies used by new calls.
-    pub fn update_outbound_policies(&self, directory: OutboundPolicyDirectory) {
+    pub fn update_outbound_policies(&self, mut directory: OutboundPolicyDirectory) {
+        directory.inherit_selection_state(&self.outbound_policies.load());
         self.outbound_policies.store(Arc::new(directory));
     }
 

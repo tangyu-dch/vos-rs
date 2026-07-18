@@ -1,5 +1,10 @@
-use crate::{CallError, CallResult, CallerIdentity, CallerIdentityMode, GatewayId, SelectedRoute};
+use crate::pool_selection::PoolSelectionCursor;
+use crate::{
+    CallError, CallResult, CallerIdentity, CallerIdentityMode, CallerPoolStrategy, GatewayId,
+    SelectedRoute,
+};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Authenticated origin of an outbound call.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,6 +41,7 @@ pub enum RuntimeEgressPolicy {
 pub struct RuntimeCallerPool {
     pub id: String,
     pub owner: CallSource,
+    pub strategy: CallerPoolStrategy,
     pub members: Vec<RuntimeCallerPoolMember>,
 }
 
@@ -61,6 +67,7 @@ pub struct OutboundPolicyDirectory {
     policies: HashMap<CallSource, RuntimeSourcePolicy>,
     pools: HashMap<String, RuntimeCallerPool>,
     group_members: HashMap<String, Vec<RuntimeEgressGroupMember>>,
+    selection_cursors: HashMap<String, Arc<PoolSelectionCursor>>,
 }
 
 impl OutboundPolicyDirectory {
@@ -87,6 +94,12 @@ impl OutboundPolicyDirectory {
         directory
             .pools
             .extend(pools.into_iter().map(|pool| (pool.id.clone(), pool)));
+        directory.selection_cursors.extend(
+            directory
+                .pools
+                .keys()
+                .map(|id| (id.clone(), Arc::new(PoolSelectionCursor::default()))),
+        );
         for member in group_members {
             directory
                 .group_members
@@ -95,6 +108,22 @@ impl OutboundPolicyDirectory {
                 .push(member);
         }
         directory
+    }
+
+    /// Preserves stateful selection cursors for unchanged pools during a configuration refresh.
+    pub fn inherit_selection_state(&mut self, previous: &Self) {
+        for (pool_id, pool) in &self.pools {
+            let unchanged_strategy = previous
+                .pools
+                .get(pool_id)
+                .is_some_and(|previous_pool| previous_pool.strategy == pool.strategy);
+            if unchanged_strategy {
+                if let Some(cursor) = previous.selection_cursors.get(pool_id) {
+                    self.selection_cursors
+                        .insert(pool_id.clone(), Arc::clone(cursor));
+                }
+            }
+        }
     }
 
     /// Applies an explicit source policy. `None` preserves the legacy route-target behavior.
@@ -241,31 +270,25 @@ impl OutboundPolicyDirectory {
                     .contains(&(member.number.clone(), source.clone()))
             })
             .collect::<Vec<_>>();
-        let total_weight = eligible
-            .iter()
-            .map(|member| member.weight.max(1))
-            .sum::<u32>();
-        if total_weight == 0 {
+        let mut eligible = eligible;
+        eligible.sort_by(|left, right| left.number.cmp(&right.number));
+        if eligible.is_empty() {
             return Err(CallError::CallerIdentityUnavailable(
                 "caller pool has no allocated member".to_string(),
             ));
         }
-        let mut choice = stable_hash(selection_key) % u64::from(total_weight);
-        for member in eligible {
-            let weight = u64::from(member.weight.max(1));
-            if choice < weight {
-                return Ok(member.number.clone());
-            }
-            choice -= weight;
-        }
-        Err(CallError::CallerIdentityUnavailable(
-            "caller pool selection failed".to_string(),
-        ))
+        let weights = eligible
+            .iter()
+            .map(|member| member.weight)
+            .collect::<Vec<_>>();
+        let cursor = self.selection_cursors.get(pool_id).ok_or_else(|| {
+            CallError::CallerIdentityUnavailable("caller pool selector is unavailable".to_string())
+        })?;
+        let index = cursor
+            .select_index(pool.strategy, pool_id, selection_key, &weights)
+            .ok_or_else(|| {
+                CallError::CallerIdentityUnavailable("caller pool selection failed".to_string())
+            })?;
+        Ok(eligible[index].number.clone())
     }
-}
-
-fn stable_hash(value: &str) -> u64 {
-    value.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
-        hash.wrapping_mul(0x100000001b3) ^ u64::from(byte)
-    })
 }
