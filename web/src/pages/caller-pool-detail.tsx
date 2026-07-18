@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Button, Empty, Form, Grid, Input, Message, Select, Space, Spin,
+  Alert, Button, Empty, Form, Grid, Input, InputNumber, Message, Select, Space, Spin,
   Switch, Table, Tabs
 } from '@arco-design/web-react';
 import { IconDelete, IconPlus, IconRefresh, IconSave } from '@arco-design/web-react/icon';
 import { useParams } from 'react-router-dom';
 import type { Entity } from '../services/resources';
 import { listOptions } from '../services/trunks';
-import { getCallerPool, getCallerPoolMembers, saveCallerPoolMembers, updateCallerPool, type CallerPool, type CallerPoolMember } from '../services/caller-pools';
+import { callerPoolValidationError, getCallerPool, getCallerPoolMembers, numberCanJoinCallerPool, saveCallerPoolMembers, updateCallerPool, type CallerPool, type CallerPoolMember } from '../services/caller-pools';
+import { trunkRole } from '../services/trunks';
 import { WorkspaceField } from './trunk-detail';
 
 const strategyOptions = [
@@ -19,8 +20,6 @@ const strategyOptions = [
 
 const fallbackOptions = [
   { label: '拒绝呼叫', value: 'reject' },
-  { label: '固定替换', value: 'fixed' },
-  { label: '号码池替换', value: 'pool' },
 ];
 
 const sourceTypeOptions = [
@@ -36,6 +35,8 @@ export default function CallerPoolDetailPage() {
   const [pool, setPool] = useState<CallerPool | null>(null);
   const [members, setMembers] = useState<CallerPoolMember[]>([]);
   const [numbers, setNumbers] = useState<Entity[]>([]);
+  const [accessTrunks, setAccessTrunks] = useState<Entity[]>([]);
+  const [extensions, setExtensions] = useState<Entity[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -44,14 +45,18 @@ export default function CallerPoolDetailPage() {
     setLoading(true);
     setError('');
     try {
-      const [poolData, membersData, numbersData] = await Promise.all([
+      const [poolData, membersData, numbersData, trunksData, extensionsData] = await Promise.all([
         getCallerPool(id),
         getCallerPoolMembers(id),
         listOptions('/numbers'),
+        listOptions('/trunks'),
+        listOptions('/extensions'),
       ]);
       setPool(poolData);
       setMembers(membersData.map((m) => ({ ...m, _key: genId() })));
       setNumbers(numbersData);
+      setAccessTrunks(trunksData.filter((trunk) => trunkRole(trunk) === 'access'));
+      setExtensions(extensionsData);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '号码池加载失败');
     } finally {
@@ -65,17 +70,8 @@ export default function CallerPoolDetailPage() {
 
   const save = async () => {
     if (!pool) return;
-    if (!pool.virtual_alias?.trim() || !pool.owner_source_id?.trim()) {
-      Message.error('虚拟主叫与来源标识不能为空');
-      return;
-    }
-    // Validation for members
-    for (const member of members) {
-      if (!member.number?.trim()) {
-        Message.error('号码不能为空');
-        return;
-      }
-    }
+    const validationError = callerPoolValidationError(pool, members);
+    if (validationError) { Message.error(validationError); return; }
 
     try {
       setSaving(true);
@@ -98,7 +94,19 @@ export default function CallerPoolDetailPage() {
     );
   };
 
-  const numberOptions = useMemo(() => numbers.map((n) => ({ label: String(n.number), value: String(n.number) })), [numbers]);
+  const numberOptions = useMemo(() => {
+    if (!pool) return [];
+    const selected = new Set(members.map((member) => member.number));
+    return numbers
+      .filter((number) => numberCanJoinCallerPool(number, pool) || selected.has(String(number.number)))
+      .map((number) => ({ label: String(number.number), value: String(number.number) }));
+  }, [members, numbers, pool]);
+  const sourceOptions = useMemo(() => {
+    if (!pool) return [];
+    if (pool.owner_source_type === 'trunk') return accessTrunks.map((trunk) => ({ label: String(trunk.name ?? trunk.id), value: String(trunk.id) }));
+    if (pool.owner_source_type === 'extension') return extensions.map((extension) => ({ label: String(extension.display_name ?? extension.username), value: String(extension.username) }));
+    return pool.owner_source_id ? [{ label: pool.owner_source_id, value: pool.owner_source_id }] : [];
+  }, [accessTrunks, extensions, pool]);
 
   const memberColumns = [
     {
@@ -117,10 +125,13 @@ export default function CallerPoolDetailPage() {
       title: '优先级',
       width: 120,
       render: (_: unknown, row: CallerPoolMember, index: number) => (
-        <Input
-          type="number"
-          value={row.priority !== undefined ? String(row.priority) : ''}
-          onChange={(value) => patchMember(index, { priority: value ? Number(value) : 100 })}
+        <InputNumber
+          min={0}
+          max={65535}
+          precision={0}
+          value={row.priority ?? 100}
+          onChange={(value) => patchMember(index, { priority: Number(value ?? 100) })}
+          style={{ width: '100%' }}
         />
       ),
     },
@@ -128,10 +139,13 @@ export default function CallerPoolDetailPage() {
       title: '权重',
       width: 120,
       render: (_: unknown, row: CallerPoolMember, index: number) => (
-        <Input
-          type="number"
-          value={row.weight !== undefined ? String(row.weight) : ''}
-          onChange={(value) => patchMember(index, { weight: value ? Number(value) : 100 })}
+        <InputNumber
+          min={1}
+          max={10000}
+          precision={0}
+          value={row.weight ?? 100}
+          onChange={(value) => patchMember(index, { weight: Number(value ?? 100) })}
+          style={{ width: '100%' }}
         />
       ),
     },
@@ -139,11 +153,13 @@ export default function CallerPoolDetailPage() {
       title: '最大并发',
       width: 140,
       render: (_: unknown, row: CallerPoolMember, index: number) => (
-        <Input
-          type="number"
-          value={row.max_concurrent !== undefined ? String(row.max_concurrent) : ''}
-          onChange={(value) => patchMember(index, { max_concurrent: value ? Number(value) : 0 })}
+        <InputNumber
+          min={0}
+          precision={0}
+          value={row.max_concurrent ?? 0}
+          onChange={(value) => patchMember(index, { max_concurrent: Number(value ?? 0) })}
           placeholder="0 表示不限制"
+          style={{ width: '100%' }}
         />
       ),
     },
@@ -194,12 +210,16 @@ export default function CallerPoolDetailPage() {
                 <Select
                   value={pool.owner_source_type}
                   options={sourceTypeOptions}
-                  onChange={(value) => setPool((curr) => curr ? { ...curr, owner_source_type: value } : null)}
+                  onChange={(value) => setPool((curr) => curr ? { ...curr, owner_source_type: value, owner_source_id: '' } : null)}
                 />
               </WorkspaceField>
               <WorkspaceField label="来源标识" required>
-                <Input
+                <Select
+                  showSearch
+                  allowCreate={pool.owner_source_type === 'extension_group'}
                   value={pool.owner_source_id}
+                  options={sourceOptions}
+                  placeholder={pool.owner_source_type === 'extension_group' ? '选择或录入分机群组' : '请选择已存在的来源'}
                   onChange={(value) => setPool((curr) => curr ? { ...curr, owner_source_id: value } : null)}
                 />
               </WorkspaceField>
@@ -236,8 +256,8 @@ export default function CallerPoolDetailPage() {
           <div className="repeat-editor">
             <div className="section-title">
               <div>
-                <h2>号码池分机绑定</h2>
-                <p className="muted-copy">在此加入用于呼出轮询、显号的真实物理号码及每个号码的路由权重。</p>
+                <h2>真实号码成员</h2>
+                <p className="muted-copy">仅展示已授权给当前来源且允许显号的真实号码；历史成员仍会保留回显以便修正。</p>
               </div>
               <Button
                 icon={<IconPlus />}
@@ -271,7 +291,7 @@ export default function CallerPoolDetailPage() {
         ),
       },
     ];
-  }, [pool, members, numberOptions]);
+  }, [members, numberOptions, pool, sourceOptions]);
 
   return (
     <section className="workspace">

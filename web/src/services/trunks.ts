@@ -107,8 +107,7 @@ export function policyValidationError(policy: OutboundPolicy): string | null {
   return null;
 }
 
-export async function listOptions(path: '/caller-pools' | '/egress-groups' | '/trunks' | '/numbers'): Promise<Entity[]> {
+export async function listOptions(path: '/caller-pools' | '/egress-groups' | '/trunks' | '/numbers' | '/extensions'): Promise<Entity[]> {
   const result = await api.get<PageResult<Entity> | Entity[]>(path, { page: 1, page_size: 200 });
   return Array.isArray(result) ? result : result.items || [];
 }
-

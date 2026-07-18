@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Button, Empty, Form, Grid, Input, Message, Select, Space, Spin,
+  Alert, Button, Empty, Form, Grid, Input, InputNumber, Message, Select, Space, Spin,
   Switch, Table, Tabs
 } from '@arco-design/web-react';
 import { IconDelete, IconPlus, IconRefresh, IconSave } from '@arco-design/web-react/icon';
 import { useParams } from 'react-router-dom';
 import type { Entity } from '../services/resources';
 import { listOptions } from '../services/trunks';
-import { getEgressGroup, getEgressGroupMembers, saveEgressGroupMembers, updateEgressGroup, type EgressGroup, type EgressGroupMember } from '../services/egress-groups';
+import { egressGroupValidationError, getEgressGroup, getEgressGroupMembers, saveEgressGroupMembers, updateEgressGroup, type EgressGroup, type EgressGroupMember } from '../services/egress-groups';
 import { WorkspaceField } from './trunk-detail';
 
 const genId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
@@ -47,23 +47,8 @@ export default function EgressGroupDetailPage() {
 
   const save = async () => {
     if (!group) return;
-    if (!group.name?.trim()) {
-      Message.error('分组名称不能为空');
-      return;
-    }
-    // Validation for members
-    for (const member of members) {
-      if (!member.egress_trunk_id) {
-        Message.error('落地中继不能为空');
-        return;
-      }
-      if (member.time_start || member.time_end) {
-        if (!member.time_start || !member.time_end) {
-          Message.error('时间窗口必须成对出现');
-          return;
-        }
-      }
-    }
+    const validationError = egressGroupValidationError(group, members);
+    if (validationError) { Message.error(validationError); return; }
 
     try {
       setSaving(true);
@@ -114,10 +99,13 @@ export default function EgressGroupDetailPage() {
       title: '优先级',
       width: 120,
       render: (_: unknown, row: EgressGroupMember, index: number) => (
-        <Input
-          type="number"
-          value={row.priority !== undefined ? String(row.priority) : ''}
-          onChange={(value) => patchMember(index, { priority: value ? Number(value) : 100 })}
+        <InputNumber
+          min={0}
+          max={65535}
+          precision={0}
+          value={row.priority ?? 100}
+          onChange={(value) => patchMember(index, { priority: Number(value ?? 100) })}
+          style={{ width: '100%' }}
         />
       ),
     },
@@ -125,10 +113,13 @@ export default function EgressGroupDetailPage() {
       title: '权重',
       width: 120,
       render: (_: unknown, row: EgressGroupMember, index: number) => (
-        <Input
-          type="number"
-          value={row.weight !== undefined ? String(row.weight) : ''}
-          onChange={(value) => patchMember(index, { weight: value ? Number(value) : 100 })}
+        <InputNumber
+          min={1}
+          max={10000}
+          precision={0}
+          value={row.weight ?? 100}
+          onChange={(value) => patchMember(index, { weight: Number(value ?? 100) })}
+          style={{ width: '100%' }}
         />
       ),
     },
@@ -140,6 +131,7 @@ export default function EgressGroupDetailPage() {
           value={row.time_start || ''}
           onChange={(value) => patchMember(index, { time_start: value || null })}
           placeholder="HH:MM"
+          maxLength={5}
         />
       ),
     },
@@ -151,6 +143,7 @@ export default function EgressGroupDetailPage() {
           value={row.time_end || ''}
           onChange={(value) => patchMember(index, { time_end: value || null })}
           placeholder="HH:MM"
+          maxLength={5}
         />
       ),
     },
@@ -216,8 +209,8 @@ export default function EgressGroupDetailPage() {
           <div className="repeat-editor">
             <div className="section-title">
               <div>
-                <h2>数智中继选择</h2>
-                <p className="muted-copy">在此指定被叫号码匹配前缀以及网关之间的优先级和权重路由关系。</p>
+                <h2>落地中继选择</h2>
+                <p className="muted-copy">按被叫前缀、业务时段、优先级和权重选择落地中继；相同规则不能重复。</p>
               </div>
               <Button
                 icon={<IconPlus />}
