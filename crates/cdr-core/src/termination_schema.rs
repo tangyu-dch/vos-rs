@@ -6,6 +6,29 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS access_username TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS access_realm TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS access_password_hash TEXT NOT NULL DEFAULT ''",
+    r#"DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_gateway_termination_role') THEN
+            ALTER TABLE sip_gateways ADD CONSTRAINT chk_gateway_termination_role
+                CHECK (role IN ('access', 'egress')) NOT VALID;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_gateway_access_auth_mode') THEN
+            ALTER TABLE sip_gateways ADD CONSTRAINT chk_gateway_access_auth_mode CHECK (
+                access_auth_mode IN ('none', 'ip_allowlist', 'digest_register', 'ip_and_digest')
+                AND (role <> 'access' OR access_auth_mode <> 'none')
+            ) NOT VALID;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_gateway_digest_credentials') THEN
+            ALTER TABLE sip_gateways ADD CONSTRAINT chk_gateway_digest_credentials CHECK (
+                access_auth_mode NOT IN ('digest_register', 'ip_and_digest') OR
+                (BTRIM(access_username) <> '' AND BTRIM(access_realm) <> '' AND BTRIM(access_password_hash) <> '')
+            ) NOT VALID;
+        END IF;
+    END $$"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_access_gateway_username_unique
+        ON sip_gateways (access_username)
+        WHERE role='access' AND enabled
+          AND access_auth_mode IN ('digest_register', 'ip_and_digest')
+          AND BTRIM(access_username) <> ''"#,
     "ALTER TABLE number_inventory ADD COLUMN IF NOT EXISTS owner_egress_trunk_id TEXT REFERENCES sip_gateways(id) ON DELETE RESTRICT",
     r#"CREATE TABLE IF NOT EXISTS trunk_ip_rules (
         id BIGSERIAL PRIMARY KEY,
@@ -173,5 +196,8 @@ mod tests {
         assert!(sql.contains("chk_source_policy_caller_fields"));
         assert!(sql.contains("chk_source_policy_egress_fields"));
         assert!(sql.contains("owner_egress_trunk_id"));
+        assert!(sql.contains("idx_access_gateway_username_unique"));
+        assert!(sql.contains("chk_gateway_access_auth_mode"));
+        assert!(sql.contains("chk_gateway_digest_credentials"));
     }
 }
