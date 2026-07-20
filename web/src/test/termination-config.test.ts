@@ -4,12 +4,12 @@ import {
   numberCanJoinCallerPool,
   type CallerPool,
   type CallerPoolMember,
-} from '../services/caller-pools';
+} from '@/services/caller-pools';
 import {
   egressGroupValidationError,
   type EgressGroup,
   type EgressGroupMember,
-} from '../services/egress-groups';
+} from '@/services/egress-groups';
 
 const pool: CallerPool = {
   id: 'pool-a',

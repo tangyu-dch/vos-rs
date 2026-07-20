@@ -1,5 +1,5 @@
-import { api, type PageResult } from './client';
-import type { Entity } from './resources';
+import { api, type PageResult } from '@/services/client';
+import type { Entity } from '@/services/resources';
 
 export type TrunkRole = 'access' | 'egress';
 export type AccessAuthType = 'ip_allowlist' | 'digest_register' | 'ip_and_digest';
@@ -61,7 +61,67 @@ export async function getTrunkWorkspace(id: string): Promise<TrunkWorkspaceData>
 }
 
 export function updateTrunk(id: string, values: Entity) {
-  return api.put<Entity>(`/trunks/${encodeURIComponent(id)}`, values);
+  return api.put<Entity>(`/trunks/${encodeURIComponent(id)}`, trunkForSave(values));
+}
+
+export function trunkForSave(values: Entity): Entity {
+  const body = { ...values };
+  if (typeof body.access_password === 'string' && !body.access_password.trim()) {
+    delete body.access_password;
+  }
+  delete body.has_access_password;
+  delete body.has_register_password;
+  delete body.egress_connection_type;
+  delete body.register_server;
+  delete body.register_username;
+  delete body.register_password;
+  delete body.created_at;
+  delete body.current_concurrent;
+  delete body.circuit_state;
+  return body;
+}
+
+export function trunkValidationError(
+  draft: Entity,
+  original: Entity,
+  rules: TrunkIpRule[],
+  endpoints: EgressEndpoint[],
+): string | null {
+  const role = trunkRole(draft);
+  if (role === 'access') {
+    const mode = String(draft.access_auth_mode ?? '');
+    const needsIp = mode === 'ip_allowlist' || mode === 'ip_and_digest';
+    const needsDigest = mode === 'digest_register' || mode === 'ip_and_digest';
+    if (!['ip_allowlist', 'digest_register', 'ip_and_digest'].includes(mode)) return '请选择接入认证方式';
+    if (rules.some((rule) => !rule.cidr.trim())) return 'IP 白名单地址不能为空';
+    if (needsIp && !rules.some((rule) => rule.enabled)) return '请至少配置一条已启用且完整的 IP 白名单';
+    if (needsDigest) {
+      const username = String(draft.access_username ?? '').trim();
+      const password = String(draft.access_password ?? '');
+      if (!username) return '注册认证必须填写注册用户';
+      const usernameChanged = username !== String(original.access_username ?? '').trim();
+      if ((!original.has_access_password || usernameChanged) && !password) {
+        return usernameChanged ? '修改注册用户后必须重新输入注册密码' : '注册认证必须填写注册密码';
+      }
+    }
+  }
+  if (role === 'egress') {
+    const connectionType = String(draft.egress_connection_type ?? 'static_peer');
+    if (connectionType === 'client_register') {
+      const server = String(draft.register_server ?? '').trim();
+      const username = String(draft.register_username ?? '').trim();
+      const password = String(draft.register_password ?? '');
+      if (!server) return '注册服务器不能为空';
+      if (!username) return '注册用户不能为空';
+      const usernameChanged = original.reg_username ? (username !== String(original.reg_username).trim()) : false;
+      if ((!original.has_register_password || usernameChanged) && !password) {
+        return usernameChanged ? '修改注册用户后必须重新输入注册密码' : '注册认证必须填写注册密码';
+      }
+    } else {
+      if (endpoints.some((endpoint) => !endpoint.host.trim())) return '落地端点的主机地址不能为空';
+    }
+  }
+  return null;
 }
 
 export function getTrunkIpRules(id: string) {
@@ -92,6 +152,7 @@ export function saveOutboundPolicy(id: string, policy: OutboundPolicy) {
 
 export function policyForSave(policy: OutboundPolicy): OutboundPolicy {
   const body = { ...policy };
+  body.fallback_mode = 'reject';
   if (body.caller_mode !== 'fixed_number') delete body.fixed_number;
   if (body.caller_mode !== 'virtual_pool') delete body.caller_pool_id;
   if (body.egress_mode === 'direct') delete body.egress_group_id;

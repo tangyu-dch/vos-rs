@@ -1,9 +1,10 @@
-import { api } from './client';
-import type { Entity } from './resources';
+import { api } from '@/services/client';
+import type { Entity } from '@/services/resources';
 
 export interface EgressGroup extends Entity {
   id?: string;
   name: string;
+  description?: string;
   enabled?: boolean;
 }
 

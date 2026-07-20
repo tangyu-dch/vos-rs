@@ -1,6 +1,6 @@
-import { api } from './client';
-import type { Entity } from './resources';
-import { policyForSave, type OutboundPolicy } from './trunks';
+import { api } from '@/services/client';
+import type { Entity } from '@/services/resources';
+import { policyForSave, type OutboundPolicy } from '@/services/trunks';
 
 export interface ExtensionWorkspaceData {
   extension: Entity;

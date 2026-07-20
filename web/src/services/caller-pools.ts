@@ -1,5 +1,5 @@
-import { api } from './client';
-import type { Entity } from './resources';
+import { api } from '@/services/client';
+import type { Entity } from '@/services/resources';
 
 export interface CallerPool extends Entity {
   id?: string;
@@ -58,7 +58,7 @@ export async function getCallerPool(id: string): Promise<CallerPool> {
 }
 
 export async function updateCallerPool(id: string, pool: CallerPool): Promise<void> {
-  return api.put<void>(`/caller-pools/${encodeURIComponent(id)}`, pool);
+  return api.put<void>(`/caller-pools/${encodeURIComponent(id)}`, { ...pool, fallback_mode: 'reject' });
 }
 
 export async function getCallerPoolMembers(id: string): Promise<CallerPoolMember[]> {

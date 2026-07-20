@@ -1,5 +1,5 @@
 import axios, { type AxiosRequestConfig } from 'axios';
-import { clearSession, getAccessToken } from './auth';
+import { clearSession, getAccessToken } from '@/services/auth';
 
 interface Envelope<T> { code: number; message: string; data: T; request_id: string; }
 interface ErrorEnvelope { code?: number | string; message?: string; details?: string; request_id?: string; }
@@ -18,11 +18,28 @@ http.interceptors.request.use((config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
-http.interceptors.response.use(undefined, (error) => {
+http.interceptors.response.use(undefined, async (error) => {
+  const config = error.config;
   const status = error.response?.status as number | undefined;
+  
+  // Retry logic for timeout, network error or 502
+  const isTimeout = error.code === 'ECONNABORTED';
+  const isNetworkError = !error.response && error.code !== 'ECONNABORTED';
+  const is502 = status === 502;
+  
+  if (config && (isTimeout || is502 || isNetworkError)) {
+    config.retryCount = config.retryCount || 0;
+    if (config.retryCount < 3) {
+      config.retryCount += 1;
+      const backoff = Math.pow(2, config.retryCount) * 1000;
+      await new Promise(resolve => setTimeout(resolve, backoff));
+      return http.request(config);
+    }
+  }
+
   const body = error.response?.data as ErrorEnvelope | undefined;
   if (status === 401 && window.location.pathname !== '/login') { clearSession(); window.location.assign('/login'); }
-  const message = body?.details || body?.message || (error.code === 'ECONNABORTED' ? '请求超时，请检查服务状态' : '请求失败，请稍后重试');
+  const message = body?.details || body?.message || (isTimeout ? '请求超时，请检查服务状态' : '请求失败，请稍后重试');
   return Promise.reject(new ApiError(message, status, String(body?.code ?? ''), body?.request_id));
 });
 
