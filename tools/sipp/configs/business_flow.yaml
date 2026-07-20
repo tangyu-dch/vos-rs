@@ -1,0 +1,72 @@
+connections:
+  database:
+    host: "127.0.0.1"
+    port: 5432
+    username: "vos_rs"
+    password: "vos_rs"
+    database: "vos_rs"
+    max_connections: 20
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+    database: 0
+    max_connections: 20
+  nats:
+    url: "nats://127.0.0.1:4222"
+    cdr_stream: "VOS_RS_CDR"
+    cdr_subject: "vos_rs.cdr"
+
+sip_edge:
+  dynamic_config:
+    enabled: false
+  cluster:
+    enabled: false
+    node_id: "sipp-business-edge"
+    router_mode: "direct"
+    advertised_addr: "127.0.0.1:5160"
+    management_url: "http://127.0.0.1:5182"
+  network:
+    sip_udp_bind: "127.0.0.1:5160"
+    advertised_addr: "127.0.0.1:5160"
+    manage_bind: "127.0.0.1:5182"
+    ws_bind: "127.0.0.1:5183"
+  routing:
+    default_gateway: ""
+    database_routes_enabled: true
+    gateway_health_checks_enabled: false
+  security:
+    internal_secret: "sipp-business-secret"
+  auth:
+    realm: "vos-rs"
+    nonce: "sipp-business-nonce"
+    secret_key: "sipp-business-auth-secret"
+  media:
+    nodes:
+      - id: "sipp-local-media"
+        type: "local"
+        advertised_addr: "127.0.0.1"
+        port_min: 42000
+        port_max: 42100
+        weight: 1
+    symmetric_learning: true
+    anti_spoofing: true
+    source_relearn_secs: 30
+    metrics_log: false
+  recording:
+    enabled: true
+    directory: "target/recordings/sipp-business"
+    max_duration_secs: 300
+    workers: 2
+    queue_capacity: 1024
+  billing:
+    balance_enforcement_enabled: true
+    settlement_enabled: true
+  performance:
+    cdr_queue_capacity: 1024
+    cdr_persistence_enabled: true
+    udp_workers: 1
+    udp_workers_auto: false
+
+logging:
+  filter: "sip_edge=info,call_core=info,info"

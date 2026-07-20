@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+
+<scenario name="VOS-RS registered extension outbound UAC">
+  <!-- Injection fields: username;password;caller;callee -->
+  <send retrans="500">
+    <![CDATA[
+      REGISTER sip:[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: <sip:[field0]@[remote_ip]>;tag=[pid]reg[call_number]
+      To: <sip:[field0]@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 1 REGISTER
+      Contact: <sip:[field0]@[local_ip]:[local_port]>
+      Expires: 300
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="401" auth="true" auth_username="[field0]" auth_password="[field1]"/>
+  <send retrans="500">
+    <![CDATA[
+      REGISTER sip:[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: <sip:[field0]@[remote_ip]>;tag=[pid]reg[call_number]
+      To: <sip:[field0]@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 2 REGISTER
+      Contact: <sip:[field0]@[local_ip]:[local_port]>
+      Expires: 300
+      [authentication username=2001 password=Demo2001!]
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="200"/>
+
+  <send retrans="500">
+    <![CDATA[
+      INVITE sip:[field3]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      Max-Forwards: 70
+      From: "[field2]" <sip:[field2]@[remote_ip]>;tag=[pid]extension[call_number]
+      To: <sip:[field3]@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 3 INVITE
+      Contact: <sip:[field0]@[local_ip]:[local_port]>
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=extension 1 1 IN IP[local_ip_type] [local_ip]
+      s=VOS-RS extension outbound
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 0 8
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:8 PCMA/8000
+    ]]>
+  </send>
+  <recv response="407" auth="true" auth_username="2001" auth_password="Demo2001!"/>
+  <send>
+    <![CDATA[
+      ACK sip:[field3]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      Max-Forwards: 70
+      From: "[field2]" <sip:[field2]@[remote_ip]>;tag=[pid]extension[call_number]
+      To: <sip:[field3]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 3 ACK
+      Content-Length: 0
+    ]]>
+  </send>
+  <send retrans="500">
+    <![CDATA[
+      INVITE sip:[field3]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      Max-Forwards: 70
+      From: "[field2]" <sip:[field2]@[remote_ip]>;tag=[pid]extension[call_number]
+      To: <sip:[field3]@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 4 INVITE
+      Contact: <sip:[field0]@[local_ip]:[local_port]>
+      [authentication username=2001 password=Demo2001!]
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=extension 1 1 IN IP[local_ip_type] [local_ip]
+      s=VOS-RS extension outbound
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 0 8
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:8 PCMA/8000
+    ]]>
+  </send>
+  <recv response="100" optional="true"/>
+  <recv response="180" optional="true"/>
+  <recv response="200"/>
+
+  <send>
+    <![CDATA[
+      ACK sip:[field3]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field2]" <sip:[field2]@[remote_ip]>;tag=[pid]extension[call_number]
+      To: <sip:[field3]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 4 ACK
+      Content-Length: 0
+    ]]>
+  </send>
+  <pause milliseconds="300"/>
+  <send retrans="500">
+    <![CDATA[
+      BYE sip:[field3]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field2]" <sip:[field2]@[remote_ip]>;tag=[pid]extension[call_number]
+      To: <sip:[field3]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 5 BYE
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="200"/>
+</scenario>
