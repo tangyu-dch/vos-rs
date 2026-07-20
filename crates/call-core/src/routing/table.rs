@@ -89,7 +89,15 @@ impl RouteTable {
 
     pub fn select(&self, destination_uri: &SipUri) -> CallResult<SelectedRoute> {
         let candidates = self.select_candidates(destination_uri)?;
-        Ok(candidates.first().cloned().unwrap())
+        candidates.first().cloned().ok_or_else(|| {
+            CallError::NoRouteForDestination(
+                destination_uri
+                    .user
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
     }
 
     pub fn select_candidates(&self, destination_uri: &SipUri) -> CallResult<Vec<SelectedRoute>> {

@@ -22,7 +22,9 @@
 //! - **Inbound**：主叫方到软交换
 //! - **Outbound**：软交换到被叫方（网关）
 
-use crate::{CallError, CallResult, CallerIdentity, GatewayId, RouteTarget, SelectedRoute};
+use crate::{
+    CallError, CallResult, CallerIdentity, CdrAuditSnapshot, GatewayId, RouteTarget, SelectedRoute,
+};
 use sip_core::{SipRequest, SipUri};
 use std::time::SystemTime;
 
@@ -63,6 +65,27 @@ pub enum LegDirection {
     Inbound,
     /// 出站（软交换到网关）
     Outbound,
+}
+
+/// 平台业务视角的呼叫方向。
+///
+/// 该值必须由可信的接入识别结果生成，不能从 SIP 请求头直接读取。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallDirection {
+    /// 外部落地中继呼入平台。
+    Inbound,
+    /// 分机或接入中继经平台呼出。
+    Outbound,
+}
+
+impl CallDirection {
+    /// 返回 CDR、路由和事件协议使用的稳定字符串值。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inbound => "inbound",
+            Self::Outbound => "outbound",
+        }
+    }
 }
 
 /// 呼叫分支状态。
@@ -155,7 +178,7 @@ pub struct CallLeg {
 ///            ↓           ↓
 ///          Failed      Failed
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     /// 呼叫 ID（SIP Call-ID）
     pub id: CallId,
@@ -187,16 +210,39 @@ pub struct Call {
     pub direction: String,
     /// Resolved public caller number. Its owner gateway is pinned for this call.
     pub caller_identity: Option<CallerIdentity>,
+    /// Remaining caller-number choices, each pinned to routes for its owner gateway.
+    pub(crate) caller_identity_alternatives: Vec<(CallerIdentity, Vec<SelectedRoute>)>,
+    /// Billing account resolved from the authenticated source when the call starts.
+    pub billing_account: Option<String>,
+    /// Routing and billing decisions frozen for the final CDR.
+    pub audit: CdrAuditSnapshot,
 }
 
 impl Call {
     pub fn from_inbound_invite(request: &SipRequest) -> CallResult<Self> {
-        Self::from_inbound_invite_at(request, SystemTime::now())
+        Self::from_inbound_invite_with_direction(request, CallDirection::Outbound)
+    }
+
+    /// 从 INVITE 创建呼叫，并使用平台内部判定的业务方向。
+    pub fn from_inbound_invite_with_direction(
+        request: &SipRequest,
+        direction: CallDirection,
+    ) -> CallResult<Self> {
+        Self::from_inbound_invite_at_with_direction(request, SystemTime::now(), direction)
     }
 
     pub fn from_inbound_invite_at(
         request: &SipRequest,
         started_at: SystemTime,
+    ) -> CallResult<Self> {
+        Self::from_inbound_invite_at_with_direction(request, started_at, CallDirection::Outbound)
+    }
+
+    /// 使用显式业务方向和开始时间创建呼叫。
+    pub fn from_inbound_invite_at_with_direction(
+        request: &SipRequest,
+        started_at: SystemTime,
+        direction: CallDirection,
     ) -> CallResult<Self> {
         let call_id = request
             .headers
@@ -227,8 +273,11 @@ impl Call {
             answered_at: None,
             ended_at: None,
             recording_path: None,
-            direction: "outbound".to_string(),
+            direction: direction.as_str().to_string(),
             caller_identity: None,
+            caller_identity_alternatives: Vec::new(),
+            billing_account: None,
+            audit: CdrAuditSnapshot::default(),
         })
     }
 

@@ -24,12 +24,16 @@
 //! 5. 健康状态过滤（Circuit Breaker）
 //! 6. 容量检查（max_capacity / max_concurrent）
 
+mod acd;
 mod billing;
 mod call;
 mod caller_identity;
 
+pub use acd::{AcdEngine, AgentSession, AgentState as AcdAgentState, AllocationStrategy, EnqueueResult, WaitingCall};
 pub use billing::AtomicBillingBucket;
-pub use call::{Call, CallId, CallLeg, CallState, FailureCause, LegDirection, LegId, LegState};
+pub use call::{
+    Call, CallDirection, CallId, CallLeg, CallState, FailureCause, LegDirection, LegId, LegState,
+};
 pub use caller_identity::{CallerIdentity, CallerIdentityMode, CallerNumberDirectory};
 mod cdr;
 mod error;
@@ -40,7 +44,7 @@ mod queue;
 mod routing;
 mod webhooks;
 
-pub use cdr::{CallCdr, CallQualityMetrics, CdrStatus};
+pub use cdr::{CallCdr, CallQualityMetrics, CdrAuditSnapshot, CdrStatus};
 pub use error::{CallError, CallResult};
 pub use manager::{
     CallEventSendError, CallEventSink, CallManager, CdrSendError, CdrSink, InboundInviteOutcome,

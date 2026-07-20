@@ -92,7 +92,6 @@ pub enum CallEvent {
     },
 }
 
-
 /// VCI（VOS Call Instruction）2.0 呼叫控制动作协议。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -174,7 +173,10 @@ mod tests {
             call_id: "call-1".to_string(),
             sequence: 42,
             occurred_at_ms: 1_720_000_000_123,
-            event: CallEvent::CallAnswered { sip_status: 200, leg: "b_leg".to_string() },
+            event: CallEvent::CallAnswered {
+                sip_status: 200,
+                leg: "b_leg".to_string(),
+            },
         };
 
         let json = serde_json::to_string(&event).expect("事件应可序列化");

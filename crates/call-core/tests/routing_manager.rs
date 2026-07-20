@@ -1,6 +1,6 @@
 use call_core::{
-    CallError, CallEvent, CallId, CallManager, CallState, CallerNumberDirectory, CdrStatus, Route,
-    RouteTable, RouteTarget,
+    CallDirection, CallError, CallEvent, CallId, CallManager, CallState, CallerNumberDirectory,
+    CdrStatus, Route, RouteTable, RouteTarget,
 };
 
 #[test]
@@ -148,6 +148,52 @@ fn call_manager_accepts_preselected_outbound_uri() {
         call.outbound.as_ref().unwrap().remote_uri.to_string(),
         "sip:1002@192.0.2.20:5062;transport=udp"
     );
+}
+
+#[test]
+fn external_direction_header_cannot_override_default_direction() {
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = CallManager::new(test_routes(), tx);
+    let request = invite_request_with_direction_header(
+        "call-untrusted-direction@example.com",
+        "13800138000",
+        "inbound",
+    );
+
+    let outcome = manager
+        .handle_inbound_invite(&request)
+        .expect("invite should be accepted");
+    let call = manager
+        .get(&outcome.call_id)
+        .expect("call should be stored");
+
+    assert_eq!(call.direction, "outbound");
+}
+
+#[test]
+fn trusted_inbound_direction_is_preserved_in_cdr() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = CallManager::new(test_routes(), tx);
+    let call_id = "call-inbound-cdr@example.com";
+    let request = invite_request(call_id, "13800138000");
+
+    manager
+        .handle_inbound_invite_with_source_and_health_and_direction(
+            &request,
+            None,
+            None,
+            CallDirection::Inbound,
+        )
+        .expect("inbound invite should route");
+    manager
+        .handle_outbound_response(&outbound_response(200, "OK", call_id))
+        .expect("call should be answered");
+    manager
+        .handle_inbound_termination(&bye_request(call_id), None, None)
+        .expect("call should terminate");
+
+    let cdr = rx.try_recv().expect("terminated call should emit CDR");
+    assert_eq!(cdr.direction, "inbound");
 }
 
 #[test]
@@ -394,6 +440,35 @@ fn invite_request(call_id: &str, destination: &str) -> sip_core::SipRequest {
         ),
         call_id = call_id,
         destination = destination
+    );
+
+    let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap()
+    else {
+        panic!("expected request");
+    };
+    request.into_owned()
+}
+
+fn invite_request_with_direction_header(
+    call_id: &str,
+    destination: &str,
+    direction: &str,
+) -> sip_core::SipRequest {
+    let raw = format!(
+        concat!(
+            "INVITE sip:{destination}@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-direction\r\n",
+            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "To: <sip:{destination}@example.com>\r\n",
+            "Call-ID: {call_id}\r\n",
+            "CSeq: 1 INVITE\r\n",
+            "X-Call-Direction: {direction}\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        call_id = call_id,
+        destination = destination,
+        direction = direction,
     );
 
     let sip_core::SipMessageBorrow::Request(request) = parse_message(raw.as_bytes()).unwrap()

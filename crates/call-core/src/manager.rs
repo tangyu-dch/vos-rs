@@ -22,9 +22,9 @@
 //! 呼叫结束（BYE/CANCEL/超时/failover）时调用 `decrement_active`。
 
 use crate::{
-    Call, CallCdr, CallError, CallEvent, CallId, CallQualityMetrics, CallResult, CallSource,
-    CallState, CallerIdentity, CallerNumberDirectory, GatewayHealthTracker,
-    OutboundPolicyDirectory, RouteTable, WebhookEvent, WEBHOOK_SCHEMA_VERSION,
+    Call, CallCdr, CallDirection, CallError, CallEvent, CallId, CallQualityMetrics, CallResult,
+    CallSource, CallState, CallerIdentity, CallerNumberDirectory, GatewayHealthTracker,
+    OutboundPolicyDirectory, RouteTable, SelectedRoute, WebhookEvent, WEBHOOK_SCHEMA_VERSION,
 };
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
@@ -284,16 +284,24 @@ impl CallManager {
         source: Option<&CallSource>,
         health: Option<&GatewayHealthTracker>,
     ) -> CallResult<InboundInviteOutcome> {
-        let mut call = Call::from_inbound_invite(request)?;
-        let call_id = call.id.clone();
+        self.handle_inbound_invite_with_source_and_health_and_direction(
+            request,
+            source,
+            health,
+            CallDirection::Outbound,
+        )
+    }
 
-        // 从 X-Call-Direction 头部读取呼叫方向（CPS 测试用）
-        if let Some(dir) = request.headers.get("x-call-direction") {
-            let dir_str = dir.as_str().trim().to_lowercase();
-            if dir_str == "inbound" || dir_str == "outbound" {
-                call.direction = dir_str;
-            }
-        }
+    /// Handles an INVITE with a direction derived from trusted ingress identity.
+    pub fn handle_inbound_invite_with_source_and_health_and_direction(
+        &self,
+        request: &SipRequest,
+        source: Option<&CallSource>,
+        health: Option<&GatewayHealthTracker>,
+        direction: CallDirection,
+    ) -> CallResult<InboundInviteOutcome> {
+        let mut call = Call::from_inbound_invite_with_direction(request, direction)?;
+        let call_id = call.id.clone();
 
         self.push_event(
             &call_id,
@@ -345,7 +353,7 @@ impl CallManager {
         })?;
         let source_resolution = source
             .map(|source| {
-                self.outbound_policies.load().resolve(
+                self.outbound_policies.load().resolve_with_alternatives(
                     source,
                     &original_number,
                     request.uri.user.as_deref().unwrap_or(""),
@@ -355,8 +363,13 @@ impl CallManager {
             })
             .transpose()?
             .flatten();
-        let caller_identity = if let Some((identity, source_candidates)) = source_resolution {
+        if let Some(source) = source {
+            call.audit = self.outbound_policies.load().audit_snapshot(source);
+        }
+        let caller_identity = if let Some(mut selections) = source_resolution {
+            let (identity, source_candidates) = selections.remove(0);
             candidates = source_candidates;
+            call.caller_identity_alternatives = selections;
             Some(identity)
         } else {
             let policy_target = &candidates[0].target;
@@ -373,12 +386,24 @@ impl CallManager {
             }
             identity
         };
+        call.audit.original_caller = Some(original_number.clone());
+        call.audit.presented_caller = Some(
+            caller_identity
+                .as_ref()
+                .map_or(original_number, |identity| {
+                    identity.presented_number.clone()
+                }),
+        );
         call.caller_identity = caller_identity.clone();
         call.candidates = candidates;
         call.current_candidate_index = 0;
         let outbound_uri = call.candidates[0].outbound_uri.clone();
         let caller_id_mode = call.candidates[0].target.caller_id_mode.clone();
         let virtual_caller = call.candidates[0].target.virtual_caller.clone();
+        if call.audit.caller_mode.is_none() {
+            call.audit.caller_mode.clone_from(&caller_id_mode);
+            call.audit.caller_selection.clone_from(&caller_id_mode);
+        }
 
         call.select_route(outbound_uri.clone())?;
         let state = call.state;
@@ -399,16 +424,22 @@ impl CallManager {
         request: &SipRequest,
         outbound_uri: sip_core::SipUri,
     ) -> CallResult<InboundInviteOutcome> {
-        let mut call = Call::from_inbound_invite(request)?;
-        let call_id = call.id.clone();
+        self.handle_inbound_invite_to_uri_with_direction(
+            request,
+            outbound_uri,
+            CallDirection::Outbound,
+        )
+    }
 
-        // 从 X-Call-Direction 头部读取呼叫方向（CPS 测试用）
-        if let Some(dir) = request.headers.get("x-call-direction") {
-            let dir_str = dir.as_str().trim().to_lowercase();
-            if dir_str == "inbound" || dir_str == "outbound" {
-                call.direction = dir_str;
-            }
-        }
+    /// Handles a pre-routed INVITE with a trusted business direction.
+    pub fn handle_inbound_invite_to_uri_with_direction(
+        &self,
+        request: &SipRequest,
+        outbound_uri: sip_core::SipUri,
+        direction: CallDirection,
+    ) -> CallResult<InboundInviteOutcome> {
+        let mut call = Call::from_inbound_invite_with_direction(request, direction)?;
+        let call_id = call.id.clone();
 
         self.push_event(
             &call_id,
@@ -606,10 +637,72 @@ impl CallManager {
         self.calls.get(call_id).map(|c| c.clone())
     }
 
+    /// Advances a virtual caller pool after the selected number reaches capacity.
+    ///
+    /// The caller identity and its owner-gateway routes are replaced while holding the
+    /// call entry lock, so readers never observe a number paired with another owner.
+    pub fn advance_caller_pool(&self, call_id: &CallId) -> Option<InboundInviteOutcome> {
+        let mut call = self.calls.get_mut(call_id)?;
+        if call.state != CallState::Routing {
+            return None;
+        }
+        let (identity, candidates) = call.caller_identity_alternatives.first()?.clone();
+        let selected = candidates.first()?.clone();
+        call.caller_identity_alternatives.remove(0);
+        call.audit.presented_caller = Some(identity.presented_number.clone());
+        call.audit.fallback_used = true;
+        call.caller_identity = Some(identity.clone());
+        call.candidates = candidates;
+        call.current_candidate_index = 0;
+        let outbound_uri = selected.outbound_uri;
+        if let Some(outbound) = call.outbound.as_mut() {
+            outbound.remote_uri = outbound_uri.clone();
+        }
+        Some(InboundInviteOutcome {
+            call_id: call_id.clone(),
+            state: call.state,
+            outbound_uri,
+            caller_id_mode: selected.target.caller_id_mode,
+            virtual_caller: selected.target.virtual_caller,
+            caller_identity: Some(identity),
+        })
+    }
+
     /// 设置录音文件路径，用于 BYE 时写入 CDR。
     pub fn set_recording_path(&self, call_id: &CallId, path: String) {
         if let Some(mut call) = self.calls.get_mut(call_id) {
             call.recording_path = Some(path);
+        }
+    }
+
+    /// Freezes the billing account selected from the authenticated call source.
+    pub fn set_billing_account(&self, call_id: &CallId, account: Option<String>) {
+        if let Some(mut call) = self.calls.get_mut(call_id) {
+            call.billing_account = account;
+        }
+    }
+
+    /// 设置呼叫的候选路由，供并行振铃/分机组使用。
+    pub fn set_candidates(&self, call_id: &CallId, candidates: Vec<SelectedRoute>) {
+        if let Some(mut call) = self.calls.get_mut(call_id) {
+            call.candidates = candidates;
+        }
+    }
+
+    /// Freezes ingress and pulse-rating facts selected before the call starts.
+    pub fn set_cdr_audit_context(
+        &self,
+        call_id: &CallId,
+        ingress_trunk_id: Option<String>,
+        billing_interval_secs: Option<u32>,
+        price_per_interval: Option<f64>,
+    ) {
+        if let Some(mut call) = self.calls.get_mut(call_id) {
+            if ingress_trunk_id.is_some() {
+                call.audit.ingress_trunk_id = ingress_trunk_id;
+            }
+            call.audit.billing_interval_secs = billing_interval_secs;
+            call.audit.price_per_interval = price_per_interval;
         }
     }
 
@@ -695,6 +788,13 @@ impl CallManager {
 
     /// Forcibly terminates a call with a specific failure reason.
     pub fn terminate_call_with_reason(&self, call_id: &str, reason: &str) {
+        self.try_terminate_call_with_reason(call_id, reason);
+    }
+
+    /// Forcibly terminates a call once and reports whether this invocation won the
+    /// termination race. Callers can use the return value to avoid duplicate
+    /// settlement when multiple lifecycle paths observe the same call ending.
+    pub fn try_terminate_call_with_reason(&self, call_id: &str, reason: &str) -> bool {
         let cid = crate::CallId::new(call_id.to_string());
         if let Some(mut call) = self.calls.get_mut(&cid) {
             let result = if call.answered_at.is_some() {
@@ -703,7 +803,7 @@ impl CallManager {
                 call.fail(None, reason.to_string())
             };
             if result.is_err() {
-                return;
+                return false;
             }
             if let Some(cdr) = crate::cdr::CallCdr::from_completed_call(&call) {
                 self.push_cdr(cdr);
@@ -720,7 +820,9 @@ impl CallManager {
                     leg: "a_leg".to_string(),
                 },
             );
+            return true;
         }
+        false
     }
 
     /// Returns the gateway_id of the currently selected route for a call, if any.

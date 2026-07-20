@@ -1,4 +1,4 @@
-use call_core::{Call, CallState, LegState};
+use call_core::{Call, CallCdr, CallDirection, CallState, CdrAuditSnapshot, LegState};
 use sip_core::{parse_message, SipMessage, SipUri};
 use std::str::FromStr;
 
@@ -11,6 +11,16 @@ fn creates_call_from_inbound_invite() {
     assert_eq!(call.state, CallState::Routing);
     assert_eq!(call.inbound.state, LegState::Inviting);
     assert!(call.outbound.is_none());
+    assert_eq!(call.direction, "outbound");
+}
+
+#[test]
+fn creates_call_with_trusted_inbound_direction() {
+    let request = invite_request();
+    let call = Call::from_inbound_invite_with_direction(&request, CallDirection::Inbound)
+        .expect("call should be created");
+
+    assert_eq!(call.direction, "inbound");
 }
 
 #[test]
@@ -76,6 +86,31 @@ fn established_call_can_terminate() {
     assert_eq!(call.state, CallState::Terminated);
     assert_eq!(call.inbound.state, LegState::Terminated);
     assert_eq!(call.outbound.unwrap().state, LegState::Terminated);
+}
+
+#[test]
+fn completed_cdr_preserves_frozen_audit_context() {
+    let mut call = routed_call();
+    call.audit = CdrAuditSnapshot {
+        source_type: Some("trunk".to_string()),
+        source_id: Some("access-a".to_string()),
+        ingress_trunk_id: Some("access-a".to_string()),
+        caller_mode: Some("virtual_pool".to_string()),
+        caller_pool_id: Some("pool-a".to_string()),
+        caller_selection: Some("round_robin".to_string()),
+        billing_interval_secs: Some(6),
+        price_per_interval: Some(0.05),
+        ..CdrAuditSnapshot::default()
+    };
+    call.billing_account = Some("account-a".to_string());
+    call.mark_answered().expect("call should be answered");
+    call.terminate().expect("call should terminate");
+
+    let cdr = CallCdr::from_completed_call(&call).expect("terminated call should create CDR");
+    assert_eq!(cdr.audit.source_id.as_deref(), Some("access-a"));
+    assert_eq!(cdr.audit.billing_account.as_deref(), Some("account-a"));
+    assert_eq!(cdr.audit.billing_interval_secs, Some(6));
+    assert_eq!(cdr.audit.price_per_interval, Some(0.05));
 }
 
 #[test]

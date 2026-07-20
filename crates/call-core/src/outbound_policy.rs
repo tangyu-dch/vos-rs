@@ -1,10 +1,12 @@
 use crate::pool_selection::PoolSelectionCursor;
 use crate::{
-    CallError, CallResult, CallerIdentity, CallerIdentityMode, CallerPoolStrategy, GatewayId,
-    SelectedRoute,
+    CallError, CallResult, CallerIdentity, CallerIdentityMode, CallerPoolStrategy,
+    CdrAuditSnapshot, GatewayId, SelectedRoute,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+type CallerIdentitySelections = Vec<(CallerIdentity, Vec<SelectedRoute>)>;
 
 /// Authenticated origin of an outbound call.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -50,6 +52,7 @@ pub struct RuntimeCallerPoolMember {
     pub number: String,
     pub priority: i32,
     pub weight: u32,
+    pub max_concurrent: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +65,7 @@ pub struct RuntimeEgressGroupMember {
 /// New source-owned outbound policy data, atomically refreshed with routes.
 #[derive(Debug, Clone, Default)]
 pub struct OutboundPolicyDirectory {
-    owners: HashMap<String, GatewayId>,
+    owners: HashMap<String, (GatewayId, u32)>,
     allocations: HashSet<(String, CallSource)>,
     policies: HashMap<CallSource, RuntimeSourcePolicy>,
     pools: HashMap<String, RuntimeCallerPool>,
@@ -71,8 +74,29 @@ pub struct OutboundPolicyDirectory {
 }
 
 impl OutboundPolicyDirectory {
+    /// Returns the policy metadata that must remain explainable after configuration changes.
+    pub fn audit_snapshot(&self, source: &CallSource) -> CdrAuditSnapshot {
+        let mut audit = CdrAuditSnapshot {
+            source_type: Some(source.source_type.clone()),
+            source_id: Some(source.source_id.clone()),
+            ingress_trunk_id: (source.source_type == "trunk").then(|| source.source_id.clone()),
+            ..CdrAuditSnapshot::default()
+        };
+        if let Some(policy) = self.policies.get(source) {
+            audit.caller_mode = Some(policy.caller_mode.clone());
+            audit.caller_pool_id.clone_from(&policy.caller_pool_id);
+            audit.caller_selection = policy
+                .caller_pool_id
+                .as_ref()
+                .and_then(|pool_id| self.pools.get(pool_id))
+                .map(|pool| pool_strategy_name(pool.strategy).to_string())
+                .or_else(|| Some(policy.caller_mode.clone()));
+        }
+        audit
+    }
+
     pub fn new(
-        owners: impl IntoIterator<Item = (String, String)>,
+        owners: impl IntoIterator<Item = (String, String, i32)>,
         allocations: impl IntoIterator<Item = (String, CallSource)>,
         policies: impl IntoIterator<Item = RuntimeSourcePolicy>,
         pools: impl IntoIterator<Item = RuntimeCallerPool>,
@@ -82,8 +106,16 @@ impl OutboundPolicyDirectory {
         directory.owners.extend(
             owners
                 .into_iter()
-                .filter(|(number, gateway)| !number.is_empty() && !gateway.is_empty())
-                .map(|(number, gateway)| (number, GatewayId::new(gateway))),
+                .filter(|(number, gateway, _)| !number.is_empty() && !gateway.is_empty())
+                .map(|(number, gateway, max_concurrent)| {
+                    (
+                        number,
+                        (
+                            GatewayId::new(gateway),
+                            u32::try_from(max_concurrent).unwrap_or(0),
+                        ),
+                    )
+                }),
         );
         directory.allocations.extend(allocations);
         directory.policies.extend(
@@ -135,6 +167,25 @@ impl OutboundPolicyDirectory {
         candidates: &[SelectedRoute],
         selection_key: &str,
     ) -> CallResult<Option<(CallerIdentity, Vec<SelectedRoute>)>> {
+        Ok(self
+            .resolve_with_alternatives(
+                source,
+                original_number,
+                destination,
+                candidates,
+                selection_key,
+            )?
+            .and_then(|mut selections| (!selections.is_empty()).then(|| selections.remove(0))))
+    }
+
+    pub(crate) fn resolve_with_alternatives(
+        &self,
+        source: &CallSource,
+        original_number: &str,
+        destination: &str,
+        candidates: &[SelectedRoute],
+        selection_key: &str,
+    ) -> CallResult<Option<CallerIdentitySelections>> {
         let Some(policy) = self.policies.get(source) else {
             return Ok(None);
         };
@@ -149,11 +200,11 @@ impl OutboundPolicyDirectory {
                 "source policy has no available termination gateway for destination".to_string(),
             ));
         }
-        let (number, mode) = match policy.caller_mode.as_str() {
+        let (numbers, mode) = match policy.caller_mode.as_str() {
             "strict_passthrough" => {
                 self.ensure_allocated(original_number, source)?;
                 (
-                    original_number.to_string(),
+                    vec![(original_number.to_string(), None)],
                     CallerIdentityMode::StrictPassthrough,
                 )
             }
@@ -164,10 +215,10 @@ impl OutboundPolicyDirectory {
                     )
                 })?;
                 self.ensure_allocated(number, source)?;
-                (number.to_string(), CallerIdentityMode::Fixed)
+                (vec![(number.to_string(), None)], CallerIdentityMode::Fixed)
             }
             "virtual_pool" => (
-                self.select_pool_number(policy, source, selection_key)?,
+                self.select_pool_numbers(policy, source, selection_key)?,
                 CallerIdentityMode::Random,
             ),
             other => {
@@ -176,34 +227,60 @@ impl OutboundPolicyDirectory {
                 )))
             }
         };
-        let owner_gateway_id = self.owners.get(&number).cloned().ok_or_else(|| {
-            CallError::CallerIdentityUnavailable(format!(
-                "caller number {number} has no owner egress trunk"
-            ))
-        })?;
+        let mut selections = Vec::with_capacity(numbers.len());
+        for (number, pool_capacity) in numbers {
+            selections.push(self.resolve_number(
+                original_number,
+                number,
+                mode,
+                pool_capacity,
+                &allowed_gateways,
+                &allowed_candidates,
+            )?);
+        }
+        Ok(Some(selections))
+    }
+
+    fn resolve_number(
+        &self,
+        original_number: &str,
+        number: String,
+        mode: CallerIdentityMode,
+        pool_capacity: Option<u32>,
+        allowed_gateways: &HashSet<GatewayId>,
+        allowed_candidates: &[SelectedRoute],
+    ) -> CallResult<(CallerIdentity, Vec<SelectedRoute>)> {
+        let (owner_gateway_id, inventory_capacity) =
+            self.owners.get(&number).cloned().ok_or_else(|| {
+                CallError::CallerIdentityUnavailable(format!(
+                    "caller number {number} has no owner egress trunk"
+                ))
+            })?;
         if !allowed_gateways.contains(&owner_gateway_id) {
             return Err(CallError::CallerIdentityUnavailable(format!(
                 "caller number {number} owner is outside source termination scope"
             )));
         }
         let owner_candidates = allowed_candidates
-            .into_iter()
+            .iter()
             .filter(|candidate| candidate.target.gateway_id == owner_gateway_id)
+            .cloned()
             .collect::<Vec<_>>();
         if owner_candidates.is_empty() {
             return Err(CallError::CallerIdentityUnavailable(format!(
                 "caller number {number} owner gateway is unavailable"
             )));
         }
-        Ok(Some((
+        Ok((
             CallerIdentity {
                 original_number: original_number.to_string(),
                 presented_number: number,
                 owner_gateway_id,
                 mode,
+                max_concurrent: effective_capacity(pool_capacity, inventory_capacity),
             },
             owner_candidates,
-        )))
+        ))
     }
 
     fn allowed_gateways(
@@ -243,12 +320,12 @@ impl OutboundPolicyDirectory {
         }
     }
 
-    fn select_pool_number(
+    fn select_pool_numbers(
         &self,
         policy: &RuntimeSourcePolicy,
         source: &CallSource,
         selection_key: &str,
-    ) -> CallResult<String> {
+    ) -> CallResult<Vec<(String, Option<u32>)>> {
         let pool_id = policy.caller_pool_id.as_deref().ok_or_else(|| {
             CallError::CallerIdentityUnavailable("source caller pool is missing".to_string())
         })?;
@@ -272,6 +349,7 @@ impl OutboundPolicyDirectory {
             .collect::<Vec<_>>();
         let mut eligible = eligible;
         eligible.sort_by(|left, right| left.number.cmp(&right.number));
+        eligible.dedup_by(|left, right| left.number == right.number);
         if eligible.is_empty() {
             return Err(CallError::CallerIdentityUnavailable(
                 "caller pool has no allocated member".to_string(),
@@ -289,6 +367,177 @@ impl OutboundPolicyDirectory {
             .ok_or_else(|| {
                 CallError::CallerIdentityUnavailable("caller pool selection failed".to_string())
             })?;
-        Ok(eligible[index].number.clone())
+        Ok((0..eligible.len())
+            .map(|offset| {
+                let member = eligible[(index + offset) % eligible.len()];
+                (member.number.clone(), Some(member.max_concurrent))
+            })
+            .collect())
+    }
+}
+
+fn effective_capacity(pool_capacity: Option<u32>, inventory_capacity: u32) -> u32 {
+    match (
+        pool_capacity.filter(|capacity| *capacity > 0),
+        inventory_capacity,
+    ) {
+        (Some(pool), inventory) if inventory > 0 => pool.min(inventory),
+        (Some(pool), _) => pool,
+        (None, inventory) => inventory,
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::effective_capacity;
+
+    #[test]
+    fn pool_capacity_cannot_exceed_inventory_capacity() {
+        assert_eq!(effective_capacity(Some(20), 10), 10);
+        assert_eq!(effective_capacity(Some(5), 10), 5);
+        assert_eq!(effective_capacity(Some(5), 0), 5);
+        assert_eq!(effective_capacity(Some(0), 10), 10);
+        assert_eq!(effective_capacity(None, 0), 0);
+    }
+}
+
+#[cfg(test)]
+mod pool_fallback_tests {
+    use super::*;
+    use crate::RouteTarget;
+    use sip_core::SipUri;
+    use std::str::FromStr;
+
+    fn candidate(gateway: &str) -> SelectedRoute {
+        SelectedRoute {
+            route_id: format!("route-{gateway}"),
+            target: RouteTarget::new(gateway, format!("{gateway}.example.com"), Some(5060)),
+            outbound_uri: SipUri::from_str(&format!("sip:callee@{gateway}.example.com"))
+                .expect("valid test URI"),
+        }
+    }
+
+    fn directory(members: Vec<RuntimeCallerPoolMember>) -> OutboundPolicyDirectory {
+        let source = CallSource::new("trunk", "access-a");
+        let allocations = ["10001", "10002", "10003"]
+            .into_iter()
+            .map(|number| (number.to_string(), source.clone()))
+            .collect::<Vec<_>>();
+        OutboundPolicyDirectory::new(
+            [
+                ("10001".to_string(), "egress-a".to_string(), 1),
+                ("10002".to_string(), "egress-b".to_string(), 1),
+                ("10003".to_string(), "egress-a".to_string(), 1),
+            ],
+            allocations,
+            [RuntimeSourcePolicy {
+                source: source.clone(),
+                caller_mode: "virtual_pool".to_string(),
+                fixed_number: None,
+                caller_pool_id: Some("pool-a".to_string()),
+                egress: RuntimeEgressPolicy::Group("group-a".to_string()),
+            }],
+            [RuntimeCallerPool {
+                id: "pool-a".to_string(),
+                owner: source,
+                strategy: CallerPoolStrategy::Priority,
+                members,
+            }],
+            [
+                RuntimeEgressGroupMember {
+                    group_id: "group-a".to_string(),
+                    gateway_id: "egress-a".to_string(),
+                    destination_prefix: String::new(),
+                },
+                RuntimeEgressGroupMember {
+                    group_id: "group-a".to_string(),
+                    gateway_id: "egress-b".to_string(),
+                    destination_prefix: String::new(),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn pool_fallback_keeps_each_number_pinned_to_its_owner_gateway() {
+        let directory = directory(vec![
+            RuntimeCallerPoolMember {
+                number: "10001".to_string(),
+                priority: 100,
+                weight: 1,
+                max_concurrent: 1,
+            },
+            RuntimeCallerPoolMember {
+                number: "10002".to_string(),
+                priority: 100,
+                weight: 1,
+                max_concurrent: 1,
+            },
+        ]);
+        let selections = directory
+            .resolve_with_alternatives(
+                &CallSource::new("trunk", "access-a"),
+                "original",
+                "callee",
+                &[candidate("egress-a"), candidate("egress-b")],
+                "call-a",
+            )
+            .expect("policy should resolve")
+            .expect("source has policy");
+
+        assert_eq!(selections.len(), 2);
+        assert_eq!(selections[0].0.presented_number, "10001");
+        assert_eq!(selections[0].0.owner_gateway_id.as_str(), "egress-a");
+        assert!(selections[0]
+            .1
+            .iter()
+            .all(|route| route.target.gateway_id == selections[0].0.owner_gateway_id));
+        assert_eq!(selections[1].0.presented_number, "10002");
+        assert_eq!(selections[1].0.owner_gateway_id.as_str(), "egress-b");
+        assert!(selections[1]
+            .1
+            .iter()
+            .all(|route| route.target.gateway_id == selections[1].0.owner_gateway_id));
+    }
+
+    #[test]
+    fn pool_fallback_does_not_cross_the_existing_priority_boundary() {
+        let directory = directory(vec![
+            RuntimeCallerPoolMember {
+                number: "10001".to_string(),
+                priority: 100,
+                weight: 1,
+                max_concurrent: 1,
+            },
+            RuntimeCallerPoolMember {
+                number: "10003".to_string(),
+                priority: 90,
+                weight: 1,
+                max_concurrent: 1,
+            },
+        ]);
+        let selections = directory
+            .resolve_with_alternatives(
+                &CallSource::new("trunk", "access-a"),
+                "original",
+                "callee",
+                &[candidate("egress-a"), candidate("egress-b")],
+                "call-a",
+            )
+            .expect("policy should resolve")
+            .expect("source has policy");
+
+        assert_eq!(selections.len(), 1);
+        assert_eq!(selections[0].0.presented_number, "10001");
+    }
+}
+
+fn pool_strategy_name(strategy: CallerPoolStrategy) -> &'static str {
+    match strategy {
+        CallerPoolStrategy::Random => "random",
+        CallerPoolStrategy::WeightedRandom => "weighted_random",
+        CallerPoolStrategy::RoundRobin => "round_robin",
+        CallerPoolStrategy::StableHash => "stable_hash",
+        CallerPoolStrategy::Priority => "priority",
     }
 }

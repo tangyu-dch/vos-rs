@@ -8,6 +8,8 @@ pub struct CallerIdentity {
     pub presented_number: String,
     pub owner_gateway_id: GatewayId,
     pub mode: CallerIdentityMode,
+    /// Maximum simultaneous calls allowed to present this number; zero is unlimited.
+    pub max_concurrent: u32,
 }
 
 /// Caller-number handling applied before an outbound INVITE is built.
@@ -22,17 +24,28 @@ pub enum CallerIdentityMode {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallerNumberDirectory {
     owners: HashMap<String, GatewayId>,
+    capacities: HashMap<String, u32>,
     numbers_by_gateway: HashMap<GatewayId, Vec<String>>,
 }
 
 impl CallerNumberDirectory {
     pub fn owns_number(&self, number: &str, gateway_id: &str) -> bool {
-        self.owners.get(number).is_some_and(|gid| gid.as_str() == gateway_id)
+        self.owners
+            .get(number)
+            .is_some_and(|gid| gid.as_str() == gateway_id)
     }
 
     pub fn new(entries: impl IntoIterator<Item = (String, String)>) -> Self {
+        Self::new_with_capacity(
+            entries
+                .into_iter()
+                .map(|(number, gateway)| (number, gateway, 0)),
+        )
+    }
+
+    pub fn new_with_capacity(entries: impl IntoIterator<Item = (String, String, u32)>) -> Self {
         let mut directory = Self::default();
-        for (number, gateway_id) in entries {
+        for (number, gateway_id, max_concurrent) in entries {
             let number = number.trim().to_string();
             let gateway_id = gateway_id.trim().to_string();
             if number.is_empty() || gateway_id.is_empty() || !valid_number(&number) {
@@ -40,6 +53,7 @@ impl CallerNumberDirectory {
             }
             let gateway_id = GatewayId::new(gateway_id);
             directory.owners.insert(number.clone(), gateway_id.clone());
+            directory.capacities.insert(number.clone(), max_concurrent);
             directory
                 .numbers_by_gateway
                 .entry(gateway_id)
@@ -122,6 +136,7 @@ impl CallerNumberDirectory {
             presented_number: presented_number.to_string(),
             owner_gateway_id,
             mode,
+            max_concurrent: self.capacities.get(presented_number).copied().unwrap_or(0),
         }))
     }
 
@@ -152,6 +167,7 @@ impl CallerNumberDirectory {
             presented_number: presented_number.clone(),
             owner_gateway_id: owner_gateway_id.clone(),
             mode: CallerIdentityMode::Random,
+            max_concurrent: self.capacities.get(presented_number).copied().unwrap_or(0),
         }))
     }
 }
@@ -202,7 +218,8 @@ mod tests {
 
     #[test]
     fn strict_passthrough_requires_an_owned_number() {
-        let directory = CallerNumberDirectory::new([("13800138000".into(), "gw1".into())]);
+        let directory =
+            CallerNumberDirectory::new_with_capacity([("13800138000".into(), "gw1".into(), 7)]);
         let resolved = directory
             .resolve(
                 Some("strict_passthrough"),
@@ -215,6 +232,7 @@ mod tests {
             .expect("policy should create identity");
         assert_eq!(resolved.presented_number, "13800138000");
         assert_eq!(resolved.owner_gateway_id.as_str(), "gw1");
+        assert_eq!(resolved.max_concurrent, 7);
 
         assert!(directory
             .resolve(

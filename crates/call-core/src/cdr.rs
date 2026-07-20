@@ -2,6 +2,26 @@ use crate::{Call, CallId, CallState, FailureCause};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
 
+/// Immutable routing and billing decisions captured when a call is established.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CdrAuditSnapshot {
+    pub source_type: Option<String>,
+    pub source_id: Option<String>,
+    pub billing_account: Option<String>,
+    pub original_caller: Option<String>,
+    pub presented_caller: Option<String>,
+    pub caller_mode: Option<String>,
+    pub caller_pool_id: Option<String>,
+    pub caller_selection: Option<String>,
+    pub ingress_trunk_id: Option<String>,
+    pub egress_trunk_id: Option<String>,
+    pub selected_route_id: Option<String>,
+    pub fallback_used: bool,
+    pub billing_interval_secs: Option<u32>,
+    pub price_per_interval: Option<f64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CdrStatus {
     Answered,
@@ -52,6 +72,7 @@ pub struct CallCdr {
     pub dtmf_digits: Option<String>,
     pub recording_path: Option<String>,
     pub direction: String,
+    pub audit: CdrAuditSnapshot,
 }
 
 impl CallCdr {
@@ -74,6 +95,21 @@ impl CallCdr {
         };
 
         let m = metrics.unwrap_or_default();
+
+        let selected_route = call.candidates.get(call.current_candidate_index);
+        let identity = call.caller_identity.as_ref();
+        let mut audit = call.audit.clone();
+        audit.billing_account.clone_from(&call.billing_account);
+        if let Some(identity) = identity {
+            audit.original_caller = Some(identity.original_number.clone());
+            audit.presented_caller = Some(identity.presented_number.clone());
+        }
+        audit.egress_trunk_id =
+            selected_route.map(|route| route.target.gateway_id.as_str().to_string());
+        audit.selected_route_id = selected_route.map(|route| route.route_id.clone());
+        audit.fallback_used = audit.fallback_used
+            || !call.outbound_history.is_empty()
+            || call.current_candidate_index > 0;
 
         Some(Self {
             call_id: call.id.clone(),
@@ -99,6 +135,7 @@ impl CallCdr {
             dtmf_digits,
             recording_path: call.recording_path.clone(),
             direction: call.direction.clone(),
+            audit,
         })
     }
 }
