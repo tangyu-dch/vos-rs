@@ -8,6 +8,8 @@ ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS supports_registration BOOLEAN 
 ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_auth_type VARCHAR(20) NOT NULL DEFAULT 'none';
 ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_username TEXT NOT NULL DEFAULT '';
 ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_password TEXT NOT NULL DEFAULT '';
+-- 主动注册尚未启用；旧版 reg_password 为明文字段，禁止继续保留凭据。
+UPDATE sip_gateways SET reg_password = '' WHERE reg_password <> '';
 ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS parent_gateway_id TEXT;
 ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS caller_id_mode VARCHAR(20) NOT NULL DEFAULT 'passthrough';
 ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS virtual_caller TEXT NOT NULL DEFAULT '';
