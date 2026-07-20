@@ -11,6 +11,7 @@ pub enum SdpError {
     MissingAudioRtpMedia,
     MissingCompatibleAudioCodec,
     MissingConnectionAddress,
+    TooLarge,
 }
 
 impl fmt::Display for SdpError {
@@ -27,6 +28,7 @@ impl fmt::Display for SdpError {
                 write!(f, "missing compatible audio codec in SDP")
             }
             Self::MissingConnectionAddress => write!(f, "missing SDP connection address"),
+            Self::TooLarge => write!(f, "SDP session description is too large"),
         }
     }
 }

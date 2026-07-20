@@ -275,8 +275,10 @@ impl SessionDescription {
         self.media
             .iter()
             .position(|media| {
-                media.media_type.eq_ignore_ascii_case("audio")
-                    && media.protocol.to_ascii_uppercase().contains("RTP")
+                (media.media_type.eq_ignore_ascii_case("audio")
+                    && media.protocol.to_ascii_uppercase().contains("RTP"))
+                || (media.media_type.eq_ignore_ascii_case("image")
+                    && media.protocol.to_ascii_uppercase().contains("UDPTL"))
             })
             .ok_or(SdpError::MissingAudioRtpMedia)
     }
@@ -375,6 +377,10 @@ impl FromStr for SessionDescription {
     type Err = SdpError;
 
     fn from_str(input: &str) -> SdpResult<Self> {
+        if input.len() > 4096 {
+            return Err(SdpError::TooLarge);
+        }
+
         let mut description = Self {
             lines: Vec::new(),
             session_connection: None,
@@ -489,32 +495,41 @@ fn parse_line(line: &str) -> SdpResult<(char, &str)> {
 }
 
 fn parse_connection_line(value: &str, line: &str) -> SdpResult<ConnectionAddress> {
-    let parts = value.split_whitespace().collect::<Vec<_>>();
-    if parts.len() != 3 {
+    let mut parts = value.split_whitespace();
+    let network_type = parts.next().ok_or_else(|| SdpError::InvalidConnectionLine(line.to_string()))?;
+    let address_type = parts.next().ok_or_else(|| SdpError::InvalidConnectionLine(line.to_string()))?;
+    let address = parts.next().ok_or_else(|| SdpError::InvalidConnectionLine(line.to_string()))?;
+    
+    if parts.next().is_some() {
         return Err(SdpError::InvalidConnectionLine(line.to_string()));
     }
 
-    Ok(ConnectionAddress::new(parts[0], parts[1], parts[2]))
+    Ok(ConnectionAddress::new(network_type, address_type, address))
 }
 
 fn parse_media_line(value: &str, line: &str, line_index: usize) -> SdpResult<MediaDescription> {
-    let parts = value.split_whitespace().collect::<Vec<_>>();
-    if parts.len() < 4 {
+    let mut parts = value.split_whitespace();
+    let media_type = parts.next().ok_or_else(|| SdpError::InvalidMediaLine(line.to_string()))?.to_string();
+    let port_str = parts.next().ok_or_else(|| SdpError::InvalidMediaLine(line.to_string()))?;
+    let protocol = parts.next().ok_or_else(|| SdpError::InvalidMediaLine(line.to_string()))?.to_string();
+
+    let port = port_str
+        .split_once('/')
+        .map(|(port, _)| port)
+        .unwrap_or(port_str)
+        .parse::<u16>()
+        .map_err(|_| SdpError::InvalidPort(port_str.to_string()))?;
+
+    let formats: Vec<String> = parts.map(|s| s.to_string()).collect();
+    if formats.is_empty() {
         return Err(SdpError::InvalidMediaLine(line.to_string()));
     }
 
-    let port = parts[1]
-        .split_once('/')
-        .map(|(port, _)| port)
-        .unwrap_or(parts[1])
-        .parse::<u16>()
-        .map_err(|_| SdpError::InvalidPort(parts[1].to_string()))?;
-
     Ok(MediaDescription {
-        media_type: parts[0].to_string(),
+        media_type,
         port,
-        protocol: parts[2].to_string(),
-        formats: parts[3..].iter().map(|value| value.to_string()).collect(),
+        protocol,
+        formats,
         connection_address: None,
         media_line_index: line_index,
         connection_line_index: None,
@@ -581,39 +596,48 @@ fn parse_ice_attribute(line: &str, parameters: &mut IceParameters) {
 
 fn parse_candidate_attribute(line: &str) -> Option<IceCandidate> {
     let value = line.strip_prefix("a=candidate:")?;
-    let parts = value.split_whitespace().collect::<Vec<_>>();
-    if parts.len() < 8 || parts[6] != "typ" {
+    let mut parts = value.split_whitespace();
+    
+    let foundation = parts.next()?.to_string();
+    let component = parts.next()?.parse().ok()?;
+    let transport = parts.next()?.to_ascii_lowercase();
+    let priority = parts.next()?.parse().ok()?;
+    let address = parts.next()?.to_string();
+    let port = parts.next()?.parse().ok()?;
+    
+    if parts.next()? != "typ" {
         return None;
     }
+    let candidate_type = parts.next()?.to_ascii_lowercase();
 
     let mut candidate = IceCandidate {
-        foundation: parts[0].to_string(),
-        component: parts[1].parse().ok()?,
-        transport: parts[2].to_ascii_lowercase(),
-        priority: parts[3].parse().ok()?,
-        address: parts[4].to_string(),
-        port: parts[5].parse().ok()?,
-        candidate_type: parts[7].to_ascii_lowercase(),
+        foundation,
+        component,
+        transport,
+        priority,
+        address,
+        port,
+        candidate_type,
         related_address: None,
         related_port: None,
         tcp_type: None,
     };
 
-    let mut index = 8;
-    while index < parts.len() {
-        match parts[index] {
+    while let Some(key) = parts.next() {
+        match key {
             "raddr" => {
-                candidate.related_address = parts.get(index + 1).map(|value| (*value).to_string())
+                candidate.related_address = parts.next().map(|v| v.to_string());
             }
             "rport" => {
-                candidate.related_port = parts.get(index + 1).and_then(|value| value.parse().ok())
+                candidate.related_port = parts.next().and_then(|v| v.parse().ok());
             }
             "tcptype" => {
-                candidate.tcp_type = parts.get(index + 1).map(|value| (*value).to_string())
+                candidate.tcp_type = parts.next().map(|v| v.to_string());
             }
-            _ => {}
+            _ => {
+                let _ = parts.next();
+            }
         }
-        index += 2;
     }
     Some(candidate)
 }
@@ -646,4 +670,16 @@ fn payload_attribute(line: &str) -> Option<&str> {
         .find_map(|prefix| line.strip_prefix(prefix))
         .and_then(|value| value.split_whitespace().next())
         .filter(|payload| *payload != "*")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sdp_too_large_returns_error() {
+        let large_sdp = "v=0\r\n".repeat(1000); // 7000 bytes
+        let result = SessionDescription::parse(&large_sdp);
+        assert_eq!(result.unwrap_err(), SdpError::TooLarge);
+    }
 }
