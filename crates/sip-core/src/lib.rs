@@ -21,3 +21,5 @@ pub type SipResponseBorrow<'a> = message::SipResponse<'a>;
 pub type SipMessageBorrow<'a> = message::SipMessage<'a>;
 
 pub use message::{parse_message, StartLine};
+pub mod zero_copy;
+pub use zero_copy::{ZeroCopyHeader, ZeroCopyRequestLine, ZeroCopySipMessage};
