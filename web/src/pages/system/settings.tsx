@@ -163,29 +163,28 @@ export function SettingsPage() {
           <Spinner color="primary" label="正在拉取核心节点参数..." />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full">
           {systemConfigGroups.map((group) => (
             <Card key={group.key} shadow="sm" className="p-2 w-full">
-              <CardBody className="p-5 flex flex-col gap-4">
-                <div className="border-b border-divider pb-3 flex items-center justify-between">
-                  <div>
-                    <h3 className="text-sm font-bold text-foreground">{group.label}</h3>
-                    <p className="text-tiny text-default-400 mt-0.5">{group.description}</p>
+              <CardBody className="p-4 flex flex-col gap-3">
+                <div className="border-b border-divider pb-2.5 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold text-foreground truncate">{group.label}</h3>
+                    <p className="text-tiny text-default-400 mt-0.5 truncate">{group.description}</p>
                   </div>
-                  <Chip size="sm" variant="bordered" className="text-default-500 text-tiny">
+                  <Chip size="sm" variant="bordered" className="text-default-500 text-tiny shrink-0">
                     {group.key.toUpperCase()}
                   </Chip>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {group.fields.map((field) => {
                     const value = configValues[field.key];
                     const enabled = String(value) === 'true' || value === true;
                     return (
-                      <div key={field.key} className={`flex flex-col gap-1.5 ${field.fullWidth ? 'md:col-span-2' : ''}`}>
-                        <div className="flex items-center justify-between text-small">
+                      <div key={field.key} className={`flex flex-col gap-1.5 ${field.fullWidth ? 'sm:col-span-2' : ''}`}>
+                        <div className="flex items-center justify-between gap-2 text-small">
                           <span className="font-semibold text-default-700">{field.label}</span>
-                          <span className="text-default-400 text-tiny font-mono">{field.key}</span>
                         </div>
 
                         {field.kind === 'boolean' ? (
