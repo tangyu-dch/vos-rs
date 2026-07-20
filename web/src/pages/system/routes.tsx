@@ -5,9 +5,10 @@ import { useMemo, useState } from 'react';
 import {
   Button, Chip, Input, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
 } from '@heroui/react';
-import { Send } from 'lucide-react';
+import { Send, Network } from 'lucide-react';
 import { api } from '@/services/client';
 import { ResourceWorkspace, FieldLabel } from '@/pages/shared/resource-workspace';
+import { VisualFlowEditor } from '@/components/VisualFlowEditor';
 import type { ResourceSpec } from '@/pages/shared/types';
 import type { Entity } from '@/services/resources';
 
@@ -28,6 +29,7 @@ export function RoutesPage() {
   }), []);
 
   const [simOpen, setSimOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [simLoading, setSimLoading] = useState(false);
   const [simDestination, setSimDestination] = useState('');
   const [simError, setSimError] = useState('');
@@ -52,14 +54,24 @@ export function RoutesPage() {
   return (
     <div className="relative">
       <ResourceWorkspace spec={routeSpec} />
-      <Button
-        color="primary"
-        className="fixed bottom-6 right-6 shadow-lg"
-        startContent={<Send className="w-4 h-4" />}
-        onPress={() => setSimOpen(true)}
-      >
-        路由仿真
-      </Button>
+      <div className="fixed bottom-6 right-6 flex items-center gap-3 z-20">
+        <Button
+          color="secondary"
+          className="shadow-lg font-bold text-white"
+          startContent={<Network className="w-4 h-4" />}
+          onPress={() => setEditorOpen(true)}
+        >
+          拖拽式可视化编排
+        </Button>
+        <Button
+          color="primary"
+          className="shadow-lg font-bold"
+          startContent={<Send className="w-4 h-4" />}
+          onPress={() => setSimOpen(true)}
+        >
+          路由仿真
+        </Button>
+      </div>
 
       <Modal isOpen={simOpen} onOpenChange={(o) => !o && setSimOpen(false)} size="lg">
         <ModalContent>
@@ -126,6 +138,11 @@ export function RoutesPage() {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      <VisualFlowEditor
+        isOpen={editorOpen}
+        onClose={() => setEditorOpen(false)}
+      />
     </div>
   );
 }

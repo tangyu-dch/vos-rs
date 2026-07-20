@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Button, Card, CardBody, Chip, Table, TableHeader, TableColumn, TableBody, TableRow, TableCell,
 } from '@heroui/react';
-import { RefreshCw, Eye, PhoneOff } from 'lucide-react';
+import { RefreshCw, Eye, PhoneOff, Activity } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/client';
 import { useAuth } from '@/auth/AuthContext';
@@ -13,6 +13,7 @@ import { canWriteDomain } from '@/services/auth';
 import type { Entity } from '@/services/resources';
 import { ErrorState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
+import { SipTraceModal } from '@/components/SipTraceModal';
 import {
   ConfirmDialog, usePageVisibility,
 } from '@/pages/shared/resource-workspace';
@@ -23,6 +24,7 @@ export function ActiveCallsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [confirmRow, setConfirmRow] = useState<Entity | null>(null);
+  const [traceCallId, setTraceCallId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const navigate = useNavigate();
   const { session } = useAuth();
@@ -110,6 +112,15 @@ export function ActiveCallsPage() {
                   <TableCell>{valueText(row.gateway)}</TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        startContent={<Activity className="w-3.5 h-3.5" />}
+                        onPress={() => setTraceCallId(String(entityId(row, 'call_id')))}
+                      >
+                        SIP 轨迹
+                      </Button>
                       <Button isIconOnly size="sm" variant="light" onPress={() => navigate(`/calls/${entityId(row, 'call_id')}`)}>
                         <Eye className="w-4 h-4 text-default-500" />
                       </Button>
@@ -143,6 +154,12 @@ export function ActiveCallsPage() {
           setConfirmRow(null);
         }}
         onClose={() => setConfirmRow(null)}
+      />
+
+      <SipTraceModal
+        isOpen={Boolean(traceCallId)}
+        onClose={() => setTraceCallId(null)}
+        callId={traceCallId || ''}
       />
     </Card>
   );
