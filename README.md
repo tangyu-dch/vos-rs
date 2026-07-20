@@ -658,6 +658,14 @@ curl http://localhost:8080/manage/calls/<call_id>/status
 - ✅ **多租户月度账单凭证导出 (`AccountsPage`)**：**提供一键生成导出印章级企业月度账单 (JSON/CSV) 凭证通道**
 - ✅ **代码质量**：Rust 全 Workspace **0 Warnings 零告警**、450+ 单元/集成测试 100% PASS
 
+### v2.0（未来前瞻规划 - AI-Native 智能语音算网一体化平台）
+
+- 🚀 **AI-Native 端到端音频 Token 零中转管道 (Native Audio LLM Direct Pipeline)**：免除 STT/TTS 文本中转，原生 RTP 数据包直接直连 GPT-4o Realtime / Gemini Live，实现 < 120ms 超人类感知实时双向打断对话
+- 🚀 **eBPF + XDP 电信级内核旁路网卡驱动 (XDP Media Engine)**：通过 Linux eBPF/XDP 零拷贝在网卡层直接解包转发 RTP/SRTP，挑战单机 5000+ CPS 与 10 万路并发转发
+- 🚀 **AI 驱动的实时防诈骗与深伪声纹识别 (Voice Anti-Fraud & Deepfake Detection)**：流式提取 ECAPA-TDNN 声纹特征，毫秒级识别 AI 伪造声音 (Deepfake Voice) 并触发信令级防欺诈硬断开
+- 🚀 **全球 Anycast 边缘 Mesh 智能叠加网络 (Global Edge Mesh Routing)**：基于 QUIC/WebTransport 构建全球跨洲际节点，保证跨国 Call Center 丢包率 < 0.1% 与毫秒级自适应选路
+- 🚀 **大模型驱动的自然语言智能运维与自愈 (LLM Telecom Copilot & Self-Healing)**：自然语言提问自动聚合 SIP 梯形图、QoS 指标与日志，生成根因分析并自动下发容灾切流策略
+
 ---
 
 ## ❓ FAQ
