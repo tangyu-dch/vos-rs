@@ -127,4 +127,26 @@ test";
         assert_eq!(msg.header_value("from"), Some("<sip:1000@192.168.1.1>;tag=abc"));
         assert_eq!(msg.body, b"test");
     }
+
+    #[test]
+    fn test_zero_copy_parse_response() {
+        let raw = b"SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP 192.168.1.5:5060\r\n\
+CSeq: 1 INVITE\r\n\
+Server: vos-rs-v1\r\n\
+\r\n";
+
+        let msg = ZeroCopySipMessage::parse(raw).unwrap();
+        assert_eq!(msg.status_code, Some(200));
+        assert_eq!(msg.reason_phrase, Some("OK"));
+        assert_eq!(msg.header_value("CSeq"), Some("1 INVITE"));
+        assert_eq!(msg.header_value("SERVER"), Some("vos-rs-v1"));
+        assert!(msg.body.is_empty());
+    }
+
+    #[test]
+    fn test_zero_copy_invalid_utf8_returns_error() {
+        let raw = &[0xff, 0xfe, 0xfd];
+        assert!(ZeroCopySipMessage::parse(raw).is_err());
+    }
 }

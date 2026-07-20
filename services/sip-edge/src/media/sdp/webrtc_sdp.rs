@@ -112,4 +112,13 @@ mod tests {
         assert!(sip_sdp.contains("RTP/AVP"));
         assert!(sip_sdp.contains("opus/48000/2"));
     }
+
+    #[test]
+    fn test_convert_sip_answer_to_webrtc() {
+        let sip = "v=0\r\no=- 100 200 IN IP4 192.168.1.10\r\nc=IN IP4 192.168.1.10\r\nm=audio 5000 RTP/AVP 0 8\r\n";
+        let webrtc_sdp = convert_sip_answer_to_webrtc(sip, "ufrag123", "pwd456", "sha-256 AA:BB").unwrap();
+        assert!(webrtc_sdp.contains("UDP/TLS/RTP/SAVPF"));
+        assert!(webrtc_sdp.contains("a=ice-ufrag:ufrag123"));
+        assert!(webrtc_sdp.contains("a=fingerprint:sha-256 AA:BB"));
+    }
 }

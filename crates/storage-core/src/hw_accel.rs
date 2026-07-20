@@ -64,4 +64,15 @@ mod tests {
         let encoded = encoder.encode_pcm(&pcm, 8000, 1).unwrap();
         assert_eq!(encoded.len(), 6);
     }
+
+    #[test]
+    fn test_hw_accel_error_display() {
+        let err1 = HwAccelError::DeviceNotFound("cuda:0".into());
+        let err2 = HwAccelError::CodecUnsupported("h265".into());
+        let err3 = HwAccelError::ExecutionFailed("out of memory".into());
+
+        assert!(err1.to_string().contains("cuda:0"));
+        assert!(err2.to_string().contains("h265"));
+        assert!(err3.to_string().contains("out of memory"));
+    }
 }
