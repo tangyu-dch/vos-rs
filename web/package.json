@@ -11,12 +11,19 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@arco-design/web-react": "^2.62.0",
+    "@heroui/react": "^2.8.0",
+    "@tailwindcss/postcss": "^4.3.3",
+    "autoprefixer": "^10.5.4",
     "axios": "^1.7.2",
     "echarts": "^5.5.1",
+    "framer-motion": "^12.42.2",
+    "lucide-react": "^1.25.0",
+    "postcss": "^8.5.20",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.25.1"
+    "react-router-dom": "^6.25.1",
+    "sonner": "^1.7.4",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -6,14 +6,13 @@ const THEME_STORAGE_KEY = 'vos-theme';
 
 function readStoredTheme(): Theme {
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return stored === 'light' || stored === 'dark' ? stored : 'dark';
+  return stored === 'light' || stored === 'dark' ? stored : 'light';
 }
 
 function applyTheme(theme: Theme): void {
   const root = document.documentElement;
-  root.dataset.theme = theme;
-  // Arco Design React 的暗色变量由 html 的 arco-theme="dark" 选择器驱动。
-  root.setAttribute('arco-theme', theme);
+  // HeroUI 通过 <html class="dark"> 切换暗色主题
+  root.classList.toggle('dark', theme === 'dark');
   root.style.colorScheme = theme;
   window.localStorage.setItem(THEME_STORAGE_KEY, theme);
 }
@@ -21,13 +20,14 @@ function applyTheme(theme: Theme): void {
 interface ThemeContextValue {
   theme: Theme;
   toggleTheme: () => void;
+  setTheme: (theme: Theme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-/** 全局主题状态，统一登录页、管理布局和 Arco 组件的主题来源。 */
+/** 全局主题状态，统一登录页、管理布局和 HeroUI 组件的主题来源。 */
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(readStoredTheme);
+  const [theme, setThemeState] = useState<Theme>(readStoredTheme);
 
   useEffect(() => {
     applyTheme(theme);
@@ -36,7 +36,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       theme,
-      toggleTheme: () => setTheme((current) => (current === 'dark' ? 'light' : 'dark')),
+      toggleTheme: () => setThemeState((current) => (current === 'dark' ? 'light' : 'dark')),
+      setTheme: setThemeState,
     }),
     [theme],
   );
