@@ -99,6 +99,7 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
     r#"CREATE TABLE IF NOT EXISTS egress_groups (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -155,9 +156,15 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_egress_endpoints_trunk ON egress_endpoints (trunk_id)",
     "CREATE INDEX IF NOT EXISTS idx_number_owner ON number_inventory (owner_egress_trunk_id)",
     "CREATE INDEX IF NOT EXISTS idx_number_allocations_source ON number_allocations (source_type, source_id)",
+    r#"INSERT INTO number_allocations(number,source_type,source_id,enabled)
+        SELECT number,'extension',username,TRUE FROM number_inventory
+        WHERE username IS NOT NULL AND BTRIM(username) <> ''
+          AND NOT EXISTS (SELECT 1 FROM number_allocations a WHERE a.number=number_inventory.number AND a.enabled)
+        ON CONFLICT (number,source_type,source_id) DO NOTHING"#,
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_number_allocations_one_active ON number_allocations (number) WHERE enabled",
     "CREATE INDEX IF NOT EXISTS idx_caller_pool_members_pool ON caller_pool_members (pool_id)",
     "CREATE INDEX IF NOT EXISTS idx_egress_group_members_group ON egress_group_members (group_id)",
+    "ALTER TABLE egress_groups ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''",
     r#"DO $$ BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_source_policy_caller_fields') THEN
             ALTER TABLE source_outbound_policies ADD CONSTRAINT chk_source_policy_caller_fields CHECK (
@@ -173,6 +180,56 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
             ) NOT VALID;
         END IF;
     END $$"#,
+    r#"CREATE TABLE IF NOT EXISTS extension_groups (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        description TEXT DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"#,
+    r#"CREATE TABLE IF NOT EXISTS extension_group_members (
+        group_id VARCHAR(50) REFERENCES extension_groups(id) ON DELETE CASCADE,
+        username VARCHAR(50) REFERENCES sip_users(username) ON DELETE CASCADE,
+        PRIMARY KEY (group_id, username)
+    )"#,
+    r#"CREATE TABLE IF NOT EXISTS ivr_menus (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        welcome_prompt VARCHAR(255) NOT NULL DEFAULT 'welcome.wav',
+        timeout_secs INTEGER NOT NULL DEFAULT 10,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"#,
+    r#"CREATE TABLE IF NOT EXISTS ivr_actions (
+        ivr_id VARCHAR(50) REFERENCES ivr_menus(id) ON DELETE CASCADE,
+        dtmf_key VARCHAR(5) NOT NULL,
+        action_type VARCHAR(20) NOT NULL,
+        action_target VARCHAR(100) NOT NULL,
+        waiting_prompt VARCHAR(255),
+        webhook_method VARCHAR(10),
+        PRIMARY KEY (ivr_id, dtmf_key)
+    )"#,
+    r#"ALTER TABLE ivr_actions ADD COLUMN IF NOT EXISTS waiting_prompt VARCHAR(255)"#,
+    r#"ALTER TABLE ivr_actions ADD COLUMN IF NOT EXISTS webhook_method VARCHAR(10)"#,
+    r#"CREATE TABLE IF NOT EXISTS call_queues (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        strategy VARCHAR(30) NOT NULL DEFAULT 'longest_idle',
+        moh_file VARCHAR(255) NOT NULL DEFAULT 'moh.wav',
+        max_wait_secs INTEGER NOT NULL DEFAULT 300,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"#,
+    r#"CREATE TABLE IF NOT EXISTS call_agents (
+        agent_id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        extension VARCHAR(50) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'idle',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"#,
+    r#"CREATE TABLE IF NOT EXISTS queue_agents (
+        queue_id VARCHAR(50) REFERENCES call_queues(id) ON DELETE CASCADE,
+        agent_id VARCHAR(50) REFERENCES call_agents(agent_id) ON DELETE CASCADE,
+        penalty INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (queue_id, agent_id)
+    )"#,
 ];
 
 #[cfg(test)]

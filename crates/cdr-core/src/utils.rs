@@ -78,6 +78,9 @@ pub(crate) fn cdr_event_from_row(row: &sqlx::postgres::PgRow) -> crate::models::
         dtmf_digits: row.get(18),
         recording_path: row.get(19),
         direction: row.get(20),
+        audit: row
+            .get::<sqlx::types::Json<call_core::CdrAuditSnapshot>, _>(21)
+            .0,
     }
 }
 

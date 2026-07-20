@@ -204,29 +204,29 @@ impl PostgresCdrStore {
         let cap_val = gw.max_capacity.map(|c| c as i32);
         sqlx::query(
             "INSERT INTO sip_gateways (id, host, port, transport, max_capacity, gateway_type, role, access_auth_mode, access_username, access_realm, access_password_hash, prefix_rules, supports_registration, reg_auth_type, reg_username, reg_password, parent_gateway_id, caller_id_mode, virtual_caller, max_concurrent, account_id, enabled) \
-             VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'peer'), COALESCE($7, 'egress'), COALESCE($8, 'none'), COALESCE($9, ''), COALESCE($10, ''), COALESCE($11, ''), COALESCE($12, ''), COALESCE($13, FALSE), COALESCE($14, 'none'), COALESCE($15, ''), COALESCE($16, ''), $17, COALESCE($18, 'passthrough'), COALESCE($19, ''), COALESCE($20, 100), $21, COALESCE($22, TRUE)) \
-             ON CONFLICT (id) DO UPDATE \
-             SET host = EXCLUDED.host, \
-                 port = EXCLUDED.port, \
-                 transport = EXCLUDED.transport, \
-                 max_capacity = EXCLUDED.max_capacity, \
-                 gateway_type = EXCLUDED.gateway_type, \
-                 role = EXCLUDED.role, \
-                 access_auth_mode = EXCLUDED.access_auth_mode, \
-                 access_username = EXCLUDED.access_username, \
-                 access_realm = EXCLUDED.access_realm, \
-                 access_password_hash = COALESCE($11, sip_gateways.access_password_hash), \
-                 prefix_rules = EXCLUDED.prefix_rules, \
-                 supports_registration = EXCLUDED.supports_registration, \
-                 reg_auth_type = EXCLUDED.reg_auth_type, \
-                 reg_username = EXCLUDED.reg_username, \
-                 reg_password = COALESCE($16, sip_gateways.reg_password), \
-                 parent_gateway_id = EXCLUDED.parent_gateway_id, \
-                 caller_id_mode = EXCLUDED.caller_id_mode, \
-                 virtual_caller = EXCLUDED.virtual_caller, \
-                 max_concurrent = EXCLUDED.max_concurrent, \
-                 account_id = EXCLUDED.account_id, \
-                 enabled = EXCLUDED.enabled"
+              VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'peer'), COALESCE($7, 'egress'), COALESCE($8, 'none'), COALESCE($9, ''), COALESCE($10, ''), COALESCE($11, ''), COALESCE($12, ''), COALESCE($13, FALSE), COALESCE($14, 'none'), COALESCE($15, ''), COALESCE($22, ''), $16, COALESCE($17, 'passthrough'), COALESCE($18, ''), COALESCE($19, 100), $20, COALESCE($21, TRUE)) \
+              ON CONFLICT (id) DO UPDATE \
+              SET host = EXCLUDED.host, \
+                  port = EXCLUDED.port, \
+                  transport = EXCLUDED.transport, \
+                  max_capacity = EXCLUDED.max_capacity, \
+                  gateway_type = EXCLUDED.gateway_type, \
+                  role = EXCLUDED.role, \
+                  access_auth_mode = EXCLUDED.access_auth_mode, \
+                  access_username = EXCLUDED.access_username, \
+                  access_realm = EXCLUDED.access_realm, \
+                  access_password_hash = COALESCE($11, sip_gateways.access_password_hash), \
+                  prefix_rules = EXCLUDED.prefix_rules, \
+                  supports_registration = EXCLUDED.supports_registration, \
+                  reg_auth_type = EXCLUDED.reg_auth_type, \
+                  reg_username = EXCLUDED.reg_username, \
+                  reg_password = COALESCE($22, sip_gateways.reg_password), \
+                  parent_gateway_id = EXCLUDED.parent_gateway_id, \
+                  caller_id_mode = EXCLUDED.caller_id_mode, \
+                  virtual_caller = EXCLUDED.virtual_caller, \
+                  max_concurrent = EXCLUDED.max_concurrent, \
+                  account_id = EXCLUDED.account_id, \
+                  enabled = EXCLUDED.enabled"
         )
         .bind(&gw.id)
         .bind(&gw.host)
@@ -243,13 +243,13 @@ impl PostgresCdrStore {
         .bind(gw.supports_registration)
         .bind(&gw.reg_auth_type)
         .bind(&gw.reg_username)
-        .bind(&gw.reg_password)
         .bind(&gw.parent_gateway_id)
         .bind(&gw.caller_id_mode)
         .bind(&gw.virtual_caller)
         .bind(gw.max_concurrent)
         .bind(gw.account_id)
         .bind(gw.enabled)
+        .bind(&gw.reg_password)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -370,7 +370,11 @@ impl PostgresCdrStore {
     }
 
     /// 返回网关总数。
-    pub async fn count_gateways(&self, gateway_type: Option<&str>, role: Option<&str>) -> Result<i64, sqlx::Error> {
+    pub async fn count_gateways(
+        &self,
+        gateway_type: Option<&str>,
+        role: Option<&str>,
+    ) -> Result<i64, sqlx::Error> {
         let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM sip_gateways WHERE ($1::TEXT IS NULL OR gateway_type = $1) AND ($2::TEXT IS NULL OR role = $2)",
         )
@@ -387,5 +391,48 @@ impl PostgresCdrStore {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    /// 加载需要主动向运营商注册的网关（中继）配置。
+    pub async fn load_outbound_registrations(
+        &self,
+    ) -> Result<
+        Vec<(
+            String, // id
+            String, // host
+            Option<u16>, // port
+            String, // transport
+            String, // reg_auth_type
+            String, // reg_username
+            String, // reg_password
+        )>,
+        sqlx::Error,
+    > {
+        let rows = sqlx::query(
+            "SELECT id, host, port, transport, reg_auth_type, reg_username, reg_password \
+             FROM sip_gateways WHERE enabled = TRUE AND reg_auth_type <> 'none'",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut list = Vec::new();
+        for row in rows {
+            let id: String = row.get(0);
+            let host: String = row.get(1);
+            let port: Option<i32> = row.get(2);
+            let transport: String = row.get(3);
+            let reg_auth_type: String = row.get(4);
+            let reg_username: String = row.get(5);
+            let reg_password: String = row.get(6);
+            list.push((
+                id,
+                host,
+                port.map(|p| p as u16),
+                transport,
+                reg_auth_type,
+                reg_username,
+                reg_password,
+            ));
+        }
+        Ok(list)
     }
 }

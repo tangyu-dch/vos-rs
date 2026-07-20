@@ -62,6 +62,7 @@ pub struct CallerPoolMember {
 pub struct EgressGroup {
     pub id: String,
     pub name: String,
+    pub description: String,
     pub enabled: bool,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,

@@ -44,9 +44,13 @@ CREATE TABLE IF NOT EXISTS call_cdrs (
     dtmf_digits TEXT,
     recording_path TEXT,
     direction VARCHAR(10) DEFAULT 'outbound',
+    audit JSONB NOT NULL DEFAULT '{}'::jsonb,
     inserted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
+
+pub(super) const MIGRATE_CDR_AUDIT_SQL: &str =
+    "ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS audit JSONB NOT NULL DEFAULT '{}'::jsonb";
 
 pub(super) const CREATE_CALL_ID_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_call_cdrs_call_id ON call_cdrs (call_id)";
@@ -114,6 +118,8 @@ pub(super) const MIGRATE_SIP_GATEWAYS_SQL: &[&str] = &[
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_auth_type VARCHAR(20) NOT NULL DEFAULT 'none'",
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_username TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS reg_password TEXT NOT NULL DEFAULT ''",
+    // 旧版曾将上游注册密码写入该字段。主动注册尚未启用，迁移时清除明文凭据。
+    "UPDATE sip_gateways SET reg_password = '' WHERE reg_password <> ''",
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS parent_gateway_id TEXT",
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS caller_id_mode VARCHAR(20) NOT NULL DEFAULT 'passthrough'",
     "ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS virtual_caller TEXT NOT NULL DEFAULT ''",
@@ -479,15 +485,16 @@ pub(super) const CREATE_AUDIT_LOGS_INDEX_SQL: &str =
 
 pub(super) const CREATE_SIP_FLOWS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS sip_flows (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL,
     call_id TEXT NOT NULL,
     method TEXT NOT NULL,
     direction TEXT NOT NULL,
     from_addr TEXT NOT NULL,
     to_addr TEXT NOT NULL,
     raw_message TEXT NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
-)
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (id, timestamp)
+) PARTITION BY RANGE (timestamp)
 "#;
 
 pub(super) const CREATE_SIP_FLOWS_CALL_ID_INDEX_SQL: &str =

@@ -20,7 +20,7 @@
 //! - 字段使用 snake_case
 //! - 数据库表名使用 snake_case + 复数
 
-use call_core::CallCdr;
+use call_core::{CallCdr, CdrAuditSnapshot};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use time::OffsetDateTime;
@@ -75,6 +75,9 @@ pub struct CdrEvent {
     pub dtmf_digits: Option<String>,
     pub recording_path: Option<String>,
     pub direction: String,
+    /// Frozen source, routing, caller identity, and pulse-rating decisions.
+    #[serde(default)]
+    pub audit: CdrAuditSnapshot,
 }
 
 impl CdrEvent {
@@ -104,6 +107,7 @@ impl CdrEvent {
             dtmf_digits: cdr.dtmf_digits.clone(),
             recording_path: cdr.recording_path.clone(),
             direction: cdr.direction.clone(),
+            audit: cdr.audit.clone(),
         }
     }
 
@@ -249,7 +253,8 @@ pub struct SipGateway {
     pub reg_auth_type: Option<String>,
     /// 注册用户名
     pub reg_username: Option<String>,
-    /// 注册密码
+    /// 历史注册密码字段，仅为旧数据库结构兼容，禁止序列化或写入明文。
+    #[serde(skip_serializing)]
     pub reg_password: Option<String>,
     /// 父网关 ID（用于级联）
     pub parent_gateway_id: Option<String>,
@@ -386,6 +391,10 @@ pub struct ReconcileResult {
 pub struct NumberInventory {
     pub number: String,
     pub username: Option<String>,
+    /// 当前有效的使用授权类型。
+    pub allocation_source_type: Option<String>,
+    /// 当前有效的使用授权对象。
+    pub allocation_source_id: Option<String>,
     pub gateway_id: Option<String>,
     /// 唯一物理归属的落地中继。
     pub owner_egress_trunk_id: Option<String>,

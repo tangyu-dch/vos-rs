@@ -76,6 +76,9 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_CDR_TABLE_SQL)
             .execute(&self.pool)
             .await?;
+        sqlx::query(MIGRATE_CDR_AUDIT_SQL)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(CREATE_CALL_ID_INDEX_SQL)
             .execute(&self.pool)
             .await?;
@@ -265,6 +268,24 @@ impl PostgresCdrStore {
         sqlx::query(SEED_SYSTEM_CONFIGS_SQL)
             .execute(&self.pool)
             .await?;
+        // 兼容处理：检查是否存在旧的非分区 sip_flows 表，若存在则重命名为 sip_flows_old
+        if let Ok(Some(relkind)) = sqlx::query_scalar::<_, String>(
+            "SELECT relkind::text FROM pg_class WHERE relname = 'sip_flows'"
+        )
+        .fetch_optional(&self.pool)
+        .await
+        {
+            if relkind == "r" {
+                tracing::info!("Found old non-partitioned sip_flows table. Renaming it to sip_flows_old.");
+                let _ = sqlx::query("DROP TABLE IF EXISTS sip_flows_old CASCADE")
+                    .execute(&self.pool)
+                    .await;
+                let _ = sqlx::query("ALTER TABLE sip_flows RENAME TO sip_flows_old")
+                    .execute(&self.pool)
+                    .await;
+            }
+        }
+
         sqlx::query(CREATE_SIP_FLOWS_TABLE_SQL)
             .execute(&self.pool)
             .await?;
@@ -350,10 +371,33 @@ mod tests {
             dtmf_digits: None,
             recording_path: None,
             direction: "outbound".to_string(),
+            audit: call_core::CdrAuditSnapshot {
+                source_type: Some("trunk".to_string()),
+                source_id: Some("access-a".to_string()),
+                billing_account: Some("account-a".to_string()),
+                billing_interval_secs: Some(6),
+                price_per_interval: Some(0.05),
+                ..call_core::CdrAuditSnapshot::default()
+            },
         };
         let json = event.to_json_bytes();
-        let decoded = CdrEvent::from_json_slice(&json).unwrap();
+        let decoded = CdrEvent::from_json_slice(&json).expect("failed to decode json");
         assert_eq!(event, decoded);
+    }
+
+    #[test]
+    fn test_legacy_cdr_event_defaults_missing_audit_snapshot() {
+        let payload = br#"{
+            "call_id":"legacy","caller":null,"callee":null,
+            "started_at_ms":1,"answered_at_ms":null,"ended_at_ms":2,
+            "duration_ms":1,"billable_duration_ms":0,"status":"failed",
+            "failure_status_code":null,"failure_reason":null,
+            "caller_rtcp_loss_rate":null,"caller_rtcp_jitter_ms":null,"caller_rtcp_rtt_ms":null,
+            "gateway_rtcp_loss_rate":null,"gateway_rtcp_jitter_ms":null,"gateway_rtcp_rtt_ms":null,
+            "mos":null,"dtmf_digits":null,"recording_path":null,"direction":"outbound"
+        }"#;
+        let decoded = CdrEvent::from_json_slice(payload).expect("legacy CDR must remain readable");
+        assert_eq!(decoded.audit, call_core::CdrAuditSnapshot::default());
     }
 
     #[test]

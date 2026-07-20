@@ -17,8 +17,8 @@ impl PostgresCdrStore {
                 duration_ms, billable_duration_ms, status, failure_status_code, failure_reason,
                 caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms,
                 gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
-                mos, dtmf_digits, recording_path, direction
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+                mos, dtmf_digits, recording_path, direction, audit
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
             ON CONFLICT (call_id) DO NOTHING
             "#,
         )
@@ -43,6 +43,7 @@ impl PostgresCdrStore {
         .bind(&event.dtmf_digits)
         .bind(&event.recording_path)
         .bind(&event.direction)
+        .bind(sqlx::types::Json(&event.audit))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -74,6 +75,7 @@ impl PostgresCdrStore {
         let mut dtmf_digits_list = Vec::with_capacity(events.len());
         let mut recording_paths = Vec::with_capacity(events.len());
         let mut directions = Vec::with_capacity(events.len());
+        let mut audits = Vec::with_capacity(events.len());
 
         for event in events {
             call_ids.push(event.call_id.clone());
@@ -97,6 +99,7 @@ impl PostgresCdrStore {
             dtmf_digits_list.push(event.dtmf_digits.clone());
             recording_paths.push(event.recording_path.clone());
             directions.push(event.direction.clone());
+            audits.push(sqlx::types::Json(event.audit.clone()));
         }
 
         sqlx::query(
@@ -106,14 +109,14 @@ impl PostgresCdrStore {
                 duration_ms, billable_duration_ms, status, failure_status_code, failure_reason,
                 caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms,
                 gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
-                mos, dtmf_digits, recording_path, direction
+                mos, dtmf_digits, recording_path, direction, audit
             )
             SELECT * FROM UNNEST(
                 $1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::timestamptz[], $6::timestamptz[],
                 $7::int8[], $8::int8[], $9::text[], $10::int4[], $11::text[],
                 $12::float8[], $13::float8[], $14::int4[],
                 $15::float8[], $16::float8[], $17::int4[],
-                $18::float8[], $19::text[], $20::text[], $21::text[]
+                $18::float8[], $19::text[], $20::text[], $21::text[], $22::jsonb[]
             )
             ON CONFLICT (call_id) DO NOTHING
             "#
@@ -139,6 +142,7 @@ impl PostgresCdrStore {
         .bind(&dtmf_digits_list)
         .bind(&recording_paths)
         .bind(&directions)
+        .bind(&audits)
         .execute(&self.pool)
         .await?;
 
@@ -197,6 +201,7 @@ impl PostgresCdrStore {
         callee: Option<&str>,
         start: Option<OffsetDateTime>,
         end: Option<OffsetDateTime>,
+        before_id: Option<i64>,
     ) -> Result<(Vec<CdrEvent>, i64), sqlx::Error> {
         let offset = (page - 1) * page_size;
         let rows = sqlx::query(
@@ -204,7 +209,7 @@ impl PostgresCdrStore {
               duration_ms, billable_duration_ms, status, failure_status_code, failure_reason, \
               caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms, \
               gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms, \
-              mos, dtmf_digits, recording_path, direction \
+              mos, dtmf_digits, recording_path, direction, audit \
               FROM call_cdrs \
               WHERE ($1::text IS NULL OR status = $1) \
                 AND ($2::text IS NULL OR call_id LIKE '%' || $2 || '%') \
@@ -212,8 +217,9 @@ impl PostgresCdrStore {
                 AND ($4::text IS NULL OR callee LIKE '%' || $4 || '%') \
                 AND ($5::timestamptz IS NULL OR started_at >= $5) \
                 AND ($6::timestamptz IS NULL OR started_at <= $6) \
-              ORDER BY started_at DESC \
-              LIMIT $7 OFFSET $8",
+                AND ($7::int8 IS NULL OR id < $7) \
+              ORDER BY started_at DESC, id DESC \
+              LIMIT $8 OFFSET $9",
         )
         .bind(status)
         .bind(call_id)
@@ -221,6 +227,7 @@ impl PostgresCdrStore {
         .bind(callee)
         .bind(start)
         .bind(end)
+        .bind(before_id)
         .bind(page_size)
         .bind(offset)
         .fetch_all(&self.pool)
@@ -233,7 +240,8 @@ impl PostgresCdrStore {
                 AND ($3::text IS NULL OR caller LIKE '%' || $3 || '%') \
                 AND ($4::text IS NULL OR callee LIKE '%' || $4 || '%') \
                 AND ($5::timestamptz IS NULL OR started_at >= $5) \
-                AND ($6::timestamptz IS NULL OR started_at <= $6)",
+                AND ($6::timestamptz IS NULL OR started_at <= $6) \
+                AND ($7::int8 IS NULL OR id < $7)",
         )
         .bind(status)
         .bind(call_id)
@@ -241,6 +249,7 @@ impl PostgresCdrStore {
         .bind(callee)
         .bind(start)
         .bind(end)
+        .bind(before_id)
         .fetch_one(&self.pool)
         .await?;
 
@@ -255,7 +264,7 @@ impl PostgresCdrStore {
               duration_ms, billable_duration_ms, status, failure_status_code, failure_reason, \
               caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms, \
               gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms, \
-              mos, dtmf_digits, recording_path, direction \
+              mos, dtmf_digits, recording_path, direction, audit \
               FROM call_cdrs WHERE call_id = $1",
         )
         .bind(call_id)

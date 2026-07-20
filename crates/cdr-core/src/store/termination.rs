@@ -28,10 +28,11 @@ impl PostgresCdrStore {
     /// Loads active number ownership, preferring the canonical owner column over the legacy one.
     pub async fn list_runtime_number_owners(
         &self,
-    ) -> Result<Vec<(String, String)>, sqlx::Error> {
+    ) -> Result<Vec<(String, String, i32)>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT number,COALESCE(NULLIF(owner_egress_trunk_id,''),NULLIF(gateway_id,'')) \
+            "SELECT number,COALESCE(NULLIF(owner_egress_trunk_id,''),NULLIF(gateway_id,'')),max_concurrent \
              FROM number_inventory WHERE LOWER(status) IN ('available','assigned','active') \
+               AND LOWER(COALESCE(direction,'both')) IN ('outbound','both','bidirectional') \
                AND COALESCE(NULLIF(owner_egress_trunk_id,''),NULLIF(gateway_id,'')) IS NOT NULL",
         )
         .fetch_all(&self.pool)
@@ -59,6 +60,9 @@ impl PostgresCdrStore {
         rules: &[TrunkIpRule],
     ) -> Result<(), sqlx::Error> {
         let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('vos_rs:trunk_ip_rules'))")
+            .execute(&mut *transaction)
+            .await?;
         for (index, rule) in rules.iter().enumerate().filter(|(_, rule)| rule.enabled) {
             for other in rules.iter().skip(index + 1).filter(|rule| rule.enabled) {
                 let ports_overlap = rule.source_port.is_none()
@@ -307,8 +311,8 @@ impl PostgresCdrStore {
 
     /// Creates or updates an egress authorization group.
     pub async fn upsert_egress_group(&self, group: &EgressGroup) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO egress_groups(id,name,enabled) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,enabled=EXCLUDED.enabled,updated_at=now()")
-            .bind(&group.id).bind(&group.name).bind(group.enabled).execute(&self.pool).await?;
+        sqlx::query("INSERT INTO egress_groups(id,name,description,enabled) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,enabled=EXCLUDED.enabled,updated_at=now()")
+            .bind(&group.id).bind(&group.name).bind(&group.description).bind(group.enabled).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -428,7 +432,9 @@ impl PostgresCdrStore {
     }
 
     /// Lists all trunk credentials for registered access trunks.
-    pub async fn list_trunk_credentials(&self) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+    pub async fn list_trunk_credentials(
+        &self,
+    ) -> Result<Vec<(String, String, String)>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT id, access_username, access_password_hash FROM sip_gateways \
              WHERE role = 'access' AND enabled = TRUE \
@@ -455,6 +461,39 @@ impl PostgresCdrStore {
         Ok(rows
             .into_iter()
             .map(|row| (row.get(0), row.get(1)))
+            .collect())
+    }
+
+    /// 列出所有分机组及其成员。
+    pub async fn list_extension_group_members(&self) -> Result<Vec<(String, String)>, sqlx::Error> {
+        let rows = sqlx::query("SELECT group_id, username FROM extension_group_members")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect())
+    }
+
+    /// 列出所有 IVR 菜单。
+    pub async fn list_ivr_menus(&self) -> Result<Vec<(String, String, String, i32)>, sqlx::Error> {
+        let rows = sqlx::query("SELECT id, name, welcome_prompt, timeout_secs FROM ivr_menus")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
+            .collect())
+    }
+
+    /// 列出所有 IVR 动作。
+    pub async fn list_ivr_actions(&self) -> Result<Vec<(String, String, String, String, Option<String>, Option<String>)>, sqlx::Error> {
+        let rows = sqlx::query("SELECT ivr_id, dtmf_key, action_type, action_target, waiting_prompt, webhook_method FROM ivr_actions")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4), row.get(5)))
             .collect())
     }
 }

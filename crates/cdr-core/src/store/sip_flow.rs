@@ -3,9 +3,38 @@ use crate::PostgresCdrStore;
 use time::OffsetDateTime;
 
 impl PostgresCdrStore {
-    pub async fn insert_sip_flows_batch(&self, records: &[SipFlowRecord]) -> Result<(), sqlx::Error> {
+    pub async fn insert_sip_flows_batch(
+        &self,
+        records: &[SipFlowRecord],
+    ) -> Result<(), sqlx::Error> {
         if records.is_empty() {
             return Ok(());
+        }
+
+        // 动态解析并预创建分区子表
+        let mut dates = std::collections::HashSet::new();
+        for record in records {
+            dates.insert(record.timestamp.date());
+        }
+
+        for date in dates {
+            let year = date.year();
+            let month = u8::from(date.month());
+            let day = date.day();
+            let part_name = format!("sip_flows_y{:04}m{:02}d{:02}", year, month, day);
+            let start = format!("{:04}-{:02}-{:02} 00:00:00+00", year, month, day);
+            
+            let next_date = date + time::Duration::days(1);
+            let next_year = next_date.year();
+            let next_month = u8::from(next_date.month());
+            let next_day = next_date.day();
+            let end = format!("{:04}-{:02}-{:02} 00:00:00+00", next_year, next_month, next_day);
+
+            let ddl = format!(
+                "CREATE TABLE IF NOT EXISTS {} PARTITION OF sip_flows FOR VALUES FROM ('{}') TO ('{}')",
+                part_name, start, end
+            );
+            sqlx::query(&ddl).execute(&self.pool).await?;
         }
 
         let mut call_ids = Vec::with_capacity(records.len());
@@ -52,7 +81,7 @@ impl PostgresCdrStore {
     pub async fn get_sip_flows(&self, call_id: &str) -> Result<Vec<SipFlowRecord>, sqlx::Error> {
         sqlx::query_as::<_, SipFlowRecord>(
             "SELECT id, call_id, method, direction, from_addr, to_addr, raw_message, timestamp \
-             FROM sip_flows WHERE call_id = $1 ORDER BY timestamp ASC, id ASC"
+             FROM sip_flows WHERE call_id = $1 ORDER BY timestamp ASC, id ASC",
         )
         .bind(call_id)
         .fetch_all(&self.pool)

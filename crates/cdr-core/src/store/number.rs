@@ -22,7 +22,9 @@ impl PostgresCdrStore {
 
     pub async fn list_numbers(&self) -> Result<Vec<NumberInventory>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT number, username, gateway_id, owner_egress_trunk_id, direction, max_concurrent, current_concurrent, status, created_at, updated_at FROM number_inventory ORDER BY number",
+            "SELECT n.number,n.username,a.source_type,a.source_id,n.gateway_id,n.owner_egress_trunk_id,n.direction,n.max_concurrent,n.current_concurrent,n.status,n.created_at,n.updated_at \
+             FROM number_inventory n LEFT JOIN number_allocations a ON a.number=n.number AND a.enabled \
+             ORDER BY n.number",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -31,14 +33,16 @@ impl PostgresCdrStore {
             numbers.push(NumberInventory {
                 number: row.get(0),
                 username: row.get(1),
-                gateway_id: row.get(2),
-                owner_egress_trunk_id: row.get(3),
-                direction: row.get(4),
-                max_concurrent: row.get(5),
-                current_concurrent: row.get(6),
-                status: row.get(7),
-                created_at: row.get(8),
-                updated_at: row.get(9),
+                allocation_source_type: row.get(2),
+                allocation_source_id: row.get(3),
+                gateway_id: row.get(4),
+                owner_egress_trunk_id: row.get(5),
+                direction: row.get(6),
+                max_concurrent: row.get(7),
+                current_concurrent: row.get(8),
+                status: row.get(9),
+                created_at: row.get(10),
+                updated_at: row.get(11),
             });
         }
         Ok(numbers)
@@ -51,8 +55,9 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<NumberInventory>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT number, username, gateway_id, owner_egress_trunk_id, direction, max_concurrent, current_concurrent, status, created_at, updated_at \
-             FROM number_inventory ORDER BY number LIMIT $1 OFFSET $2",
+            "SELECT n.number,n.username,a.source_type,a.source_id,n.gateway_id,n.owner_egress_trunk_id,n.direction,n.max_concurrent,n.current_concurrent,n.status,n.created_at,n.updated_at \
+             FROM number_inventory n LEFT JOIN number_allocations a ON a.number=n.number AND a.enabled \
+             ORDER BY n.number LIMIT $1 OFFSET $2",
         )
         .bind(limit)
         .bind(offset)
@@ -63,14 +68,16 @@ impl PostgresCdrStore {
             .map(|row| NumberInventory {
                 number: row.get(0),
                 username: row.get(1),
-                gateway_id: row.get(2),
-                owner_egress_trunk_id: row.get(3),
-                direction: row.get(4),
-                max_concurrent: row.get(5),
-                current_concurrent: row.get(6),
-                status: row.get(7),
-                created_at: row.get(8),
-                updated_at: row.get(9),
+                allocation_source_type: row.get(2),
+                allocation_source_id: row.get(3),
+                gateway_id: row.get(4),
+                owner_egress_trunk_id: row.get(5),
+                direction: row.get(6),
+                max_concurrent: row.get(7),
+                current_concurrent: row.get(8),
+                status: row.get(9),
+                created_at: row.get(10),
+                updated_at: row.get(11),
             })
             .collect())
     }
