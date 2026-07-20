@@ -41,7 +41,6 @@ pub(crate) mod utils;
 pub(crate) mod wav;
 
 pub use self::config::MediaConfig;
-pub use self::energy_detector::RtpEnergyDetector;
 pub use self::live_transcode::LiveTranscoder;
 pub use self::metrics::RtcpQualitySnapshot;
 pub use self::recording::MediaError;

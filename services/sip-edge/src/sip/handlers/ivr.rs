@@ -181,7 +181,8 @@ async fn run_ivr_menu_loop(
         let timeout = Duration::from_secs(timeout_secs as u64);
         let mut accum = String::new();
         let mut retries = 0;
-        let mut next_menu_id = None;
+        #[allow(unused_assignments)]
+        let mut next_menu_id: Option<String> = None;
 
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;

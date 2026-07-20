@@ -279,9 +279,11 @@ impl SbcEngine {
         if let Some(lock_time) = self.locked_ips.get(&ip) {
             if Instant::now() < *lock_time {
                 return false;
+            } else {
+                drop(lock_time);
+                self.locked_ips.remove(&ip);
             }
         }
-        self.locked_ips.remove(&ip); // 锁定过期，清理条目
 
         // 2. 检查黑名单
         if let Ok(blocklist) = self.blocklist.read() {

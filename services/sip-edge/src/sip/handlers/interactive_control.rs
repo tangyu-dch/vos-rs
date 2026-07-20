@@ -927,7 +927,6 @@ pub(crate) fn execute_instruction(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use call_core::VciInstruction;
 
     #[test]

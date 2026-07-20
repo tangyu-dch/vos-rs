@@ -153,6 +153,7 @@ pub(crate) async fn relay_media_port(
                 fast_path_counters.flush(&relay, local_port);
                 plan = relay.relay_plan(local_port);
                 plan_epoch = current_epoch;
+                energy_detector.reset();
                 live_transcoder =
                     if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
                         if local_codec != peer_codec {
@@ -223,21 +224,21 @@ pub(crate) async fn relay_media_port(
                 let mut drop_packet = false;
                 if !is_pass_through {
                     // 优化：仅当配置了 DTMF 探测时才解析 RTP 包，并移除无用的 rtp_stats.observe
-                    if plan.dtmf_payload_type.is_some() {
-                        match RtpPacketView::parse(packet) {
-                            Ok(rtp) => {
-                                if plan.dtmf_payload_type == Some(rtp.payload_type) {
-                                    relay.process_dtmf_packet(local_port, rtp);
-                                }
-                            }
-                            Err(error) => {
-                                relay.record_metric(local_port, |metrics| {
-                                    metrics.dropped_invalid_packets += 1
-                                });
-                                warn!(%error, %source, local_port, "dropping invalid RTP packet on fast path");
-                                drop_packet = true;
+                    if let Ok(rtp) = RtpPacketView::parse(packet) {
+                        if plan.dtmf_payload_type == Some(rtp.payload_type) {
+                            relay.process_dtmf_packet(local_port, rtp);
+                        } else if let Some(codec) = plan.codec {
+                            energy_detector.process_packet(rtp.payload, codec);
+                            if energy_detector.is_talking() {
+                                debug!(local_port, "RTP VAD 语音活动检测：正在说话");
                             }
                         }
+                    } else {
+                        relay.record_metric(local_port, |metrics| {
+                            metrics.dropped_invalid_packets += 1
+                        });
+                        warn!(%source, local_port, "dropping invalid RTP packet on fast path");
+                        drop_packet = true;
                     }
                 }
 
