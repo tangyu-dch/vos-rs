@@ -1,161 +1,812 @@
-# VOS-RS (VoIP Softswitch in Rust)
+<div align="center">
 
-`vos-rs` 是用 Rust 语言编写的**电信运营级 VoIP 软交换与媒体转发平台**。项目对标商业软交换平台 VOS-3000，旨在单机环境下实现 5000+ 并发通话和 1000+ CPS (Calls Per Second) 的超高性能要求。
+# VOS-RS
 
-平台采用**信令与媒体分离**的设计原则，集成了信令路由、对称 RTP 媒体中继、SBC 安全防护、实时计费、录音存储、以及 API/Web 控制台于一体。同时，项目提供了一套**AI-Native 的可编程媒体控制接口**，可极其方便地对接 AI Voice Agent（智能语音机器人）、TTS/ASR 系统及现代呼叫中心。
+**电信运营级 VoIP 软交换与媒体转发平台 · Rust 实现**
 
----
+[![Rust](https://img.shields.io/badge/Rust-1.89%2B-orange?logo=rust)](https://www.rust-lang.org/)
+[![Edition](https://img.shields.io/badge/Edition-2021-blue)](https://doc.rust-lang.org/edition-guide/)
+[![License](https://img.shields.io/badge/License-Proprietary-red)](./Cargo.toml)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14%2B-blue?logo=postgresql)](https://www.postgresql.org/)
+[![NATS](https://img.shields.io/badge/NATS-JetStream-blue?logo=nats.io)](https://nats.io/)
+[![React](https://img.shields.io/badge/React-18-blue?logo=react)](https://react.dev/)
+[![TailwindCSS](https://img.shields.io/badge/TailwindCSS-v4-blue?logo=tailwindcss)](https://tailwindcss.com/)
+[![HeroUI](https://img.shields.io/badge/HeroUI-v2.8-purple)](https://www.heroui.com/)
 
-## 🚀 核心设计与高性能架构
+对标商业软交换 VOS-3000 · 单机 5000+ 并发通话 · 1000+ CPS · AI-Native 可编程媒体控制
 
-- **异步运行时**：基于 `Tokio`（多线程模式）构建高并发 I/O 环，线程亲和度（Affinity）绑定 CPU 物理核心。
-- **零拷贝 (Zero-Copy) SIP 解析**：自研 `sip-core`、`rtp-core`、`sdp-core` 消息解析器。SIP 头部、URI、方法、SipMessage 等使用携带生命周期参数的借用类型直接引用原始接收缓冲区切片，消除了大并发信令下高频产生的堆内存分配与垃圾回收压力。
-- **高并发零锁媒体中继**：无锁式 UDP 端口分配，绑定套接字前不占用任何全局互斥锁；转码器 `LiveTranscoder` 上下文直接作为协程局部变量生存于网络转发循环，彻底规避全局锁争抢。
-- **G.711 PCMA/PCMU 查表法加速**：基于 `OnceLock` 预先缓存 static LUT 查找表，将 G.711 原地原地转码（In-place）的位移分支计算退化为 $O(1)$ 级 L1-Cache 缓存寻址，实现原地零内存分配转码。
-- **WAV 放音异步化与隔离**：使用 `spawn_blocking` 隔离 WAV 文件磁盘读取，彻底解决磁盘 I/O 带来的网络协程停顿。
-- **PostgreSQL UNNEST 批量写入**：CDR 批量入库抛弃了常规 QueryBuilder 动态拼接 SQL，重构为 **静态 UNNEST 数组绑定模式**，降低客户端序列化成本和 PostgreSQL 语法解析器负载达 90% 以上。
-- **NATS JetStream 话单事件流**：异步批量缓冲与流式入库，保障信令与媒体节点不受外部数据库 I/O 阻塞影响。
-- **Opus ↔ G.711 实时高性能转码**：集成了 Rust 社区顶尖的 `opus`（支持 `bundled` 静态编译以完全免除系统 FFI 开发包依赖）与 `rubato`（高性能重采样引擎），内置 `fifo` 环形缓冲区对抗网络包抖动。
-- **VCI 2.0 NATS 呼叫控制总线**：全面采用 NATS 消息队列作为信令与媒体的统一控制总线，支持同步交互式路由与带外异步指令控制。在呼叫事件中清晰标注 A-Leg (主叫侧) 与 B-Leg (被叫侧)，内置了“先呼分机再呼被叫”、“先呼被叫再呼分机”及“多方会议室混音”等电信级业务场景控制。
-- **网络拓扑与静态 IP 绑定**：在 Docker 部署体系中引入容器静态 IP 网络分配与物理绑定，彻底规避了高并发下容器 DNS Plumbing 导致的解析延迟、解析失败与早期信令丢包。
+</div>
 
 ---
 
-## 📂 项目模块结构
+## 📖 目录
+
+- [✨ 项目简介](#-项目简介)
+- [📸 界面预览](#-界面预览)
+- [🚀 核心特性](#-核心特性)
+- [🛠 技术栈](#-技术栈)
+- [🏗 系统架构](#-系统架构)
+- [📂 项目结构](#-项目结构)
+- [⚡ 快速开始](#-快速开始)
+- [⚙️ 配置说明](#️-配置说明)
+- [🧪 测试与压测](#-测试与压测)
+- [🚢 部署指南](#-部署指南)
+- [📊 性能指标](#-性能指标)
+- [🤖 AI 集成](#-ai-集成)
+- [🗺 路线图](#-路线图)
+- [❓ FAQ](#-faq)
+- [🤝 贡献指南](#-贡献指南)
+- [📄 许可证](#-许可证)
+- [🙏 致谢](#-致谢)
+
+---
+
+## ✨ 项目简介
+
+`vos-rs` 是用 Rust 编写的**电信运营级 VoIP 软交换与媒体转发平台**，对标商业软交换 VOS-3000，旨在单机环境下实现 **5000+ 并发通话** 和 **1000+ CPS** 的超高性能要求。
+
+平台采用 **信令与媒体分离** 的设计原则，集成了：
+
+- **SIP B2BUA 信令代理**：完整 RFC 3261 事务状态机、PRACK/Session-Expires、3xx 重定向
+- **对称 RTP 媒体中继**：Opus ↔ G.711 实时热转码、DTMF 检测、WAV 录音
+- **SBC 安全防御**：IP ACL、令牌桶限速、Digest 认证、租户隔离
+- **路由与计费**：LCR 前缀匹配、网关健康探测、实时余额扣减、CDR 话单
+- **NAT 穿透**：STUN 公网映射、UPnP 端口映射、对称 RTP 学习
+- **REST API + Web 控制台**：30+ 业务端点 + React 可视化管理界面
+- **AI-Native 可编程媒体接口**：热插拔媒体控制，对接 AI Voice Agent / IVR / TTS / ASR
+
+---
+
+## 📸 界面预览
+
+> 全部截图取自实际运行的控制台（深色主题），完整图集见 [`docs/assets/`](./docs/assets/)。
+
+### 登录页
+
+![登录页](./docs/assets/login.png)
+
+### 仪表盘（运营总览）
+
+![仪表盘](./docs/assets/dashboard.png)
+
+### 活跃通话监控
+
+![活跃通话](./docs/assets/active-calls.png)
+
+### 分机管理
+
+![分机管理](./docs/assets/extensions.png)
+
+### 中继管理
+
+![中继管理](./docs/assets/trunks.png)
+
+### 路由配置
+
+![路由配置](./docs/assets/routing.png)
+
+### 计费账户
+
+![计费账户](./docs/assets/billing-accounts.png)
+
+### 系统设置（响应式自适应）
+
+桌面宽屏（3 列布局）：
+
+![系统设置-桌面](./docs/assets/settings.png)
+
+窄屏自适应（2 列布局）：
+
+![系统设置-窄屏](./docs/assets/settings-narrow.png)
+
+### 安全防护（SBC / TLS）
+
+![安全防护](./docs/assets/security.png)
+
+### 集群基础设施
+
+![基础设施](./docs/assets/infrastructure.png)
+
+---
+
+## 🚀 核心特性
+
+### 信令与媒体
+
+| 能力 | 说明 |
+| :--- | :--- |
+| **多传输支持** | UDP / TCP / TLS / WebSocket |
+| **完整事务状态机** | RFC 3261 INVITE / BYE / REFER / PRACK (RFC 3262) / Session-Expires (RFC 4028) / 3xx 重定向 |
+| **零拷贝 SIP 解析** | 自研 `sip-core`，借用类型直接引用接收缓冲区，消除高频堆分配 |
+| **对称 RTP 中继** | 高并发无锁端口分配，转码器上下文作为协程局部变量 |
+| **Opus ↔ G.711 转码** | 基于 `opus` + `rubato` FFI，G.711 查表法 $O(1)$ 加速 |
+| **DTMF 检测** | 同时支持 SIP INFO 与 RFC 2833 带内按键 |
+| **WAV 录音** | 双向/单向录音，`spawn_blocking` 隔离磁盘 I/O |
+
+### 路由与计费
+
+| 能力 | 说明 |
+| :--- | :--- |
+| **LCR 路由** | 前缀最长匹配 + 优先级备用 + 时间窗路由 |
+| **网关熔断** | 主动健康探测，故障自动隔离与恢复 |
+| **实时计费** | 余额预扣减 + 限时拆线 + 计费结算 |
+| **CDR 话单** | PostgreSQL UNNEST 批量写入，NATS JetStream 异步事件流 |
+| **反欺诈** | 并发/CPS 限制、号码黑白名单 |
+
+### SBC 安全
+
+| 能力 | 说明 |
+| :--- | :--- |
+| **IP ACL** | CIDR 网段黑白名单 |
+| **令牌桶限速** | 单 IP / 全局 CPS 控制 |
+| **Digest 认证** | 动态 Nonce 防重放 |
+| **租户隔离** | 域名与号段强物理隔离 |
+| **TLS 加密** | 自定义证书验证 |
+
+### NAT 穿透
+
+| 能力 | 说明 |
+| :--- | :--- |
+| **STUN** | 多服务器 Fallback 公网映射发现 |
+| **UPnP** | 自动网关端口映射 |
+| **Symmetric RTP** | 首包源地址学习 + keepalive 保活 |
+
+---
+
+## 🛠 技术栈
+
+### 后端
+
+| 层级 | 技术 | 版本 |
+| :--- | :--- | :--- |
+| 主语言 | Rust | ≥ 1.89 (Edition 2021) |
+| 异步运行时 | Tokio (multi_thread) | =1.x |
+| HTTP REST | Axum + tower-http | =0.7.x |
+| 数据库 | sqlx (PostgreSQL) | =0.7.x |
+| 消息队列 | async-nats (JetStream) | 最新 |
+| 并发数据结构 | DashMap | =6.x |
+| TLS | tokio-rustls + rustls | 最新 |
+| 日志 | tracing + tracing-subscriber | =0.1.x |
+| 错误处理 | thiserror (库) + anyhow (应用) | =1.x |
+
+### 前端
+
+| 层级 | 技术 | 版本 |
+| :--- | :--- | :--- |
+| 框架 | React + TypeScript | 18 / 5.3+ |
+| 构建工具 | Vite | 5.x |
+| 组件库 | HeroUI | ^2.8.0 |
+| 样式 | Tailwind CSS v4 | ^4.3.3 |
+| 路由 | React Router | 6.x |
+| Toast | sonner | ^1.7.4 |
+| 图标 | lucide-react | 最新 |
+
+### 基础设施
+
+| 组件 | 技术 |
+| :--- | :--- |
+| 数据库 | PostgreSQL 14+ (主数据 + CDR) |
+| 消息队列 | NATS JetStream |
+| 录音存储 | 本地 FS / 阿里云 OSS (双写) |
+| 容器化 | Docker + Docker Compose |
+
+---
+
+## 🏗 系统架构
+
+### 分层架构
+
+```mermaid
+flowchart TB
+    subgraph Client[客户端]
+        UA[SIP 终端<br/>硬电话/软电话]
+        WEB[WebRTC 客户端<br/>浏览器/小程序]
+    end
+
+    subgraph SipEdge[sip-edge 服务]
+        SBC[SBC 安全层<br/>IP ACL / 令牌桶 / Digest 认证]
+        B2BUA[SIP B2BUA<br/>事务状态机 / Dialog]
+        ROUTE[路由引擎<br/>LCR / 熔断 / 时间窗]
+        BILL[计费引擎<br/>实时扣费 / 结算]
+        MEDIA[媒体控制器<br/>RTP Relay / 转码 / 录音]
+        SBC --> B2BUA
+        B2BUA --> ROUTE
+        ROUTE --> BILL
+        BILL --> MEDIA
+    end
+
+    subgraph ApiServer[api-server 服务]
+        REST[REST API<br/>Axum 30+ 端点]
+        WEBHOOK[Webhook<br/>事件推送]
+    end
+
+    subgraph CdrWorker[cdr-worker 服务]
+        CONSUMER[NATS 消费者<br/>批量落库]
+    end
+
+    subgraph Storage[存储层]
+        PG[(PostgreSQL<br/>主数据 + CDR)]
+        NATS[(NATS JetStream<br/>事件流)]
+        OSS[(OSS / 本地 FS<br/>录音存储)]
+    end
+
+    UA <-->|SIP/RTP| SBC
+    WEB <-->|SIP/WS/RTP| SBC
+    WEB <-->|HTTP| REST
+    REST <-->|读取/配置| PG
+    B2BUA -.->|CDR 事件| NATS
+    CONSUMER <-->|批量写入| PG
+    MEDIA -.->|录音文件| OSS
+    BILL <-->|余额/话单| PG
+```
+
+### 信令与媒体分离
+
+```mermaid
+flowchart LR
+    subgraph 信令节点 轻量 CPU 密集
+        S1[SIP 解析/生成]
+        S2[事务状态机]
+        S3[路由引擎]
+        S4[计费引擎]
+        S5[SDP 改写]
+    end
+
+    subgraph 媒体节点 重量级 IO + CPU
+        M1[RTP/RTCP 收发]
+        M2[NAT 穿透]
+        M3[Codec 转码]
+        M4[DTMF 检测]
+        M5[录音]
+        M6[Jitter Buffer]
+    end
+
+    S1 --> S2 --> S3 --> S4 --> S5
+    S5 -.->|分配| M1
+    M1 --> M2 --> M3 --> M4
+    M1 --> M5
+    M1 --> M6
+```
+
+### 通话建立流程
+
+```mermaid
+sequenceDiagram
+    participant UAC as 主叫 UAC
+    participant Edge as sip-edge B2BUA
+    participant Route as 路由引擎
+    participant Bill as 计费引擎
+    participant UAS as 被叫 UAS
+
+    UAC->>Edge: INVITE (SDP A)
+    Edge->>Bill: 余额预检 + 预扣减
+    Bill-->>Edge: 通过
+    Edge->>Route: 路由查询 (前缀匹配)
+    Route-->>Edge: 选定落地中继
+    Edge->>Edge: SDP 改写 (Topology Hiding)
+    Edge->>UAS: INVITE (SDP A')
+    UAS-->>Edge: 100 Trying
+    UAS-->>Edge: 180 Ringing
+    UAS-->>Edge: 200 OK (SDP B)
+    Edge->>Edge: SDP 改写 + 媒体分配
+    Edge-->>UAC: 200 OK (SDP B')
+    UAC->>Edge: ACK
+    Edge->>UAS: ACK
+    Note over UAC,UAS: 媒体通道建立 (RTP 双向中继)
+    Note over Edge,Bill: 通话中实时计费
+    UAC->>Edge: BYE
+    Edge->>UAS: BYE
+    UAS-->>Edge: 200 OK
+    Edge->>Bill: 结算 + 释放预扣
+    Edge->>Edge: 生成 CDR → NATS
+```
+
+---
+
+## 📂 项目结构
 
 ```text
 vos-rs/
-├── crates/                    # 核心协议与业务模块 (零拷贝解析)
-│   ├── sip-core/              # SIP 信令语法树与解析器 (RFC 3261)
-│   ├── rtp-core/              # RTP/RTCP 封包解析与 SRTP 加密通道
-│   ├── sdp-core/              # SDP 媒体协商解析与重写工具
-│   ├── call-core/             # 呼叫状态机、路由匹配与 CDR 生成器
-│   ├── cdr-core/              # 话单数据模型与 PostgreSQL 操作库
-│   └── storage-core/          # 录音存储抽象层（本地磁盘与 OSS 双写）
+├── crates/                       # 核心协议与业务模块 (零拷贝解析)
+│   ├── sip-core/                 # SIP 信令语法树与解析器 (RFC 3261)
+│   ├── rtp-core/                 # RTP/RTCP 封包解析与 SRTP 加密通道
+│   ├── sdp-core/                 # SDP 媒体协商解析与重写工具
+│   ├── call-core/                # 呼叫状态机、路由匹配与 CDR 生成器
+│   ├── cdr-core/                 # 话单数据模型与 PostgreSQL 操作库
+│   └── storage-core/             # 录音存储抽象层（本地磁盘与 OSS 双写）
 │
-├── services/                  # 独立二进制服务
-│   ├── sip-edge/              # 边缘信令与媒体代理 (B2BUA + RTP Relay + 录音 + API)
-│   ├── api-server/            # REST API 后端服务 (Axum 框架，支持 30+ 业务端点)
-│   └── cdr-worker/            # NATS 异步话单消费者，批量写入数据库
+├── services/                     # 独立二进制服务
+│   ├── sip-edge/                 # 边缘信令与媒体代理 (B2BUA + RTP Relay + 录音)
+│   ├── api-server/               # REST API 后端服务 (Axum 30+ 端点)
+│   ├── cdr-worker/               # NATS 异步话单消费者
+│   ├── media-edge/               # 独立媒体节点 (WebRTC / 转码)
+│   └── sip-router/               # 分布式路由服务
 │
-├── web/                       # 前端管理界面 (React + TypeScript + Vite)
-├── tools/                     # 集成测试与 SIPp 性能压测工具
-└── scripts/                   # SQL 迁移与一键开发辅助脚本
+├── web/                          # 前端管理界面 (React 18 + HeroUI v2 + Tailwind v4)
+│   └── src/
+│       ├── pages/
+│       │   ├── operations/       # 运营监控（仪表盘、活跃通话）
+│       │   ├── numbers/          # 号码管理（分机、号码池、DID）
+│       │   ├── trunks/           # 中继管理（接入/落地/分组）
+│       │   ├── call-center/      # 呼叫中心（坐席、队列、IVR）
+│       │   ├── billing/          # 计费（账户、费率、交易、话单）
+│       │   ├── system/           # 系统配置（路由、安全、基础设施、设置）
+│       │   └── shared/           # 跨页面共享层
+│       ├── components/           # 通用组件（ConsoleShell、detail-shell 等）
+│       └── services/             # API 客户端与资源服务
+│
+├── docs/                         # 文档目录
+│   ├── architecture/             # 架构与设计
+│   ├── deployment/               # 部署指南
+│   ├── development/              # 开发与环境配置
+│   ├── user-guide/               # 用户操作指南
+│   └── assets/                   # 截图与图片资源
+│
+├── tools/                        # SIPp 测试工具与场景脚本
+├── scripts/                      # SQL 迁移与开发辅助脚本
+├── deploy/                       # Docker Compose 部署配置
+├── Cargo.toml                    # Workspace 根 (11 members)
+├── Makefile                      # 常用命令
+├── config.yaml                   # 默认配置
+├── AGENTS.md                     # AI 编程助手指南
+└── README.md                     # 本文件
 ```
 
 ---
 
-## ⚡ 核心能力一览
-
-| 模块维度 | 技术指标与覆盖功能 |
-| :--- | :--- |
-| **SIP 信令控制** | 支持 UDP / TCP / TLS / WebSocket 传输；REGISTER 注册挑战认证；完整实现 INVITE / BYE / REFER 分支控制；事务状态机 (RFC 3261)、PRACK 可靠临时响应 (RFC 3262)、Session-Expires 会话定时器 (RFC 4028)、3xx 路由重定向。 |
-| **媒体通道处理** | 高性能对称 RTP / RTCP 中继转发；支持 **Opus (48kHz) ↔ G.711 PCMA/PCMU (8kHz) 实时双向热转码**；实时 SDP 改写；DTMF 检测（支持 SIP INFO 与 RFC 2833 带内按键）；WAV 呼叫双向/单向录音。 |
-| **路由与计费系统** | 路由前缀最长匹配 (LCR) + 优先级备用；网关健康主动探测与自动熔断/恢复；呼叫容量与并发速率控制；支持时间窗路由与防黑名单欺诈；实时的余额预扣减与限时拆线。 |
-| **SBC 安全防御** | 基于 IP ACL 的网段黑白名单过滤；针对单 IP / 全局的 Token Bucket (令牌桶) CPS 限速；租户间域名与号段强物理隔离；Digest 动态认证 Nonce 防重放。 |
-| **NAT 穿越与映射** | 动态 STUN 公网映射地址发现（支持多服务器 Fallback）；UPnP 自动网关端口映射；NAT 探测与 keepalive 心跳保活。 |
-| **API 与 Web** | 提供 30+ REST 端点（实时话单查询、仪表盘统计、用户/网关配置、账单对账、通话拆线、路由预览）；可视化 React 管理控制台。 |
-
----
-
-## 🎵 软件定义媒体与 AI 通信接口 (可编程 API)
-
-`vos-rs` 拥有极为灵活的软件定义媒体中继环，支持通过 `sip-edge` 的管理端口，在不影响信令连接的情况下对当前的 RTP 媒体流实施热插拔控制，是快速构建 **AI 语音 Agent (智能大模型机器人)** 和 **可编程 IVR** 的首选平台：
-
-### 1. 媒体控制 API
-*   **注入音频播放**：`POST /manage/calls/:call_id/play`
-    *   **参数配置**：指定目标 Leg (`caller`、`callee` 或 `both` 双方)。
-    *   **独占替换模式 (Exclusive)**：播放本地 WAV 时，拦截另一侧的常规中继流量，接收端仅能听到广播音频。
-    *   **背景混音模式 (Background)**：本地音频流与另一侧的实时声音混合中继。
-    *   **动态重采样 (Auto Resampling)**：解码器集成了线性插值重采样引擎，用户上传 16kHz、44.1kHz 或 48kHz 等非标准采样率 of WAV 文件时，系统会在载入时**自动无缝重采样**至 8000Hz 播放，避免音调音速失准，保障稳定性。
-*   **停止音频播放**：`POST /manage/calls/:call_id/stop-play`
-    *   实时中止指定 Leg 正在进行的音频投递，干净释放后台轮询协程。
-*   **实时静音/取消静音**：`POST /manage/calls/:call_id/mute` 与 `POST /manage/calls/:call_id/unmute`
-    *   在接收端直接拦截该 Leg 的输入数据包（不进行中继转发），可用于坐席消噪或三方通话控制。
-*   **实时转码 (Dynamic Transcoding)**：
-    *   当 SIP 协商结果为一侧 Opus（常见于 WebRTC/小程序/网页客户端）而另一侧为 PCMA/PCMU（传统运营商线路）时，系统自动在物理转发循环中启用 `LiveTranscoder`。重采样和编解码由底层经过极致汇编优化的 FFI 处理，实现零全局锁高吞吐。
-*   **呼叫媒体状态监测**：`GET /manage/calls/:call_id/status`
-    *   返回通话两端的静音状态、正在播音的本地文件路径、播放模式、以及高精确度的音频文件播放进度百分比。
-
-### 2. 电信级终端兼容与连续性保障
-*   **Marker Bit 首帧通知**：音频注入开始的第一帧包强制设置 Marker 标记位为 `true`，通知硬终端重置 Jitter Buffer 缓冲区，消除源切换时的杂音。
-*   **平滑 SSRC 序列号/时间戳重写 (Smooth Transition)**：在 Exclusive（独占播放）结束恢复常规通话中继时，媒体转发环能够自动计算在播放期间错过的包数和采样步长偏差（Offsets），并在中继时重新改写 RTP 包头。使得硬终端（如实体话机）接收到的序列号与时间戳呈现绝对的数学连续性，消除切换瞬间可能出现的“咔哒”爆音与丢包统计。
-
----
-
-## 🛠 快速开始
+## ⚡ 快速开始
 
 ### 运行环境要求
-- **OS**: Linux / macOS
-- **Compiler**: Rust 1.89+ (Edition 2021)
-- **Database**: PostgreSQL 14+
-- **Message Queue**: NATS Server (JetStream 模式)
-- **Frontend Build**: Node.js 18+ & npm
 
-### 1. Docker Compose 一键拉起（推荐）
+| 组件 | 版本 | 说明 |
+| :--- | :--- | :--- |
+| OS | Linux / macOS | 暂不支持 Windows |
+| Rust | 1.89+ | Edition 2021 |
+| PostgreSQL | 14+ | 主数据 + CDR |
+| NATS Server | 2.10+ | JetStream 模式 |
+| Node.js | 18+ | 前端构建 |
+| Docker | 24+ | 可选，容器化部署 |
+
+### 方式一：Docker Compose 一键启动（推荐）
+
 ```bash
-# 启动所有基础设施（Postgres, NATS, S3）以及 vos-rs 节点 (sip-edge, api-server, React 前端)
+# 1. 克隆仓库
+git clone <repo-url> vos-rs && cd vos-rs
+
+# 2. 启动所有服务（Postgres + NATS + S3 + sip-edge + api-server + 前端）
 docker compose -f deploy/docker/docker-compose.yml up -d --build
 
-# 访问管理后台
+# 3. 访问管理后台
 # 地址: http://localhost:3000
+# 默认账号: admin / admin
 ```
 
-### 2. 本地开发调试
+### 方式二：本地开发调试
+
 ```bash
-# 创建本地测试数据库
+# 1. 创建数据库
 createdb vos_rs
 
-# 启动依赖服务（NATS 4222 端口，PostgreSQL 5432 端口）
-# 并配置本地配置文件（见 docs/development/ENV_VARS.md）
+# 2. 启动依赖服务（PostgreSQL 5432, NATS 4222）
+# 参考 docs/development/ENV_VARS.md 配置 .env
 
-# 一键启动三端进程（sip-edge + api-server + 前端 Dev Server）
+# 3. 执行数据库迁移
+make db-migrate
+
+# 4. 一键启动三端进程（sip-edge + api-server + 前端 Dev Server）
 ./scripts/dev.sh
+
+# 5. 访问 http://localhost:3000
+```
+
+### 方式三：从源码构建
+
+```bash
+# 1. 构建后端 workspace
+cargo build --workspace --release
+
+# 2. 构建前端
+cd web && npm install && npm run build
+
+# 3. 启动 sip-edge
+./target/release/sip-edge
+
+# 4. 启动 api-server
+./target/release/api-server
+
+# 5. 部署前端（nginx 托管 web/dist）
 ```
 
 ---
 
-## 🧪 验证与压力测试
+## ⚙️ 配置说明
 
-`vos-rs` 拥有严苛的自动化回归验证链。我们提供了一组基于 `SIPp` 的集成压力测试，用来模拟真实环境下的高频呼叫与 RTP 编解码传输。
+所有配置通过 `VOS_RS_` 前缀环境变量加载，完整列表见 [`docs/development/ENV_VARS.md`](./docs/development/ENV_VARS.md)。
+
+### 核心配置示例
 
 ```bash
-# 查看所有命令帮助
-make help
+# === 数据库与消息队列 ===
+VOS_RS_DATABASE_URL=postgres://user:pass@localhost:5432/vosrs
+VOS_RS_NATS_URL=nats://localhost:4222
 
-# 1. 运行格式检查与快速单元测试
-make quick
+# === SIP 信令 ===
+VOS_RS_SIP_BIND=0.0.0.0:5060                      # SIP 监听地址
+VOS_RS_SIP_ADVERTISED_ADDR=1.2.3.4:5060           # 对外通告地址
+VOS_RS_SIP_TLS_BIND=0.0.0.0:5061                  # TLS 监听 (可选)
+VOS_RS_SIP_TLS_CERT_PATH=/path/cert.pem
+VOS_RS_SIP_TLS_KEY_PATH=/path/key.pem
 
-# 2. 运行工作区下的全量测试（包括 180+ 单元与集成测试）
-make test
+# === RTP 媒体 ===
+VOS_RS_RTP_ADVERTISED_ADDR=1.2.3.4                # RTP 对外地址
+VOS_RS_RTP_PORT_MIN=40000                          # RTP 端口范围起始
+VOS_RS_RTP_PORT_MAX=40100                          # RTP 端口范围结束
+VOS_RS_RTP_SYMMETRIC_LEARNING=true                # 对称 RTP 学习
 
-# 3. 运行 SIPp 呼叫流冒烟测试
-make smoke
+# === 录音 ===
+VOS_RS_RECORDING_ENABLED=false
+VOS_RS_RECORDING_DIR=/var/lib/vos-rs/recordings
 
-# 4. 运行全流程验证（信令代理 + RTP 对称转发 + 高并发无锁端口占用验证）
-make verify
+# === 认证 ===
+VOS_RS_AUTH_ENABLED=true                           # SIP Digest Auth
+VOS_RS_AUTH_REALM=vos-rs
 
-# 5. 并发压力性能测试
-make perf
+# === SBC 安全 ===
+VOS_RS_SBC_ALLOW=192.168.1.0/24                    # IP 白名单 (CIDR)
+VOS_RS_SBC_BLOCK=                                  # IP 黑名单
+VOS_RS_SBC_LIMIT_CAPACITY=100                      # 令牌桶容量
+VOS_RS_SBC_LIMIT_FILL_RATE=10                      # 令牌填充速率
+
+# === 日志 ===
+RUST_LOG=info
+# 或分模块: RUST_LOG=sip_edge=debug,media=trace
+
+# === UDP Workers ===
+VOS_RS_UDP_WORKERS=0                               # 0=auto (CPU 核心数)
 ```
 
-## 📖 相关文档
+---
 
-### 架构与设计
-- [系统分层架构规范](docs/architecture/ARCHITECTURE.md)
-- [中继接入、主叫号码与落地设计](docs/architecture/TRUNK_CALLER_TERMINATION_DESIGN.md)
-- [SIP/RTP 协议覆盖指标一览](docs/architecture/rtp-sip-completeness.md)
-- [Webhooks 全流程控制与 VCI 2.0 指令集设计对比](docs/architecture/WEBHOOKS_DESIGN_COMPARISON.md)
-- [Webhooks 插拔式可扩展通道架构](docs/architecture/WEBHOOKS_EXTENSIBILITY_ARCHITECTURE.md)
-- [NATS 会话控制协议与命令设计规范](docs/architecture/NATS_VCI_COMMAND_DESIGN.md)
+## 🧪 测试与压测
 
-### 开发与集成
-- [AI 语音插件标准接入协议（UDS 二进制流 + OpenAI/Gemini 接入示例）](docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md)
-- [环境变量配置参考](docs/development/ENV_VARS.md)
+### 测试金字塔
 
-### 部署与运维
-- [部署与调优指南](docs/deployment/DEPLOY.md)
-- [Web 后台管理系统指引](docs/user-guide/WEB_GUIDE.md)
-- [中继与路由配置指南](docs/user-guide/ROUTING_TRUNK_GUIDE.md)
+```mermaid
+flowchart TB
+    E2E[E2E 测试<br/>SIPp 端到端场景]
+    INT[集成测试<br/>模块协作]
+    UNIT[单元测试<br/>核心逻辑]
 
-> 完整文档索引见 [docs/README.md](docs/README.md)。
+    E2E --> INT --> UNIT
+```
+
+### 测试命令
+
+```bash
+# === 代码质量 ===
+cargo clippy --workspace -- -D warnings    # Lint 检查
+cargo fmt --check                          # 格式化检查
+cargo check --workspace                    # 类型检查
+
+# === 测试 ===
+cargo test --workspace                     # 全量测试 (180+ 用例)
+make test-unit                             # 仅单元测试
+make test-integration                      # 仅集成测试
+cargo bench -p call-core                   # 性能基准测试
+
+# === SIPp 端到端 ===
+cd tools/sipp && ./run_all.sh              # SIPp 场景测试
+./tools/sipp/run_business_flows.sh         # 业务流程场景
+./tools/sipp/run_cps_rec.sh 100 10 10      # 100 通话 / 10 CPS / 10 秒
+
+# === 安全审计 ===
+cargo audit                                # 依赖安全扫描
+```
+
+### SIPp 业务场景
+
+`tools/sipp/scenarios/` 下提供完整 SIPp 场景脚本：
+
+| 场景 | 文件 | 说明 |
+| :--- | :--- | :--- |
+| 接入中继主叫 | `business_access_uac.xml` | 模拟运营商接入 |
+| 接入拒绝 | `business_access_rejected_uac.xml` | 验证 403/404 拒绝 |
+| 落地入局 | `business_egress_inbound_uac.xml` | 模拟呼入业务 |
+| 分机主叫 | `business_extension_uac.xml` | 分机 → 中继 |
+| 分机被叫 | `business_extension_uas.xml` | 中继 → 分机 |
+| 分机注册 | `business_extension_register_uac.xml` | REGISTER 流程 |
+| 网关正常 | `business_gateway_uas.xml` | 模拟落地网关 |
+| 网关故障 | `business_gateway_fail_uas.xml` | 验证故障转移 |
+
+---
+
+## 🚢 部署指南
+
+### Docker 部署
+
+```bash
+# 构建镜像
+make docker-build
+
+# 启动完整栈
+docker compose -f deploy/docker/docker-compose.yml up -d
+
+# 查看服务状态
+docker compose -f deploy/docker/docker-compose.yml ps
+
+# 查看日志
+docker compose -f deploy/docker/docker-compose.yml logs -f sip-edge
+```
+
+### 生产环境检查清单
+
+- [ ] 配置独立的 PostgreSQL 实例（建议 16C/32G+）
+- [ ] 配置 NATS Cluster（3 节点）
+- [ ] 设置强密码（数据库、NATS、API）
+- [ ] 启用 TLS（SIP / API / NATS）
+- [ ] 配置防火墙规则（仅开放必要端口）
+- [ ] 设置 SBC IP 白名单
+- [ ] 配置录音存储（OSS Bucket 或独立磁盘）
+- [ ] 设置日志轮转与监控告警
+- [ ] 配置数据库备份策略
+- [ ] 设置系统级资源限制（ulimit）
+
+完整部署文档见 [`docs/deployment/DEPLOY.md`](./docs/deployment/DEPLOY.md)。
+
+---
+
+## 📊 性能指标
+
+### 目标性能
+
+| 指标 | 目标 | 当前 |
+| :--- | :--- | :--- |
+| CPS (calls per second) | ≥ 1000 | < 200（优化中） |
+| 并发通话 | ≥ 5000 | 测试中 |
+| API P99 延迟 | < 100ms | 测试中 |
+| 数据库查询 P99 | < 50ms | 测试中 |
+| 启动时间 | < 5s | < 3s |
+| 内存使用 | 稳态无泄漏 | 监控中 |
+
+### 已优化项
+
+- ✅ RTP 解析引入有界 `BufferPool`，消除每包堆分配
+- ✅ 路由引擎实现 `PrefixTrie` 树检索，替代线性扫描
+- ✅ SBC ACL 实现 `IpTrie` 树检索
+- ✅ `sip-edge/src/main.rs` 从 9401 行拆分为多个子模块
+- ✅ CDR 批量入库采用 PostgreSQL UNNEST 静态数组绑定
+
+### 已知瓶颈（持续优化）
+
+- 🔴 录音模块使用 `std::sync::Mutex` + 同步 I/O，需重构为 async channel-based
+- 🔴 SBC RateLimiter 单 Mutex，需改为 DashMap 分片
+- 🟡 RTP 每包 6-8 次 DashMap 锁，高 pps 下 cache line bouncing
+- 🟡 SIP 解析非零拷贝，需引入借用生命周期
+
+---
+
+## 🤖 AI 集成
+
+`vos-rs` 提供 **AI-Native 可编程媒体控制接口**，是构建 AI Voice Agent 的首选平台：
+
+### 媒体控制 API
+
+| 端点 | 方法 | 说明 |
+| :--- | :--- | :--- |
+| `/manage/calls/:call_id/play` | POST | 注入音频播放（独占/混音模式） |
+| `/manage/calls/:call_id/stop-play` | POST | 停止音频播放 |
+| `/manage/calls/:call_id/mute` | POST | 实时静音 |
+| `/manage/calls/:call_id/unmute` | POST | 取消静音 |
+| `/manage/calls/:call_id/status` | GET | 通话媒体状态 |
+
+### 关键能力
+
+- **动态转码**：WebRTC (Opus 48kHz) ↔ 运营商 (PCMA/PCMU 8kHz) 实时双向转码
+- **音频注入**：支持 8kHz/16kHz/44.1kHz/48kHz WAV 自动重采样
+- **平滑切换**：SSRC/序列号/时间戳连续性重写，消除切换爆音
+- **Marker Bit**：首帧 Marker 标记，通知终端重置 Jitter Buffer
+
+### 接入示例
+
+```bash
+# 向通话注入音频（独占模式，仅 caller 听到）
+curl -X POST http://localhost:8080/manage/calls/<call_id>/play \
+  -H "Content-Type: application/json" \
+  -d '{"file":"/var/lib/vos-rs/prompts/welcome.wav","leg":"caller","mode":"exclusive"}'
+
+# 查询通话媒体状态
+curl http://localhost:8080/manage/calls/<call_id>/status
+```
+
+完整 AI 接入指南见 [`docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md`](./docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md)。
+
+---
+
+## 🗺 路线图
+
+### v1.0（当前）
+
+- ✅ SIP B2BUA 完整事务状态机
+- ✅ RTP 中继 + Opus/G.711 转码
+- ✅ 路由引擎 + LCR + 熔断
+- ✅ 计费引擎 + CDR + 实时扣费
+- ✅ SBC 安全 + IP ACL + 限速
+- ✅ Web 控制台 + REST API
+- ✅ AI-Native 媒体控制 API
+
+### v1.1（计划中）
+
+- ⏳ 录音模块 async 化重构
+- ⏳ SBC RateLimiter DashMap 分片
+- ⏳ SIP 解析零拷贝重构
+- ⏳ 实时余额扣减 AtomicI64 CAS 缓存
+- ⏳ WebRTC 完整支持（媒体节点）
+
+### v1.2（规划中）
+
+- ⏳ 分布式信令节点（sip-router）
+- ⏳ 集群级媒体调度
+- ⏳ Webhook 插拔式通道
+- ⏳ 可视化路由拓扑编辑器
+- ⏳ Prometheus + Grafana 监控栈
+
+---
+
+## ❓ FAQ
+
+<details>
+<summary><b>Q: 为什么不用 Asterisk / FreeSWITCH？</b></summary>
+
+A: Asterisk 与 FreeSWITCH 是成熟的 VoIP 平台，但在电信级高并发场景下存在瓶颈：
+- **Asterisk**：基于线程池模型，单机并发上限约 1000 通话
+- **FreeSWITCH**：基于 APR 线程模型，单机并发可达 5000+，但 C 语言开发效率低
+- **vos-rs**：基于 Tokio 异步运行时，零拷贝解析 + 无锁媒体中继，目标单机 5000+ 通话 / 1000+ CPS，且 Rust 内存安全
+
+</details>
+
+<details>
+<summary><b>Q: 为什么选择 Rust 而不是 Go？</b></summary>
+
+A: Rust 在以下方面优于 Go：
+- **零成本抽象**：异步运行时无 GC 暂停，适合实时媒体处理
+- **内存安全**：编译期保证无数据竞争，无悬垂指针
+- **性能**：与 C/C++ 同级，Go 的 2-3 倍
+- **生态**：Tokio 是业界顶级异步运行时，sqlx 提供编译期 SQL 检查
+
+</details>
+
+<details>
+<summary><b>Q: 如何对接现有的 SIP 硬件设备？</b></summary>
+
+A: vos-rs 完整实现 RFC 3261 SIP 协议，兼容所有标准 SIP 终端：
+- **硬件话机**：Yealink / Grandstream / Cisco 等
+- **软电话**：Zoiper / Linphone / MicroSIP
+- **WebRTC 客户端**：浏览器 / 小程序（需启用 Opus 转码）
+- **运营商中继**：IP 互联 / SIP Trunking
+
+</details>
+
+<details>
+<summary><b>Q: 录音文件如何存储？</b></summary>
+
+A: 支持三种存储模式：
+- **本地磁盘**：默认，写入 `VOS_RS_RECORDING_DIR`
+- **阿里云 OSS**：上传至 OSS Bucket
+- **双写**：同时写入本地与 OSS（推荐生产环境）
+
+录音文件命名格式：`{call_id}_{leg}_{timestamp}.wav`，8kHz/16-bit/PCM。
+
+</details>
+
+<details>
+<summary><b>Q: 如何进行容量规划？</b></summary>
+
+A: 单节点推荐配置：
+
+| 并发通话 | CPU | 内存 | 带宽 (G.711) | 带宽 (Opus) |
+| :--- | :--- | :--- | :--- | :--- |
+| 500 | 4C | 4G | 50 Mbps | 15 Mbps |
+| 1000 | 8C | 8G | 100 Mbps | 30 Mbps |
+| 2000 | 16C | 16G | 200 Mbps | 60 Mbps |
+| 5000 | 32C | 32G | 500 Mbps | 150 Mbps |
+
+</details>
+
+---
+
+## 🤝 贡献指南
+
+我们欢迎社区贡献！请遵循以下流程：
+
+### 开发流程
+
+1. **Fork 仓库** 并克隆到本地
+2. **创建分支**：`git checkout -b feat/your-feature`
+3. **编写代码**：遵循 [`AGENTS.md`](./AGENTS.md) 中的编码规范
+4. **通过测试**：
+   ```bash
+   cargo clippy --workspace -- -D warnings
+   cargo test --workspace
+   cd web && npm test
+   ```
+5. **提交代码**：使用 Conventional Commits 规范
+   ```
+   feat(auth): 添加 JWT 刷新令牌机制
+   fix(billing): 修复并发余额扣减竞态条件
+   refactor(rtp): 提取 RTP 解析为独立模块
+   ```
+6. **发起 PR**：关联 issue，等待 review
+
+### Commit 规范
+
+格式：`<type>(<scope>): <description>`
+
+| Type | 说明 |
+| :--- | :--- |
+| `feat` | 新功能 |
+| `fix` | Bug 修复 |
+| `refactor` | 重构（不改业务逻辑） |
+| `perf` | 性能优化 |
+| `docs` | 文档 |
+| `test` | 测试 |
+| `chore` | 杂项 |
+| `ci` | CI 配置 |
+
+**Scope** 范围：`sip-core` / `rtp-core` / `sdp-core` / `call-core` / `cdr-core` / `sip-edge` / `api-server` / `cdr-worker` / `media` / `routing` / `billing` / `auth` / `sbc` / `web`
+
+### PR 规则
+
+- 标题与 commit 格式一致
+- 必须关联 issue（`Closes #123`）
+- 必须通过 CI（`cargo clippy` + `cargo test` + `cargo build`）
+- 单 PR 变更不超过 500 行（大 PR 应拆分）
+
+---
+
+## 📄 许可证
+
+本项目采用 **专有许可证 (Proprietary)**，详见 [`Cargo.toml`](./Cargo.toml)。
+
+未经授权，禁止复制、修改、分发或商业使用。如需商业授权，请联系项目维护者。
+
+---
+
+## 🙏 致谢
+
+### 核心依赖
+
+- [Tokio](https://tokio.rs/) — 异步运行时
+- [Axum](https://github.com/tokio-rs/axum) — Web 框架
+- [sqlx](https://github.com/launchbadge/sqlx) — 数据库访问
+- [DashMap](https://github.com/xacrimon/dashmap) — 并发 HashMap
+- [async-nats](https://github.com/nats-io/nats.rs) — NATS 客户端
+- [HeroUI](https://www.heroui.com/) — React 组件库
+- [Tailwind CSS](https://tailwindcss.com/) — 原子化 CSS 框架
+- [React](https://react.dev/) — UI 框架
+
+### 协议参考
+
+- [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261) — SIP: Session Initiation Protocol
+- [RFC 3262](https://www.rfc-editor.org/rfc/rfc3262) — Reliability of Provisional Responses
+- [RFC 3264](https://www.rfc-editor.org/rfc/rfc3264) — An Offer/Answer Model with SDP
+- [RFC 3550](https://www.rfc-editor.org/rfc/rfc3550) — RTP: A Transport Protocol for Real-time Applications
+- [RFC 4028](https://www.rfc-editor.org/rfc/rfc4028) — Session Timers in the Session Initiation Protocol
+- [RFC 4566](https://www.rfc-editor.org/rfc/rfc4566) — SDP: Session Description Protocol
+- [RFC 2833](https://www.rfc-editor.org/rfc/rfc2833) — RTP Payload for DTMF Digits
+
+### 灵感来源
+
+- [VOS-3000](http://www.vos3000.com/) — 商业软交换平台（对标产品）
+- [Kamailio](https://kamailio.org/) — 开源 SIP 服务器
+- [OpenSIPS](https://opensips.org/) — 开源 SIP 服务器
+- [FreeSWITCH](https://freeswitch.org/) — 开源软交换平台
+
+---
+
+<div align="center">
+
+**[⬆ 回到顶部](#vos-rs)**
+
+Made with ❤️ by vos-rs team
+
+</div>
