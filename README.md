@@ -354,67 +354,79 @@ vos-rs/
 
 ---
 
-## ⚡ 快速开始
+## ⚡ 快速开始 (Quick Start & Plan)
 
-### 运行环境要求
+### 1. 运行环境依赖要求
 
-| 组件 | 版本 | 说明 |
+| 组件 | 推荐版本 | 用途说明 |
 | :--- | :--- | :--- |
-| OS | Linux / macOS | 暂不支持 Windows |
-| Rust | 1.89+ | Edition 2021 |
-| PostgreSQL | 14+ | 主数据 + CDR |
-| NATS Server | 2.10+ | JetStream 模式 |
-| Node.js | 18+ | 前端构建 |
-| Docker | 24+ | 可选，容器化部署 |
+| **OS** | macOS / Linux (Ubuntu 22.04+) | 生产与开发最佳环境 |
+| **Rust** | ≥ 1.89 (Edition 2021) | 编译后端 6 大核心 Crate 与 3 个 Service |
+| **PostgreSQL** | ≥ 14 | 存储 SIP 分机、网关、路由与 CDR 详单 |
+| **NATS Server** | ≥ 2.10 (JetStream 模式) | 异步高吞吐 CDR 消息队列 |
+| **Node.js / npm** | ≥ 18.x / pnpm | 构建 Vite + React + HeroUI 现代前端 |
+| **Docker** | ≥ 24.x | 可选，用于一键容器化集成部署 |
 
-### 方式一：Docker Compose 一键启动（推荐）
+---
+
+### 2. 快速部署计划 (三大启动方式)
+
+#### 🚀 方式一：Docker Compose 一键极速启动（推荐生产与演示）
 
 ```bash
-# 1. 克隆仓库
-git clone <repo-url> vos-rs && cd vos-rs
+# 1. 克隆项目仓库
+git clone https://github.com/your-org/vos-rs.git && cd vos-rs
 
-# 2. 启动所有服务（Postgres + NATS + S3 + sip-edge + api-server + 前端）
+# 2. 启动所有服务（PostgreSQL + NATS + sip-edge + api-server + 前端镜像）
 docker compose -f deploy/docker/docker-compose.yml up -d --build
 
-# 3. 访问管理后台
-# 地址: http://localhost:3000
-# 默认账号: admin / admin
+# 3. 访问 Web 管理控制台
+# 浏览器打开: http://localhost:3000
+# 初始管理员凭据: admin / admin (或 admin / admin123)
 ```
 
-### 方式二：本地开发调试
+#### 💻 方式二：本地开发热重载模式（推荐二次开发）
 
 ```bash
-# 1. 创建数据库
+# 1. 初始化数据库
 createdb vos_rs
 
-# 2. 启动依赖服务（PostgreSQL 5432, NATS 4222）
-# 参考 docs/development/ENV_VARS.md 配置 .env
-
-# 3. 执行数据库迁移
+# 2. 执行数据库结构迁移与表对其
 make db-migrate
 
-# 4. 一键启动三端进程（sip-edge + api-server + 前端 Dev Server）
+# 3. 启动一键开发脚本（同步拉起 sip-edge, api-server 与 Vite 热更新服务器）
 ./scripts/dev.sh
 
-# 5. 访问 http://localhost:3000
+# 4. 访问前端开发服务
+# 地址: http://localhost:3000
 ```
 
-### 方式三：从源码构建
+#### 🛠 方式三：从源码独立编译构建
 
 ```bash
-# 1. 构建后端 workspace
+# 1. 编译后端全量 Release 产物
 cargo build --workspace --release
 
-# 2. 构建前端
-cd web && npm install && npm run build
+# 2. 构建前端静态资源 bundle
+cd web && npm install && npm run build && cd ..
 
-# 3. 启动 sip-edge
-./target/release/sip-edge
+# 3. 启动核心服务
+./target/release/sip-edge &     # SIP B2BUA 边缘节点 (端口 5060/5061)
+./target/release/api-server &    # REST API 服务 (端口 8080)
+./target/release/cdr-worker &    # NATS 异步话单落盘 Worker
 
-# 4. 启动 api-server
-./target/release/api-server
+# 4. 前端使用 Nginx 或 Vite 托管
+```
 
-# 5. 部署前端（nginx 托管 web/dist）
+---
+
+### 3. 数据清理与重置计划
+
+项目提供了一个数据隔离与历史记录清理脚本，用于在演示或测试完成后**一键清空 CDR 话单、SIP 信令抓包与追踪日志，同时 100% 完整保留中继、号码、账号与分机配置**：
+
+```bash
+# 一键清理历史数据（自动识别本地 psql 或 Docker Postgres）
+./scripts/clean_data.sh
 ```
 
 ---
@@ -622,33 +634,32 @@ curl http://localhost:8080/manage/calls/<call_id>/status
 
 ---
 
-## 🗺 路线图
+## 🗺 路线图 (Roadmap & Development Plan)
 
-### v1.0（当前）
+### v1.0（当前版本 - 已就绪）
 
-- ✅ SIP B2BUA 完整事务状态机
-- ✅ RTP 中继 + Opus/G.711 转码
-- ✅ 路由引擎 + LCR + 熔断
-- ✅ 计费引擎 + CDR + 实时扣费
-- ✅ SBC 安全 + IP ACL + 限速
-- ✅ Web 控制台 + REST API
-- ✅ AI-Native 媒体控制 API
+- ✅ **SIP B2BUA 引擎**：完整 RFC 3261 事务状态机、PRACK、Session-Expires
+- ✅ **RTP 媒体中继**：高并发无锁分配、Opus ↔ G.711 实时转码
+- ✅ **路由与计费**：LCR 最长前缀匹配、熔断探活、实时余额扣减、CDR
+- ✅ **SBC 边界安全**：IP ACL、令牌桶限速、Digest 动态认证
+- ✅ **Web 控制台**：基于 **HeroUI (v2.8) + Tailwind CSS + Lucide 矢量图标** 的 100% 全面大厂美学重构（全屏无留白自适应排版）
+- ✅ **AI-Native 媒体接口**：支持音频注入、打断、音视频控制 API
+- ✅ **数据库运维脚手架**：一键历史数据清理脚本（保留中继/号码/账号/分机）
 
-### v1.1（计划中）
+### v1.1（近期计划中）
 
-- ⏳ 录音模块 async 化重构
-- ⏳ SBC RateLimiter DashMap 分片
-- ⏳ SIP 解析零拷贝重构
-- ⏳ 实时余额扣减 AtomicI64 CAS 缓存
-- ⏳ WebRTC 完整支持（媒体节点）
+- ⏳ **录音模块 async 化重构**：将同步磁盘文件 I/O 全量切换为 Tokio MPSC 异步通道
+- ⏳ **SBC RateLimiter 优化**：将单 Mutex 限速器替换为 DashMap 高性能并发分片
+- ⏳ **SIP 零拷贝解析器**：借助 Rust 借用生命周期消灭字符串复制
+- ⏳ **实时余额 CAS 缓存**：基于 `AtomicI64` 内存预扣减提升高并发 CPS
+- ⏳ **WebRTC 终端媒体代理**：集成 DTLS-SRTP 与 ICE 穿透节点
 
-### v1.2（规划中）
+### v1.2（远期规划中）
 
-- ⏳ 分布式信令节点（sip-router）
-- ⏳ 集群级媒体调度
-- ⏳ Webhook 插拔式通道
-- ⏳ 可视化路由拓扑编辑器
-- ⏳ Prometheus + Grafana 监控栈
+- ⏳ **分布式信令节点 (sip-router)**：多节点无状态集群与平滑扩缩容
+- ⏳ **可视化路由拓扑编辑器**：前端图形化节点拖拽编排
+- ⏳ **插拔式 Webhook 通道**：事件驱动的第三方业务回调机制
+- ⏳ **Prometheus + Grafana 深度监控面板**：指标实时可视化导出
 
 ---
 
