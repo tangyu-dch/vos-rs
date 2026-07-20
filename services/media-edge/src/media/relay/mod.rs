@@ -43,6 +43,7 @@ pub mod sans_io;
 mod source;
 mod state;
 pub mod webrtc;
+pub mod io_uring;
 
 pub(crate) use listener::relay_media_port;
 #[allow(unused_imports)]
