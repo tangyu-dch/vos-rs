@@ -1,19 +1,35 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import type { ReactNode } from 'react';
-import { useAuth } from './auth/AuthContext';
-import { canAccessPage } from './services/auth';
-import ConsoleShell from './components/ConsoleShell';
-import Login from './pages/Login';
-import {
-  AccountsPage, ActiveCallsPage, CallDetailPage, CallsPage, DashboardPage, DidDestinationsPage,
-  ExtensionsPage, InfrastructurePage, NumbersPage,
-  RatesPage, RoutesPage, SecurityPage, SettingsPage, TransactionsPage,
-  CallerPoolsPage, EgressGroupsPage, AccessTrunksPage, EgressTrunksPage,
-} from './pages/console';
-import TrunkDetailPage from './pages/trunk-detail';
-import ExtensionDetailPage from './pages/extension-detail';
-import EgressGroupDetailPage from './pages/egress-group-detail';
-import CallerPoolDetailPage from './pages/caller-pool-detail';
+import { useAuth } from '@/auth/AuthContext';
+import { canAccessPage } from '@/services/auth';
+import ConsoleShell from '@/components/ConsoleShell';
+import Login from '@/pages/Login';
+import ErrorBoundary from '@/components/ErrorBoundary';
+import { DashboardPage } from '@/pages/operations/dashboard';
+import { ActiveCallsPage } from '@/pages/operations/active-calls';
+import { CallDetailPage } from '@/pages/operations/call-detail';
+import { ExtensionsPage } from '@/pages/numbers/extensions';
+import { NumbersPage } from '@/pages/numbers/numbers';
+import { DidDestinationsPage } from '@/pages/numbers/did-destinations';
+import { CallerPoolsPage } from '@/pages/numbers/caller-pools';
+import ExtensionDetailPage from '@/pages/numbers/extension-detail';
+import CallerPoolDetailPage from '@/pages/numbers/caller-pool-detail';
+import { AccessTrunksPage } from '@/pages/trunks/access-trunks';
+import { EgressTrunksPage } from '@/pages/trunks/egress-trunks';
+import { EgressGroupsPage } from '@/pages/trunks/egress-groups';
+import TrunkDetailPage from '@/pages/trunks/trunk-detail';
+import EgressGroupDetailPage from '@/pages/trunks/egress-group-detail';
+import AgentsPage from '@/pages/call-center/agents';
+import QueuesPage from '@/pages/call-center/queues';
+import IvrPage from '@/pages/call-center/ivr';
+import { AccountsPage } from '@/pages/billing/accounts';
+import { RatesPage } from '@/pages/billing/rates';
+import { TransactionsPage } from '@/pages/billing/transactions';
+import { CallsPage } from '@/pages/billing/calls';
+import { RoutesPage } from '@/pages/system/routes';
+import { SecurityPage } from '@/pages/system/security';
+import { InfrastructurePage } from '@/pages/system/infrastructure';
+import { SettingsPage } from '@/pages/system/settings';
 
 function PrivateConsole() {
   const { session } = useAuth();
@@ -39,6 +55,9 @@ function PrivateConsole() {
         <Route path="/caller-pools/:id" element={<ProtectedPage path="/caller-pools"><CallerPoolDetailPage /></ProtectedPage>} />
         <Route path="/egress-groups" element={<ProtectedPage path="/egress-groups"><EgressGroupsPage /></ProtectedPage>} />
         <Route path="/egress-groups/:id" element={<ProtectedPage path="/egress-groups"><EgressGroupDetailPage /></ProtectedPage>} />
+        <Route path="/queues" element={<ProtectedPage path="/queues"><QueuesPage /></ProtectedPage>} />
+        <Route path="/agents" element={<ProtectedPage path="/agents"><AgentsPage /></ProtectedPage>} />
+        <Route path="/ivr" element={<ProtectedPage path="/ivr"><IvrPage /></ProtectedPage>} />
 
         <Route path="/routing" element={<ProtectedPage path="/routing"><RoutesPage /></ProtectedPage>} />
         <Route path="/billing/accounts" element={<ProtectedPage path="/billing/accounts"><AccountsPage /></ProtectedPage>} />
@@ -59,5 +78,12 @@ function ProtectedPage({ path, children }: { path: string; children: ReactNode }
 }
 
 export default function App() {
-  return <Routes><Route path="/login" element={<Login />} /><Route path="*" element={<PrivateConsole />} /></Routes>;
+  return (
+    <ErrorBoundary>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="*" element={<PrivateConsole />} />
+      </Routes>
+    </ErrorBoundary>
+  );
 }
