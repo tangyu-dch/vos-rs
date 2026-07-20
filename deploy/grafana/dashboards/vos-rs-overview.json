@@ -1,0 +1,58 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "当前活跃通话 (Active Calls)",
+      "type": "stat",
+      "targets": [
+        { "expr": "vos_rs_active_calls", "refId": "A" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "title": "呼叫建立吞吐 (CPS)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(vos_rs_calls_established_total[1m])", "refId": "A" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "title": "RTP 媒体 MOS 质量分",
+      "type": "stat",
+      "targets": [
+        { "expr": "vos_rs_rtp_mos_score", "refId": "A" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "title": "SBC 拦截计数",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(vos_rs_sbc_blocked_total[1m])", "refId": "A" }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["vos-rs", "telecom", "softswitch"],
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "Vos-rs 电信软交换核心运营大屏",
+  "uid": "vos-rs-telecom-overview"
+}

@@ -1,0 +1,21 @@
+# Prometheus Configuration for Vos-rs Telecom Softswitch
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'vos-rs-api-server'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['localhost:8080']
+        labels:
+          cluster: 'production-east'
+          service: 'vos-rs-api'
+
+  - job_name: 'vos-rs-sip-edge'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['localhost:5060']
+        labels:
+          cluster: 'production-east'
+          service: 'vos-rs-edge'
