@@ -134,6 +134,7 @@ impl RecordingFormat {
 /// ffmpeg -y -i input.wav -c:a libopus output.opus
 /// ffmpeg -y -i input.wav -ar 8000 -ab 12.2k output.amr
 /// ```
+#[allow(dead_code)]
 pub fn transcode_recording_async(wav_path: std::path::PathBuf, format: RecordingFormat) {
     if format == RecordingFormat::Wav {
         return; // 无需转码
@@ -187,6 +188,109 @@ pub fn transcode_recording_async(wav_path: std::path::PathBuf, format: Recording
                     error = %e,
                     "ffmpeg not available or spawn failed, keeping original WAV"
                 );
+            }
+        }
+    });
+}
+
+/// 转码录音文件并在完成后上传到统一存储后端（OSS/本地双写）。
+pub fn transcode_and_upload_recording_async(
+    wav_path: std::path::PathBuf,
+    format: RecordingFormat,
+    call_id: String,
+    tokio_handle: Option<tokio::runtime::Handle>,
+    storage: Option<std::sync::Arc<dyn storage_core::StorageBackend>>,
+) {
+    let Some(handle) = tokio_handle else {
+        tracing::warn!("Tokio 句柄不可用，跳过录音上传同步");
+        return;
+    };
+    handle.spawn(async move {
+        let final_path = if format != RecordingFormat::Wav {
+            let Some(stem) = wav_path.file_stem().and_then(|s| s.to_str()) else {
+                tracing::warn!(path = ?wav_path, "transcode: cannot determine file stem");
+                return;
+            };
+            let parent = wav_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let out_path = parent.join(format!("{}.{}", stem, format.extension()));
+
+            let mut cmd = tokio::process::Command::new("ffmpeg");
+            cmd.args(["-y", "-i"])
+                .arg(&wav_path)
+                .args(match format {
+                    RecordingFormat::Opus => vec!["-c:a", "libopus", "-b:a", "32k"],
+                    RecordingFormat::Amr => vec!["-ar", "8000", "-ab", "12200"],
+                    RecordingFormat::Wav => unreachable!(),
+                })
+                .arg(&out_path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+
+            match cmd.status().await {
+                Ok(status) if status.success() => {
+                    tracing::info!(
+                        src = ?wav_path,
+                        dst = ?out_path,
+                        "recording transcoded successfully"
+                    );
+                    let _ = tokio::fs::remove_file(&wav_path).await;
+                    out_path
+                }
+                Ok(status) => {
+                    tracing::warn!(
+                        src = ?wav_path,
+                        dst = ?out_path,
+                        code = ?status.code(),
+                        "ffmpeg failed, fallback to raw wav"
+                    );
+                    wav_path
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        src = ?wav_path,
+                        dst = ?out_path,
+                        %error,
+                        "failed to execute ffmpeg, fallback to raw wav"
+                    );
+                    wav_path
+                }
+            }
+        } else {
+            wav_path
+        };
+
+        if let Some(storage) = storage {
+            let extension = if final_path.extension().is_some_and(|e| e == "opus") {
+                "opus"
+            } else if final_path.extension().is_some_and(|e| e == "amr") {
+                "amr"
+            } else {
+                "wav"
+            };
+            let key = format!("recordings/rec-{}.{}", call_id, extension);
+            match tokio::fs::read(&final_path).await {
+                Ok(data) => {
+                    let content_type = match extension {
+                        "wav" => Some("audio/wav"),
+                        "opus" => Some("audio/ogg"),
+                        "amr" => Some("audio/amr"),
+                        _ => None,
+                    };
+                    match storage.put(&key, axum::body::Bytes::from(data), content_type).await {
+                        Ok(()) => {
+                            tracing::info!(key, "录音同步完成");
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, key, "录音上传存储后端失败");
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(%error, path = ?final_path, "读取录音文件失败，无法同步");
+                }
             }
         }
     });

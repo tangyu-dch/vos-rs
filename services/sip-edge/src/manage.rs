@@ -159,41 +159,10 @@ async fn terminate(State(state): State<Arc<EdgeState>>, Path(call_id): Path<Stri
     state.inbound_transactions.remove(&call_id);
     state.call_manager.terminate_call(&call_id);
 
-    // Real-time billing: settle the call on force terminate.
-    if let (true, Some(db)) = (state.billing_settlement_enabled, state.db_store.as_ref()) {
-        if let Some(call) = state
-            .call_manager
-            .get(&call_core::CallId::new(call_id.clone()))
-        {
-            let caller_user = call.caller.as_deref().and_then(|s| {
-                let idx = s.find("sip:")?;
-                let rest = &s[idx + 4..];
-                let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
-                if end == 0 {
-                    None
-                } else {
-                    Some(&rest[..end])
-                }
-            });
-            let callee = call.inbound.remote_uri.user.as_deref().unwrap_or("");
-            let duration_ms = call
-                .ended_at
-                .and_then(|e| e.duration_since(call.started_at).ok())
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            if let Some(user) = caller_user {
-                let db = db.clone();
-                let user = user.to_string();
-                let callee = callee.to_string();
-                let cid = call_id.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = db.settle_call(&cid, &user, &callee, duration_ms).await {
-                        tracing::warn!(call_id = %cid, error = %e, "force-terminate settlement failed");
-                    }
-                });
-            }
-        }
-    }
+    crate::billing_settlement::settle_completed_call(
+        &state,
+        &call_core::CallId::new(call_id.clone()),
+    );
 
     StatusCode::OK
 }
@@ -541,10 +510,15 @@ async fn call_status(
     let mut callee_playback = serde_json::json!(null);
     let mut caller_muted = false;
     let mut callee_muted = false;
+    let mut caller_talking = false;
+    let mut callee_talking = false;
+    let mut caller_metrics = serde_json::json!(null);
+    let mut callee_metrics = serde_json::json!(null);
 
     // 获取主叫端状态
     if let Some(ref rtp) = tx.caller_relay_rtp {
         caller_muted = state.media_relay.muted_ports.contains(&rtp.port);
+        caller_talking = state.media_relay.talking_status.get(&rtp.port).map(|v| *v).unwrap_or(false);
         if let Some(playback) = state.media_relay.playbacks.get(&rtp.port) {
             if let Ok(st) = playback.lock() {
                 caller_playback = serde_json::json!({
@@ -555,11 +529,28 @@ async fn call_status(
                 });
             }
         }
+        if let Some(metrics) = state.media_relay.metrics.get(&rtp.port) {
+            let win = metrics.rtcp_window;
+            caller_metrics = serde_json::json!({
+                "received_packets": metrics.received_packets,
+                "dropped_packets": metrics.dropped_invalid_packets,
+                "jitter_ms": win.average_jitter.map(|j| j as f64 / 8.0).unwrap_or(0.0),
+                "loss_percent": win.average_fraction_lost.map(|l| l as f64 * 100.0 / 255.0).unwrap_or(0.0),
+                "rtt_ms": win.average_rtt_ms.unwrap_or(0),
+                "mos": win.mos_x100.map(|m| m as f64 / 100.0).unwrap_or(0.0),
+                "webrtc": {
+                    "ice_connected": metrics.webrtc_ice_connected,
+                    "dtls_connected": metrics.webrtc_dtls_connected,
+                    "dtls_failed": metrics.webrtc_dtls_failed,
+                }
+            });
+        }
     }
 
     // 获取被叫端状态
     if let Some(ref rtp) = tx.gateway_relay_rtp {
         callee_muted = state.media_relay.muted_ports.contains(&rtp.port);
+        callee_talking = state.media_relay.talking_status.get(&rtp.port).map(|v| *v).unwrap_or(false);
         if let Some(playback) = state.media_relay.playbacks.get(&rtp.port) {
             if let Ok(st) = playback.lock() {
                 callee_playback = serde_json::json!({
@@ -570,6 +561,22 @@ async fn call_status(
                 });
             }
         }
+        if let Some(metrics) = state.media_relay.metrics.get(&rtp.port) {
+            let win = metrics.rtcp_window;
+            callee_metrics = serde_json::json!({
+                "received_packets": metrics.received_packets,
+                "dropped_packets": metrics.dropped_invalid_packets,
+                "jitter_ms": win.average_jitter.map(|j| j as f64 / 8.0).unwrap_or(0.0),
+                "loss_percent": win.average_fraction_lost.map(|l| l as f64 * 100.0 / 255.0).unwrap_or(0.0),
+                "rtt_ms": win.average_rtt_ms.unwrap_or(0),
+                "mos": win.mos_x100.map(|m| m as f64 / 100.0).unwrap_or(0.0),
+                "webrtc": {
+                    "ice_connected": metrics.webrtc_ice_connected,
+                    "dtls_connected": metrics.webrtc_dtls_connected,
+                    "dtls_failed": metrics.webrtc_dtls_failed,
+                }
+            });
+        }
     }
 
     (
@@ -578,11 +585,15 @@ async fn call_status(
             "call_id": call_id,
             "caller": {
                 "muted": caller_muted,
+                "is_talking": caller_talking,
                 "playback": caller_playback,
+                "metrics": caller_metrics,
             },
             "callee": {
                 "muted": callee_muted,
+                "is_talking": callee_talking,
                 "playback": callee_playback,
+                "metrics": callee_metrics,
             }
         })),
     )

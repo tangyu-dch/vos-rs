@@ -22,6 +22,12 @@ pub(super) struct RelayPlan {
     pub(super) peer_port: Option<u16>,
     pub(super) peer_codec: Option<rtp_core::AudioCodec>,
     pub(super) peer_crypto_session: Option<Arc<tokio::sync::Mutex<MediaCryptoSession>>>,
+    pub(super) pending_srtp: Option<PendingSrtpConfig>,
+    pub(super) peer_pending_srtp: Option<PendingSrtpConfig>,
+    pub(super) monitors: Option<Vec<SocketAddr>>,
+    pub(super) websocket: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
+    pub(super) peer_playback_exclusive: bool,
+    pub(super) muted: bool,
 }
 
 /// 快路径按批次回写指标，避免每个 RTP 包都获取 DashMap 分片锁。
@@ -114,6 +120,15 @@ impl MediaRelayState {
         let peer_crypto_session =
             peer_port.and_then(|p| self.crypto_sessions.get(&p).map(|entry| entry.clone()));
 
+        let pending_srtp = self.pending_srtp.get(&relay_port).map(|entry| entry.clone());
+        let peer_pending_srtp = peer_port.and_then(|p| self.pending_srtp.get(&p).map(|entry| entry.clone()));
+        let monitors = self.monitors.get(&relay_port).map(|entry| entry.clone());
+        let websocket = self.websockets.get(&relay_port).map(|entry| entry.clone());
+        let peer_playback_exclusive = peer_port
+            .and_then(|p| self.playback_modes.get(&p).map(|entry| *entry == PlaybackMode::Exclusive))
+            .unwrap_or(false);
+        let muted = self.muted_ports.contains(&relay_port);
+
         let requires_processing = self.requires_processed_path(relay_port, peer_port);
         let has_valid_target = target
             .map(|address| !address.ip().is_unspecified() && address.port() != 0)
@@ -134,6 +149,12 @@ impl MediaRelayState {
             peer_port,
             peer_codec,
             peer_crypto_session,
+            pending_srtp,
+            peer_pending_srtp,
+            monitors,
+            websocket,
+            peer_playback_exclusive,
+            muted,
         }
     }
 

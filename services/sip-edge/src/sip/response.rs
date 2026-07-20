@@ -20,7 +20,9 @@
 //! - 检查网关容量
 //! - 应用前缀规则和 Caller ID 重写
 
-use call_core::{CallError, CallManager, CallerIdentity, GatewayHealthTracker, CallSource};
+use call_core::{
+    CallDirection, CallError, CallManager, CallSource, CallerIdentity, GatewayHealthTracker,
+};
 use sip_core::{HeaderMap, Method, SipRequest, SipResponse, SipUri};
 
 const SERVER_HEADER: &str = "VOS-RS sip-edge/0.1";
@@ -55,6 +57,23 @@ pub fn response_for_request_with_health(
     source: Option<&CallSource>,
     health: Option<&GatewayHealthTracker>,
 ) -> RequestHandling {
+    response_for_request_with_health_and_direction(
+        request,
+        call_manager,
+        source,
+        health,
+        CallDirection::Outbound,
+    )
+}
+
+/// 处理请求，并使用接入识别阶段确定的可信业务方向。
+pub fn response_for_request_with_health_and_direction(
+    request: &SipRequest,
+    call_manager: &CallManager,
+    source: Option<&CallSource>,
+    health: Option<&GatewayHealthTracker>,
+    direction: CallDirection,
+) -> RequestHandling {
     match &request.method {
         Method::Options => build_response(
             request,
@@ -64,7 +83,9 @@ pub fn response_for_request_with_health(
             "",
         )
         .into(),
-        Method::Invite => response_for_invite_with_source(request, call_manager, source, health),
+        Method::Invite => {
+            response_for_invite_with_source(request, call_manager, source, health, direction)
+        }
         _ => build_response(request, 501, "Not Implemented", &[], "").into(),
     }
 }
@@ -74,8 +95,11 @@ fn response_for_invite_with_source(
     call_manager: &CallManager,
     source: Option<&CallSource>,
     health: Option<&GatewayHealthTracker>,
+    direction: CallDirection,
 ) -> RequestHandling {
-    match call_manager.handle_inbound_invite_with_source_and_health(request, source, health) {
+    match call_manager.handle_inbound_invite_with_source_and_health_and_direction(
+        request, source, health, direction,
+    ) {
         Ok(outcome) => {
             let gateway_id = call_manager
                 .current_gateway_id(outcome.call_id.as_str())
@@ -105,12 +129,15 @@ fn response_for_invite_with_source(
     }
 }
 
-pub fn response_for_invite_to_uri(
+/// 将 INVITE 发送到预选 URI，并保留可信业务方向。
+pub fn response_for_invite_to_uri_with_direction(
     request: &SipRequest,
     call_manager: &CallManager,
     outbound_uri: SipUri,
+    direction: CallDirection,
 ) -> RequestHandling {
-    match call_manager.handle_inbound_invite_to_uri(request, outbound_uri) {
+    match call_manager.handle_inbound_invite_to_uri_with_direction(request, outbound_uri, direction)
+    {
         Ok(outcome) => RequestHandling {
             response: build_response(request, 100, "Trying", &[], ""),
             outbound_invite: Some(OutboundInvitePlan {

@@ -13,7 +13,7 @@ use tokio::time::{sleep, timeout, Duration};
 
 #[test]
 fn recording_pool_reports_capacity_and_queue_depth() {
-    let pool = RecordingPool::new(2, 3);
+    let pool = RecordingPool::new(2, 3, None);
 
     assert_eq!(pool.worker_count(), 2);
     assert_eq!(pool.total_capacity(), 6);
@@ -106,10 +106,7 @@ async fn allocates_even_ports_without_reusing_active_leases() {
             break;
         }
     }
-    assert_eq!(
-        endpoint.unwrap(),
-        RtpEndpoint::new("203.0.113.10", 50_002)
-    );
+    assert_eq!(endpoint.unwrap(), RtpEndpoint::new("203.0.113.10", 50_002));
 }
 
 #[tokio::test]
@@ -135,7 +132,7 @@ async fn local_node_uses_unified_pool_and_releases_call_affinity() {
         }],
         ..MediaClusterConfig::default()
     };
-    let relay = MediaRelayState::with_node_pool(&pool_config, 1, 16);
+    let relay = MediaRelayState::with_node_pool(&pool_config, 1, 16, None);
     let runtime_config = MediaConfig::new("198.51.100.1", 40_000, 40_002);
 
     let endpoint = relay

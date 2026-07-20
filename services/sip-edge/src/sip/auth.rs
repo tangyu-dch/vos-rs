@@ -348,7 +348,6 @@ impl DigestExpectation<'_> {
     }
 }
 
-#[cfg(test)]
 pub fn digest_response(
     username: &str,
     password: &str,
@@ -371,7 +370,7 @@ fn md5_hex(value: &str) -> String {
     format!("{:x}", md5::compute(value.as_bytes()))
 }
 
-fn parse_digest_authorization(raw: &str) -> Option<HashMap<String, String>> {
+pub(crate) fn parse_digest_authorization(raw: &str) -> Option<HashMap<String, String>> {
     let raw = raw.trim();
     let params = raw.strip_prefix("Digest ")?;
     Some(parse_auth_params(params))

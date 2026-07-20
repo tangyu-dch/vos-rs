@@ -126,7 +126,13 @@ pub(crate) fn start_ws_listener(
                                 Ok(tls_stream) => {
                                     match tokio_tungstenite::accept_async(tls_stream).await {
                                         Ok(ws_stream) => {
-                                            setup_ws_connection(ws_stream, peer, state_clone, config_clone).await;
+                                            setup_ws_connection(
+                                                ws_stream,
+                                                peer,
+                                                state_clone,
+                                                config_clone,
+                                            )
+                                            .await;
                                         }
                                         Err(e) => {
                                             warn!(%peer, error = %e, "WSS handshake failed");
@@ -140,7 +146,8 @@ pub(crate) fn start_ws_listener(
                         } else {
                             match tokio_tungstenite::accept_async(stream).await {
                                 Ok(ws_stream) => {
-                                    setup_ws_connection(ws_stream, peer, state_clone, config_clone).await;
+                                    setup_ws_connection(ws_stream, peer, state_clone, config_clone)
+                                        .await;
                                 }
                                 Err(e) => {
                                     warn!(%peer, error = %e, "WS handshake failed");
@@ -181,10 +188,8 @@ async fn setup_ws_connection<S>(
             let state = Arc::clone(&on_msg_state);
             let config = Arc::clone(&on_msg_config);
             async move {
-                let datagrams = crate::sip::handle_datagram(
-                    &msg_bytes, peer_addr, &state, &config,
-                )
-                .await;
+                let datagrams =
+                    crate::sip::handle_datagram(&msg_bytes, peer_addr, &state, &config).await;
                 for d in datagrams {
                     let _ = connection_tx.send(d.bytes).await;
                 }

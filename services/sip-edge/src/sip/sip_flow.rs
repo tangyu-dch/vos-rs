@@ -4,8 +4,8 @@ use sip_core::parse_message;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 use time::OffsetDateTime;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 pub(crate) struct SipFlowWriter {
     rx: Receiver<SipFlowRecord>,
@@ -75,7 +75,7 @@ impl SipFlowWriter {
                     self.edge_state.matched_call_ids.retain(|_, start_time| {
                         now.duration_since(*start_time) < Duration::from_secs(7200) // retain for max 2 hours
                     });
-                    
+
                     // Clean up matching caller addresses
                     let matched_keys: std::collections::HashSet<String> = self.edge_state.matched_call_ids
                         .iter()
@@ -96,7 +96,12 @@ fn extract_user(val: &str) -> Option<String> {
         let end_pos = rest.find(['@', ';', '>']);
         if let Some(at_pos) = rest.find('@') {
             let user = &rest[..at_pos];
-            return Some(user.trim_start_matches('"').trim_end_matches('"').trim().to_string());
+            return Some(
+                user.trim_start_matches('"')
+                    .trim_end_matches('"')
+                    .trim()
+                    .to_string(),
+            );
         }
         if let Some(ep) = end_pos {
             return Some(rest[..ep].trim().to_string());
@@ -120,14 +125,18 @@ impl EdgeState {
 
         let msg_method = match &msg {
             sip_core::SipMessageBorrow::Request(req) => req.method.as_str().to_string(),
-            sip_core::SipMessageBorrow::Response(resp) => format!("{} {}", resp.status_code, resp.reason_phrase),
+            sip_core::SipMessageBorrow::Response(resp) => {
+                format!("{} {}", resp.status_code, resp.reason_phrase)
+            }
         };
 
         // Determine if we should save caller address
         if direction == "in" {
             if let sip_core::SipMessageBorrow::Request(req) = &msg {
                 if req.method == sip_core::Method::Invite {
-                    self.call_caller_addrs.entry(call_id.clone()).or_insert(peer_addr);
+                    self.call_caller_addrs
+                        .entry(call_id.clone())
+                        .or_insert(peer_addr);
                 }
             }
         }
@@ -141,9 +150,15 @@ impl EdgeState {
             if whitelist == "*" {
                 whitelisted = true;
             } else if !whitelist.is_empty() {
-                let from_user = msg.headers().get("from").and_then(|h| extract_user(h.as_str()));
-                let to_user = msg.headers().get("to").and_then(|h| extract_user(h.as_str()));
-                
+                let from_user = msg
+                    .headers()
+                    .get("from")
+                    .and_then(|h| extract_user(h.as_str()));
+                let to_user = msg
+                    .headers()
+                    .get("to")
+                    .and_then(|h| extract_user(h.as_str()));
+
                 let parts: Vec<&str> = whitelist.split(',').map(|s| s.trim()).collect();
                 if let Some(fu) = &from_user {
                     if parts.contains(&fu.as_str()) {
@@ -158,7 +173,8 @@ impl EdgeState {
             }
 
             if whitelisted {
-                self.matched_call_ids.insert(call_id.clone(), Instant::now());
+                self.matched_call_ids
+                    .insert(call_id.clone(), Instant::now());
             }
         }
 
@@ -168,7 +184,9 @@ impl EdgeState {
 
         // Determine direction string for api-server and frontend
         let dir = if direction == "in" {
-            let is_caller = self.call_caller_addrs.get(&call_id)
+            let is_caller = self
+                .call_caller_addrs
+                .get(&call_id)
                 .map(|addr_guard| *addr_guard == peer_addr)
                 .unwrap_or(false);
             if is_caller {
@@ -177,7 +195,9 @@ impl EdgeState {
                 "uas_to_b2bua".to_string()
             }
         } else {
-            let is_caller = self.call_caller_addrs.get(&call_id)
+            let is_caller = self
+                .call_caller_addrs
+                .get(&call_id)
                 .map(|addr_guard| *addr_guard == peer_addr)
                 .unwrap_or(false);
             if is_caller {
@@ -188,7 +208,9 @@ impl EdgeState {
         };
 
         // Get local socket address (or config bind if onceLock not initialized)
-        let local_addr = self.socket.get()
+        let local_addr = self
+            .socket
+            .get()
             .and_then(|s| s.local_addr().ok())
             .map(|a| a.to_string())
             .unwrap_or_else(|| "0.0.0.0:5060".to_string());
@@ -219,11 +241,11 @@ impl EdgeState {
         // If BYE request or response to BYE seen, we can clean up after a small delay
         let is_bye = match &msg {
             sip_core::SipMessageBorrow::Request(req) => req.method == sip_core::Method::Bye,
-            sip_core::SipMessageBorrow::Response(_resp) => {
-                msg.headers().get("cseq")
-                    .map(|h| h.as_str().to_ascii_uppercase().contains("BYE"))
-                    .unwrap_or(false)
-            }
+            sip_core::SipMessageBorrow::Response(_resp) => msg
+                .headers()
+                .get("cseq")
+                .map(|h| h.as_str().to_ascii_uppercase().contains("BYE"))
+                .unwrap_or(false),
         };
 
         if is_bye {

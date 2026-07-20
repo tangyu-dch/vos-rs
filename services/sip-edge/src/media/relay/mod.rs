@@ -144,10 +144,12 @@ pub struct MediaRelayState {
     pub(crate) websockets: Arc<DashMap<u16, tokio::sync::mpsc::Sender<Vec<u8>>>>,
     pub(crate) websocket_loops: Arc<DashMap<u16, tokio::sync::oneshot::Sender<()>>>,
     pub(crate) muted_ports: Arc<dashmap::DashSet<u16>>,
+    pub(crate) talking_status: Arc<DashMap<u16, bool>>,
     continuity: Arc<DashMap<u16, RtpContinuityState>>,
     pub(crate) conference_manager: Arc<crate::media::conference::ConferenceManager>,
     pub(crate) monitors: Arc<DashMap<u16, Vec<SocketAddr>>>,
     pub(crate) buffer_pool: Arc<pool::PacketBufferPool>,
+    pub(crate) storage: Option<Arc<dyn storage_core::StorageBackend>>,
 }
 
 impl Clone for MediaRelayState {
@@ -176,10 +178,12 @@ impl Clone for MediaRelayState {
             websockets: Arc::clone(&self.websockets),
             websocket_loops: Arc::clone(&self.websocket_loops),
             muted_ports: Arc::clone(&self.muted_ports),
+            talking_status: Arc::clone(&self.talking_status),
             continuity: Arc::clone(&self.continuity),
             conference_manager: Arc::clone(&self.conference_manager),
             monitors: Arc::clone(&self.monitors),
             buffer_pool: Arc::clone(&self.buffer_pool),
+            storage: self.storage.clone(),
         }
     }
 }

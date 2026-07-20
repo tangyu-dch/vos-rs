@@ -20,7 +20,52 @@ pub(crate) async fn reload_number_routes(
     let dids = database.list_did_destinations().await?;
     let count = dids.len();
     edge_state.replace_did_destinations(dids.into_iter().map(|d| (d.number.clone(), d)).collect());
-    info!(count, "号码路由缓存已刷新");
+
+    // 重新加载分机组及其成员
+    let members = database.list_extension_group_members().await?;
+    let mut groups_map = std::collections::HashMap::new();
+    for (group_id, username) in members {
+        groups_map.entry(group_id).or_insert_with(Vec::new).push(username);
+    }
+    if let Ok(mut lock) = edge_state.extension_groups.write() {
+        *lock = groups_map;
+    }
+
+    // 重新加载 IVR 菜单与动作
+    let menus = database.list_ivr_menus().await?;
+    let actions = database.list_ivr_actions().await?;
+    let mut actions_map = std::collections::HashMap::new();
+    for (ivr_id, dtmf_key, action_type, action_target, waiting_prompt, webhook_method) in actions {
+        actions_map.entry(ivr_id).or_insert_with(std::collections::HashMap::new).insert(
+            dtmf_key,
+            crate::edge_state::IvrAction {
+                action_type,
+                action_target,
+                waiting_prompt,
+                webhook_method,
+            },
+        );
+    }
+
+    let mut menus_map = std::collections::HashMap::new();
+    for (id, name, welcome_prompt, timeout_secs) in menus {
+        let menu_actions = actions_map.remove(&id).unwrap_or_default();
+        menus_map.insert(
+            id.clone(),
+            crate::edge_state::IvrMenu {
+                id,
+                name,
+                welcome_prompt,
+                timeout_secs,
+                actions: menu_actions,
+            },
+        );
+    }
+    if let Ok(mut lock) = edge_state.ivr_menus.write() {
+        *lock = menus_map;
+    }
+
+    info!(count, "号码与 IVR 路由缓存已刷新");
     Ok(())
 }
 
@@ -131,6 +176,27 @@ mod tests {
         assert_eq!(state.resolve_number_destination(&destination), destination);
     }
 
+    #[test]
+    fn enabled_reject_destination_is_exposed_to_invite_handler() {
+        let state = state();
+        let did = cdr_core::DidDestination {
+            number: "4008002".to_string(),
+            tenant_id: None,
+            target_type: "reject".to_string(),
+            target_id: "reject".to_string(),
+            enabled: true,
+            updated_at: time::OffsetDateTime::now_utc(),
+        };
+        state.replace_did_destinations(HashMap::from([("4008002".to_string(), did)]));
+
+        assert_eq!(
+            state
+                .did_destination("4008002")
+                .map(|item| item.target_type),
+            Some("reject".to_string())
+        );
+    }
+
     #[tokio::test]
     async fn mapped_did_finds_extension_registration_contact() {
         let state = state();
@@ -143,6 +209,7 @@ mod tests {
                 &request,
                 "192.0.2.10:5070".parse::<SocketAddr>().expect("peer"),
                 SystemTime::now(),
+                None,
                 None,
             )
             .await

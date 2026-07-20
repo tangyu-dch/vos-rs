@@ -245,74 +245,36 @@ pub(crate) async fn handle_in_dialog_request(
                         crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
                     }
 
-                    // Real-time billing: settle the call.
-                    if let (true, Some(db)) = (
-                        edge_state.billing_settlement_enabled,
-                        edge_state.db_store.as_ref(),
-                    ) {
-                        let call = edge_state.call_manager.get(&outcome.call_id);
-                        if let Some(call) = call {
-                            let caller_user = call.caller.as_deref().and_then(|s| {
-                                // Extract user from "sip:user@host" or "<sip:user@host>"
-                                let idx = s.find("sip:")?;
-                                let rest = &s[idx + 4..];
-                                let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
-                                if end == 0 {
-                                    None
-                                } else {
-                                    Some(&rest[..end])
-                                }
-                            });
-                            let callee = call.inbound.remote_uri.user.as_deref().unwrap_or("");
-                            let duration_ms = call
-                                .ended_at
-                                .and_then(|e| e.duration_since(call.started_at).ok())
-                                .map(|d| d.as_millis() as i64)
-                                .unwrap_or(0);
-                            if let Some(user) = caller_user {
-                                let cid = outcome.call_id.as_str().to_string();
-                                let db = db.clone();
-                                let redis_connection = edge_state.redis_connection();
-                                let user = user.to_string();
-                                let callee = callee.to_string();
-                                tokio::spawn(async move {
-                                    match db.settle_call(&cid, &user, &callee, duration_ms).await {
-                                        Ok(Some(new_bal)) => {
-                                            if let Some(mut connection) = redis_connection {
-                                                let _: Result<(), redis::RedisError> =
-                                                    redis::cmd("HSET")
-                                                        .arg("vos_rs:billing:balances")
-                                                        .arg(&user)
-                                                        .arg(new_bal)
-                                                        .query_async(&mut connection)
-                                                        .await;
-                                            }
-                                            tracing::info!(call_id = %cid, user = %user, new_bal, "实时计费结算完成");
-                                        }
-                                        Ok(None) => {}
-                                        Err(e) => {
-                                            tracing::warn!(call_id = %cid, error = %e, "实时计费结算失败");
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                    }
+                    crate::billing_settlement::settle_completed_call(edge_state, &outcome.call_id);
 
                     edge_state.clear_media_targets(&transaction);
 
                     // 如果是会议呼叫（单腿 UAS 呼叫），直接在本地终结并返回 200 OK，不转发给其他任何节点
                     let out_user = transaction.outbound_uri.user.as_deref().unwrap_or("");
-                    if out_user.starts_with("conf_") || out_user.starts_with("room_") || out_user == "vosrs-playback" || out_user == "vosrs-gather" || out_user == "vosrs-stream" {
+                    if out_user.starts_with("conf_")
+                        || out_user.starts_with("room_")
+                        || out_user == "vosrs-playback"
+                        || out_user == "vosrs-gather"
+                        || out_user == "vosrs-stream"
+                    {
                         let username = transaction.original_request.as_ref().and_then(|req| {
                             crate::edge_state::EdgeState::username_from_request(req.as_ref())
                         });
                         if let Some(ref uname) = username {
                             edge_state.decrement_user_concurrency(uname);
                         }
-                        let duration_secs = transaction.established_at.map(|i| i.elapsed().as_secs()).unwrap_or(0);
-                        if edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats" {
-                            let edge_state_clone = edge_state.self_weak.get().and_then(|w| w.upgrade()).unwrap();
+                        let duration_secs = transaction
+                            .established_at
+                            .map(|i| i.elapsed().as_secs())
+                            .unwrap_or(0);
+                        if edge_config.webhooks.control_mode == "http"
+                            || edge_config.webhooks.control_mode == "nats"
+                        {
+                            let edge_state_clone = edge_state
+                                .self_weak
+                                .get()
+                                .and_then(|w| w.upgrade())
+                                .unwrap();
                             let edge_config_clone = edge_config.clone();
                             let cid_clone = call_id.to_string();
                             tokio::spawn(async move {
@@ -324,7 +286,8 @@ pub(crate) async fn handle_in_dialog_request(
                                     occurred_at_ms: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap_or_default()
-                                        .as_millis() as i64,
+                                        .as_millis()
+                                        as i64,
                                     event: call_core::CallEvent::CallFinished {
                                         duration_secs,
                                         sip_status: Some(200),
@@ -333,7 +296,13 @@ pub(crate) async fn handle_in_dialog_request(
                                         leg: "a_leg".to_string(),
                                     },
                                 };
-                                let _ = crate::sip::handlers::interactive_control::post_webhook_event(&edge_state_clone, &edge_config_clone, &event).await;
+                                let _ =
+                                    crate::sip::handlers::interactive_control::post_webhook_event(
+                                        &edge_state_clone,
+                                        &edge_config_clone,
+                                        &event,
+                                    )
+                                    .await;
                             });
                         }
                         edge_state.inbound_transactions.remove(call_id.as_str());
@@ -863,9 +832,18 @@ pub(crate) async fn handle_in_dialog_request(
         if let Some(ref uname) = username {
             edge_state.decrement_user_concurrency(uname);
         }
-        let duration_secs = transaction.established_at.map(|i| i.elapsed().as_secs()).unwrap_or(0);
-        if edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats" {
-            let edge_state_clone = edge_state.self_weak.get().and_then(|w| w.upgrade()).unwrap();
+        let duration_secs = transaction
+            .established_at
+            .map(|i| i.elapsed().as_secs())
+            .unwrap_or(0);
+        if edge_config.webhooks.control_mode == "http"
+            || edge_config.webhooks.control_mode == "nats"
+        {
+            let edge_state_clone = edge_state
+                .self_weak
+                .get()
+                .and_then(|w| w.upgrade())
+                .unwrap();
             let edge_config_clone = edge_config.clone();
             let cid_clone = call_id.clone();
             tokio::spawn(async move {
@@ -886,7 +864,12 @@ pub(crate) async fn handle_in_dialog_request(
                         leg: "a_leg".to_string(),
                     },
                 };
-                let _ = crate::sip::handlers::interactive_control::post_webhook_event(&edge_state_clone, &edge_config_clone, &event).await;
+                let _ = crate::sip::handlers::interactive_control::post_webhook_event(
+                    &edge_state_clone,
+                    &edge_config_clone,
+                    &event,
+                )
+                .await;
             });
         }
         edge_state.inbound_transactions.remove(call_id.as_str());

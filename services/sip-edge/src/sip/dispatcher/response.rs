@@ -70,6 +70,18 @@ pub(crate) async fn dispatch_response(
         }
     }
 
+    if let Some(ref reg_call_id) = call_id {
+        let is_outbound_reg = edge_state.outbound_registrations.iter().any(|entry| entry.value().call_id == *reg_call_id);
+        if is_outbound_reg {
+            return crate::sip::outbound_reg::handle_outbound_register_response(
+                edge_state,
+                edge_config,
+                &sip_response,
+                reg_call_id,
+            );
+        }
+    }
+
     let raw_external_call_id = sip_response
         .headers
         .get("call-id")
@@ -500,9 +512,14 @@ pub(crate) async fn dispatch_response(
                 }
             }
             if sip_response.status_code < 200
-                && (edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats")
+                && (edge_config.webhooks.control_mode == "http"
+                    || edge_config.webhooks.control_mode == "nats")
             {
-                let edge_state_clone = edge_state.self_weak.get().and_then(|w| w.upgrade()).unwrap();
+                let edge_state_clone = edge_state
+                    .self_weak
+                    .get()
+                    .and_then(|w| w.upgrade())
+                    .unwrap();
                 let edge_config_clone = edge_config.clone();
                 let cid_clone = call_id.to_string();
                 let status = sip_response.status_code;
@@ -516,9 +533,17 @@ pub(crate) async fn dispatch_response(
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_millis() as i64,
-                        event: call_core::CallEvent::CallRinging { sip_status: status, leg: "b_leg".to_string() },
+                        event: call_core::CallEvent::CallRinging {
+                            sip_status: status,
+                            leg: "b_leg".to_string(),
+                        },
                     };
-                    let _ = crate::sip::handlers::interactive_control::post_webhook_event(&edge_state_clone, &edge_config_clone, &event).await;
+                    let _ = crate::sip::handlers::interactive_control::post_webhook_event(
+                        &edge_state_clone,
+                        &edge_config_clone,
+                        &event,
+                    )
+                    .await;
                 });
             }
         }
@@ -532,11 +557,20 @@ pub(crate) async fn dispatch_response(
 
     if sip_response.status_code >= 200 && sip_response.status_code < 300 {
         if let Some(cid) = call_id.as_deref() {
-            let is_invite_local = sip_response.headers.get("cseq").map(|c| c.as_str().contains("INVITE")).unwrap_or(false);
+            let is_invite_local = sip_response
+                .headers
+                .get("cseq")
+                .map(|c| c.as_str().contains("INVITE"))
+                .unwrap_or(false);
             if is_invite_local
-                && (edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats")
+                && (edge_config.webhooks.control_mode == "http"
+                    || edge_config.webhooks.control_mode == "nats")
             {
-                let edge_state_clone = edge_state.self_weak.get().and_then(|w| w.upgrade()).unwrap();
+                let edge_state_clone = edge_state
+                    .self_weak
+                    .get()
+                    .and_then(|w| w.upgrade())
+                    .unwrap();
                 let edge_config_clone = edge_config.clone();
                 let cid_clone = cid.to_string();
                 let status = sip_response.status_code;
@@ -550,10 +584,26 @@ pub(crate) async fn dispatch_response(
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_millis() as i64,
-                        event: call_core::CallEvent::CallAnswered { sip_status: status, leg: "b_leg".to_string() },
+                        event: call_core::CallEvent::CallAnswered {
+                            sip_status: status,
+                            leg: "b_leg".to_string(),
+                        },
                     };
-                    if let Some(next_inst) = crate::sip::handlers::interactive_control::post_webhook_event(&edge_state_clone, &edge_config_clone, &event).await {
-                        crate::sip::handlers::interactive_control::execute_instruction(next_inst, cid_clone, edge_state_clone, edge_config_clone).await;
+                    if let Some(next_inst) =
+                        crate::sip::handlers::interactive_control::post_webhook_event(
+                            &edge_state_clone,
+                            &edge_config_clone,
+                            &event,
+                        )
+                        .await
+                    {
+                        crate::sip::handlers::interactive_control::execute_instruction(
+                            next_inst,
+                            cid_clone,
+                            edge_state_clone,
+                            edge_config_clone,
+                        )
+                        .await;
                     }
                 });
             }
@@ -614,7 +664,7 @@ pub(crate) async fn dispatch_response(
             .map(|t| t.established_at.is_some())
             .unwrap_or(false);
 
-    let outbound_response_outcome = if is_invite && !is_reinvite_response {
+    let mut outbound_response_outcome = if is_invite && !is_reinvite_response {
         match edge_state
             .call_manager
             .handle_outbound_response(&sip_response)
@@ -714,6 +764,29 @@ pub(crate) async fn dispatch_response(
                     }
                 });
             }
+        }
+    }
+
+    if outbound_response_outcome.failover_uri.is_some() {
+        if let Err(error) = crate::resource_lease::migrate_to_current(
+            edge_state,
+            &outbound_response_outcome.call_id,
+            &outbound_response_outcome.gateway_id,
+        )
+        .await
+        {
+            warn!(
+                call_id = %outbound_response_outcome.call_id.as_str(),
+                %error,
+                "gateway failover rejected because resource lease migration failed"
+            );
+            edge_state.call_manager.terminate_call_with_reason(
+                outbound_response_outcome.call_id.as_str(),
+                &error.to_string(),
+            );
+            outbound_response_outcome.failover_uri = None;
+            outbound_response_outcome.failover_gateway_id = None;
+            outbound_response_outcome.state = call_core::CallState::Failed;
         }
     }
 
@@ -827,8 +900,18 @@ pub(crate) async fn dispatch_response(
                         .gateway_health
                         .decrement_active(&outbound_response_outcome.gateway_id);
                 }
-                if edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats" {
-                    let edge_state_clone = edge_state.self_weak.get().and_then(|w| w.upgrade()).unwrap();
+                crate::resource_lease::release(
+                    edge_state,
+                    &call_core::CallId::new(cid.to_string()),
+                );
+                if edge_config.webhooks.control_mode == "http"
+                    || edge_config.webhooks.control_mode == "nats"
+                {
+                    let edge_state_clone = edge_state
+                        .self_weak
+                        .get()
+                        .and_then(|w| w.upgrade())
+                        .unwrap();
                     let edge_config_clone = edge_config.clone();
                     let cid_clone = cid.to_string();
                     let status = sip_response.status_code;
@@ -850,7 +933,12 @@ pub(crate) async fn dispatch_response(
                                 leg: "b_leg".to_string(),
                             },
                         };
-                        let _ = crate::sip::handlers::interactive_control::post_webhook_event(&edge_state_clone, &edge_config_clone, &event).await;
+                        let _ = crate::sip::handlers::interactive_control::post_webhook_event(
+                            &edge_state_clone,
+                            &edge_config_clone,
+                            &event,
+                        )
+                        .await;
                     });
                 }
                 edge_state.inbound_transactions.remove(cid);
@@ -1130,7 +1218,10 @@ pub(crate) async fn dispatch_response(
                 }
                 let mut datagrams = Vec::new();
                 if is_invite && (200..300).contains(&sip_response.status_code) {
-                    let request_uri = transaction.callee_contact.as_ref().unwrap_or(&transaction.outbound_uri);
+                    let request_uri = transaction
+                        .callee_contact
+                        .as_ref()
+                        .unwrap_or(&transaction.outbound_uri);
                     let ack_bytes = outbound::build_success_response_ack(
                         &sip_response,
                         request_uri,
@@ -1154,14 +1245,17 @@ pub(crate) async fn dispatch_response(
                                 occurred_at_ms: SystemTime::now()
                                     .duration_since(UNIX_EPOCH)
                                     .unwrap_or_default()
-                                    .as_millis() as i64,
-                                event: CallEvent::CallAnswered { sip_status: 200, leg: "b_leg".to_string() },
+                                    .as_millis()
+                                    as i64,
+                                event: CallEvent::CallAnswered {
+                                    sip_status: 200,
+                                    leg: "b_leg".to_string(),
+                                },
                             };
                             crate::sip::handlers::interactive_control::post_webhook_event(
-                                &edge_arc,
-                                &cfg,
-                                &event,
-                            ).await;
+                                &edge_arc, &cfg, &event,
+                            )
+                            .await;
                         });
                     }
                 }

@@ -15,7 +15,10 @@ pub(crate) async fn handle_register_request(
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
 ) -> Vec<PendingDatagram> {
-    let username = edge_config.auth.authorization_username(&request).unwrap_or_default();
+    let username = edge_config
+        .auth
+        .authorization_username(&request)
+        .unwrap_or_default();
     let is_trunk = edge_state.is_registered_access_username(&username);
     let auth_res = edge_state
         .verify_sip_auth(&edge_config.auth, &request, is_trunk)
@@ -40,7 +43,7 @@ pub(crate) async fn handle_register_request(
     let outcome = {
         let mut registrar_guard = edge_state.registrar.write().await;
         registrar_guard
-            .handle_register(&request, peer, SystemTime::now(), None)
+            .handle_register(&request, peer, SystemTime::now(), None, edge_state.nats_connection().as_ref())
             .await
     };
 

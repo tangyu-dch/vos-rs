@@ -1,3 +1,4 @@
+pub(crate) mod billing_settlement;
 pub(crate) mod cdr;
 pub(crate) mod cluster;
 pub(crate) mod config;
@@ -6,6 +7,7 @@ mod manage;
 pub(crate) mod media;
 pub(crate) mod net;
 pub(crate) mod number_routing;
+pub(crate) mod resource_lease;
 pub(crate) mod routing;
 pub(crate) mod security;
 pub(crate) mod sip;
@@ -147,15 +149,23 @@ async fn main() -> Result<(), AnyError> {
     // Wrap EdgeConfig in Arc — all mutations done, now read-only shared access
     let edge_config = Arc::new(edge_config);
 
-    tracing::info!(
-        nodes = edge_config.media_cluster.nodes.len(),
-        strategy = ?edge_config.media_cluster.allocation_strategy,
-        "Initializing unified media node pool"
-    );
+    let storage_config = storage_core::StorageConfig::from_env();
+    let storage = match storage_core::create_storage(&storage_config).await {
+        Ok(s) => {
+            tracing::info!("Storage backend initialized: {}", s.backend_name());
+            Some(Arc::from(s))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to initialize storage backend: {}", e);
+            None
+        }
+    };
+
     let media_relay = MediaRelayState::with_node_pool(
         &edge_config.media_cluster,
         edge_config.recording_workers,
         edge_config.recording_queue_capacity,
+        storage,
     );
     let cdr_sinks = std::sync::Arc::new(cdr_sinks);
 
@@ -409,15 +419,34 @@ async fn main() -> Result<(), AnyError> {
                     info!("NATS call control client successfully connected");
                     edge_state_clone.set_nats(client.clone());
                     if edge_config_clone.webhooks.control_mode == "nats" {
-                        if let Err(e) = crate::sip::handlers::command_listener::start_command_listener(
-                            edge_state_clone,
-                            edge_config_clone,
-                            client,
-                        )
-                        .await {
+                        if let Err(e) =
+                            crate::sip::handlers::command_listener::start_command_listener(
+                                edge_state_clone.clone(),
+                                edge_config_clone,
+                                client.clone(),
+                            )
+                            .await
+                        {
                             tracing::error!("NATS VCI command listener failed: {:?}", e);
                         }
                     }
+
+                    let sub_client = client.clone();
+                    let sub_state = edge_state_clone.clone();
+                    tokio::spawn(async move {
+                        use futures::StreamExt;
+                        if let Ok(mut subscriber) = sub_client.subscribe("vos_rs.cluster.registration.invalidate").await {
+                            tracing::info!("Subscribed to vos_rs.cluster.registration.invalidate");
+                            while let Some(message) = subscriber.next().await {
+                                if let Ok(payload) = std::str::from_utf8(&message.payload) {
+                                    if let Ok(msg) = serde_json::from_str::<crate::sip::registrar::RegistrationInvalidateMsg>(payload) {
+                                        sub_state.registrar.write().await.invalidate_cache(&msg.aor);
+                                        tracing::debug!(aor = %msg.aor, "invalidated registration cache from cluster broadcast");
+                                    }
+                                }
+                            }
+                        }
+                    });
                 }
                 Err(e) => {
                     tracing::error!("failed to connect to NATS for call control: {:?}", e);
@@ -524,6 +553,7 @@ async fn main() -> Result<(), AnyError> {
         Arc::clone(&socket),
         edge_config.clone(),
     );
+    resource_lease::spawn_renewal_loop(Arc::clone(&edge_state));
 
     // Start NAT keepalive background loop — sends keepalive probes to active registrations
     let num_workers = if edge_config.udp_workers_auto {
@@ -617,6 +647,10 @@ async fn main() -> Result<(), AnyError> {
     }
 
     spawn_nat_keepalive_loop(Arc::clone(&edge_state), Arc::clone(&socket));
+    crate::sip::outbound_reg::spawn_outbound_registration_loop(
+        Arc::clone(&edge_state),
+        Arc::clone(&edge_config),
+    );
     if edge_config.gateway_health_checks_enabled {
         spawn_gateway_health_probe_loop(
             Arc::clone(&edge_state),

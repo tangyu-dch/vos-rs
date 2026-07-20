@@ -29,6 +29,7 @@ pub(crate) mod conference;
 pub(crate) mod config;
 pub(crate) mod crypto;
 pub(crate) mod dtmf;
+pub(crate) mod energy_detector;
 pub(crate) mod live_transcode;
 pub(crate) mod metrics;
 pub(crate) mod recording;
@@ -40,6 +41,7 @@ pub(crate) mod utils;
 pub(crate) mod wav;
 
 pub use self::config::MediaConfig;
+pub use self::energy_detector::RtpEnergyDetector;
 pub use self::live_transcode::LiveTranscoder;
 pub use self::metrics::RtcpQualitySnapshot;
 pub use self::recording::MediaError;

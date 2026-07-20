@@ -56,6 +56,7 @@ pub struct RecordingSession {
 
 impl RecordingSession {
     pub fn new(
+        call_id: String,
         wav_path: PathBuf,
         min_free_bytes: u64,
         max_file_bytes: u64,
@@ -66,6 +67,7 @@ impl RecordingSession {
         Self {
             info: Arc::new(RecordingSessionInfo {
                 id: NEXT_RECORDING_SESSION_ID.fetch_add(1, Ordering::Relaxed),
+                call_id,
                 wav_path,
                 min_free_bytes,
                 max_file_bytes,
@@ -111,6 +113,7 @@ impl Drop for RecordingSession {
             self.info.id,
             self.info.wav_path.clone(),
             self.info.format_str.clone(),
+            self.info.call_id.clone(),
         );
     }
 }
@@ -118,6 +121,7 @@ impl Drop for RecordingSession {
 #[derive(Debug)]
 pub struct RecordingSessionInfo {
     pub id: u64,
+    pub call_id: String,
     pub wav_path: PathBuf,
     pub min_free_bytes: u64,
     pub max_file_bytes: u64,
@@ -173,11 +177,24 @@ impl RecordingSessionInfo {
     }
 }
 
-#[derive(Debug)]
 pub struct RecordingPool {
     workers: Vec<RecordingWorkerHandle>,
     queue_capacity: usize,
     packet_pool: PacketBufferPool,
+    tokio_handle: Option<tokio::runtime::Handle>,
+    storage: Option<std::sync::Arc<dyn storage_core::StorageBackend>>,
+}
+
+impl std::fmt::Debug for RecordingPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecordingPool")
+            .field("workers", &self.workers)
+            .field("queue_capacity", &self.queue_capacity)
+            .field("packet_pool", &self.packet_pool)
+            .field("tokio_handle", &self.tokio_handle)
+            .field("storage", &self.storage.as_ref().map(|_| "StorageBackend"))
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -187,15 +204,25 @@ pub struct RecordingWorkerHandle {
 }
 
 impl RecordingPool {
-    pub fn new(worker_count: usize, queue_capacity: usize) -> Self {
+    pub fn new(
+        worker_count: usize,
+        queue_capacity: usize,
+        storage: Option<std::sync::Arc<dyn storage_core::StorageBackend>>,
+    ) -> Self {
         let worker_count = worker_count.max(1);
-        // 至少保留一个槽位给 Finish/Flush 控制命令。
         let queue_capacity = queue_capacity.max(2);
         let mut workers = Vec::with_capacity(worker_count);
+        let tokio_handle = tokio::runtime::Handle::try_current().ok();
         for worker_index in 0..worker_count {
             let (sender, receiver) = tokio::sync::mpsc::channel(queue_capacity);
             let pending_commands = Arc::new(AtomicUsize::new(0));
-            match spawn_recording_worker(worker_index, receiver, Arc::clone(&pending_commands)) {
+            match spawn_recording_worker(
+                worker_index,
+                receiver,
+                Arc::clone(&pending_commands),
+                tokio_handle.clone(),
+                storage.clone(),
+            ) {
                 Ok(()) => workers.push(RecordingWorkerHandle {
                     sender,
                     pending_commands,
@@ -207,6 +234,8 @@ impl RecordingPool {
             workers,
             queue_capacity,
             packet_pool: PacketBufferPool::new(RECORDING_PACKET_POOL_CAPACITY),
+            tokio_handle,
+            storage,
         }
     }
 
@@ -253,13 +282,20 @@ impl RecordingPool {
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "recording worker is stopped"))?
     }
 
-    pub fn finish(&self, session_id: u64, wav_path: std::path::PathBuf, format_str: String) {
+    pub fn finish(
+        &self,
+        session_id: u64,
+        wav_path: std::path::PathBuf,
+        format_str: String,
+        call_id: String,
+    ) {
         let _ = self.try_send(
             session_id,
             RecordingCommand::Finish {
                 session_id,
                 wav_path,
                 format_str,
+                call_id,
             },
         );
     }
@@ -351,10 +387,12 @@ fn spawn_recording_worker(
     worker_index: usize,
     receiver: tokio::sync::mpsc::Receiver<RecordingCommand>,
     pending_commands: Arc<AtomicUsize>,
+    tokio_handle: Option<tokio::runtime::Handle>,
+    storage: Option<std::sync::Arc<dyn storage_core::StorageBackend>>,
 ) -> io::Result<()> {
     std::thread::Builder::new()
         .name(format!("vos-rs-recording-{worker_index}"))
-        .spawn(move || run_recording_worker(worker_index, receiver, pending_commands))
+        .spawn(move || run_recording_worker(worker_index, receiver, pending_commands, tokio_handle, storage))
         .map(|_| ())
         .map_err(|error| {
             io::Error::new(
@@ -368,18 +406,20 @@ fn run_recording_worker(
     worker_index: usize,
     mut receiver: tokio::sync::mpsc::Receiver<RecordingCommand>,
     pending_commands: Arc<AtomicUsize>,
+    tokio_handle: Option<tokio::runtime::Handle>,
+    storage: Option<std::sync::Arc<dyn storage_core::StorageBackend>>,
 ) {
     let mut recorders = HashMap::<u64, RecordingFile>::new();
     while let Some(command) = receiver.blocking_recv() {
         pending_commands.fetch_sub(1, Ordering::Relaxed);
-        handle_recording_command(command, &mut recorders);
+        handle_recording_command(command, &mut recorders, &tokio_handle, &storage);
 
         for _ in 0..RECORDING_WORKER_DRAIN_LIMIT {
             let Ok(command) = receiver.try_recv() else {
                 break;
             };
             pending_commands.fetch_sub(1, Ordering::Relaxed);
-            handle_recording_command(command, &mut recorders);
+            handle_recording_command(command, &mut recorders, &tokio_handle, &storage);
         }
     }
 
@@ -393,6 +433,8 @@ fn run_recording_worker(
 fn handle_recording_command(
     command: RecordingCommand,
     recorders: &mut HashMap<u64, RecordingFile>,
+    tokio_handle: &Option<tokio::runtime::Handle>,
+    storage: &Option<std::sync::Arc<dyn storage_core::StorageBackend>>,
 ) {
     match command {
         RecordingCommand::Packet { session, packet } => {
@@ -443,16 +485,19 @@ fn handle_recording_command(
             session_id,
             wav_path,
             format_str,
+            call_id,
         } => {
             if let Some(mut recording_file) = recorders.remove(&session_id) {
                 if let Err(error) = recording_file.recorder.flush_recording() {
                     warn!(%error, session_id, "failed to finalize call recording");
                 }
             }
-            // 录音完成后异步转码（wav 格式无操作）
-            crate::media::transcode::transcode_recording_async(
+            crate::media::transcode::transcode_and_upload_recording_async(
                 wav_path,
                 crate::media::transcode::RecordingFormat::from_str(&format_str),
+                call_id,
+                tokio_handle.clone(),
+                storage.clone(),
             );
         }
     }
@@ -524,6 +569,7 @@ pub enum RecordingCommand {
         wav_path: std::path::PathBuf,
         /// 目标转码格式字符串（如 "opus"、"amr"、"wav"）
         format_str: String,
+        call_id: String,
     },
 }
 
@@ -967,6 +1013,7 @@ impl MediaRelayState {
         let stem = recording_file_stem(call_id);
         let wav_path = config.recording_dir.join(format!("{stem}.wav"));
         let session = Arc::new(RecordingSession::new(
+            call_id.to_string(),
             wav_path.clone(),
             config.recording_min_free_bytes,
             config.recording_max_file_bytes,

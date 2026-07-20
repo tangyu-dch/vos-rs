@@ -36,6 +36,13 @@ use std::{
 };
 use time::OffsetDateTime;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegistrationInvalidateMsg {
+    pub aor: String,
+    pub action: String,
+    pub timestamp: u64,
+}
+
 const DEFAULT_EXPIRES_SECONDS: u32 = 3600;
 const MAX_EXPIRES_SECONDS: u32 = 86_400;
 
@@ -77,6 +84,7 @@ impl RegistrationStore {
         peer: SocketAddr,
         now: SystemTime,
         db_store: Option<&PostgresCdrStore>,
+        nats_client: Option<&async_nats::Client>,
     ) -> Result<RegisterOutcome, RegisterError> {
         self.prune_expired(now, db_store).await;
 
@@ -95,7 +103,7 @@ impl RegistrationStore {
         }
 
         for contact in contacts {
-            self.apply_contact(&aor, &contact, request, peer, now, db_store)
+            self.apply_contact(&aor, &contact, request, peer, now, db_store, nats_client)
                 .await?;
         }
 
@@ -199,6 +207,7 @@ impl RegistrationStore {
         peer: SocketAddr,
         now: SystemTime,
         db_store: Option<&PostgresCdrStore>,
+        nats_client: Option<&async_nats::Client>,
     ) -> Result<(), RegisterError> {
         match parse_contact(raw_contact)? {
             ContactUpdate::Wildcard => {
@@ -210,6 +219,14 @@ impl RegistrationStore {
                     let _ = db.delete_all_registrations(aor).await;
                 } else {
                     self.bindings.remove(aor);
+                }
+                let msg = RegistrationInvalidateMsg {
+                    aor: aor.to_string(),
+                    action: "unregister".to_string(),
+                    timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                };
+                if let Some(nats) = nats_client {
+                    let _ = nats.publish("vos_rs.cluster.registration.invalidate", serde_json::to_string(&msg).unwrap_or_default().into()).await;
                 }
                 Ok(())
             }
@@ -229,6 +246,14 @@ impl RegistrationStore {
                         if bindings.is_empty() {
                             self.bindings.remove(aor);
                         }
+                    }
+                    let msg = RegistrationInvalidateMsg {
+                        aor: aor.to_string(),
+                        action: "unregister".to_string(),
+                        timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                    };
+                    if let Some(nats) = nats_client {
+                        let _ = nats.publish("vos_rs.cluster.registration.invalidate", serde_json::to_string(&msg).unwrap_or_default().into()).await;
                     }
                     return Ok(());
                 }
@@ -264,9 +289,21 @@ impl RegistrationStore {
                         .or_default()
                         .insert(uri, binding);
                 }
+                let msg = RegistrationInvalidateMsg {
+                    aor: aor.to_string(),
+                    action: "register".to_string(),
+                    timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                };
+                if let Some(nats) = nats_client {
+                    let _ = nats.publish("vos_rs.cluster.registration.invalidate", serde_json::to_string(&msg).unwrap_or_default().into()).await;
+                }
                 Ok(())
             }
         }
+    }
+
+    pub fn invalidate_cache(&mut self, aor: &str) {
+        self.bindings.remove(aor);
     }
 
     async fn prune_expired(&mut self, now: SystemTime, db_store: Option<&PostgresCdrStore>) {
@@ -438,6 +475,7 @@ mod tests {
                 "192.0.2.10:5060".parse().unwrap(),
                 SystemTime::UNIX_EPOCH,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -472,6 +510,7 @@ mod tests {
                 "192.0.2.10:5060".parse().unwrap(),
                 SystemTime::UNIX_EPOCH,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -491,6 +530,7 @@ mod tests {
                 &query,
                 "192.0.2.10:5060".parse().unwrap(),
                 SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+                None,
                 None,
             )
             .await
@@ -520,6 +560,7 @@ mod tests {
                 "192.0.2.10:5060".parse().unwrap(),
                 SystemTime::UNIX_EPOCH,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -540,6 +581,7 @@ mod tests {
                 &unregister,
                 "192.0.2.10:5060".parse().unwrap(),
                 SystemTime::UNIX_EPOCH,
+                None,
                 None,
             )
             .await
@@ -570,6 +612,7 @@ mod tests {
                 "192.0.2.10:5060".parse().unwrap(),
                 SystemTime::UNIX_EPOCH,
                 None,
+                None,
             )
             .await
             .unwrap_err();
@@ -596,6 +639,7 @@ mod tests {
                 &register,
                 "192.0.2.20:5060".parse().unwrap(),
                 SystemTime::UNIX_EPOCH,
+                None,
                 None,
             )
             .await

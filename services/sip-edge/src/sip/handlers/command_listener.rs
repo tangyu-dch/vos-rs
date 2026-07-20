@@ -112,6 +112,29 @@ pub struct CallCommand {
 
 const PARKED_CALL_TTL: Duration = Duration::from_secs(120);
 
+fn finalize_vci_hangup(edge_state: &EdgeState, call_id: &str, termination_reason: &str) {
+    let call_id_value = call_core::CallId::new(call_id.to_string());
+    if edge_state
+        .call_manager
+        .try_terminate_call_with_reason(call_id, termination_reason)
+    {
+        crate::billing_settlement::settle_completed_call(edge_state, &call_id_value);
+    } else {
+        crate::resource_lease::release(edge_state, &call_id_value);
+    }
+}
+
+fn clear_call_id_mapping(edge_state: &EdgeState, internal_call_id: &str) {
+    if let Some((_, external_call_id)) = edge_state
+        .internal_to_external_call_ids
+        .remove(internal_call_id)
+    {
+        edge_state
+            .external_to_internal_call_ids
+            .remove(&external_call_id);
+    }
+}
+
 pub async fn start_command_listener(
     edge_state: Arc<EdgeState>,
     edge_config: Arc<crate::config::EdgeConfig>,
@@ -212,22 +235,17 @@ pub async fn handle_command(
                 .as_deref()
                 .unwrap_or("")
                 .to_string();
-            let outbound_uri =
-                if let Some(ref uri_str) = params.target_uri {
-                    SipUri::from_str(uri_str).unwrap_or_else(|_| parked.invite_request.uri.clone())
-                } else if let Some(ref gw_id) = params.target_gateway {
-                    let gw_addr = edge_state
-                        .gateway_cache
-                        .read()
-                        .unwrap()
-                        .get(gw_id)
-                        .cloned()
-                        .unwrap_or_else(|| edge_config.default_gateway.clone());
-                    SipUri::from_str(&format!("sip:{}@{}", callee, gw_addr))
-                        .unwrap_or_else(|_| parked.invite_request.uri.clone())
-                } else {
-                    parked.invite_request.uri.clone()
-                };
+            let outbound_uri = if let Some(ref uri_str) = params.target_uri {
+                SipUri::from_str(uri_str).unwrap_or_else(|_| parked.invite_request.uri.clone())
+            } else if let Some(ref gw_id) = params.target_gateway {
+                let gw_addr = edge_state
+                    .gateway_target(gw_id)
+                    .unwrap_or_else(|| edge_config.default_gateway.clone());
+                SipUri::from_str(&format!("sip:{}@{}", callee, gw_addr))
+                    .unwrap_or_else(|_| parked.invite_request.uri.clone())
+            } else {
+                parked.invite_request.uri.clone()
+            };
 
             let rewritten_sdp = match prepare_rewritten_sdp(
                 &parked.invite_request.headers,
@@ -283,14 +301,16 @@ pub async fn handle_command(
                 format!("{}:5060", outbound_uri.host)
             };
 
-            let caller_identity = params.caller_id.as_ref().map(|num| {
-                call_core::CallerIdentity {
+            let caller_identity = params
+                .caller_id
+                .as_ref()
+                .map(|num| call_core::CallerIdentity {
                     original_number: num.clone(),
                     presented_number: num.clone(),
                     owner_gateway_id: call_core::GatewayId::new(gateway_id.clone()),
                     mode: call_core::CallerIdentityMode::Fixed,
-                }
-            });
+                    max_concurrent: 0,
+                });
 
             let outbound_invite_bytes =
                 outbound::build_outbound_invite_with_session_timer_call_id_and_caller(
@@ -321,9 +341,7 @@ pub async fn handle_command(
 
             if !gateway_id.is_empty() {
                 edge_state.gateway_health.increment_active(&gateway_id);
-                let status = edge_state
-                    .gateway_health
-                    .get_gateway_status(&gateway_id);
+                let status = edge_state.gateway_health.get_gateway_status(&gateway_id);
                 crate::timers::persist_gateway_health(edge_state, gateway_id, status);
             }
         }
@@ -331,8 +349,11 @@ pub async fn handle_command(
         CommandAction::Hangup { params } => {
             info!(call_id, "VCI Hangup command execution started");
 
+            let sip_cause = params.sip_cause.unwrap_or(603);
+            let termination_reason = format!("VCI Hangup ({sip_cause})");
+
             if let Some((_, parked)) = edge_state.parked_calls.remove(&call_id) {
-                let code = params.sip_cause.unwrap_or(603);
+                let code = sip_cause;
                 let reason = match code {
                     486 => "Busy Here",
                     480 => "Temporarily Unavailable",
@@ -348,13 +369,11 @@ pub async fn handle_command(
                     "",
                 );
                 let dg = PendingDatagram::new(parked.peer_addr.to_string(), resp);
-                let _ = edge_state
-                    .send_sip_datagram(dg, &socket, edge_config)
-                    .await;
-                edge_state.media_relay.clear_target(parked.caller_relay_port);
-            } else if let Some((_, tx)) =
-                edge_state.inbound_transactions.remove(&call_id)
-            {
+                let _ = edge_state.send_sip_datagram(dg, &socket, edge_config).await;
+                edge_state
+                    .media_relay
+                    .clear_target(parked.caller_relay_port);
+            } else if let Some((_, tx)) = edge_state.inbound_transactions.remove(&call_id) {
                 if let Some(ref gw_relay) = tx.gateway_relay_rtp {
                     edge_state.media_relay.clear_target(gw_relay.port);
                 }
@@ -412,15 +431,10 @@ pub async fn handle_command(
                     edge_state.decrement_user_concurrency(&username);
                 }
 
-                edge_state
-                    .internal_to_external_call_ids
-                    .remove(&call_id);
-                if let Some(ext_cid) = edge_state.get_external_call_id(&call_id) {
-                    edge_state
-                        .external_to_internal_call_ids
-                        .remove(&ext_cid);
-                }
+                clear_call_id_mapping(edge_state, &call_id);
             }
+
+            finalize_vci_hangup(edge_state, &call_id, &termination_reason);
         }
 
         CommandAction::Play { params } => {
@@ -434,9 +448,8 @@ pub async fn handle_command(
                 }
             };
 
-            let codec =
-                crate::media::sdp::negotiated_audio_codec(&parked.invite_request.body)
-                    .unwrap_or(rtp_core::AudioCodec::Pcma);
+            let codec = crate::media::sdp::negotiated_audio_codec(&parked.invite_request.body)
+                .unwrap_or(rtp_core::AudioCodec::Pcma);
             let pt = codec.static_payload_type().unwrap_or(8);
             let codec_name = match codec {
                 rtp_core::AudioCodec::Pcmu => "PCMU",
@@ -461,10 +474,7 @@ pub async fn handle_command(
                 200,
                 "OK",
                 &[
-                    (
-                        "Content-Type".to_string(),
-                        "application/sdp".to_string(),
-                    ),
+                    ("Content-Type".to_string(), "application/sdp".to_string()),
                     (
                         "Contact".to_string(),
                         format!("<sip:vosrs-playback@{}>", edge_config.advertised_addr),
@@ -474,13 +484,13 @@ pub async fn handle_command(
             );
 
             let dg = PendingDatagram::new(parked.peer_addr.to_string(), resp);
-            let _ = edge_state
-                .send_sip_datagram(dg, &socket, edge_config)
-                .await;
+            let _ = edge_state.send_sip_datagram(dg, &socket, edge_config).await;
 
             edge_state.parked_calls.remove(&call_id);
 
-            edge_state.media_relay.register_port_codec(parked.caller_relay_port, codec);
+            edge_state
+                .media_relay
+                .register_port_codec(parked.caller_relay_port, codec);
 
             let file_path = params.url.clone();
             let loop_playback = params.loop_count.unwrap_or(1) > 1;
@@ -506,9 +516,8 @@ pub async fn handle_command(
                 }
             };
 
-            let codec =
-                crate::media::sdp::negotiated_audio_codec(&parked.invite_request.body)
-                    .unwrap_or(rtp_core::AudioCodec::Pcma);
+            let codec = crate::media::sdp::negotiated_audio_codec(&parked.invite_request.body)
+                .unwrap_or(rtp_core::AudioCodec::Pcma);
             let pt = codec.static_payload_type().unwrap_or(8);
             let codec_name = match codec {
                 rtp_core::AudioCodec::Pcmu => "PCMU",
@@ -535,10 +544,7 @@ pub async fn handle_command(
                 200,
                 "OK",
                 &[
-                    (
-                        "Content-Type".to_string(),
-                        "application/sdp".to_string(),
-                    ),
+                    ("Content-Type".to_string(), "application/sdp".to_string()),
                     (
                         "Contact".to_string(),
                         format!("<sip:vosrs-gather@{}>", edge_config.advertised_addr),
@@ -548,13 +554,13 @@ pub async fn handle_command(
             );
 
             let dg = PendingDatagram::new(parked.peer_addr.to_string(), resp);
-            let _ = edge_state
-                .send_sip_datagram(dg, &socket, edge_config)
-                .await;
+            let _ = edge_state.send_sip_datagram(dg, &socket, edge_config).await;
 
             edge_state.parked_calls.remove(&call_id);
 
-            edge_state.media_relay.register_port_codec(parked.caller_relay_port, codec);
+            edge_state
+                .media_relay
+                .register_port_codec(parked.caller_relay_port, codec);
 
             edge_state.media_relay.register_port_dtmf_tracking(
                 &call_id,
@@ -587,9 +593,7 @@ pub async fn handle_command(
 
                 while start.elapsed().as_millis() < timeout_ms as u128 {
                     tokio::time::sleep(interval).await;
-                    if let Some(digits) =
-                        edge_state_clone.media_relay.get_dtmf_digits(&call_id)
-                    {
+                    if let Some(digits) = edge_state_clone.media_relay.get_dtmf_digits(&call_id) {
                         gathered = digits.clone();
                         if gathered.len() >= max_digits {
                             break;
@@ -597,7 +601,9 @@ pub async fn handle_command(
                     }
                 }
 
-                edge_state_clone.media_relay.stop_playback(caller_relay_port);
+                edge_state_clone
+                    .media_relay
+                    .stop_playback(caller_relay_port);
 
                 if let Some(nats) = edge_state_clone.nats_connection() {
                     let dtmf_event = serde_json::json!({
@@ -616,7 +622,11 @@ pub async fn handle_command(
             info!(call_id, "VCI Stream command execution started");
 
             // 1. Check if the call is parked (first command after INVITE)
-            let port = if let Some(parked) = edge_state.parked_calls.get(&call_id).map(|p| p.value().clone()) {
+            let port = if let Some(parked) = edge_state
+                .parked_calls
+                .get(&call_id)
+                .map(|p| p.value().clone())
+            {
                 let codec = crate::media::sdp::negotiated_audio_codec(&parked.invite_request.body)
                     .unwrap_or(rtp_core::AudioCodec::Pcma);
                 let pt = codec.static_payload_type().unwrap_or(8);
@@ -643,10 +653,7 @@ pub async fn handle_command(
                     200,
                     "OK",
                     &[
-                        (
-                            "Content-Type".to_string(),
-                            "application/sdp".to_string(),
-                        ),
+                        ("Content-Type".to_string(), "application/sdp".to_string()),
                         (
                             "Contact".to_string(),
                             format!("<sip:vosrs-stream@{}>", edge_config.advertised_addr),
@@ -656,15 +663,16 @@ pub async fn handle_command(
                 );
 
                 let dg = PendingDatagram::new(parked.peer_addr.to_string(), resp);
-                let _ = edge_state
-                    .send_sip_datagram(dg, &socket, edge_config)
-                    .await;
+                let _ = edge_state.send_sip_datagram(dg, &socket, edge_config).await;
 
                 edge_state.parked_calls.remove(&call_id);
-                edge_state.media_relay.register_port_codec(parked.caller_relay_port, codec);
+                edge_state
+                    .media_relay
+                    .register_port_codec(parked.caller_relay_port, codec);
 
                 // Register transaction so BYEs work
-                let client_ep = crate::media::sdp::parse_sdp_rtp_endpoint(&parked.invite_request.body).ok();
+                let client_ep =
+                    crate::media::sdp::parse_sdp_rtp_endpoint(&parked.invite_request.body).ok();
                 let local_ep = sdp_core::RtpEndpoint {
                     address: edge_config.media.advertised_addr.clone(),
                     port: parked.caller_relay_port,
@@ -672,7 +680,11 @@ pub async fn handle_command(
                 edge_state.remember_inbound_invite(
                     &parked.invite_request,
                     parked.peer_addr,
-                    sip_core::SipUri::from_str(&format!("sip:vosrs-stream@{}", edge_config.advertised_addr)).unwrap(),
+                    sip_core::SipUri::from_str(&format!(
+                        "sip:vosrs-stream@{}",
+                        edge_config.advertised_addr
+                    ))
+                    .unwrap(),
                     client_ep,
                     Some(local_ep.clone()),
                     false,
@@ -689,7 +701,10 @@ pub async fn handle_command(
                 if let Some(ref local_ep) = tx.caller_relay_rtp {
                     local_ep.port
                 } else {
-                    warn!(call_id, "active call has no caller relay port, cannot start stream");
+                    warn!(
+                        call_id,
+                        "active call has no caller relay port, cannot start stream"
+                    );
                     return;
                 }
             } else {
@@ -698,14 +713,15 @@ pub async fn handle_command(
             };
 
             // 2. Start WebSocket audio stream
-            let _ = edge_state.media_relay.start_stream(
-                port,
-                params.websocket_url,
-                params.format,
-                params.barge_in,
-            ).await;
+            let _ = edge_state
+                .media_relay
+                .start_stream(port, params.websocket_url, params.format, params.barge_in)
+                .await;
         }
-        CommandAction::Record { max_length_secs, play_beep } => {
+        CommandAction::Record {
+            max_length_secs,
+            play_beep,
+        } => {
             let inst = call_core::VciInstruction::Record {
                 max_length_secs,
                 play_beep,
@@ -717,7 +733,8 @@ pub async fn handle_command(
                 call_id,
                 edge_state.clone(),
                 edge_config.clone(),
-            ).await;
+            )
+            .await;
         }
         CommandAction::Say { text, voice } => {
             let inst = call_core::VciInstruction::Say {
@@ -731,7 +748,8 @@ pub async fn handle_command(
                 call_id,
                 edge_state.clone(),
                 edge_config.clone(),
-            ).await;
+            )
+            .await;
         }
         CommandAction::Queue { queue_id, moh_url } => {
             let inst = call_core::VciInstruction::Queue {
@@ -744,9 +762,13 @@ pub async fn handle_command(
                 call_id,
                 edge_state.clone(),
                 edge_config.clone(),
-            ).await;
+            )
+            .await;
         }
-        CommandAction::Conference { room_id, start_muted } => {
+        CommandAction::Conference {
+            room_id,
+            start_muted,
+        } => {
             let inst = call_core::VciInstruction::Conference {
                 room_id,
                 start_muted,
@@ -758,7 +780,8 @@ pub async fn handle_command(
                 call_id,
                 edge_state.clone(),
                 edge_config.clone(),
-            ).await;
+            )
+            .await;
         }
         CommandAction::Redirect { url } => {
             let inst = call_core::VciInstruction::Redirect { url };
@@ -767,7 +790,8 @@ pub async fn handle_command(
                 call_id,
                 edge_state.clone(),
                 edge_config.clone(),
-            ).await;
+            )
+            .await;
         }
         CommandAction::Pause { duration_ms } => {
             let inst = call_core::VciInstruction::Pause { duration_ms };
@@ -776,7 +800,8 @@ pub async fn handle_command(
                 call_id,
                 edge_state.clone(),
                 edge_config.clone(),
-            ).await;
+            )
+            .await;
         }
         CommandAction::PlayDigits { digits } => {
             let inst = call_core::VciInstruction::PlayDigits {
@@ -788,11 +813,15 @@ pub async fn handle_command(
                 call_id,
                 edge_state.clone(),
                 edge_config.clone(),
-            ).await;
+            )
+            .await;
         }
-        CommandAction::Originate { target_uri, caller_id } => {
+        CommandAction::Originate {
+            target_uri,
+            caller_id,
+        } => {
             info!(call_id, "Executing Originate command");
-            
+
             let caller_relay_rtp = match edge_state
                 .media_relay
                 .allocate_endpoint_for_call(&edge_config.media, &call_id)
@@ -803,7 +832,7 @@ pub async fn handle_command(
                     return;
                 }
             };
-            
+
             let sdp_offer = format!(
                 "v=0\r\n\
                  o=vos-rs 123456 123456 IN IP4 {addr}\r\n\
@@ -816,7 +845,7 @@ pub async fn handle_command(
                 addr = edge_config.media.advertised_addr,
                 port = caller_relay_rtp.port,
             );
-            
+
             let outbound_uri = match SipUri::from_str(&target_uri) {
                 Ok(uri) => uri,
                 Err(_) => {
@@ -824,7 +853,7 @@ pub async fn handle_command(
                     return;
                 }
             };
-            
+
             let tx = crate::edge_state::InboundTransaction {
                 peer: "local-originate".to_string(),
                 outbound_peer: Some(target_uri.clone()),
@@ -863,11 +892,13 @@ pub async fn handle_command(
                 active_forks: Vec::new(),
                 max_duration_secs: None,
                 established_at: Some(std::time::Instant::now()),
-                invite_response_order: Arc::new(tokio::sync::Mutex::new(crate::edge_state::InviteResponseOrder::default())),
+                invite_response_order: Arc::new(tokio::sync::Mutex::new(
+                    crate::edge_state::InviteResponseOrder::default(),
+                )),
             };
-            
+
             edge_state.inbound_transactions.insert(call_id.clone(), tx);
-            
+
             let branch = format!("z9hG4bK-originate-{}", call_id);
             let sdp_len = sdp_offer.len();
             let invite_str = format!(
@@ -890,16 +921,22 @@ pub async fn handle_command(
                 sdp_len = sdp_len,
                 sdp_offer = sdp_offer,
             );
-            
+
             if let Some(socket) = edge_state.get_socket() {
                 let target_peer = outbound::target_addr_for_str(&target_uri);
                 let dg = PendingDatagram::new(target_peer, invite_str.into_bytes());
                 let _ = edge_state.send_sip_datagram(dg, &socket, edge_config).await;
             }
         }
-        CommandAction::Bridge { call_id_a, call_id_b } => {
-            info!(call_id, "Executing Bridge command for {} and {}", call_id_a, call_id_b);
-            
+        CommandAction::Bridge {
+            call_id_a,
+            call_id_b,
+        } => {
+            info!(
+                call_id,
+                "Executing Bridge command for {} and {}", call_id_a, call_id_b
+            );
+
             let (port_a, rtp_a) = {
                 if let Some(tx_a) = edge_state.inbound_transactions.get(&call_id_a) {
                     let port = tx_a.caller_relay_rtp.as_ref().map(|ep| ep.port);
@@ -909,7 +946,7 @@ pub async fn handle_command(
                     (None, None)
                 }
             };
-            
+
             let (port_b, rtp_b) = {
                 if let Some(tx_b) = edge_state.inbound_transactions.get(&call_id_b) {
                     let port = tx_b.caller_relay_rtp.as_ref().map(|ep| ep.port);
@@ -919,25 +956,34 @@ pub async fn handle_command(
                     (None, None)
                 }
             };
-            
+
             match (port_a, port_b) {
                 (Some(pa), Some(pb)) => {
                     edge_state.media_relay.pair_ports(pa, pb);
                     info!("Successfully paired ports: {} <-> {}", pa, pb);
-                    
+
                     if let (Some(dest_b), Some(ep_a)) = (rtp_b, {
-                        edge_state.inbound_transactions.get(&call_id_a).and_then(|tx| tx.caller_relay_rtp.clone())
+                        edge_state
+                            .inbound_transactions
+                            .get(&call_id_a)
+                            .and_then(|tx| tx.caller_relay_rtp.clone())
                     }) {
                         let _ = edge_state.media_relay.set_target(&ep_a, &dest_b);
                     }
                     if let (Some(dest_a), Some(ep_b)) = (rtp_a, {
-                        edge_state.inbound_transactions.get(&call_id_b).and_then(|tx| tx.caller_relay_rtp.clone())
+                        edge_state
+                            .inbound_transactions
+                            .get(&call_id_b)
+                            .and_then(|tx| tx.caller_relay_rtp.clone())
                     }) {
                         let _ = edge_state.media_relay.set_target(&ep_b, &dest_a);
                     }
                 }
                 _ => {
-                    warn!("Failed to find caller relay ports for bridging: a_port={:?}, b_port={:?}", port_a, port_b);
+                    warn!(
+                        "Failed to find caller relay ports for bridging: a_port={:?}, b_port={:?}",
+                        port_a, port_b
+                    );
                 }
             }
         }
@@ -949,7 +995,8 @@ mod tests {
     use super::*;
     use crate::config::EdgeConfig;
     use crate::edge_state::ParkedCall;
-    use call_core::{CallManager, RouteTable};
+    use call_core::{CallId, CallManager, CallState, CdrStatus, RouteTable};
+    use sip_core::{parse_message, SipMessage};
     use std::net::SocketAddr;
     use std::sync::Arc;
 
@@ -963,9 +1010,7 @@ mod tests {
             None,
             &config,
         );
-        let socket = std::sync::Arc::new(
-            tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap(),
-        );
+        let socket = std::sync::Arc::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap());
         state.set_socket(socket);
         Arc::new(state)
     }
@@ -1048,6 +1093,76 @@ mod tests {
         handle_command(cmd, &state, &config).await;
 
         assert!(!state.parked_calls.contains_key("test-call-2"));
+    }
+
+    #[test]
+    fn test_hangup_finalizes_managed_call_only_once() {
+        let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::unbounded_channel();
+        let manager = CallManager::new(RouteTable::default(), cdr_tx);
+        let config = Arc::new(EdgeConfig::default());
+        let state = EdgeState::with_media_relay_and_db(
+            manager,
+            crate::media::MediaRelayState::new(),
+            None,
+            &config,
+        );
+        let state = Arc::new(state);
+
+        let raw_invite = b"INVITE sip:1002@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-vci-finalize\r\n\
+From: <sip:1001@example.com>;tag=from-vci\r\n\
+To: <sip:1002@example.com>\r\n\
+Call-ID: vci-finalize@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Content-Length: 0\r\n\r\n";
+        let SipMessage::Request(invite) = parse_message(raw_invite).unwrap() else {
+            panic!("expected INVITE request");
+        };
+        state
+            .call_manager
+            .handle_inbound_invite_to_uri(
+                &invite,
+                SipUri::from_str("sip:1002@gateway.example.com:5060").unwrap(),
+            )
+            .unwrap();
+
+        finalize_vci_hangup(&state, "vci-finalize@example.com", "VCI Hangup (487)");
+
+        let call_id = CallId::new("vci-finalize@example.com");
+        assert_eq!(
+            state.call_manager.get(&call_id).map(|call| call.state),
+            Some(CallState::Failed)
+        );
+        let cdr = cdr_rx.try_recv().expect("VCI Hangup should emit a CDR");
+        assert_eq!(cdr.status, CdrStatus::Failed);
+        assert_eq!(
+            cdr.failure_cause
+                .as_ref()
+                .map(|cause| cause.reason.as_str()),
+            Some("VCI Hangup (487)")
+        );
+
+        finalize_vci_hangup(&state, "vci-finalize@example.com", "VCI Hangup (487)");
+        assert!(cdr_rx.try_recv().is_err(), "duplicate Hangup emitted a CDR");
+    }
+
+    #[test]
+    fn test_hangup_clears_both_call_id_mapping_directions() {
+        let (cdr_tx, _cdr_rx) = tokio::sync::mpsc::unbounded_channel();
+        let manager = CallManager::new(RouteTable::default(), cdr_tx);
+        let config = EdgeConfig::default();
+        let state = EdgeState::with_media_relay_and_db(
+            manager,
+            crate::media::MediaRelayState::new(),
+            None,
+            &config,
+        );
+        state.register_call_id_mapping("internal-call", "external-call");
+
+        clear_call_id_mapping(&state, "internal-call");
+
+        assert!(state.get_external_call_id("internal-call").is_none());
+        assert!(state.get_internal_call_id("external-call").is_none());
     }
 
     #[tokio::test]

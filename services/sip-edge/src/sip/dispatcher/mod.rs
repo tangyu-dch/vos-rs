@@ -15,7 +15,10 @@ pub(crate) async fn handle_datagram(
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
 ) -> Vec<PendingDatagram> {
-    if edge_state.sipflow_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+    if edge_state
+        .sipflow_enabled
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
         edge_state.capture_sip_packet(packet, "in", peer);
     }
 

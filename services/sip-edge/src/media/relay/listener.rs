@@ -113,6 +113,7 @@ pub(crate) async fn relay_media_port(
     metrics_flush_interval.tick().await;
     let mut source_binding = None;
     let mut learned_symmetric_source = None;
+    let mut energy_detector = crate::media::energy_detector::RtpEnergyDetector::new(-45.0, 4);
     let mut live_transcoder =
         if let (Some(local_codec), Some(peer_codec)) = (plan.codec, plan.peer_codec) {
             if local_codec != peer_codec {
@@ -195,7 +196,7 @@ pub(crate) async fn relay_media_port(
                 }
             }
 
-            if !use_fast_path && relay.muted_ports.contains(&local_port) {
+            if !use_fast_path && plan.muted {
                 match socket.try_recv_from(&mut buffer) {
                     Ok((next_size, next_source)) => {
                         size = next_size;
@@ -219,71 +220,52 @@ pub(crate) async fn relay_media_port(
                     })
                     .unwrap_or(false);
 
+                let mut drop_packet = false;
                 if !is_pass_through {
-                    let rtp = match RtpPacketView::parse(packet) {
-                        Ok(rtp) => rtp,
-                        Err(error) => {
-                            relay.record_metric(local_port, |metrics| {
-                                metrics.dropped_invalid_packets += 1
-                            });
-                            warn!(%error, %source, local_port, "dropping invalid RTP packet on fast path");
-                            fast_path_counters.flush_if_needed(&relay, local_port);
-                            match socket.try_recv_from(&mut buffer) {
-                                Ok((next_size, next_source)) => {
-                                    size = next_size;
-                                    source = next_source;
-                                    continue;
-                                }
-                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                                Err(error) => {
-                                    warn!(%error, local_port, "failed to non-blocking receive media packet");
-                                    break;
+                    // 优化：仅当配置了 DTMF 探测时才解析 RTP 包，并移除无用的 rtp_stats.observe
+                    if plan.dtmf_payload_type.is_some() {
+                        match RtpPacketView::parse(packet) {
+                            Ok(rtp) => {
+                                if plan.dtmf_payload_type == Some(rtp.payload_type) {
+                                    relay.process_dtmf_packet(local_port, rtp);
                                 }
                             }
-                        }
-                    };
-                    rtp_stats.observe(rtp);
-                    if plan.dtmf_payload_type == Some(rtp.payload_type) {
-                        relay.process_dtmf_packet(local_port, rtp);
-                    }
-                }
-
-                if symmetric_rtp_learning {
-                    track_symmetric_source(
-                        &relay,
-                        local_port,
-                        source,
-                        packet_kind,
-                        &mut learned_symmetric_source,
-                    );
-                }
-
-                let Some(target) = plan.target else {
-                    fast_path_counters.flush(&relay, local_port);
-                    match socket.try_recv_from(&mut buffer) {
-                        Ok((next_size, next_source)) => {
-                            size = next_size;
-                            source = next_source;
-                            continue;
-                        }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                        Err(error) => {
-                            warn!(%error, local_port, "failed to non-blocking receive media packet");
-                            break;
+                            Err(error) => {
+                                relay.record_metric(local_port, |metrics| {
+                                    metrics.dropped_invalid_packets += 1
+                                });
+                                warn!(%error, %source, local_port, "dropping invalid RTP packet on fast path");
+                                drop_packet = true;
+                            }
                         }
                     }
-                };
-
-                // 优化一：非阻塞发送优先
-                if let Err(error) = send_media_nonblocking(&socket, packet, target).await {
-                    fast_path_counters.record_send_error();
-                    warn!(%error, %source, %target, local_port, "failed to relay RTP packet on fast path");
-                } else {
-                    fast_path_counters.record_forwarded();
                 }
+
+                if !drop_packet {
+                    if symmetric_rtp_learning {
+                        track_symmetric_source(
+                            &relay,
+                            local_port,
+                            source,
+                            packet_kind,
+                            &mut learned_symmetric_source,
+                        );
+                    }
+
+                    if let Some(target) = plan.target {
+                        // 优化一：非阻塞发送优先
+                        if let Err(error) = send_media_nonblocking(&socket, packet, target).await {
+                            fast_path_counters.record_send_error();
+                            warn!(%error, %source, %target, local_port, "failed to relay RTP packet on fast path");
+                        } else {
+                            fast_path_counters.record_forwarded();
+                        }
+                    }
+                }
+                
                 fast_path_counters.flush_if_needed(&relay, local_port);
 
-                // 优化二：排空积压包
+                // 优化二：统一排空积压包
                 match socket.try_recv_from(&mut buffer) {
                     Ok((next_size, next_source)) => {
                         size = next_size;
@@ -303,10 +285,12 @@ pub(crate) async fn relay_media_port(
                 if let Ok(view) = RtpPacketView::parse(&buffer[..size]) {
                     let peer_port = plan.peer_port;
                     for port in [Some(local_port), peer_port].into_iter().flatten() {
-                        if relay.crypto_sessions.contains_key(&port) {
+                        let is_local = port == local_port;
+                        let session_exists = if is_local { plan.crypto_session.is_some() } else { plan.peer_crypto_session.is_some() };
+                        if session_exists {
                             continue;
                         }
-                        let Some(offer) = relay.pending_srtp.get(&port).map(|entry| entry.clone())
+                        let Some(offer) = (if is_local { plan.pending_srtp.clone() } else { plan.peer_pending_srtp.clone() })
                         else {
                             continue;
                         };
@@ -319,6 +303,7 @@ pub(crate) async fn relay_media_port(
                                 relay
                                     .crypto_sessions
                                     .insert(port, Arc::new(tokio::sync::Mutex::new(session)));
+                                relay.mark_relay_features_changed(port);
                             }
                             Err(error) => {
                                 relay.record_metric(local_port, |metrics| {
@@ -519,22 +504,17 @@ pub(crate) async fn relay_media_port(
                 );
             }
 
-            let peer_port = relay.peer_ports.get(&local_port).map(|entry| *entry);
-            if let Some(p_port) = peer_port {
-                if let Some(playback_mode) = relay.playback_modes.get(&p_port) {
-                    if *playback_mode == PlaybackMode::Exclusive {
-                        match socket.try_recv_from(&mut buffer) {
-                            Ok((next_size, next_source)) => {
-                                size = next_size;
-                                source = next_source;
-                                continue;
-                            }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(error) => {
-                                warn!(%error, local_port, "failed to non-blocking receive media packet");
-                                break;
-                            }
-                        }
+            if plan.peer_playback_exclusive {
+                match socket.try_recv_from(&mut buffer) {
+                    Ok((next_size, next_source)) => {
+                        size = next_size;
+                        source = next_source;
+                        continue;
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => {
+                        warn!(%error, local_port, "failed to non-blocking receive media packet");
+                        break;
                     }
                 }
             }
@@ -587,22 +567,36 @@ pub(crate) async fn relay_media_port(
             if let Some(s) = &summary {
                 if let Some(rtp_packet) = s.rtp_packet.as_ref() {
                     relay.process_dtmf_packet(local_port, *rtp_packet);
-                    if let Some(ws_tx) = relay.websockets.get(&local_port) {
-                        let codec = relay.codecs.get(&local_port).map(|v| *v).unwrap_or(rtp_core::AudioCodec::Pcma);
-                        let pcm_samples: Vec<i16> = match codec {
-                            rtp_core::AudioCodec::Pcma => {
-                                rtp_packet.payload.iter().map(|&b| crate::media::recording::decode_pcma(b)).collect()
+                    let codec = relay
+                        .codecs
+                        .get(&local_port)
+                        .map(|v| *v)
+                        .unwrap_or(rtp_core::AudioCodec::Pcma);
+                    let pcm_samples: Option<Vec<i16>> = match codec {
+                        rtp_core::AudioCodec::Pcma => Some(rtp_packet
+                            .payload
+                            .iter()
+                            .map(|&b| crate::media::recording::decode_pcma(b))
+                            .collect()),
+                        rtp_core::AudioCodec::Pcmu => Some(rtp_packet
+                            .payload
+                            .iter()
+                            .map(|&b| crate::media::recording::decode_pcmu(b))
+                            .collect()),
+                        _ => None,
+                    };
+                    
+                    if let Some(samples) = &pcm_samples {
+                        let is_talking = energy_detector.process_pcm_sample(samples);
+                        relay.talking_status.insert(local_port, is_talking);
+
+                        if let Some(ws_tx) = &plan.websocket {
+                            let mut pcm_bytes = Vec::with_capacity(samples.len() * 2);
+                            for s in samples {
+                                pcm_bytes.extend_from_slice(&s.to_le_bytes());
                             }
-                            rtp_core::AudioCodec::Pcmu => {
-                                rtp_packet.payload.iter().map(|&b| crate::media::recording::decode_pcmu(b)).collect()
-                            }
-                            _ => Vec::new(),
-                        };
-                        let mut pcm_bytes = Vec::with_capacity(pcm_samples.len() * 2);
-                        for s in pcm_samples {
-                            pcm_bytes.extend_from_slice(&s.to_le_bytes());
+                            let _ = ws_tx.try_send(pcm_bytes);
                         }
-                        let _ = ws_tx.try_send(pcm_bytes);
                     }
                     if let Some(leg) = &plan.recording {
                         match leg.session.try_record(leg.channel, *rtp_packet) {
@@ -723,7 +717,7 @@ pub(crate) async fn relay_media_port(
                 }
             }
             // 旁听/监控：如果本端口配置了监控目标，复制 RTP 包发送给监控端
-            if let Some(monitors_list) = relay.monitors.get(&local_port) {
+            if let Some(monitors_list) = &plan.monitors {
                 for &monitor_addr in monitors_list.iter() {
                     // 用 plain/decrypted packet，确保旁听者听到的是解密后的明文声音
                     // 优化一：非阻塞发送优先

@@ -349,13 +349,26 @@ pub(crate) async fn handle_invite_request(
 
     let egress_trunk_id = edge_state.identify_egress_trunk(peer).await;
     let from_gw = egress_trunk_id.is_some();
+    let call_direction = if from_gw {
+        call_core::CallDirection::Inbound
+    } else {
+        call_core::CallDirection::Outbound
+    };
+    let request_number = request.uri.user.as_deref().unwrap_or("");
+    let inbound_did_destination = egress_trunk_id
+        .as_ref()
+        .and_then(|_| edge_state.did_destination(request_number));
 
     let mut call_source: Option<call_core::CallSource> = None;
 
     if let Some(ref trunk_id) = egress_trunk_id {
-        let number = request.uri.user.as_deref().unwrap_or("");
-        if trunk_id != "test-gateway" && trunk_id != "default" && !edge_state.call_manager.owns_number(number, trunk_id) {
-            warn!(trunk_id = %trunk_id, number = %number, "egress trunk does not own callee number");
+        if trunk_id != "test-gateway"
+            && trunk_id != "default"
+            && !edge_state
+                .call_manager
+                .owns_number(request_number, trunk_id)
+        {
+            warn!(trunk_id = %trunk_id, number = %request_number, "egress trunk does not own callee number");
             return vec![PendingDatagram::new(
                 peer.to_string(),
                 response::build_response_with_owned_headers(
@@ -366,6 +379,35 @@ pub(crate) async fn handle_invite_request(
                     "",
                 ),
             )];
+        }
+        if let Some(destination) = inbound_did_destination.as_ref() {
+            if destination.target_type == "reject" {
+                return vec![PendingDatagram::new(
+                    peer.to_string(),
+                    response::build_response_with_owned_headers(
+                        &request,
+                        403,
+                        "Forbidden - DID Rejected",
+                        &[],
+                        "",
+                    ),
+                )];
+            }
+            if destination.target_type != "extension"
+                && destination.target_type != "extension_group"
+                && destination.target_type != "ivr"
+            {
+                return vec![PendingDatagram::new(
+                    peer.to_string(),
+                    response::build_response_with_owned_headers(
+                        &request,
+                        501,
+                        "Not Implemented - DID Target",
+                        &[],
+                        "",
+                    ),
+                )];
+            }
         }
         call_source = Some(call_core::CallSource::new("trunk", trunk_id));
     }
@@ -456,6 +498,13 @@ pub(crate) async fn handle_invite_request(
     }
 
     let source = call_source.expect("source must be resolved here");
+    let billing_account = if from_gw {
+        None
+    } else if source.source_type == "extension" {
+        Some(source.source_id.clone())
+    } else {
+        edge_state.resolve_trunk_billing_account(&source.source_id)
+    };
 
     let caller_domain = EdgeState::domain_from_request(&request);
     let callee_domain = request.uri.host.clone();
@@ -499,33 +548,171 @@ pub(crate) async fn handle_invite_request(
             peer,
             &edge_state_arc,
             edge_config,
-        ).await;
+        )
+        .await;
     }
 
     let registered_contact = edge_state.lookup_destination_contact(&request.uri).await;
 
+    if from_gw
+        && registered_contact.is_none()
+        && inbound_did_destination
+            .as_ref()
+            .is_some_and(|destination| destination.target_type == "extension")
+    {
+        warn!(
+            trunk_id = egress_trunk_id.as_deref().unwrap_or(""),
+            did = request_number,
+            "DID target extension is not registered"
+        );
+        return vec![PendingDatagram::new(
+            peer.to_string(),
+            response::build_response_with_owned_headers(
+                &request,
+                480,
+                "Temporarily Unavailable - DID Extension Offline",
+                &[],
+                "",
+            ),
+        )];
+    }
+
     let response::RequestHandling {
         response,
         mut outbound_invite,
-    } = if let Some(ref contact) = registered_contact {
-        if let Ok(outbound_uri) = SipUri::from_str(&contact.uri) {
-            response::response_for_invite_to_uri(&request, &edge_state.call_manager, outbound_uri)
+    } = if let Some(ref did_dest) = inbound_did_destination {
+        if did_dest.target_type == "ivr" {
+            return super::ivr::handle_ivr_locally(request, peer, edge_state, edge_config, did_dest).await;
+        } else if did_dest.target_type == "extension_group" {
+            let members = edge_state.extension_groups.read().ok().and_then(|lock| {
+                lock.get(&did_dest.target_id).cloned()
+            }).unwrap_or_default();
+            
+            let mut group_contacts = Vec::new();
+            for member in members {
+                let mut member_uri = request.uri.clone();
+                member_uri.user = Some(member.into());
+                if let Some(contact) = edge_state.lookup_contact(&member_uri).await {
+                    group_contacts.push(contact);
+                }
+            }
+            
+            if group_contacts.is_empty() {
+                warn!(group_id = %did_dest.target_id, "分机组内没有在线成员");
+                return vec![PendingDatagram::new(
+                    peer.to_string(),
+                    response::build_response_with_owned_headers(
+                        &request,
+                        480,
+                        "Temporarily Unavailable - Extension Group Offline",
+                        &[],
+                        "",
+                    ),
+                )];
+            }
+            
+            let first_contact = &group_contacts[0];
+            if let Ok(outbound_uri) = SipUri::from_str(&first_contact.uri) {
+                let outcome = response::response_for_invite_to_uri_with_direction(
+                    &request,
+                    &edge_state.call_manager,
+                    outbound_uri,
+                    call_direction,
+                );
+                
+                let internal_call_id = request.headers.get("call-id").map(|v| v.as_str().to_string()).unwrap_or_default();
+                let mut candidates = Vec::new();
+                for contact in group_contacts {
+                    if let Ok(mut outbound_uri) = SipUri::from_str(&contact.uri) {
+                        if let Ok(received_addr) = contact.received_from.parse::<std::net::SocketAddr>() {
+                            outbound_uri.host = received_addr.ip().to_string().into();
+                            outbound_uri.port = Some(received_addr.port());
+                        }
+                        candidates.push(call_core::SelectedRoute {
+                            route_id: format!("group-{}", did_dest.target_id),
+                            target: call_core::RouteTarget::new("extension-group-gateway", outbound_uri.host.to_string(), outbound_uri.port),
+                            outbound_uri,
+                        });
+                    }
+                }
+                edge_state.call_manager.set_candidates(&call_core::CallId::new(internal_call_id), candidates);
+                outcome
+            } else {
+                return vec![PendingDatagram::new(
+                    peer.to_string(),
+                    response::build_response_with_owned_headers(
+                        &request,
+                        500,
+                        "Internal Server Error - Invalid Group Contact",
+                        &[],
+                        "",
+                    ),
+                )];
+            }
         } else {
-            response::response_for_request_with_health(
+            // 标准分机
+            if let Some(ref contact) = registered_contact {
+                if let Ok(outbound_uri) = SipUri::from_str(&contact.uri) {
+                    response::response_for_invite_to_uri_with_direction(
+                        &request,
+                        &edge_state.call_manager,
+                        outbound_uri,
+                        call_direction,
+                    )
+                } else {
+                    response::response_for_request_with_health_and_direction(
+                        &request,
+                        &edge_state.call_manager,
+                        Some(&source),
+                        Some(&edge_state.gateway_health),
+                        call_direction,
+                    )
+                }
+            } else {
+                response::response_for_request_with_health_and_direction(
+                    &request,
+                    &edge_state.call_manager,
+                    Some(&source),
+                    Some(&edge_state.gateway_health),
+                    call_direction,
+                )
+            }
+        }
+    } else if let Some(ref contact) = registered_contact {
+        if let Ok(outbound_uri) = SipUri::from_str(&contact.uri) {
+            response::response_for_invite_to_uri_with_direction(
+                &request,
+                &edge_state.call_manager,
+                outbound_uri,
+                call_direction,
+            )
+        } else {
+            response::response_for_request_with_health_and_direction(
                 &request,
                 &edge_state.call_manager,
                 Some(&source),
                 Some(&edge_state.gateway_health),
+                call_direction,
             )
         }
     } else {
-        response::response_for_request_with_health(
+        response::response_for_request_with_health_and_direction(
             &request,
             &edge_state.call_manager,
             Some(&source),
             Some(&edge_state.gateway_health),
+            call_direction,
         )
     };
+
+    if outbound_invite.is_some() {
+        if let Some(call_id) = request.headers.get("call-id") {
+            edge_state.call_manager.set_billing_account(
+                &call_core::CallId::new(call_id.as_str()),
+                billing_account.clone(),
+            );
+        }
+    }
 
     if let Some(ref mut plan) = outbound_invite {
         if registered_contact.is_none() && !plan.gateway_id.is_empty() {
@@ -564,19 +751,15 @@ pub(crate) async fn handle_invite_request(
         .headers
         .get("x-test-max-duration")
         .and_then(|v| v.as_str().trim().parse::<u32>().ok());
+    let mut billing_pulse: Option<(u32, f64)> = None;
 
     // 呼叫热路径只从 Redis 读取余额和费率，不回退查询 PostgreSQL。
     if edge_config.balance_enforcement_enabled && !from_gw && outbound_invite.is_some() {
-        let caller_user = if source.source_type == "extension" {
-            source.source_id.clone()
-        } else {
-            edge_state.resolve_trunk_billing_account(&source.source_id).unwrap_or_default()
-        };
         let callee = request.uri.user.as_deref().unwrap_or("");
-        if !caller_user.is_empty() {
-            match edge_state.redis_balance_check(&caller_user, callee).await {
+        if let Some(caller_user) = billing_account.as_deref() {
+            match edge_state.redis_balance_check(caller_user, callee).await {
                 Some(check) if !check.has_balance => {
-                    warn!(caller = %caller_user, balance = check.balance, rate = check.rate, "pre-call Redis balance check failed");
+                    warn!(caller = %caller_user, balance = check.balance, interval = check.billing_interval_secs, price = check.price_per_interval, "pre-call Redis balance check failed");
                     return vec![PendingDatagram::new(
                         peer.to_string(),
                         response::error_for_call_error(
@@ -585,14 +768,77 @@ pub(crate) async fn handle_invite_request(
                         ),
                     )];
                 }
-                Some(check) if check.rate > 0.0 => {
-                    calculated_max_duration = Some(((check.balance / check.rate) * 60.0) as u32);
+                Some(check) if check.price_per_interval > 0.0 => {
+                    billing_pulse = Some((check.billing_interval_secs, check.price_per_interval));
+                    calculated_max_duration = crate::billing_settlement::maximum_duration_secs(
+                        check.balance,
+                        check.billing_interval_secs,
+                        check.price_per_interval,
+                    );
                 }
                 Some(_) => {}
                 None => {
                     warn!(caller = %caller_user, "Redis balance check unavailable, allowing call");
                 }
             }
+        }
+    }
+
+    let lease_call_id = request
+        .headers
+        .get("call-id")
+        .map(|value| call_core::CallId::new(value.as_str()))
+        .filter(|_| outbound_invite.is_some());
+    if let Some(call_id) = lease_call_id.as_ref() {
+        edge_state.call_manager.set_cdr_audit_context(
+            call_id,
+            egress_trunk_id.clone(),
+            billing_pulse.map(|pulse| pulse.0),
+            billing_pulse.map(|pulse| pulse.1),
+        );
+        let lease_error = loop {
+            match crate::resource_lease::acquire(edge_state, call_id, calculated_max_duration).await
+            {
+                Ok(()) => break None,
+                Err(
+                    error @ (crate::resource_lease::LeaseError::NumberBusy
+                    | crate::resource_lease::LeaseError::TrunkAtCapacity),
+                ) => {
+                    let Some(next) = edge_state.call_manager.advance_caller_pool(call_id) else {
+                        break Some(error);
+                    };
+                    if let Some(plan) = outbound_invite.as_mut() {
+                        plan.outbound_uri = next.outbound_uri;
+                        plan.gateway_id = next
+                            .caller_identity
+                            .as_ref()
+                            .map(|identity| identity.owner_gateway_id.as_str().to_string())
+                            .unwrap_or_default();
+                        plan.caller_identity = next.caller_identity;
+                        plan.target_override_addr = None;
+                    }
+                    warn!(
+                        call_id = %call_id.as_str(),
+                        gateway_id = %outbound_invite.as_ref().map(|plan| plan.gateway_id.as_str()).unwrap_or(""),
+                        reason = %error,
+                        "caller pool member resources at capacity, trying next member"
+                    );
+                }
+                Err(error) => break Some(error),
+            }
+        };
+        if let Some(error) = lease_error {
+            warn!(call_id = %call_id.as_str(), %error, "outbound call resource lease rejected");
+            edge_state
+                .call_manager
+                .terminate_call_with_reason(call_id.as_str(), &error.to_string());
+            return vec![PendingDatagram::new(
+                peer.to_string(),
+                response::error_for_call_error(
+                    &request,
+                    &call_core::CallError::GatewayUnavailable(error.to_string()),
+                ),
+            )];
         }
     }
 
@@ -612,6 +858,12 @@ pub(crate) async fn handle_invite_request(
             Ok(rewritten_sdp) => rewritten_sdp,
             Err(error) => {
                 warn!(%error, "rejecting INVITE after media negotiation failure");
+                if let Some(call_id) = lease_call_id.as_ref() {
+                    edge_state
+                        .call_manager
+                        .terminate_call_with_reason(call_id.as_str(), &error.to_string());
+                    crate::resource_lease::release(edge_state, call_id);
+                }
                 return vec![PendingDatagram::new(
                     peer.to_string(),
                     response_for_media_error(&request, &error),
@@ -671,9 +923,14 @@ pub(crate) async fn handle_invite_request(
                 .headers
                 .get("x-call-forking")
                 .map(|v| v.as_str().trim().to_lowercase() == "true")
-                .unwrap_or(false);
+                .unwrap_or(false)
+            || inbound_did_destination.as_ref().is_some_and(|d| d.target_type == "extension_group");
 
-        if forking_enabled && candidates.len() > 1 {
+        let managed_resources = crate::resource_lease::requires_single_leg(
+            edge_state,
+            &call_core::CallId::new(internal_call_id.clone()),
+        );
+        if forking_enabled && candidates.len() > 1 && !managed_resources {
             let fork_candidates = candidates.iter().take(3).cloned().collect::<Vec<_>>();
             let mut forks_to_save = Vec::new();
             for candidate in &fork_candidates {

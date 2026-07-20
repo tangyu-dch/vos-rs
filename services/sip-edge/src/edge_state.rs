@@ -21,7 +21,7 @@ use sdp_core::RtpEndpoint;
 use sip_core::{parse_message, Method, SipRequest, SipUri};
 use std::{
     collections::HashMap,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -73,12 +73,139 @@ struct CachedRegistrationLookup {
     expires_at: Instant,
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct IvrMenu {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) welcome_prompt: String,
+    pub(crate) timeout_secs: i32,
+    pub(crate) actions: HashMap<String, IvrAction>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct IvrAction {
+    pub(crate) action_type: String,
+    pub(crate) action_target: String,
+    pub(crate) waiting_prompt: Option<String>,
+    pub(crate) webhook_method: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct OutboundRegState {
+    pub(crate) gateway_id: String,
+    pub(crate) host: String,
+    pub(crate) port: Option<u16>,
+    pub(crate) transport: String,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    pub(crate) call_id: String,
+    pub(crate) cseq: u32,
+    pub(crate) from_tag: String,
+    pub(crate) expires: u32,
+    pub(crate) last_reg_sent: Option<std::time::Instant>,
+    pub(crate) last_reg_success: Option<std::time::Instant>,
+    pub(crate) challenge: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct GatewayIdentityCache {
+    exact_endpoints: HashMap<SocketAddr, Option<String>>,
+    unique_ips: HashMap<IpAddr, Option<String>>,
+    trunk_targets: HashMap<String, String>,
+}
+
+impl GatewayIdentityCache {
+    fn replace(&mut self, gateways: impl IntoIterator<Item = (String, u16, String)>) {
+        self.exact_endpoints.clear();
+        self.unique_ips.clear();
+        self.trunk_targets.clear();
+        for (host, port, trunk_id) in gateways {
+            self.trunk_targets
+                .insert(trunk_id.clone(), format_gateway_target(&host, port));
+            let Some(ip) = parse_normalized_ip(&host) else {
+                continue;
+            };
+            merge_gateway_identity(
+                &mut self.exact_endpoints,
+                SocketAddr::new(ip, port),
+                &trunk_id,
+            );
+            merge_gateway_identity(&mut self.unique_ips, ip, &trunk_id);
+        }
+    }
+
+    fn identify(&self, peer: SocketAddr) -> Option<String> {
+        let peer = normalize_socket_addr(peer);
+        self.exact_endpoints
+            .get(&peer)
+            .cloned()
+            .flatten()
+            .or_else(|| self.unique_ips.get(&peer.ip()).cloned().flatten())
+    }
+}
+
+fn format_gateway_target(host: &str, port: u16) -> String {
+    let host = host.trim();
+    if host.starts_with('[') || !host.contains(':') {
+        format!("{host}:{port}")
+    } else {
+        format!("[{host}]:{port}")
+    }
+}
+
+fn merge_gateway_identity<K>(identities: &mut HashMap<K, Option<String>>, key: K, trunk_id: &str)
+where
+    K: std::hash::Hash + Eq,
+{
+    identities
+        .entry(key)
+        .and_modify(|current| {
+            if current.as_deref() != Some(trunk_id) {
+                *current = None;
+            }
+        })
+        .or_insert_with(|| Some(trunk_id.to_string()));
+}
+
+fn parse_normalized_ip(host: &str) -> Option<IpAddr> {
+    let host = host.trim();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    host.parse().ok().map(normalize_ip)
+}
+
+fn normalize_socket_addr(address: SocketAddr) -> SocketAddr {
+    SocketAddr::new(normalize_ip(address.ip()), address.port())
+}
+
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(ipv6) => ipv6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(ipv6)),
+        ipv4 => ipv4,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RedisBalanceCheck {
     pub(crate) has_balance: bool,
     pub(crate) balance: f64,
-    pub(crate) rate: f64,
+    pub(crate) billing_interval_secs: u32,
+    pub(crate) price_per_interval: f64,
 }
+
+type RedisBillingPipelineResult = (
+    Option<f64>,
+    Vec<Option<u32>>,
+    Vec<Option<f64>>,
+    Vec<Option<f64>>,
+);
 
 const POSITIVE_REGISTRATION_CACHE_TTL: Duration = Duration::from_secs(5);
 const NEGATIVE_REGISTRATION_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -329,11 +456,14 @@ pub(crate) struct EdgeState {
     pub(crate) sbc_rate_limit_enabled: bool,
     pub(crate) external_to_internal_call_ids: dashmap::DashMap<String, String>,
     pub(crate) internal_to_external_call_ids: dashmap::DashMap<String, String>,
-    pub(crate) gateway_cache: std::sync::RwLock<HashMap<String, String>>,
+    pub(crate) gateway_cache: std::sync::RwLock<GatewayIdentityCache>,
     pub(crate) access_trunk_auth_modes: std::sync::RwLock<HashMap<String, String>>,
     pub(crate) access_username_to_trunk_id: std::sync::RwLock<HashMap<String, String>>,
     pub(crate) trunk_billing_accounts: std::sync::RwLock<HashMap<String, String>>,
     pub(crate) did_destinations: std::sync::RwLock<HashMap<String, cdr_core::DidDestination>>,
+    pub(crate) extension_groups: std::sync::RwLock<HashMap<String, Vec<String>>>,
+    pub(crate) ivr_menus: std::sync::RwLock<HashMap<String, IvrMenu>>,
+    pub(crate) outbound_registrations: dashmap::DashMap<String, OutboundRegState>,
     access_ip_rules: std::sync::RwLock<Vec<AccessIpRule>>,
     registered_access_users: std::sync::RwLock<Vec<String>>,
     /// 按用户名跟踪活跃并发通话数，O(1) 替代 O(n) iter 扫描
@@ -416,11 +546,14 @@ impl EdgeState {
             sbc_rate_limit_enabled: config.sbc_rate_limit_enabled,
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
-            gateway_cache: std::sync::RwLock::new(HashMap::new()),
+            gateway_cache: std::sync::RwLock::new(GatewayIdentityCache::default()),
             access_trunk_auth_modes: std::sync::RwLock::new(HashMap::new()),
             access_username_to_trunk_id: std::sync::RwLock::new(HashMap::new()),
             trunk_billing_accounts: std::sync::RwLock::new(HashMap::new()),
             did_destinations: std::sync::RwLock::new(HashMap::new()),
+            extension_groups: std::sync::RwLock::new(HashMap::new()),
+            ivr_menus: std::sync::RwLock::new(HashMap::new()),
+            outbound_registrations: dashmap::DashMap::new(),
             access_ip_rules: std::sync::RwLock::new(Vec::new()),
             registered_access_users: std::sync::RwLock::new(Vec::new()),
             user_concurrency: dashmap::DashMap::new(),
@@ -441,7 +574,9 @@ impl EdgeState {
             self_weak: std::sync::OnceLock::new(),
             sipflow_enabled: std::sync::atomic::AtomicBool::new(config.sipflow_enabled),
             sipflow_whitelist: std::sync::RwLock::new(config.sipflow_whitelist.clone()),
-            sipflow_retention_days: std::sync::atomic::AtomicI32::new(config.sipflow_retention_days),
+            sipflow_retention_days: std::sync::atomic::AtomicI32::new(
+                config.sipflow_retention_days,
+            ),
             sip_flow_tx: std::sync::OnceLock::new(),
             call_caller_addrs: dashmap::DashMap::new(),
             matched_call_ids: dashmap::DashMap::new(),
@@ -486,11 +621,14 @@ impl EdgeState {
             sbc_rate_limit_enabled: config.sbc_rate_limit_enabled,
             external_to_internal_call_ids: dashmap::DashMap::new(),
             internal_to_external_call_ids: dashmap::DashMap::new(),
-            gateway_cache: std::sync::RwLock::new(HashMap::new()),
+            gateway_cache: std::sync::RwLock::new(GatewayIdentityCache::default()),
             access_trunk_auth_modes: std::sync::RwLock::new(HashMap::new()),
             access_username_to_trunk_id: std::sync::RwLock::new(HashMap::new()),
             trunk_billing_accounts: std::sync::RwLock::new(HashMap::new()),
             did_destinations: std::sync::RwLock::new(HashMap::new()),
+            extension_groups: std::sync::RwLock::new(HashMap::new()),
+            ivr_menus: std::sync::RwLock::new(HashMap::new()),
+            outbound_registrations: dashmap::DashMap::new(),
             access_ip_rules: std::sync::RwLock::new(Vec::new()),
             registered_access_users: std::sync::RwLock::new(Vec::new()),
             user_concurrency: dashmap::DashMap::new(),
@@ -510,7 +648,9 @@ impl EdgeState {
             self_weak: std::sync::OnceLock::new(),
             sipflow_enabled: std::sync::atomic::AtomicBool::new(config.sipflow_enabled),
             sipflow_whitelist: std::sync::RwLock::new(config.sipflow_whitelist.clone()),
-            sipflow_retention_days: std::sync::atomic::AtomicI32::new(config.sipflow_retention_days),
+            sipflow_retention_days: std::sync::atomic::AtomicI32::new(
+                config.sipflow_retention_days,
+            ),
             sip_flow_tx: std::sync::OnceLock::new(),
             call_caller_addrs: dashmap::DashMap::new(),
             matched_call_ids: dashmap::DashMap::new(),
@@ -580,7 +720,11 @@ impl EdgeState {
     }
 
     /// 从 Redis 读取 SIP 鉴权凭据，不回退查询 PostgreSQL。
-    pub(crate) async fn redis_auth_password(&self, username: &str, is_trunk: bool) -> Option<String> {
+    pub(crate) async fn redis_auth_password(
+        &self,
+        username: &str,
+        is_trunk: bool,
+    ) -> Option<String> {
         let mut connection = self.redis_connection()?;
         let hash_key = if is_trunk {
             "vos_rs:auth:trunks"
@@ -626,27 +770,43 @@ impl EdgeState {
         callee: &str,
     ) -> Option<RedisBalanceCheck> {
         let mut connection = self.redis_connection()?;
+        let prefixes = (0..=callee.len())
+            .rev()
+            .filter(|index| callee.is_char_boundary(*index))
+            .map(|index| &callee[..index])
+            .collect::<Vec<_>>();
         let mut pipeline = redis::pipe();
         pipeline
             .cmd("HGET")
             .arg("vos_rs:billing:balances")
             .arg(username)
             .cmd("HMGET")
-            .arg("vos_rs:billing:rates");
-        for index in (0..=callee.len())
-            .rev()
-            .filter(|index| callee.is_char_boundary(*index))
-        {
-            pipeline.arg(&callee[..index]);
+            .arg("vos_rs:billing:intervals");
+        for prefix in &prefixes {
+            pipeline.arg(prefix);
         }
-        let (balance, rates): (Option<f64>, Vec<Option<f64>>) =
+        pipeline.cmd("HMGET").arg("vos_rs:billing:prices");
+        for prefix in &prefixes {
+            pipeline.arg(prefix);
+        }
+        pipeline.cmd("HMGET").arg("vos_rs:billing:rates");
+        for prefix in &prefixes {
+            pipeline.arg(prefix);
+        }
+        let (balance, intervals, prices, legacy_rates): RedisBillingPipelineResult =
             pipeline.query_async(&mut connection).await.ok()?;
         let balance = balance.unwrap_or(0.0);
-        let rate = rates.into_iter().flatten().next().unwrap_or(0.0);
+        let pulse = intervals
+            .into_iter()
+            .zip(prices)
+            .find_map(|(interval, price)| interval.zip(price));
+        let (billing_interval_secs, price_per_interval) =
+            pulse.unwrap_or_else(|| (60, legacy_rates.into_iter().flatten().next().unwrap_or(0.0)));
         Some(RedisBalanceCheck {
-            has_balance: balance > 0.0 || rate == 0.0,
+            has_balance: balance >= price_per_interval || price_per_interval == 0.0,
             balance,
-            rate,
+            billing_interval_secs,
+            price_per_interval,
         })
     }
 
@@ -735,21 +895,25 @@ impl EdgeState {
         let Some(number) = uri.user.as_deref() else {
             return uri.clone();
         };
-        let target_id = self
-            .did_destinations
-            .read()
-            .ok()
-            .and_then(|dids| {
-                dids.get(number)
-                    .filter(|did| did.enabled && did.target_type == "extension")
-                    .map(|did| did.target_id.clone())
-            });
+        let target_id = self.did_destinations.read().ok().and_then(|dids| {
+            dids.get(number)
+                .filter(|did| did.enabled && did.target_type == "extension")
+                .map(|did| did.target_id.clone())
+        });
         let Some(target_id) = target_id else {
             return uri.clone();
         };
         let mut resolved = uri.clone();
         resolved.user = Some(target_id.into());
         resolved
+    }
+
+    /// Returns the enabled DID rule for a real number.
+    pub(crate) fn did_destination(&self, number: &str) -> Option<cdr_core::DidDestination> {
+        self.did_destinations
+            .read()
+            .ok()
+            .and_then(|destinations| destinations.get(number).filter(|did| did.enabled).cloned())
     }
 
     fn cached_registration_lookup(
@@ -888,213 +1052,223 @@ impl EdgeState {
         datagram: PendingDatagram,
         fallback_socket: &'a UdpSocket,
         edge_config: &'a EdgeConfig,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), std::io::Error>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), std::io::Error>> + Send + 'a>>
+    {
         Box::pin(async move {
-        // The guard intentionally covers the actual socket/channel write. Merely serializing
-        // response construction still allows a suspended provisional-response task to send
-        // after a final response under high scheduler pressure.
-        let _invite_response_guard = match datagram.invite_response.as_ref() {
-            Some(metadata) => {
-                let mut order = metadata.order.lock().await;
-                if order.cseq != metadata.cseq {
-                    if order
-                        .cseq
-                        .zip(metadata.cseq)
-                        .is_some_and(|(current, pending)| pending < current)
-                    {
+            // The guard intentionally covers the actual socket/channel write. Merely serializing
+            // response construction still allows a suspended provisional-response task to send
+            // after a final response under high scheduler pressure.
+            let _invite_response_guard = match datagram.invite_response.as_ref() {
+                Some(metadata) => {
+                    let mut order = metadata.order.lock().await;
+                    if order.cseq != metadata.cseq {
+                        if order
+                            .cseq
+                            .zip(metadata.cseq)
+                            .is_some_and(|(current, pending)| pending < current)
+                        {
+                            debug!(
+                                cseq = ?metadata.cseq,
+                                current_cseq = ?order.cseq,
+                                status = metadata.status_code,
+                                "dropping response from an older INVITE transaction"
+                            );
+                            return Ok(());
+                        }
+                        order.cseq = metadata.cseq;
+                        order.final_response_seen = metadata.status_code >= 200;
+                        order.final_response_send_started = false;
+                    }
+                    if metadata.status_code < 200 && order.final_response_send_started {
                         debug!(
                             cseq = ?metadata.cseq,
-                            current_cseq = ?order.cseq,
                             status = metadata.status_code,
-                            "dropping response from an older INVITE transaction"
+                            "dropping late provisional INVITE response before network send"
                         );
                         return Ok(());
                     }
-                    order.cseq = metadata.cseq;
-                    order.final_response_seen = metadata.status_code >= 200;
-                    order.final_response_send_started = false;
+                    if metadata.status_code >= 200 {
+                        order.final_response_send_started = true;
+                    }
+                    Some(order)
                 }
-                if metadata.status_code < 200 && order.final_response_send_started {
-                    debug!(
-                        cseq = ?metadata.cseq,
-                        status = metadata.status_code,
-                        "dropping late provisional INVITE response before network send"
-                    );
+                None => None,
+            };
+
+            let target_addr: SocketAddr = match datagram.target.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "invalid target address",
+                    ));
+                }
+            };
+
+            if self
+                .sipflow_enabled
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                self.capture_sip_packet(&datagram.bytes, "out", target_addr);
+            }
+
+            let mut transport = Transport::Udp;
+            if let Ok(msg) = parse_message(&datagram.bytes) {
+                if let Some(via) = msg.headers().get("via") {
+                    let via_str = via.as_str().to_uppercase();
+                    if via_str.contains("SIP/2.0/TLS") {
+                        transport = Transport::Tls;
+                    } else if via_str.contains("SIP/2.0/TCP") {
+                        transport = Transport::Tcp;
+                    } else if via_str.contains("SIP/2.0/WSS") {
+                        transport = Transport::Wss;
+                    } else if via_str.contains("SIP/2.0/WS") {
+                        transport = Transport::Ws;
+                    }
+                }
+            }
+
+            if let Some(tx) = self.get_tcp_connection(&target_addr) {
+                if tx.send(datagram.bytes.clone()).await.is_ok() {
                     return Ok(());
                 }
-                if metadata.status_code >= 200 {
-                    order.final_response_send_started = true;
-                }
-                Some(order)
             }
-            None => None,
-        };
 
-        let target_addr: SocketAddr = match datagram.target.parse() {
-            Ok(addr) => addr,
-            Err(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "invalid target address",
-                ));
-            }
-        };
-
-        if self.sipflow_enabled.load(std::sync::atomic::Ordering::Relaxed) {
-            self.capture_sip_packet(&datagram.bytes, "out", target_addr);
-        }
-
-        let mut transport = Transport::Udp;
-        if let Ok(msg) = parse_message(&datagram.bytes) {
-            if let Some(via) = msg.headers().get("via") {
-                let via_str = via.as_str().to_uppercase();
-                if via_str.contains("SIP/2.0/TLS") {
-                    transport = Transport::Tls;
-                } else if via_str.contains("SIP/2.0/TCP") {
-                    transport = Transport::Tcp;
-                } else if via_str.contains("SIP/2.0/WSS") {
-                    transport = Transport::Wss;
-                } else if via_str.contains("SIP/2.0/WS") {
-                    transport = Transport::Ws;
-                }
-            }
-        }
-
-        if let Some(tx) = self.get_tcp_connection(&target_addr) {
-            if tx.send(datagram.bytes.clone()).await.is_ok() {
+            if matches!(
+                transport,
+                Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss
+            ) && self
+                .forward_to_flow_owner(target_addr, datagram.bytes.clone())
+                .await?
+            {
                 return Ok(());
             }
-        }
 
-        if matches!(
-            transport,
-            Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss
-        ) && self
-            .forward_to_flow_owner(target_addr, datagram.bytes.clone())
-            .await?
-        {
-            return Ok(());
-        }
+            match transport {
+                Transport::Tcp => {
+                    debug!(%target_addr, "establishing new outbound TCP connection");
+                    match TcpStream::connect(target_addr).await {
+                        Ok(stream) => {
+                            let (tx, rx) = tokio::sync::mpsc::channel(100);
+                            self.register_tcp_connection(target_addr, tx.clone());
 
-        match transport {
-            Transport::Tcp => {
-                debug!(%target_addr, "establishing new outbound TCP connection");
-                match TcpStream::connect(target_addr).await {
-                    Ok(stream) => {
-                        let (tx, rx) = tokio::sync::mpsc::channel(100);
-                        self.register_tcp_connection(target_addr, tx.clone());
+                            let state_clone = Arc::clone(self);
+                            let config_clone = edge_config.clone();
+                            tokio::spawn(handle_stream_connection(
+                                SipStream::Tcp(stream),
+                                target_addr,
+                                tx.clone(),
+                                rx,
+                                move |msg_bytes, peer_addr, connection_tx| {
+                                    let state = Arc::clone(&state_clone);
+                                    let config = config_clone.clone();
+                                    let fut: std::pin::Pin<
+                                        Box<dyn std::future::Future<Output = ()> + Send>,
+                                    > = Box::pin(async move {
+                                        let datagrams =
+                                            handle_datagram(&msg_bytes, peer_addr, &state, &config)
+                                                .await;
+                                        for d in datagrams {
+                                            let _ = connection_tx.send(d.bytes).await;
+                                        }
+                                    });
+                                    fut
+                                },
+                            ));
 
-                        let state_clone = Arc::clone(self);
-                        let config_clone = edge_config.clone();
-                        tokio::spawn(handle_stream_connection(
-                            SipStream::Tcp(stream),
-                            target_addr,
-                            tx.clone(),
-                            rx,
-                            move |msg_bytes, peer_addr, connection_tx| {
-                                let state = Arc::clone(&state_clone);
-                                let config = config_clone.clone();
-                                let fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(async move {
-                                    let datagrams =
-                                        handle_datagram(&msg_bytes, peer_addr, &state, &config)
-                                            .await;
-                                    for d in datagrams {
-                                        let _ = connection_tx.send(d.bytes).await;
-                                    }
-                                });
-                                fut
-                            },
-                        ));
-
-                        let _ = tx.send(datagram.bytes).await;
-                        Ok(())
-                    }
-                    Err(e) => {
-                        error!(%target_addr, error = %e, "failed to establish outbound TCP connection");
-                        Err(e)
-                    }
-                }
-            }
-            Transport::Tls => {
-                debug!(%target_addr, "establishing new outbound TLS connection");
-                match TcpStream::connect(target_addr).await {
-                    Ok(stream) => {
-                        let connector = create_tls_connector(
-                            edge_config.tls_ca_path.as_deref(),
-                            edge_config.tls_insecure_skip_verify,
-                        )
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-                        let domain = match &edge_config.tls_server_name {
-                            Some(name) => ServerName::try_from(name.clone()).map_err(|_| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::InvalidInput,
-                                    format!("invalid TLS server name: {name}"),
-                                )
-                            })?,
-                            None => ServerName::from(target_addr.ip()),
-                        };
-                        match connector.connect(domain, stream).await {
-                            Ok(tls_stream) => {
-                                let (tx, rx) = tokio::sync::mpsc::channel(100);
-                                self.register_tcp_connection(target_addr, tx.clone());
-
-                                let state_clone = Arc::clone(self);
-                                let config_clone = edge_config.clone();
-                                tokio::spawn(handle_stream_connection(
-                                    SipStream::TlsClient(tls_stream),
-                                    target_addr,
-                                    tx.clone(),
-                                    rx,
-                                    move |msg_bytes, peer_addr, connection_tx| {
-                                        let state = Arc::clone(&state_clone);
-                                        let config = config_clone.clone();
-                                        let fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(async move {
-                                            let datagrams = handle_datagram(
-                                                &msg_bytes, peer_addr, &state, &config,
-                                            )
-                                            .await;
-                                            for d in datagrams {
-                                                let _ = connection_tx.send(d.bytes).await;
-                                            }
-                                        });
-                                        fut
-                                    },
-                                ));
-
-                                let _ = tx.send(datagram.bytes).await;
-                                Ok(())
-                            }
-                            Err(e) => {
-                                error!(%target_addr, error = %e, "failed to establish outbound TLS handshake");
-                                Err(std::io::Error::new(
-                                    std::io::ErrorKind::ConnectionRefused,
-                                    e,
-                                ))
-                            }
+                            let _ = tx.send(datagram.bytes).await;
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!(%target_addr, error = %e, "failed to establish outbound TCP connection");
+                            Err(e)
                         }
                     }
-                    Err(e) => {
-                        error!(%target_addr, error = %e, "failed to connect TCP for TLS");
-                        Err(e)
+                }
+                Transport::Tls => {
+                    debug!(%target_addr, "establishing new outbound TLS connection");
+                    match TcpStream::connect(target_addr).await {
+                        Ok(stream) => {
+                            let connector = create_tls_connector(
+                                edge_config.tls_ca_path.as_deref(),
+                                edge_config.tls_insecure_skip_verify,
+                            )
+                            .map_err(|e| {
+                                std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
+                            })?;
+                            let domain = match &edge_config.tls_server_name {
+                                Some(name) => ServerName::try_from(name.clone()).map_err(|_| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidInput,
+                                        format!("invalid TLS server name: {name}"),
+                                    )
+                                })?,
+                                None => ServerName::from(target_addr.ip()),
+                            };
+                            match connector.connect(domain, stream).await {
+                                Ok(tls_stream) => {
+                                    let (tx, rx) = tokio::sync::mpsc::channel(100);
+                                    self.register_tcp_connection(target_addr, tx.clone());
+
+                                    let state_clone = Arc::clone(self);
+                                    let config_clone = edge_config.clone();
+                                    tokio::spawn(handle_stream_connection(
+                                        SipStream::TlsClient(tls_stream),
+                                        target_addr,
+                                        tx.clone(),
+                                        rx,
+                                        move |msg_bytes, peer_addr, connection_tx| {
+                                            let state = Arc::clone(&state_clone);
+                                            let config = config_clone.clone();
+                                            let fut: std::pin::Pin<
+                                                Box<dyn std::future::Future<Output = ()> + Send>,
+                                            > = Box::pin(async move {
+                                                let datagrams = handle_datagram(
+                                                    &msg_bytes, peer_addr, &state, &config,
+                                                )
+                                                .await;
+                                                for d in datagrams {
+                                                    let _ = connection_tx.send(d.bytes).await;
+                                                }
+                                            });
+                                            fut
+                                        },
+                                    ));
+
+                                    let _ = tx.send(datagram.bytes).await;
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    error!(%target_addr, error = %e, "failed to establish outbound TLS handshake");
+                                    Err(std::io::Error::new(
+                                        std::io::ErrorKind::ConnectionRefused,
+                                        e,
+                                    ))
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!(%target_addr, error = %e, "failed to connect TCP for TLS");
+                            Err(e)
+                        }
                     }
                 }
+                Transport::Ws | Transport::Wss => {
+                    error!(%target_addr, "no active WebSocket connection found for outbound datagram");
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::NotConnected,
+                        "no active WebSocket connection",
+                    ))
+                }
+                Transport::Udp => {
+                    fallback_socket
+                        .send_to(&datagram.bytes, target_addr)
+                        .await?;
+                    Ok(())
+                }
             }
-            Transport::Ws | Transport::Wss => {
-                error!(%target_addr, "no active WebSocket connection found for outbound datagram");
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::NotConnected,
-                    "no active WebSocket connection",
-                ))
-            }
-            Transport::Udp => {
-                fallback_socket
-                    .send_to(&datagram.bytes, target_addr)
-                    .await?;
-                Ok(())
-            }
-        }
-    })
-}
+        })
+    }
 
     pub async fn send_keepalive_probe(&self, target_str: &str, fallback_socket: &UdpSocket) {
         let Ok(target_addr) = target_str.parse::<SocketAddr>() else {
@@ -1148,9 +1322,9 @@ impl EdgeState {
     }
 
     pub(crate) async fn identify_egress_trunk(&self, peer: SocketAddr) -> Option<String> {
-        let peer_ip = peer.ip().to_string();
         #[cfg(test)]
         {
+            let peer_ip = normalize_ip(peer.ip()).to_string();
             if self
                 .test_gateways
                 .lock()
@@ -1163,21 +1337,40 @@ impl EdgeState {
         self.gateway_cache
             .read()
             .unwrap_or_else(|error| error.into_inner())
-            .get(&peer_ip)
-            .cloned()
+            .identify(peer)
     }
 
-    /// 用已加载的路由网关替换网关 IP 缓存。
-    pub(crate) fn replace_gateway_cache(
+    /// Replaces the egress identity cache with configured SIP endpoints.
+    pub(crate) fn replace_gateway_endpoint_cache(
         &self,
-        gateways: impl IntoIterator<Item = (String, String)>,
+        gateways: impl IntoIterator<Item = (String, u16, String)>,
     ) {
         let mut cache = self
             .gateway_cache
             .write()
             .unwrap_or_else(|error| error.into_inner());
-        cache.clear();
-        cache.extend(gateways);
+        cache.replace(gateways);
+    }
+
+    pub(crate) fn gateway_target(&self, trunk_id: &str) -> Option<String> {
+        self.gateway_cache
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .trunk_targets
+            .get(trunk_id)
+            .cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_gateway_cache(
+        &self,
+        gateways: impl IntoIterator<Item = (String, String)>,
+    ) {
+        self.replace_gateway_endpoint_cache(
+            gateways
+                .into_iter()
+                .map(|(host, trunk_id)| (host, 5060, trunk_id)),
+        );
     }
 
     pub(crate) fn access_trunk_auth_mode(&self, trunk_id: &str) -> String {
@@ -1505,5 +1698,74 @@ fn log_media_target_metrics(
             dtmf_events = metrics.dtmf_events,
             "clearing RTP relay target"
         );
+    }
+}
+
+#[cfg(test)]
+mod gateway_identity_tests {
+    use super::GatewayIdentityCache;
+
+    fn identify(cache: &GatewayIdentityCache, peer: &str) -> Option<String> {
+        cache.identify(peer.parse().expect("valid test peer"))
+    }
+
+    #[test]
+    fn exact_endpoint_distinguishes_trunks_on_the_same_ip() {
+        let mut cache = GatewayIdentityCache::default();
+        cache.replace([
+            ("127.0.0.1".to_string(), 5170, "carrier-a".to_string()),
+            ("127.0.0.1".to_string(), 5171, "carrier-b".to_string()),
+        ]);
+
+        assert_eq!(
+            identify(&cache, "127.0.0.1:5170").as_deref(),
+            Some("carrier-a")
+        );
+        assert_eq!(
+            identify(&cache, "127.0.0.1:5171").as_deref(),
+            Some("carrier-b")
+        );
+        assert_eq!(identify(&cache, "127.0.0.1:5199"), None);
+    }
+
+    #[test]
+    fn ip_fallback_only_accepts_a_unique_trunk() {
+        let mut cache = GatewayIdentityCache::default();
+        cache.replace([
+            ("192.0.2.10".to_string(), 5060, "carrier-a".to_string()),
+            ("192.0.2.10".to_string(), 5070, "carrier-a".to_string()),
+        ]);
+        assert_eq!(
+            identify(&cache, "192.0.2.10:5090").as_deref(),
+            Some("carrier-a")
+        );
+
+        cache.replace([
+            ("192.0.2.10".to_string(), 5060, "carrier-a".to_string()),
+            ("192.0.2.10".to_string(), 5070, "carrier-b".to_string()),
+        ]);
+        assert_eq!(identify(&cache, "192.0.2.10:5090"), None);
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_peers_match_ipv4_configuration() {
+        let mut cache = GatewayIdentityCache::default();
+        cache.replace([("192.0.2.10".to_string(), 5060, "carrier-a".to_string())]);
+
+        assert_eq!(
+            identify(&cache, "[::ffff:192.0.2.10]:5060").as_deref(),
+            Some("carrier-a")
+        );
+    }
+
+    #[test]
+    fn duplicate_endpoint_owned_by_multiple_trunks_is_ambiguous() {
+        let mut cache = GatewayIdentityCache::default();
+        cache.replace([
+            ("192.0.2.10".to_string(), 5060, "carrier-a".to_string()),
+            ("192.0.2.10".to_string(), 5060, "carrier-b".to_string()),
+        ]);
+
+        assert_eq!(identify(&cache, "192.0.2.10:5060"), None);
     }
 }

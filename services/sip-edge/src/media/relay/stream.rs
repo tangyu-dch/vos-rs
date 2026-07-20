@@ -1,7 +1,7 @@
 use super::*;
+use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use futures::{StreamExt, SinkExt};
 use tracing::{info, warn};
 
 impl MediaRelayState {
@@ -25,8 +25,15 @@ impl MediaRelayState {
             Err(e) => return Err(format!("Invalid WebSocket URL: {e}")),
         };
 
-        let codec = self.codecs.get(&port).map(|v| *v).unwrap_or(rtp_core::AudioCodec::Pcma);
-        let active_socket = self.active_sockets.get(&port).map(|v| Arc::clone(v.value()));
+        let codec = self
+            .codecs
+            .get(&port)
+            .map(|v| *v)
+            .unwrap_or(rtp_core::AudioCodec::Pcma);
+        let active_socket = self
+            .active_sockets
+            .get(&port)
+            .map(|v| Arc::clone(v.value()));
         let target = self.target_for_port(port);
         let relay = self.clone();
 
@@ -48,7 +55,8 @@ impl MediaRelayState {
                 while let Some(pcm_bytes) = ws_rx.recv().await {
                     if format_clone.contains("16k") || format_clone.contains("16000") {
                         // Resample from 8kHz PCM to 16kHz PCM by duplicating samples
-                        let samples = pcm_bytes.chunks_exact(2)
+                        let samples = pcm_bytes
+                            .chunks_exact(2)
                             .map(|c| i16::from_le_bytes([c[0], c[1]]))
                             .collect::<Vec<i16>>();
                         let mut resampled = Vec::with_capacity(samples.len() * 4);
@@ -61,19 +69,27 @@ impl MediaRelayState {
                         }
                     } else if format_clone == "pcma" {
                         // Convert 8kHz PCM back to PCMA (G.711a)
-                        let samples = pcm_bytes.chunks_exact(2)
+                        let samples = pcm_bytes
+                            .chunks_exact(2)
                             .map(|c| i16::from_le_bytes([c[0], c[1]]))
                             .collect::<Vec<i16>>();
-                        let alaw: Vec<u8> = samples.iter().map(|&s| crate::media::transcode::linear_to_alaw(s)).collect();
+                        let alaw: Vec<u8> = samples
+                            .iter()
+                            .map(|&s| crate::media::transcode::linear_to_alaw(s))
+                            .collect();
                         if write_half.send(WsMessage::Binary(alaw)).await.is_err() {
                             break;
                         }
                     } else if format_clone == "pcmu" {
                         // Convert 8kHz PCM back to PCMU (G.711u)
-                        let samples = pcm_bytes.chunks_exact(2)
+                        let samples = pcm_bytes
+                            .chunks_exact(2)
                             .map(|c| i16::from_le_bytes([c[0], c[1]]))
                             .collect::<Vec<i16>>();
-                        let ulaw: Vec<u8> = samples.iter().map(|&s| crate::media::transcode::linear_to_ulaw(s)).collect();
+                        let ulaw: Vec<u8> = samples
+                            .iter()
+                            .map(|&s| crate::media::transcode::linear_to_ulaw(s))
+                            .collect();
                         if write_half.send(WsMessage::Binary(ulaw)).await.is_err() {
                             break;
                         }
@@ -97,14 +113,19 @@ impl MediaRelayState {
                     if let WsMessage::Binary(data) = msg {
                         let pcm_samples = if format.contains("16k") || format.contains("16000") {
                             // Resample from 16kHz PCM to 8kHz PCM by decimating
-                            let samples = data.chunks_exact(2)
+                            let samples = data
+                                .chunks_exact(2)
                                 .map(|c| i16::from_le_bytes([c[0], c[1]]))
                                 .collect::<Vec<i16>>();
                             samples.iter().step_by(2).copied().collect::<Vec<i16>>()
                         } else if format == "pcma" {
-                            data.iter().map(|&b| crate::media::recording::decode_pcma(b)).collect::<Vec<i16>>()
+                            data.iter()
+                                .map(|&b| crate::media::recording::decode_pcma(b))
+                                .collect::<Vec<i16>>()
                         } else if format == "pcmu" {
-                            data.iter().map(|&b| crate::media::recording::decode_pcmu(b)).collect::<Vec<i16>>()
+                            data.iter()
+                                .map(|&b| crate::media::recording::decode_pcmu(b))
+                                .collect::<Vec<i16>>()
                         } else {
                             data.chunks_exact(2)
                                 .map(|c| i16::from_le_bytes([c[0], c[1]]))
@@ -117,9 +138,18 @@ impl MediaRelayState {
                                 break;
                             }
                             let payload: Vec<u8> = match codec {
-                                rtp_core::AudioCodec::Pcma => chunk.iter().map(|&s| crate::media::transcode::linear_to_alaw(s)).collect(),
-                                rtp_core::AudioCodec::Pcmu => chunk.iter().map(|&s| crate::media::transcode::linear_to_ulaw(s)).collect(),
-                                _ => chunk.iter().map(|&s| crate::media::transcode::linear_to_alaw(s)).collect(),
+                                rtp_core::AudioCodec::Pcma => chunk
+                                    .iter()
+                                    .map(|&s| crate::media::transcode::linear_to_alaw(s))
+                                    .collect(),
+                                rtp_core::AudioCodec::Pcmu => chunk
+                                    .iter()
+                                    .map(|&s| crate::media::transcode::linear_to_ulaw(s))
+                                    .collect(),
+                                _ => chunk
+                                    .iter()
+                                    .map(|&s| crate::media::transcode::linear_to_alaw(s))
+                                    .collect(),
                             };
 
                             let payload_type = codec.static_payload_type().unwrap_or(8);
@@ -140,8 +170,14 @@ impl MediaRelayState {
 
                             if let Ok(encoded) = rtp.encode() {
                                 let mut final_packet = encoded;
-                                if let Some(peer_port) = relay_clone.peer_ports.get(&port).map(|entry| *entry) {
-                                    if let Some(session) = relay_clone.crypto_sessions.get(&peer_port).map(|entry| entry.clone()) {
+                                if let Some(peer_port) =
+                                    relay_clone.peer_ports.get(&port).map(|entry| *entry)
+                                {
+                                    if let Some(session) = relay_clone
+                                        .crypto_sessions
+                                        .get(&peer_port)
+                                        .map(|entry| entry.clone())
+                                    {
                                         let mut candidate = final_packet.clone();
                                         if session.lock().await.encrypt(&mut candidate).is_ok() {
                                             final_packet = candidate;

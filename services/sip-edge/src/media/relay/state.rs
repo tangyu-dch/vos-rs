@@ -3,14 +3,18 @@ use super::*;
 impl MediaRelayState {
     #[cfg(test)]
     pub fn new() -> Self {
-        Self::with_recording_pool(4, 10_000)
+        Self::with_recording_pool(4, 10_000, None)
     }
 
-    pub fn with_recording_pool(recording_workers: usize, recording_queue_capacity: usize) -> Self {
+    pub fn with_recording_pool(
+        recording_workers: usize,
+        recording_queue_capacity: usize,
+        storage: Option<Arc<dyn storage_core::StorageBackend>>,
+    ) -> Self {
         let conference_manager = Arc::new(crate::media::conference::ConferenceManager::new());
         crate::media::conference::start_mixer_loop(Arc::clone(&conference_manager));
 
-        Self {
+        let relay = Self {
             mode: MediaRelayMode::Local,
             targets: Arc::new(DashMap::new()),
             peer_ports: Arc::new(DashMap::new()),
@@ -20,6 +24,7 @@ impl MediaRelayState {
             recording_pool: Arc::new(RecordingPool::new(
                 recording_workers,
                 recording_queue_capacity,
+                storage.clone(),
             )),
             dtmf_states: Arc::new(DashMap::new()),
             active_loops: Arc::new(DashMap::new()),
@@ -41,11 +46,16 @@ impl MediaRelayState {
             websockets: Arc::new(DashMap::new()),
             websocket_loops: Arc::new(DashMap::new()),
             muted_ports: Arc::new(dashmap::DashSet::new()),
+            talking_status: Arc::new(DashMap::new()),
             continuity: Arc::new(DashMap::new()),
             conference_manager,
             monitors: Arc::new(DashMap::new()),
             buffer_pool: Arc::new(pool::PacketBufferPool::new(MEDIA_PACKET_POOL_CAPACITY)),
-        }
+            storage,
+        };
+
+        spawn_rtp_keepalive_loop(relay.clone());
+        relay
     }
 
     /// 请求 media-edge 在指定端口启用 ICE-Lite、DTLS 与 SRTP。
@@ -102,8 +112,9 @@ impl MediaRelayState {
         config: &crate::cluster::MediaClusterConfig,
         recording_workers: usize,
         recording_queue_capacity: usize,
+        storage: Option<Arc<dyn storage_core::StorageBackend>>,
     ) -> Self {
-        let mut state = Self::with_recording_pool(recording_workers, recording_queue_capacity);
+        let mut state = Self::with_recording_pool(recording_workers, recording_queue_capacity, storage);
         state.mode = MediaRelayMode::Pool {
             pool: MediaNodePool::new(config),
         };
@@ -397,11 +408,13 @@ impl MediaRelayState {
         self.stop_playback(rtp_port);
         self.active_sockets.remove(&rtp_port);
         self.muted_ports.remove(&rtp_port);
+        self.talking_status.remove(&rtp_port);
         self.continuity.remove(&rtp_port);
         if let Some(p_port) = peer_port {
             self.stop_playback(p_port);
             self.active_sockets.remove(&p_port);
             self.muted_ports.remove(&p_port);
+            self.talking_status.remove(&p_port);
             self.continuity.remove(&p_port);
         }
 
@@ -446,5 +459,39 @@ impl MediaRelayState {
         if let Some(peer_port) = peer_port {
             self.mark_relay_features_changed(peer_port);
         }
+    }
+}
+
+pub(crate) fn spawn_rtp_keepalive_loop(relay: MediaRelayState) {
+    if !cfg!(test) && tokio::runtime::Handle::try_current().is_ok() {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                interval.tick().await;
+                for entry in relay.targets.iter() {
+                    let port = *entry.key();
+                    let target_addr = *entry.value();
+                if let Some(socket) = relay.active_sockets.get(&port) {
+                    let mut keepalive_packet = vec![0u8; 13];
+                    keepalive_packet[0] = 0x80;
+                    keepalive_packet[1] = 13; // Comfort Noise
+                    keepalive_packet[2] = 0x12;
+                    keepalive_packet[3] = 0x34;
+                    keepalive_packet[4] = 0x00;
+                    keepalive_packet[5] = 0x00;
+                    keepalive_packet[6] = 0x04;
+                    keepalive_packet[7] = 0xd2;
+                    keepalive_packet[8] = 0x12;
+                    keepalive_packet[9] = 0x34;
+                    keepalive_packet[10] = 0x56;
+                    keepalive_packet[11] = 0x78;
+                    keepalive_packet[12] = 0x00;
+                    if let Err(e) = socket.send_to(&keepalive_packet, target_addr).await {
+                        tracing::debug!("RTP keepalive send failed on port {}: {}", port, e);
+                    }
+                }
+            }
+        }
+    });
     }
 }

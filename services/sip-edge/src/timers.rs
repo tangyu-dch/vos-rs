@@ -387,46 +387,10 @@ pub(crate) fn spawn_session_timer_watchdog(
                     .call_manager
                     .terminate_call_with_reason(&call_id, &reason);
 
-                // Real-time billing: settle the call on timeout.
-                if let (true, Some(db)) = (
-                    edge_state.billing_settlement_enabled,
-                    edge_state.db_store.as_ref(),
-                ) {
-                    if let Some(call) = edge_state
-                        .call_manager
-                        .get(&call_core::CallId::new(call_id.clone()))
-                    {
-                        let caller_user = call.caller.as_deref().and_then(|s| {
-                            let idx = s.find("sip:")?;
-                            let rest = &s[idx + 4..];
-                            let end = rest.find(['@', ';', '>']).unwrap_or(rest.len());
-                            if end == 0 {
-                                None
-                            } else {
-                                Some(&rest[..end])
-                            }
-                        });
-                        let callee = call.inbound.remote_uri.user.as_deref().unwrap_or("");
-                        let duration_ms = call
-                            .ended_at
-                            .and_then(|e| e.duration_since(call.started_at).ok())
-                            .map(|d| d.as_millis() as i64)
-                            .unwrap_or(0);
-                        if let Some(user) = caller_user {
-                            let db = db.clone();
-                            let user = user.to_string();
-                            let callee = callee.to_string();
-                            let cid = call_id.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    db.settle_call(&cid, &user, &callee, duration_ms).await
-                                {
-                                    tracing::warn!(call_id = %cid, error = %e, "timeout settlement failed");
-                                }
-                            });
-                        }
-                    }
-                }
+                crate::billing_settlement::settle_completed_call(
+                    &edge_state,
+                    &call_core::CallId::new(call_id.clone()),
+                );
 
                 info!(call_id, "session-expired call terminated by watchdog");
             }

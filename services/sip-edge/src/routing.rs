@@ -63,21 +63,26 @@ pub(crate) async fn reload_routes_from_database(
             },
         )
         .collect::<HashMap<_, _>>();
+    let mut gateway_identities = gateway_map
+        .iter()
+        .map(|(id, (host, port, _, _, _, _, _, _))| {
+            (host.clone(), port.unwrap_or(5060), id.clone())
+        })
+        .collect::<Vec<_>>();
     for endpoint in endpoints {
         if let Some(gateway) = gateway_map.get_mut(&endpoint.trunk_id) {
+            if let Ok(port) = u16::try_from(endpoint.port) {
+                gateway_identities.push((endpoint.host.clone(), port, endpoint.trunk_id.clone()));
+            }
             gateway.0 = endpoint.host;
             gateway.1 = u16::try_from(endpoint.port).ok();
             gateway.2 = endpoint.transport;
         }
     }
-    edge_state.replace_gateway_cache(
-        gateway_map
-            .iter()
-            .map(|(id, (host, _, _, _, _, _, _, _))| (host.clone(), id.clone())),
-    );
+    edge_state.replace_gateway_endpoint_cache(gateway_identities);
     edge_state
         .call_manager
-        .update_caller_numbers(CallerNumberDirectory::new(
+        .update_caller_numbers(CallerNumberDirectory::new_with_capacity(
             caller_numbers.into_iter().filter_map(|number| {
                 let enabled = matches!(
                     number.status.trim().to_ascii_lowercase().as_str(),
@@ -96,7 +101,13 @@ pub(crate) async fn reload_routes_from_database(
                 (enabled && outbound)
                     .then_some(number.gateway_id)
                     .flatten()
-                    .map(|gateway_id| (number.number, gateway_id))
+                    .map(|gateway_id| {
+                        (
+                            number.number,
+                            gateway_id,
+                            u32::try_from(number.max_concurrent.unwrap_or(0)).unwrap_or(0),
+                        )
+                    })
             }),
         ));
     refresh_termination_runtime(edge_state, db, &gateway_details, &now_hhmm_or_current()).await?;
@@ -246,6 +257,7 @@ fn runtime_pools(
                 number: member.number,
                 priority: member.priority,
                 weight: u32::try_from(member.weight).unwrap_or(1),
+                max_concurrent: u32::try_from(member.max_concurrent).unwrap_or(0),
             });
     }
     pools
@@ -388,6 +400,9 @@ pub(crate) fn spawn_route_reload_listener(
                 match reload_routes_from_database(&edge_state, db).await {
                     Ok(()) => {
                         refresh_anti_fraud_rules(&edge_state).await;
+                        if let Err(error) = warm_hot_path_redis_cache(&edge_state, Some(db)).await {
+                            warn!(%error, "路由热加载后刷新认证与计费缓存失败");
+                        }
                         info!("动态路由热重载成功，已加载最新路由表数据！");
                     }
                     Err(e) => warn!("热加载路由失败: {}", e),
@@ -423,6 +438,10 @@ pub(crate) async fn warm_hot_path_redis_cache(
         .ignore()
         .del("vos_rs:billing:rates")
         .ignore()
+        .del("vos_rs:billing:intervals")
+        .ignore()
+        .del("vos_rs:billing:prices")
+        .ignore()
         .del("vos_rs:billing:balances")
         .ignore();
     for (username, password) in credentials {
@@ -437,7 +456,19 @@ pub(crate) async fn warm_hot_path_redis_cache(
     }
     for rate in rates {
         pipeline
-            .hset("vos_rs:billing:rates", rate.prefix, rate.rate_per_minute)
+            .hset("vos_rs:billing:rates", &rate.prefix, rate.rate_per_minute)
+            .ignore()
+            .hset(
+                "vos_rs:billing:intervals",
+                &rate.prefix,
+                rate.billing_interval_secs,
+            )
+            .ignore()
+            .hset(
+                "vos_rs:billing:prices",
+                rate.prefix,
+                rate.price_per_interval,
+            )
             .ignore();
     }
     for account in accounts {

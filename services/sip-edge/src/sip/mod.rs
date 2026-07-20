@@ -33,10 +33,11 @@ pub(crate) mod dialog;
 pub(crate) mod dispatcher;
 pub(crate) mod handlers;
 pub(crate) mod outbound;
+pub(crate) mod outbound_reg;
 pub(crate) mod registrar;
 pub(crate) mod response;
-pub(crate) mod transaction;
 pub(crate) mod sip_flow;
+pub(crate) mod transaction;
 
 pub(crate) use auth::{AuthConfig, AuthDecision};
 pub(crate) use dialog::DialogValidationError;

@@ -58,6 +58,8 @@ pub fn validate_media_negotiation(body: &[u8]) -> Result<(), MediaError> {
         && !upper.contains("OPUS")
         && !upper.contains("G722")
         && !upper.contains("G729")
+        && !upper.contains("T38")
+        && !upper.contains("UDPTL")
     {
         return Err(MediaError::Sdp(
             sdp_core::SdpError::MissingCompatibleAudioCodec,

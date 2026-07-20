@@ -11,12 +11,13 @@ use crate::media::{self, MediaConfig, MediaRelayState};
 use crate::sip::dialog::DialogValidationError;
 use crate::sip::{outbound, response, AuthConfig};
 
+pub mod command_listener;
 pub mod in_dialog;
+pub mod interactive_control;
 pub mod invite;
+pub mod ivr;
 pub mod message;
 pub mod register;
-pub mod command_listener;
-pub mod interactive_control;
 
 pub(crate) use in_dialog::handle_in_dialog_request;
 pub(crate) use invite::handle_invite_request;

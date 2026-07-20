@@ -655,6 +655,7 @@ mod tests {
             presented_number: "13800138000".to_string(),
             owner_gateway_id: GatewayId::new("gw1"),
             mode: CallerIdentityMode::Fixed,
+            max_concurrent: 1,
         };
         let headers = caller_identity_headers(&inbound, "edge.example.com:5060", &identity)
             .expect("valid identity headers");
@@ -674,6 +675,7 @@ mod tests {
             presented_number: "13800138000\r\nX-Evil: yes".to_string(),
             owner_gateway_id: GatewayId::new("gw1"),
             mode: CallerIdentityMode::Fixed,
+            max_concurrent: 1,
         };
         assert!(caller_identity_headers(&inbound, "edge.example.com", &identity).is_none());
     }

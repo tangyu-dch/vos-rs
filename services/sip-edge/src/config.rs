@@ -216,9 +216,15 @@ impl WebhookSection {
                 .delivery_record_ttl_secs
                 .unwrap_or(defaults.delivery_record_ttl_secs),
             control_mode: self.control_mode.unwrap_or(defaults.control_mode),
-            control_incoming_subject: self.control_incoming_subject.unwrap_or(defaults.control_incoming_subject),
-            control_command_subject: self.control_command_subject.unwrap_or(defaults.control_command_subject),
-            control_dtmf_subject: self.control_dtmf_subject.unwrap_or(defaults.control_dtmf_subject),
+            control_incoming_subject: self
+                .control_incoming_subject
+                .unwrap_or(defaults.control_incoming_subject),
+            control_command_subject: self
+                .control_command_subject
+                .unwrap_or(defaults.control_command_subject),
+            control_dtmf_subject: self
+                .control_dtmf_subject
+                .unwrap_or(defaults.control_dtmf_subject),
         }
     }
 }
