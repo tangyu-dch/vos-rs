@@ -105,10 +105,7 @@ async fn allocates_even_ports_without_reusing_active_leases() {
             break;
         }
     }
-    assert_eq!(
-        endpoint.unwrap(),
-        RtpEndpoint::new("203.0.113.10", 50_002)
-    );
+    assert_eq!(endpoint.unwrap(), RtpEndpoint::new("203.0.113.10", 50_002));
 }
 
 #[test]

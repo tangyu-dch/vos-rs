@@ -6,14 +6,21 @@ impl MediaRelayState {
     }
 
     pub fn metrics_for_port(&self, relay_port: u16) -> MediaRelayMetrics {
-        let mut m = self.metrics
+        let mut m = self
+            .metrics
             .get(&relay_port)
             .map(|entry| *entry)
             .unwrap_or_default();
         if let Some(session) = self.webrtc_sessions.get(&relay_port) {
-            m.webrtc_ice_connected = session.ice_connected.load(std::sync::atomic::Ordering::Acquire);
-            m.webrtc_dtls_connected = session.dtls_connected.load(std::sync::atomic::Ordering::Acquire);
-            m.webrtc_dtls_failed = session.dtls_failed.load(std::sync::atomic::Ordering::Acquire);
+            m.webrtc_ice_connected = session
+                .ice_connected
+                .load(std::sync::atomic::Ordering::Acquire);
+            m.webrtc_dtls_connected = session
+                .dtls_connected
+                .load(std::sync::atomic::Ordering::Acquire);
+            m.webrtc_dtls_failed = session
+                .dtls_failed
+                .load(std::sync::atomic::Ordering::Acquire);
         }
         m
     }

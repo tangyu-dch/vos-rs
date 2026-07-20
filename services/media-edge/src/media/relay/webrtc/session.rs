@@ -77,7 +77,8 @@ impl WebRtcSession {
     ) -> Result<Vec<u8>, String> {
         let response = binding_success_response(packet, source, &self.ice)?;
         self.dtls.set_peer(source).await;
-        self.ice_connected.store(true, std::sync::atomic::Ordering::Release);
+        self.ice_connected
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(response)
     }
 

@@ -68,7 +68,13 @@ impl DtlsTransport {
             inbound_rx: Mutex::new(inbound_rx),
             peer: Arc::clone(&peer),
         });
-        tokio::spawn(run_handshake(connection, identity, crypto, dtls_connected, dtls_failed));
+        tokio::spawn(run_handshake(
+            connection,
+            identity,
+            crypto,
+            dtls_connected,
+            dtls_failed,
+        ));
         Self { inbound_tx, peer }
     }
 
