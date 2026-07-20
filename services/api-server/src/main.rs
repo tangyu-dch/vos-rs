@@ -8,11 +8,13 @@ mod audit;
 mod auth;
 mod billing;
 mod calls;
+mod call_center;
 mod cdr;
 mod dashboard;
 mod details;
 mod gateways;
 mod hot_cache;
+mod ivr_menus;
 mod media_cluster;
 mod metrics;
 mod numbers;
@@ -86,6 +88,7 @@ pub(crate) struct AppState {
     pub(crate) internal_secret: String,
     pub(crate) redis_client: redis::aio::ConnectionManager,
     pub(crate) sip_node_key_prefix: String,
+    pub(crate) sip_auth_realm: String,
 }
 
 /// 管理列表统一分页参数；服务端限制单页最大 100 条，避免大响应拖慢 API。
@@ -436,6 +439,7 @@ async fn main() -> anyhow::Result<()> {
     struct SipEdgeConfigSection {
         network: Option<SipEdgeNetworkSection>,
         cluster: Option<SipEdgeClusterSection>,
+        auth: Option<SipEdgeAuthSection>,
     }
     #[derive(serde::Deserialize, Debug, Default)]
     struct SipEdgeNetworkSection {
@@ -445,6 +449,10 @@ async fn main() -> anyhow::Result<()> {
     struct SipEdgeClusterSection {
         node_key_prefix: Option<String>,
         management_url: Option<String>,
+    }
+    #[derive(serde::Deserialize, Debug, Default)]
+    struct SipEdgeAuthSection {
+        realm: Option<String>,
     }
 
     let config: ApiServerConfig = serde_yaml::from_str(&config_content).unwrap_or_default();
@@ -546,6 +554,12 @@ async fn main() -> anyhow::Result<()> {
     let nats_client = async_nats::connect(&nats_url).await.ok();
 
     let sip_edge_section = config.sip_edge.unwrap_or_default();
+    let sip_auth_realm = sip_edge_section
+        .auth
+        .as_ref()
+        .and_then(|auth| auth.realm.clone())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "vos-rs".to_string());
     let cluster_section = sip_edge_section.cluster.unwrap_or_default();
     let sip_node_key_prefix = cluster_section
         .node_key_prefix
@@ -604,6 +618,7 @@ async fn main() -> anyhow::Result<()> {
         internal_secret,
         redis_client,
         sip_node_key_prefix,
+        sip_auth_realm,
     };
 
     let cors_origins_raw = api_network.allowed_origins.clone().unwrap_or_default();

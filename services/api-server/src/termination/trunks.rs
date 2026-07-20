@@ -41,11 +41,24 @@ pub async fn replace_ip_rules(
             enabled: item.enabled.unwrap_or(true),
         });
     }
+    let auth_mode: String = sqlx::query_scalar(
+        "SELECT access_auth_mode FROM sip_gateways WHERE id=$1 AND role='access'",
+    )
+    .bind(&id)
+    .fetch_one(state.store.pool())
+    .await
+    .map_err(database)?;
+    if matches!(auth_mode.as_str(), "ip_allowlist" | "ip_and_digest")
+        && !rules.iter().any(|rule| rule.enabled)
+    {
+        return Err(invalid("IP 白名单认证必须至少保留一条已启用的来源地址"));
+    }
     state
         .store
         .replace_trunk_ip_rules(&id, &rules)
         .await
         .map_err(database)?;
+    crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }
 
@@ -93,6 +106,6 @@ pub async fn replace_endpoints(
         .replace_egress_endpoints(&id, &endpoints)
         .await
         .map_err(database)?;
+    crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }
-

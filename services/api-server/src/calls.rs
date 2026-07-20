@@ -300,7 +300,8 @@ pub async fn call_sipflow(
         if !flows.is_empty() {
             let mut events = Vec::with_capacity(flows.len());
             for flow in flows {
-                let flow_ms = flow.timestamp.unix_timestamp() * 1000 + (flow.timestamp.millisecond() as i64);
+                let flow_ms =
+                    flow.timestamp.unix_timestamp() * 1000 + (flow.timestamp.millisecond() as i64);
                 let offset_ms = (flow_ms - start_ms).max(0);
                 events.push(SipFlowEvent {
                     offset_ms,
@@ -322,7 +323,11 @@ pub async fn call_sipflow(
         offset_ms: 0,
         message: "INVITE".to_string(),
         direction: "uac_to_b2bua".to_string(),
-        note: format!("From: {} → To: {}", cdr.caller.as_deref().unwrap_or("-"), cdr.callee.as_deref().unwrap_or("-")),
+        note: format!(
+            "From: {} → To: {}",
+            cdr.caller.as_deref().unwrap_or("-"),
+            cdr.callee.as_deref().unwrap_or("-")
+        ),
         raw_message: None,
     });
     events.push(SipFlowEvent {
@@ -349,7 +354,9 @@ pub async fn call_sipflow(
 
     match cdr.status.as_str() {
         "answered" => {
-            let ring_ms = answered_ms.map(|a| ((a - start_ms) / 2).max(4)).unwrap_or(50);
+            let ring_ms = answered_ms
+                .map(|a| ((a - start_ms) / 2).max(4))
+                .unwrap_or(50);
             events.push(SipFlowEvent {
                 offset_ms: ring_ms,
                 message: "180 Ringing".to_string(),
@@ -470,14 +477,26 @@ pub async fn call_sipflow(
             let fail_off = ended_ms - start_ms;
             events.push(SipFlowEvent {
                 offset_ms: fail_off,
-                message: format!("{} {}", fail_code, cdr.failure_reason.as_deref().unwrap_or("Service Unavailable")),
+                message: format!(
+                    "{} {}",
+                    fail_code,
+                    cdr.failure_reason
+                        .as_deref()
+                        .unwrap_or("Service Unavailable")
+                ),
                 direction: "uas_to_b2bua".to_string(),
                 note: String::new(),
                 raw_message: None,
             });
             events.push(SipFlowEvent {
                 offset_ms: fail_off + 1,
-                message: format!("{} {}", fail_code, cdr.failure_reason.as_deref().unwrap_or("Service Unavailable")),
+                message: format!(
+                    "{} {}",
+                    fail_code,
+                    cdr.failure_reason
+                        .as_deref()
+                        .unwrap_or("Service Unavailable")
+                ),
                 direction: "b2bua_to_uac".to_string(),
                 note: "Call failed".to_string(),
                 raw_message: None,

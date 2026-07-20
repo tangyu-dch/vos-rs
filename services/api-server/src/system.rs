@@ -209,7 +209,13 @@ async fn validate_realm_change(
         .count_users()
         .await
         .map_err(|_| "检查 SIP 用户失败")?;
-    validate_realm_transition(&current, new_realm, user_count)
+    let trunk_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sip_gateways WHERE role='access' AND access_auth_mode IN ('digest_register','ip_and_digest')",
+    )
+    .fetch_one(state.store.pool())
+    .await
+    .map_err(|_| "检查接入中继凭据失败")?;
+    validate_realm_transition(&current, new_realm, user_count + trunk_count)
 }
 
 fn validate_realm_transition(
@@ -218,7 +224,7 @@ fn validate_realm_transition(
     user_count: i64,
 ) -> Result<(), &'static str> {
     if current != requested && user_count > 0 {
-        Err("存在 SIP 用户时禁止修改 realm；修改会使现有 Digest HA1 凭据全部失效")
+        Err("存在 SIP 用户或注册认证中继时禁止修改 realm；修改会使现有 Digest HA1 凭据全部失效")
     } else {
         Ok(())
     }

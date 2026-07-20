@@ -17,6 +17,7 @@ pub struct ListCdrsQuery {
     pub callee: Option<String>,
     pub start_time: Option<String>,
     pub end_time: Option<String>,
+    pub before_id: Option<i64>,
 }
 
 pub async fn list_cdrs(
@@ -40,6 +41,7 @@ pub async fn list_cdrs(
             query.callee.as_deref(),
             start,
             end,
+            query.before_id,
         )
         .await
         .map_err(|e| ApiError {

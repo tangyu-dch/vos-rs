@@ -2,6 +2,8 @@ use crate::{ApiError, AppState};
 
 const AUTH_USERS_KEY: &str = "vos_rs:auth_users";
 const BILLING_RATES_KEY: &str = "vos_rs:billing:rates";
+const BILLING_INTERVALS_KEY: &str = "vos_rs:billing:intervals";
+const BILLING_PRICES_KEY: &str = "vos_rs:billing:prices";
 const BILLING_BALANCES_KEY: &str = "vos_rs:billing:balances";
 
 fn connection(state: &AppState) -> redis::aio::ConnectionManager {
@@ -44,10 +46,25 @@ pub(crate) async fn rebuild_billing_rates(state: &AppState) -> Result<(), ApiErr
         .map_err(|error| ApiError::internal(error.to_string()))?;
     let mut connection = connection(state);
     let mut pipeline = redis::pipe();
-    pipeline.atomic().del(BILLING_RATES_KEY).ignore();
+    pipeline
+        .atomic()
+        .del(BILLING_RATES_KEY)
+        .ignore()
+        .del(BILLING_INTERVALS_KEY)
+        .ignore()
+        .del(BILLING_PRICES_KEY)
+        .ignore();
     for rate in rates {
         pipeline
-            .hset(BILLING_RATES_KEY, rate.prefix, rate.rate_per_minute)
+            .hset(BILLING_RATES_KEY, &rate.prefix, rate.rate_per_minute)
+            .ignore()
+            .hset(
+                BILLING_INTERVALS_KEY,
+                &rate.prefix,
+                rate.billing_interval_secs,
+            )
+            .ignore()
+            .hset(BILLING_PRICES_KEY, rate.prefix, rate.price_per_interval)
             .ignore();
     }
     pipeline

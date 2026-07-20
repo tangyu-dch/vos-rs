@@ -75,6 +75,7 @@ pub struct CallerPoolMemberBody {
 pub struct EgressGroupBody {
     pub id: Option<String>,
     pub name: String,
+    pub description: Option<String>,
     pub enabled: Option<bool>,
 }
 
@@ -149,6 +150,38 @@ fn validate_source_type(value: &str) -> Result<(), Error> {
     }
 }
 
+async fn ensure_source_exists(
+    state: &AppState,
+    source_type: &str,
+    source_id: &str,
+) -> Result<(), Error> {
+    let exists: bool = match source_type {
+        "trunk" => sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sip_gateways WHERE id=$1 AND role='access' AND enabled)",
+        )
+        .bind(source_id)
+        .fetch_one(state.store.pool())
+        .await
+        .map_err(database)?,
+        "extension" => {
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_users WHERE username=$1)")
+                .bind(source_id)
+                .fetch_one(state.store.pool())
+                .await
+                .map_err(database)?
+        }
+        "extension_group" => {
+            return Err(invalid("分机群组尚未接入运行时，请选择接入中继或分机"));
+        }
+        _ => return Err(invalid("来源类型不受支持")),
+    };
+    if exists {
+        Ok(())
+    } else {
+        Err(invalid(format!("授权来源 {source_id} 不存在或类型不匹配")))
+    }
+}
+
 fn validate_cidr(value: &str) -> Result<(), Error> {
     let (address, prefix) = value
         .split_once('/')
@@ -195,15 +228,11 @@ fn validate_policy(body: &SourcePolicyBody) -> Result<&'static str, Error> {
         "group" if body.egress_group_id.is_some() && body.direct_egress_trunk_id.is_none() => {}
         _ => return Err(invalid("落地模式与直绑中继/落地组字段不匹配或存在冲突")),
     }
-    if !matches!(
-        body.fallback_mode.as_deref().unwrap_or("reject"),
-        "reject" | "fallback_number" | "fallback_pool" | "fixed" | "pool"
-    ) {
-        return Err(invalid("失败策略不受支持"));
+    if body.fallback_mode.as_deref().unwrap_or("reject") != "reject" {
+        return Err(invalid("当前仅支持失败时拒绝呼叫"));
     }
     Ok(mode)
 }
-
 
 mod did;
 mod groups;

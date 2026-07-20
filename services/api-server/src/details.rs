@@ -16,10 +16,11 @@ pub(crate) async fn extension(
     State(state): State<AppState>,
     Path(username): Path<String>,
 ) -> Result<Json<Value>, DetailError> {
-    let (users, registrations, numbers) = tokio::try_join!(
+    let (users, registrations, numbers, allocations) = tokio::try_join!(
         state.store.list_users(),
         state.store.list_registrations(),
         state.store.list_numbers(),
+        state.store.list_number_allocations(None),
     )
     .map_err(database_error)?;
     let user = users
@@ -30,9 +31,21 @@ pub(crate) async fn extension(
         .into_iter()
         .filter(|registration| aor_username(&registration.aor) == username)
         .collect::<Vec<_>>();
+    let allocated_numbers = allocations
+        .into_iter()
+        .filter(|allocation| {
+            allocation.enabled
+                && allocation.source_type == "extension"
+                && allocation.source_id == username
+        })
+        .map(|allocation| allocation.number)
+        .collect::<std::collections::HashSet<_>>();
     let numbers = numbers
         .into_iter()
-        .filter(|number| number.username.as_deref() == Some(username.as_str()))
+        .filter(|number| {
+            allocated_numbers.contains(&number.number)
+                || number.username.as_deref() == Some(username.as_str())
+        })
         .collect::<Vec<_>>();
     Ok(Json(json!({
         "extension": user,
@@ -47,9 +60,10 @@ pub(crate) async fn trunk(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DetailError> {
-    let (gateways, numbers, routes, registrations) = tokio::try_join!(
+    let (gateways, numbers, allocations, routes, registrations) = tokio::try_join!(
         state.store.list_gateways_full(),
         state.store.list_numbers(),
+        state.store.list_number_allocations(None),
         state.store.list_routes_full(),
         state.store.list_registrations(),
     )
@@ -58,9 +72,23 @@ pub(crate) async fn trunk(
         .into_iter()
         .find(|gateway| gateway.id == id)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "trunk not found".to_string()))?;
+    let allocated_numbers = allocations
+        .into_iter()
+        .filter(|allocation| {
+            allocation.enabled && allocation.source_type == "trunk" && allocation.source_id == id
+        })
+        .map(|allocation| allocation.number)
+        .collect::<std::collections::HashSet<_>>();
     let numbers = numbers
         .into_iter()
-        .filter(|number| number.gateway_id.as_deref() == Some(id.as_str()))
+        .filter(|number| {
+            if trunk.role.as_deref() == Some("egress") {
+                number.owner_egress_trunk_id.as_deref() == Some(id.as_str())
+                    || number.gateway_id.as_deref() == Some(id.as_str())
+            } else {
+                allocated_numbers.contains(&number.number)
+            }
+        })
         .collect::<Vec<_>>();
     let routes = routes
         .into_iter()
@@ -69,7 +97,7 @@ pub(crate) async fn trunk(
     let registrations = registrations
         .into_iter()
         .filter(|r| {
-            if let Some(ref reg_user) = trunk.reg_username {
+            if let Some(ref reg_user) = trunk.access_username {
                 if aor_username(&r.aor) == reg_user {
                     return true;
                 }

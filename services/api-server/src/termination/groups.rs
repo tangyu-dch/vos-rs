@@ -25,6 +25,7 @@ async fn save_egress_group(
         .upsert_egress_group(&EgressGroup {
             id,
             name: body.name,
+            description: body.description.unwrap_or_default(),
             enabled: body.enabled.unwrap_or(true),
             created_at: now,
             updated_at: now,
@@ -134,5 +135,3 @@ pub async fn replace_egress_group_members(
     crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }
-
-

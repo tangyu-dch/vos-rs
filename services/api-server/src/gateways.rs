@@ -145,16 +145,25 @@ fn access_ha1(username: &str, realm: &str, password: &str) -> String {
     )
 }
 
+fn reject_unsupported_egress_secret(_role: &str, _password: Option<&str>) -> Result<(), ApiError> {
+    Ok(())
+}
+
 pub async fn list_gateways(
     State(state): State<AppState>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<PaginatedResponse<SipGateway>>, ApiError> {
     let (page, page_size, offset) = normalize_page(&query);
     let (items, total) = tokio::try_join!(
+        state.store.list_gateways_page(
+            page_size,
+            offset,
+            query.gateway_type.as_deref(),
+            query.role.as_deref()
+        ),
         state
             .store
-            .list_gateways_page(page_size, offset, query.gateway_type.as_deref(), query.role.as_deref()),
-        state.store.count_gateways(query.gateway_type.as_deref(), query.role.as_deref()),
+            .count_gateways(query.gateway_type.as_deref(), query.role.as_deref()),
     )
     .map_err(|e| ApiError {
         error: e.to_string(),
@@ -172,17 +181,42 @@ pub async fn create_gateway(
     Json(req): Json<CreateGatewayRequest>,
 ) -> Result<StatusCode, ApiError> {
     let role = req.role.as_deref().unwrap_or("egress");
-    let access_username = req.access_username.clone().or_else(|| {
-        (role == "access")
-            .then(|| req.reg_username.clone())
-            .flatten()
+    let is_access = role == "access";
+    let access_auth_mode = req.access_auth_mode.as_deref().map(|mode| {
+        if mode == "ip_whitelist" {
+            "ip_allowlist"
+        } else {
+            mode
+        }
     });
-    let access_realm = req.access_realm.clone();
-    let access_password = req.access_password.clone().or_else(|| {
-        (role == "access")
-            .then(|| req.reg_password.clone())
-            .flatten()
-    });
+    let uses_access_digest =
+        is_access && matches!(access_auth_mode, Some("digest_register" | "ip_and_digest"));
+    reject_unsupported_egress_secret(role, req.reg_password.as_deref())?;
+    let access_username = uses_access_digest
+        .then(|| {
+            req.access_username
+                .clone()
+                .or_else(|| req.reg_username.clone())
+        })
+        .flatten();
+    if req
+        .access_realm
+        .as_deref()
+        .is_some_and(|realm| realm.trim() != state.sip_auth_realm)
+    {
+        return Err(ApiError::internal(format!(
+            "参数无效: 认证 Realm 必须使用系统配置 {}",
+            state.sip_auth_realm
+        )));
+    }
+    let access_realm = is_access.then(|| state.sip_auth_realm.clone());
+    let access_password = uses_access_digest
+        .then(|| {
+            req.access_password
+                .clone()
+                .or_else(|| req.reg_password.clone())
+        })
+        .flatten();
     validate_gateway(
         &req.id,
         &req.host,
@@ -191,7 +225,7 @@ pub async fn create_gateway(
         req.caller_id_mode.as_deref(),
         req.virtual_caller.as_deref(),
         req.role.as_deref(),
-        req.access_auth_mode.as_deref(),
+        access_auth_mode,
         access_username.as_deref(),
         access_realm.as_deref(),
         access_password
@@ -225,10 +259,15 @@ pub async fn create_gateway(
         access_password_hash,
         has_access_password: access_password.is_some(),
         prefix_rules: req.prefix_rules,
-        supports_registration: req.supports_registration,
+        supports_registration: is_access
+            .then_some(uses_access_digest)
+            .or(req.supports_registration),
         reg_auth_type: req.reg_auth_type,
         reg_username: req.reg_username,
-        reg_password: req.reg_password,
+        // Legacy reg_password must never be persisted as plaintext. Access
+        // credentials are converted to Digest HA1 above; active upstream
+        // registration will use a dedicated encrypted credential model.
+        reg_password: if is_access { None } else { req.reg_password.clone() },
         parent_gateway_id: None,
         caller_id_mode: req.caller_id_mode,
         virtual_caller: req.virtual_caller,
@@ -268,6 +307,35 @@ pub async fn update_gateway(
         .ok_or_else(|| ApiError {
             error: "网关不存在".into(),
         })?;
+    let role = req
+        .role
+        .as_deref()
+        .or(old.role.as_deref())
+        .unwrap_or("egress");
+    let is_access = role == "access";
+    let access_auth_mode = req
+        .access_auth_mode
+        .as_deref()
+        .or(old.access_auth_mode.as_deref())
+        .map(|mode| {
+            if mode == "ip_whitelist" {
+                "ip_allowlist"
+            } else {
+                mode
+            }
+        });
+    let uses_access_digest =
+        is_access && matches!(access_auth_mode, Some("digest_register" | "ip_and_digest"));
+    reject_unsupported_egress_secret(role, req.reg_password.as_deref())?;
+    if req
+        .role
+        .as_deref()
+        .is_some_and(|role| old.role.as_deref() != Some(role))
+    {
+        return Err(ApiError::internal(
+            "参数无效: 中继创建后不能切换接入/落地类型，请新建对应类型中继",
+        ));
+    }
     let caller_id_mode = req
         .caller_id_mode
         .clone()
@@ -276,14 +344,41 @@ pub async fn update_gateway(
         .virtual_caller
         .clone()
         .or_else(|| old.virtual_caller.clone());
-    let access_username = req
-        .access_username
-        .clone()
-        .or_else(|| old.access_username.clone());
-    let access_realm = req
+    let access_username = uses_access_digest
+        .then(|| {
+            req.access_username
+                .clone()
+                .or_else(|| old.access_username.clone())
+        })
+        .flatten();
+    if req
         .access_realm
-        .clone()
-        .or_else(|| old.access_realm.clone());
+        .as_deref()
+        .is_some_and(|realm| realm.trim() != state.sip_auth_realm)
+    {
+        return Err(ApiError::internal(format!(
+            "参数无效: 认证 Realm 必须使用系统配置 {}",
+            state.sip_auth_realm
+        )));
+    }
+    let access_realm = req
+        .role
+        .as_deref()
+        .or(old.role.as_deref())
+        .filter(|role| *role == "access")
+        .map(|_| state.sip_auth_realm.clone());
+    let identity_changed = uses_access_digest
+        && (access_username != old.access_username || access_realm != old.access_realm);
+    if identity_changed
+        && req
+            .access_password
+            .as_deref()
+            .is_none_or(|password| password.is_empty())
+    {
+        return Err(ApiError::internal(
+            "参数无效: 修改注册用户名或 Realm 时必须重新输入密码",
+        ));
+    }
     validate_gateway(
         &id,
         &req.host,
@@ -292,9 +387,7 @@ pub async fn update_gateway(
         caller_id_mode.as_deref(),
         virtual_caller.as_deref(),
         req.role.as_deref().or(old.role.as_deref()),
-        req.access_auth_mode
-            .as_deref()
-            .or(old.access_auth_mode.as_deref()),
+        access_auth_mode,
         access_username.as_deref(),
         access_realm.as_deref(),
         req.access_password
@@ -302,13 +395,19 @@ pub async fn update_gateway(
             .is_some_and(|value| !value.is_empty())
             || old.has_access_password,
     )?;
-    let access_password_hash = req.access_password.as_deref().and_then(|password| {
-        Some(access_ha1(
-            access_username.as_deref()?,
-            access_realm.as_deref()?,
-            password,
-        ))
-    });
+    let access_password_hash = if uses_access_digest {
+        req.access_password.as_deref().and_then(|password| {
+            Some(access_ha1(
+                access_username.as_deref()?,
+                access_realm.as_deref()?,
+                password,
+            ))
+        })
+    } else {
+        // Explicitly clear dormant Digest material when authentication no longer
+        // uses it. A later switch back must provide a fresh password.
+        Some(String::new())
+    };
     let gw = SipGateway {
         id: id.clone(),
         host: req.host,
@@ -317,26 +416,24 @@ pub async fn update_gateway(
         max_capacity: req.max_capacity.filter(|capacity| *capacity > 0),
         gateway_type: req.gateway_type.or_else(|| old.gateway_type.clone()),
         role: req.role.or_else(|| old.role.clone()),
-        access_auth_mode: req
-            .access_auth_mode
-            .or_else(|| old.access_auth_mode.clone())
-            .map(|mode| {
-                if mode == "ip_whitelist" {
-                    "ip_allowlist".to_string()
-                } else {
-                    mode
-                }
-            }),
+        access_auth_mode: access_auth_mode.map(str::to_string),
         access_username,
         access_realm,
         access_password_hash,
-        has_access_password: req.access_password.is_some() || old.has_access_password,
+        has_access_password: uses_access_digest
+            && (req
+                .access_password
+                .as_deref()
+                .is_some_and(|password| !password.is_empty())
+                || old.has_access_password),
         prefix_rules: req.prefix_rules.or_else(|| old.prefix_rules.clone()),
-        supports_registration: req.supports_registration.or(old.supports_registration),
+        supports_registration: is_access
+            .then_some(uses_access_digest)
+            .or(req.supports_registration)
+            .or(old.supports_registration),
         reg_auth_type: req.reg_auth_type.or_else(|| old.reg_auth_type.clone()),
         reg_username: req.reg_username.or_else(|| old.reg_username.clone()),
-        // The store uses COALESCE, so omission preserves the current secret.
-        reg_password: req.reg_password,
+        reg_password: if is_access { None } else { req.reg_password.clone() },
         parent_gateway_id: old.parent_gateway_id.clone(),
         caller_id_mode,
         virtual_caller,
@@ -379,7 +476,7 @@ pub async fn delete_gateway(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_gateway;
+    use super::{reject_unsupported_egress_secret, validate_gateway};
 
     #[test]
     fn validates_transport_port_and_virtual_caller() {
@@ -444,5 +541,12 @@ mod tests {
             true
         )
         .is_ok());
+    }
+
+    #[test]
+    fn rejects_plaintext_upstream_registration_password() {
+        assert!(reject_unsupported_egress_secret("egress", Some("secret")).is_ok());
+        assert!(reject_unsupported_egress_secret("egress", None).is_ok());
+        assert!(reject_unsupported_egress_secret("access", Some("secret")).is_ok());
     }
 }

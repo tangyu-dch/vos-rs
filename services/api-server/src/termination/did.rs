@@ -15,26 +15,29 @@ async fn save_did(
     status: StatusCode,
 ) -> EmptyResult {
     if number.trim().is_empty()
-        || body.target_id.trim().is_empty()
-        || !matches!(
-            body.target_type.as_str(),
-            "extension" | "extension_group" | "ivr" | "reject"
-        )
+        || !matches!(body.target_type.as_str(), "extension" | "reject")
+        || (body.target_type == "extension" && body.target_id.trim().is_empty())
     {
         return Err(invalid("DID 号码或目标参数无效"));
     }
+    let target_id = if body.target_type == "reject" {
+        "reject".to_string()
+    } else {
+        body.target_id
+    };
     state
         .store
         .upsert_did_destination(&DidDestination {
             number,
             tenant_id: body.tenant_id,
             target_type: body.target_type,
-            target_id: body.target_id,
+            target_id,
             enabled: body.enabled.unwrap_or(true),
             updated_at: OffsetDateTime::now_utc(),
         })
         .await
         .map_err(database)?;
+    crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(status)
 }
 pub async fn create_did(
@@ -61,6 +64,7 @@ pub async fn delete_did(State(state): State<AppState>, Path(number): Path<String
         .await
         .map_err(database)?
     {
+        crate::routes::publish_route_reload(&state.nats_client).await;
         Ok(StatusCode::OK)
     } else {
         Err((StatusCode::NOT_FOUND, "DID 目标不存在".to_string()))
@@ -89,4 +93,3 @@ pub async fn put_number_did(
 ) -> EmptyResult {
     save_did(state, number, body, StatusCode::OK).await
 }
-

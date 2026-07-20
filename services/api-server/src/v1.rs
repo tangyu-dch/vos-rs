@@ -14,7 +14,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    anti_fraud, audit, auth, billing, calls, cdr, dashboard, details, gateways, media_cluster,
+    anti_fraud, audit, auth, billing, call_center, calls, cdr, dashboard, details, gateways, ivr_menus, media_cluster,
     numbers, recording, registrations, report, routes, sip_cluster, system, termination, users,
     AppState,
 };
@@ -41,6 +41,8 @@ pub(crate) fn protected_routes(state: AppState) -> Router<AppState> {
         .merge(billing_routes())
         .merge(security_routes())
         .merge(infrastructure_routes())
+        .merge(call_center_routes())
+        .merge(ivr_routes())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::audit_log,
@@ -284,6 +286,38 @@ fn infrastructure_routes() -> Router<AppState> {
         .route(
             "/api/v1/infrastructure/media/metrics",
             get(calls::media_metrics),
+        )
+}
+
+fn call_center_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/v1/call-center/queues",
+            get(call_center::list_queues).post(call_center::create_queue),
+        )
+        .route(
+            "/api/v1/call-center/queues/:id",
+            put(call_center::update_queue).delete(call_center::delete_queue),
+        )
+        .route(
+            "/api/v1/call-center/agents",
+            get(call_center::list_agents).post(call_center::create_agent),
+        )
+        .route(
+            "/api/v1/call-center/agents/:id",
+            put(call_center::update_agent).delete(call_center::delete_agent),
+        )
+}
+
+fn ivr_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/v1/ivr/menus",
+            get(ivr_menus::list_menus).post(ivr_menus::create_menu),
+        )
+        .route(
+            "/api/v1/ivr/menus/:id",
+            put(ivr_menus::update_menu).delete(ivr_menus::delete_menu),
         )
 }
 

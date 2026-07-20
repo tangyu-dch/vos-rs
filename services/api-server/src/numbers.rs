@@ -34,22 +34,6 @@ fn err(e: impl std::fmt::Display) -> E {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-async fn publish_numbers_reload(nats: &Option<async_nats::Client>) {
-    let Some(client) = nats else {
-        tracing::warn!("NATS 未连接，号码映射重载处于 pending，数据库变更将在周期刷新后生效");
-        return;
-    };
-    if let Err(error) = client
-        .publish(
-            "vos_rs.numbers.reload",
-            axum::body::Bytes::from_static(b"reload"),
-        )
-        .await
-    {
-        tracing::warn!(%error, "号码映射重载广播失败，数据库变更已提交");
-    }
-}
-
 pub async fn list_numbers(
     State(state): State<AppState>,
     Query(query): Query<PageQuery>,
@@ -76,6 +60,12 @@ pub async fn create_number(
         .owner_egress_trunk_id
         .as_deref()
         .or(b.gateway_id.as_deref());
+    if owner.is_none() {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "号码必须归属于一个落地中继".to_string(),
+        ));
+    }
     validate_owner(&state, owner).await?;
     state
         .store
@@ -90,7 +80,7 @@ pub async fn create_number(
         )
         .await
         .map_err(err)?;
-    publish_numbers_reload(&state.nats_client).await;
+    crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::CREATED)
 }
 
@@ -129,7 +119,7 @@ pub async fn update_number(
         )
         .await
         .map_err(err)?;
-    publish_numbers_reload(&state.nats_client).await;
+    crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }
 
@@ -160,7 +150,7 @@ pub async fn delete_number(
 ) -> Result<StatusCode, E> {
     let deleted = state.store.delete_number(&number).await.map_err(err)?;
     if deleted {
-        publish_numbers_reload(&state.nats_client).await;
+        crate::routes::publish_route_reload(&state.nats_client).await;
     }
     Ok(if deleted {
         StatusCode::OK

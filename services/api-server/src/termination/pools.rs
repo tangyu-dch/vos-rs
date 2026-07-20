@@ -24,6 +24,7 @@ async fn save_caller_pool(
     {
         return Err(invalid("号码池 ID、来源和虚拟别名不能为空"));
     }
+    ensure_source_exists(&state, &body.owner_source_type, &body.owner_source_id).await?;
     if !matches!(
         body.strategy.as_str(),
         "random" | "round_robin" | "weighted_random" | "stable_hash" | "weighted" | "hash"
@@ -36,12 +37,10 @@ async fn save_caller_pool(
         value => value,
     }
     .to_string();
-    let fallback_mode = match body.fallback_mode.as_deref().unwrap_or("reject") {
-        "fixed" => "fallback_number",
-        "pool" => "fallback_pool",
-        value => value,
+    if body.fallback_mode.as_deref().unwrap_or("reject") != "reject" {
+        return Err(invalid("当前仅支持号码池选择失败时拒绝呼叫"));
     }
-    .to_string();
+    let fallback_mode = "reject".to_string();
     let now = OffsetDateTime::now_utc();
     state
         .store
@@ -60,7 +59,6 @@ async fn save_caller_pool(
         .map_err(database)?;
     crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(status)
-
 }
 
 pub async fn create_caller_pool(
@@ -95,7 +93,6 @@ pub async fn delete_caller_pool(
     } else {
         Err((StatusCode::NOT_FOUND, "号码池不存在".to_string()))
     }
-
 }
 pub async fn list_caller_pool_members(
     State(state): State<AppState>,
@@ -114,6 +111,14 @@ pub async fn replace_caller_pool_members(
     Path(id): Path<String>,
     Json(body): Json<Batch<CallerPoolMemberBody>>,
 ) -> EmptyResult {
+    let pool = state
+        .store
+        .list_caller_pools()
+        .await
+        .map_err(database)?
+        .into_iter()
+        .find(|pool| pool.id == id)
+        .ok_or((StatusCode::NOT_FOUND, "号码池不存在".to_string()))?;
     let mut members = Vec::with_capacity(body.items.len());
     for item in body.items {
         let priority = item.priority.unwrap_or(100);
@@ -125,6 +130,26 @@ pub async fn replace_caller_pool_members(
             || max < 0
         {
             return Err(invalid("号码池成员参数无效"));
+        }
+        let authorized: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM number_inventory n \
+             JOIN number_allocations a ON a.number=n.number AND a.enabled \
+             WHERE n.number=$1 AND a.source_type=$2 AND a.source_id=$3 \
+               AND LOWER(n.status) IN ('available','assigned','active') \
+               AND LOWER(COALESCE(n.direction,'both')) IN ('outbound','both','bidirectional') \
+               AND COALESCE(NULLIF(n.owner_egress_trunk_id,''),NULLIF(n.gateway_id,'')) IS NOT NULL)",
+        )
+        .bind(&item.number)
+        .bind(&pool.owner_source_type)
+        .bind(&pool.owner_source_id)
+        .fetch_one(state.store.pool())
+        .await
+        .map_err(database)?;
+        if !authorized {
+            return Err(invalid(format!(
+                "号码 {} 未授权给当前来源、不可显号或没有落地归属",
+                item.number
+            )));
         }
         members.push(CallerPoolMember {
             id: 0,
@@ -143,6 +168,4 @@ pub async fn replace_caller_pool_members(
         .map_err(database)?;
     crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
-
 }
-

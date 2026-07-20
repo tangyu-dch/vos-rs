@@ -11,6 +11,7 @@ pub async fn set_number_owner(
         .await
         .map_err(database)?;
     if updated {
+        crate::routes::publish_route_reload(&state.nats_client).await;
         Ok(StatusCode::OK)
     } else {
         Err((StatusCode::NOT_FOUND, "号码或落地中继不存在".to_string()))
@@ -49,6 +50,7 @@ pub async fn replace_allocations(
         if item.source_id.trim().is_empty() {
             return Err(invalid("授权来源 ID 不能为空"));
         }
+        ensure_source_exists(&state, &item.source_type, &item.source_id).await?;
         allocations.push(NumberAllocation {
             id: 0,
             number: number.clone(),
@@ -62,6 +64,6 @@ pub async fn replace_allocations(
         .replace_number_allocations(&number, &allocations)
         .await
         .map_err(database)?;
+    crate::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }
-
