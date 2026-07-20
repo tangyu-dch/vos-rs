@@ -3,7 +3,7 @@
 
 import { useMemo, useState } from 'react';
 import {
-  Button, Input, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
+  Button, Chip, Input, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
 } from '@heroui/react';
 import { Send } from 'lucide-react';
 import { api } from '@/services/client';
@@ -76,9 +76,45 @@ export function RoutesPage() {
               {simError && <p className="text-tiny text-danger">{simError}</p>}
             </div>
             {simResult && (
-              <div className="mt-2 p-3 rounded-medium bg-content2">
-                <h4 className="text-small font-semibold text-foreground mb-2">匹配结果</h4>
-                <pre className="text-tiny font-mono whitespace-pre-wrap text-default-600">{JSON.stringify(simResult, null, 2)}</pre>
+              <div className="mt-2 flex flex-col gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    匹配节点拓扑链 (Route Topology Graph)
+                  </h4>
+                  <Chip size="sm" color="success" variant="flat">匹配成功</Chip>
+                </div>
+
+                {/* 节点拓扑链 */}
+                <div className="flex flex-wrap items-center gap-2 py-2 px-3 bg-white rounded-xl border border-slate-200/60 shadow-xs">
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-slate-400">呼入源</span>
+                    <Chip size="sm" variant="bordered" className="font-semibold text-slate-700">INBOUND</Chip>
+                  </div>
+                  <span className="text-slate-300 font-bold">→</span>
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-slate-400">前缀匹配</span>
+                    <Chip size="sm" color="primary" variant="flat" className="font-bold">
+                      {String(simResult.prefix || '全前缀 *')}
+                    </Chip>
+                  </div>
+                  <span className="text-slate-300 font-bold">→</span>
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-slate-400">优先级/成本</span>
+                    <Chip size="sm" color="warning" variant="flat" className="font-semibold">
+                      P:{String(simResult.priority ?? 100)} / C:{String(simResult.cost ?? 0)}
+                    </Chip>
+                  </div>
+                  <span className="text-slate-300 font-bold">→</span>
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-slate-400">落地网关</span>
+                    <Chip size="sm" color="secondary" className="font-extrabold text-white">
+                      {String(simResult.gateway_id || simResult.target_gateway || 'TRUNK-GW')}
+                    </Chip>
+                  </div>
+                </div>
+
+                <pre className="text-[11px] font-mono whitespace-pre-wrap text-slate-600 bg-slate-100 p-2.5 rounded-xl border border-slate-200/60 max-h-48 overflow-y-auto">{JSON.stringify(simResult, null, 2)}</pre>
               </div>
             )}
           </ModalBody>
