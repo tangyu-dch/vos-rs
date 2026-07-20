@@ -26,10 +26,12 @@ use bytes::Bytes;
 use thiserror::Error;
 
 pub mod config;
+pub mod hw_accel;
 pub mod local;
 pub mod oss;
 
 pub use config::{StorageBackendKind, StorageConfig, StorageRule};
+pub use hw_accel::{HardwareAudioEncoder, SoftwareFallbackEncoder, HwAccelError};
 
 #[derive(Debug, Error)]
 pub enum StorageError {
