@@ -1,0 +1,12 @@
+apiVersion: v2
+name: vos-rs
+description: Telecom-Grade VoIP Softswitch Platform Helm Chart (sip-edge, media-edge, api-server)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - voip
+  - sip
+  - softswitch
+  - b2bua
+  - rtp

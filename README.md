@@ -649,6 +649,13 @@ curl http://localhost:8080/manage/calls/<call_id>/status
 - ✅ **Web 控制台**：基于 **HeroUI (v2.8) + Tailwind CSS + Lucide 矢量图标** 的 100% 全面大厂美学重构与 **可视化路由拓扑链展布 (Route Topology Visualizer)**
 - ✅ **AI-Native 媒体接口**：支持音频注入、打断、音视频控制 API
 - ✅ **数据库运维脚手架**：一键历史数据清理脚本（保留中继/号码/账号/分机）
+- ✅ **实时在线 SIP 信令梯形图 (`SipTraceModal`)**：**前端控制台已全量集成基于 Call-ID 的可视化 SIP 消息梯形图 (Sequence Diagram) 与 Raw 报文高亮面板**
+- ✅ **智能中继网关 OPTIONS 质量探测**：**支持毫秒级 OPTIONS 心跳探活、RTT/丢包率 QoS 评级与图形化卡片展布**
+- ✅ **Linux 万兆网卡 `io_uring` 传输框架**：**内置 io_uring 零拷贝 UDP 收发 Ring 缓冲区与 Socket 抽象**
+- ✅ **拖拽式可视化路由/IVR 编排器 (`VisualFlowEditor`)**：**前端控制台全量支持拖拽式节点 Card 链与逻辑分支在线编排**
+- ✅ **AI Voice Agent 全双工低延迟管道 (`ai_plugin.rs`)**：**基于 WebSocket / UDP 实现双向低延迟 PCM/Opus 实时音频流打断与交互**
+- ✅ **Kubernetes Helm Chart & HPA 自动弹性扩缩容 (`deploy/helm/`)**：**内置完整 Helm Chart 部署定义与 HPA (HorizontalPodAutoscaler) 规则**
+- ✅ **多租户月度账单凭证导出 (`AccountsPage`)**：**提供一键生成导出印章级企业月度账单 (JSON/CSV) 凭证通道**
 - ✅ **代码质量**：Rust 全 Workspace **0 Warnings 零告警**、450+ 单元/集成测试 100% PASS
 
 ---
