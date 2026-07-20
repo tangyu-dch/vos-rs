@@ -127,7 +127,7 @@ pub(crate) async fn update_queue(
     Path(_id): Path<String>,
     Json(payload): Json<CallQueue>,
 ) -> Result<Json<CallQueue>, ApiError> {
-    create_queue(State(state), Json(payload.clone())).await?;
+    let _ = create_queue(State(state), Json(payload.clone())).await?;
     Ok(Json(payload))
 }
 
@@ -206,7 +206,7 @@ pub(crate) async fn update_agent(
     Path(_id): Path<String>,
     Json(payload): Json<AgentStatus>,
 ) -> Result<Json<AgentStatus>, ApiError> {
-    create_agent(State(state), Json(payload.clone())).await?;
+    let _ = create_agent(State(state), Json(payload.clone())).await?;
     Ok(Json(payload))
 }
 

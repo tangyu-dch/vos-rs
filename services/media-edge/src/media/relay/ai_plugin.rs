@@ -146,12 +146,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_ai_plugin_voice_protocol_exchange() {
-        let plugin_addr: SocketAddr = "127.0.0.1:23456".parse().unwrap();
-        let proxy_addr: SocketAddr = "127.0.0.1:23457".parse().unwrap();
-
-        // 模拟外部 AI 插件端的 UDP 服务监听
-        let plugin_socket = UdpSocket::bind(plugin_addr).await.unwrap();
+        // 模拟外部 AI 插件端的 UDP 服务监听 (动态绑定空闲端口)
+        let plugin_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let plugin_addr = plugin_socket.local_addr().unwrap();
         let plugin_socket = Arc::new(plugin_socket);
+
+        let proxy_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = proxy_socket.local_addr().unwrap();
+        drop(proxy_socket);
 
         // 启动 AI 代理
         let proxy = AiVoicePluginProxy::start(proxy_addr, plugin_addr)

@@ -133,7 +133,7 @@ pub(crate) async fn update_menu(
     Path(_id): Path<String>,
     Json(payload): Json<IvrMenu>,
 ) -> Result<Json<IvrMenu>, ApiError> {
-    create_menu(State(state), Json(payload.clone())).await?;
+    let _ = create_menu(State(state), Json(payload.clone())).await?;
     Ok(Json(payload))
 }
 
