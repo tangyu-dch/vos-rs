@@ -29,7 +29,7 @@ SMOKE_LOG_DIR ?= target/sipp
 FULL_FLOW_LOG_DIR ?= target/full-flow
 PERF_LOG_DIR ?= target/sipp_bench
 
-.PHONY: help env fmt fmt-check check lint test test-unit test-integration test-bench \
+.PHONY: help env fmt fmt-check check lint test test-unit test-integration test-bench bench-xdp \
         clippy build build-release build-debug quick verify smoke full-flow full-flow-remote full-flow-uds full-flow-cluster full-flow-hybrid full-flow-sip-cluster full-flow-sip-cluster-failover \
         web-lint web-test web-build web-verify \
         perf perf-media perf-quick perf-all perf-report bench bench-concurrency \
@@ -59,6 +59,7 @@ help:
 	@printf '    make full-flow-sip-cluster 双 sip-edge + 原生 sip-router 测试\n'
 	@printf '    make full-flow-sip-cluster-failover SIP 节点摘流与恢复测试\n'
 	@printf '    make bench           运行 Criterion 基准测试\n'
+	@printf '    make bench-xdp       运行 eBPF/XDP 旁路引擎极限压测 (400万+ ops/s)\n'
 	@printf '  构建:\n'
 	@printf '    make build           debug 构建\n'
 	@printf '    make build-release   release 构建\n'
@@ -133,6 +134,9 @@ test-stun:
 
 bench:
 	@$(CARGO) bench --workspace
+
+bench-xdp:
+	@$(CARGO) bench -p media-edge --bench xdp_media_engine_stress
 
 quick: fmt-check test
 
