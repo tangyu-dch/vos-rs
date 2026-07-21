@@ -159,9 +159,12 @@
 测试环境：Apple M3 Max / macOS (ARM64) / PostgreSQL 15 / Redis 7 / NATS JetStream  
 测试场景：SIPp `bench_uac.xml` 组合并发压测（包含标准 SIP 事务与媒体流分发通道）
 
-#### 1. 纯信令模式 (Pure Signaling: INVITE + ACK + BYE)
+#### 4.1 纯信令模式 (Pure Signaling: INVITE + ACK + BYE)
 
-| 目标 CPS | 总通话量 (Count) | 成功率 (Succ) | 失败数 (Fail) | 平均响应时延 (Resp Time) | 标称发送速率 | **实际吞吐 (Actual CPS)** | 状态 |
+* **测试场景**：标准 SIP 呼叫建立与拆线（零媒体开销）
+* **命令行**：`bash tools/sipp/run_benchmark.sh signal batch`
+
+| 目标 CPS | 总通话量 (Count) | 成功率 (Succ) | 失败数 (Fail) | 平均响应时间 | 标称发送速率 | **实际吞吐 (Actual CPS)** | 状态 |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **200** | 1,000 | 100.0% (1,000) | 0 | 5 ms | 194.1 CPS | **193.7 CPS** | 🟢 PASS |
 | **500** | 2,500 | 100.0% (2,500) | 0 | 4 ms | 485.7 CPS | **484.5 CPS** | 🟢 PASS |
@@ -169,9 +172,12 @@
 | **1200** | 6,000 | 100.0% (6,000) | 0 | 5 ms | 1,163.5 CPS | **1,159.6 CPS** | 🟢 PASS |
 | **1500** | 7,500 | 100.0% (7,500) | 0 | 11 ms | 1,454.9 CPS | **1,450.7 CPS** | 🟢 PASS |
 
-#### 2. 信令 + 媒体组合模式 (Combined Mode: SIP + RTP Packet Relay)
+#### 4.2 信令 + 媒体组合模式 (Combined Mode: SIP Signaling + RTP Relay)
 
-| 目标 CPS | 总通话量 (Count) | 成功率 (Succ) | 失败数 (Fail) | 平均响应时延 (Resp Time) | 标称发送速率 | **实际吞吐 (Actual CPS)** | 状态 |
+* **测试场景**：SIP 信令握手 + SDP 媒体协商 + 双向 RTP 报文通道分发
+* **命令行**：`bash tools/sipp/run_benchmark.sh media batch`
+
+| 目标 CPS | 总通话量 (Count) | 成功率 (Succ) | 失败数 (Fail) | 平均响应时间 | 标称发送速率 | **实际吞吐 (Actual CPS)** | 状态 |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **200** | 1,000 | 100.0% (1,000) | 0 | 6 ms | 195.7 CPS | **195.2 CPS** | 🟢 PASS |
 | **500** | 2,500 | 100.0% (2,500) | 0 | 12 ms | 483.5 CPS | **481.8 CPS** | 🟢 PASS |
