@@ -87,6 +87,9 @@ export interface SipRegistration {
   expires_at: string;
   path: string[];
   updated_at?: string;
+  contact?: string;
+  user_agent?: string;
+  node?: string;
 }
 
 export interface DtmfEvent {
