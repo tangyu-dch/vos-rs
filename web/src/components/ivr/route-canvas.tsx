@@ -167,7 +167,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
           width={NODE_WIDTH}
           height={NODE_HEIGHT}
           rx={10}
-          className="fill-white dark:fill-slate-900 stroke-slate-200 dark:stroke-slate-700"
+          className="fill-content1 stroke-default-200"
           strokeWidth={1}
         />
         <rect width={4} height={NODE_HEIGHT} rx={2} className={`fill-current ${catalog.color.split(' ')[0].replace('/15', '/100')}`} />
@@ -199,7 +199,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
               cx={pos.x - node.position.x}
               cy={pos.y - node.position.y}
               r={PORT_RADIUS}
-              className="fill-slate-300 dark:fill-slate-600 stroke-white dark:stroke-slate-900"
+              className="fill-default-300 stroke-content1"
               strokeWidth={2}
             />
           );
@@ -212,7 +212,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
                 cx={pos.x - node.position.x}
                 cy={pos.y - node.position.y}
                 r={PORT_RADIUS}
-                className="fill-purple-500 stroke-white dark:stroke-slate-900 hover:fill-purple-600"
+                className="fill-secondary stroke-content1 hover:fill-secondary/80"
                 strokeWidth={2}
               />
               <foreignObject x={pos.x - node.position.x - 30} y={pos.y - node.position.y - 22} width={60} height={16}>
@@ -239,7 +239,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
         <path
           d={edgePath(srcPos, dstPos)}
           fill="none"
-          className="stroke-purple-400 group-hover:stroke-purple-600"
+          className="stroke-secondary/70 group-hover:stroke-secondary"
           strokeWidth={2}
           markerEnd="url(#arrow-route)"
         />
@@ -270,16 +270,16 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
     if (!src) return null;
     const srcPos = getPortPosition(src, drag.fromPort.portId, 'out');
     return (
-      <path d={edgePath(srcPos, drag.cursor)} fill="none" className="stroke-purple-400" strokeWidth={2} strokeDasharray="4 2" />
+      <path d={edgePath(srcPos, drag.cursor)} fill="none" className="stroke-secondary/70" strokeWidth={2} strokeDasharray="4 2" />
     );
   };
 
   return (
     <div className="flex gap-3 h-full min-h-0">
       {/* 左侧节点工具箱 */}
-      <div className="w-64 shrink-0 h-full p-3 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex flex-col gap-2 overflow-y-auto">
-        <div className="flex items-center gap-2 pb-2 border-b border-default-200 dark:border-slate-800 shrink-0">
-          <Plus className="w-4 h-4 text-purple-600" />
+      <div className="w-64 shrink-0 h-full p-3 bg-content1 rounded-xl border border-default-200 flex flex-col gap-2 overflow-y-auto">
+        <div className="flex items-center gap-2 pb-2 border-b border-default-200 shrink-0">
+          <Plus className="w-4 h-4 text-secondary" />
           <span className="text-xs font-bold">路由节点</span>
         </div>
         {(['source', 'filter', 'action'] as const).map((cat) => {
@@ -319,7 +319,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
       <div className="flex-1 min-w-0 relative">
         <svg
           ref={svgRef}
-          className="w-full h-full bg-default-50 dark:bg-slate-950 rounded-xl border-2 border-dashed border-default-200 dark:border-slate-800"
+          className="w-full h-full bg-background rounded-xl border-2 border-dashed border-default-200"
           onDragOver={(e) => e.preventDefault()}
           onDrop={handleDrop}
           onMouseMove={handleMouseMove}
@@ -328,11 +328,11 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
         >
           <defs>
             <marker id="arrow-route" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-              <path d="M0,0 L0,6 L8,3 z" className="fill-purple-400" />
+              <path d="M0,0 L0,6 L8,3 z" className="fill-secondary/70" />
             </marker>
           </defs>
           <pattern id="grid-route" width="20" height="20" patternUnits="userSpaceOnUse">
-            <path d="M 20 0 L 0 0 0 20" fill="none" className="stroke-default-100 dark:stroke-slate-800" strokeWidth="0.5" />
+            <path d="M 20 0 L 0 0 0 20" fill="none" className="stroke-default-100" strokeWidth="0.5" />
           </pattern>
           <rect width="100%" height="100%" fill="url(#grid-route)" />
           {topology.edges.map(renderEdge)}

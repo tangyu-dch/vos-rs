@@ -207,7 +207,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
           width={NODE_WIDTH}
           height={NODE_HEIGHT}
           rx={10}
-          className={isSelected ? 'fill-white dark:fill-slate-900 stroke-purple-500' : 'fill-white dark:fill-slate-900 stroke-slate-200 dark:stroke-slate-700'}
+          className={isSelected ? 'fill-content1 stroke-primary' : 'fill-content1 stroke-default-200'}
           strokeWidth={isSelected ? 2 : 1}
         />
         {/* 左侧色条 */}
@@ -244,7 +244,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
                 cx={pos.x - node.position.x}
                 cy={pos.y - node.position.y}
                 r={PORT_RADIUS}
-                className="fill-slate-300 dark:fill-slate-600 stroke-white dark:stroke-slate-900"
+                className="fill-default-300 stroke-content1"
                 strokeWidth={2}
               />
             </g>
@@ -263,7 +263,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
                 cx={pos.x - node.position.x}
                 cy={pos.y - node.position.y}
                 r={PORT_RADIUS}
-                className="fill-purple-500 stroke-white dark:stroke-slate-900 hover:fill-purple-600"
+                className="fill-secondary stroke-content1 hover:fill-secondary/80"
                 strokeWidth={2}
               />
               <foreignObject
@@ -296,7 +296,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
         <path
           d={edgePath(srcPos, dstPos)}
           fill="none"
-          className="stroke-purple-400 group-hover:stroke-purple-600"
+          className="stroke-secondary/70 group-hover:stroke-secondary"
           strokeWidth={2}
           markerEnd="url(#arrow)"
         />
@@ -335,7 +335,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
       <path
         d={edgePath(srcPos, drag.cursor)}
         fill="none"
-        className="stroke-purple-400"
+        className="stroke-secondary/70"
         strokeWidth={2}
         strokeDasharray="4 2"
       />
@@ -346,7 +346,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
     <div className="relative w-full h-full">
       <svg
         ref={svgRef}
-        className="w-full h-full bg-default-50 dark:bg-slate-950 rounded-xl border-2 border-dashed border-default-200 dark:border-slate-800"
+        className="w-full h-full bg-background rounded-xl border-2 border-dashed border-default-200"
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
         onMouseMove={handleMouseMove}
@@ -364,12 +364,12 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
             orient="auto"
             markerUnits="strokeWidth"
           >
-            <path d="M0,0 L0,6 L8,3 z" className="fill-purple-400" />
+            <path d="M0,0 L0,6 L8,3 z" className="fill-secondary/70" />
           </marker>
         </defs>
         {/* 网格背景 */}
         <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-          <path d="M 20 0 L 0 0 0 20" fill="none" className="stroke-default-100 dark:stroke-slate-800" strokeWidth="0.5" />
+          <path d="M 20 0 L 0 0 0 20" fill="none" className="stroke-default-100" strokeWidth="0.5" />
         </pattern>
         <rect width="100%" height="100%" fill="url(#grid)" />
         {/* 渲染所有边 */}
@@ -424,9 +424,9 @@ export function NodePalette() {
   ];
 
   return (
-    <div className="w-72 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex flex-col gap-3 overflow-y-auto">
-      <div className="flex items-center gap-2 pb-2 border-b border-default-200 dark:border-slate-800 shrink-0">
-        <Plus className="w-4 h-4 text-purple-600" />
+    <div className="w-72 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 flex flex-col gap-3 overflow-y-auto">
+      <div className="flex items-center gap-2 pb-2 border-b border-default-200 shrink-0">
+        <Plus className="w-4 h-4 text-secondary" />
         <span className="text-xs font-bold">节点工具箱</span>
       </div>
       <p className="text-[10px] text-default-400">按住下方卡片拖入画布即可创建节点</p>
@@ -476,7 +476,7 @@ interface InspectorProps {
 export function NodeInspector({ node, onChange }: InspectorProps) {
   if (!node) {
     return (
-      <div className="w-80 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex items-center justify-center">
+      <div className="w-80 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 flex items-center justify-center">
         <div className="text-center">
           <Sparkles className="w-8 h-8 text-default-300 mx-auto mb-2" />
           <p className="text-xs text-default-400">在画布中点击选中节点查看属性</p>
@@ -487,9 +487,9 @@ export function NodeInspector({ node, onChange }: InspectorProps) {
   const catalog = NODE_CATALOG_MAP[node.type];
   const Icon = ICON_MAP[catalog.icon] ?? Plus;
   return (
-    <div className="w-80 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex flex-col gap-3 overflow-y-auto">
-      <div className="flex items-center gap-2 pb-2 border-b border-default-200 dark:border-slate-800 shrink-0">
-        <Sparkles className="w-4 h-4 text-purple-600" />
+    <div className="w-80 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 flex flex-col gap-3 overflow-y-auto">
+      <div className="flex items-center gap-2 pb-2 border-b border-default-200 shrink-0">
+        <Sparkles className="w-4 h-4 text-secondary" />
         <span className="text-xs font-bold">节点属性</span>
       </div>
       <div className={`p-3 rounded-lg border ${catalog.color} flex items-center gap-2`}>
@@ -504,7 +504,7 @@ export function NodeInspector({ node, onChange }: InspectorProps) {
       <div className="flex flex-col gap-2">
         <label className="text-xs font-semibold">节点标题</label>
         <input
-          className="text-xs px-3 py-2 rounded-lg border border-default-200 dark:border-slate-700 bg-content2"
+          className="text-xs px-3 py-2 rounded-lg border border-default-200 bg-content2"
           value={node.title}
           onChange={(e) => onChange({ ...node, title: e.target.value })}
         />
@@ -512,12 +512,12 @@ export function NodeInspector({ node, onChange }: InspectorProps) {
       <div className="flex flex-col gap-2">
         <label className="text-xs font-semibold">节点描述</label>
         <textarea
-          className="text-xs px-3 py-2 rounded-lg border border-default-200 dark:border-slate-700 bg-content2 min-h-16"
+          className="text-xs px-3 py-2 rounded-lg border border-default-200 bg-content2 min-h-16"
           value={node.description ?? ''}
           onChange={(e) => onChange({ ...node, description: e.target.value })}
         />
       </div>
-      <div className="flex flex-col gap-2 pt-2 border-t border-default-200 dark:border-slate-800">
+      <div className="flex flex-col gap-2 pt-2 border-t border-default-200">
         <span className="text-xs font-semibold">配置参数</span>
         <NodeConfigFormWrapper node={node} onChange={onChange} />
       </div>
