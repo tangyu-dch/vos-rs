@@ -156,8 +156,19 @@
 
 ### 🚀 它有多快？(性能指标)
 
-测试环境：Apple M3 Max / macOS (ARM64) / PostgreSQL 15 / Redis 7 / NATS JetStream  
-测试场景：SIPp `bench_uac.xml` 组合并发压测（包含标准 SIP 事务与媒体流分发通道）
+#### 🛠 测试环境与硬件规格
+
+| 项目 | 规格 |
+| :--- | :--- |
+| **机型** | Apple MacBook Pro (M1 Pro, 2021) |
+| **CPU** | Apple M1 Pro (ARM64) |
+| **物理核心** | 8 性能核 + 2 能效核 = 10 核 |
+| **逻辑核心** | 10 |
+| **内存** | 16 GB unified memory |
+| **磁盘** | Apple SSD (NVMe) |
+| **基础组件** | macOS / PostgreSQL 15 / Redis 7 / NATS JetStream |
+
+* **测试场景**：SIPp `bench_uac.xml` 组合并发压测（包含标准 SIP 事务与媒体流分发通道）
 
 #### 4.1 纯信令模式 (Pure Signaling: INVITE + ACK + BYE)
 
