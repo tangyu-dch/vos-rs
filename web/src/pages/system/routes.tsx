@@ -1,24 +1,31 @@
-// 系统管理 - 路由策略与仿真 (table 定义 + 可视化拓扑编排 + 时间路由)
+// 系统管理 - 路由策略编排
+// 主视图: 表格定义路由规则 (含时间路由字段)
+// 每条规则支持独立的可视化拓扑编排 (点击"拓扑编排"按钮弹出画布)
+// 画布节点配置与表格字段双向绑定
 
 import { useMemo, useState } from 'react';
 import {
   Button, Chip, Input, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
-  Tab, Tabs, Card, CardBody,
+  Card, CardBody,
 } from '@heroui/react';
-import { Send, Table as TableIcon, GitFork, Sparkles, Save, RefreshCw, Clock } from 'lucide-react';
+import { Send, GitFork, Clock, Network } from 'lucide-react';
 import { api } from '@/services/client';
-import { ResourceWorkspace, FieldLabel } from '@/pages/shared/resource-workspace';
+import { ResourceWorkspace } from '@/pages/shared/resource-workspace';
 import type { ResourceSpec } from '@/pages/shared/types';
 import type { Entity } from '@/services/resources';
 import { message } from '@/utils/toast';
-import { RouteCanvas, createDefaultTopology } from '@/components/ivr/route-canvas';
-import type { RouteTopology } from '@/components/ivr/route-types';
+import { RouteTopologyEditor, type RouteRuleFields } from '@/components/ivr/route-rule-binding';
 
 export function RoutesPage() {
-  // 路由规则 table spec - 包含完整的时间路由字段
+  // 当前正在编辑拓扑的规则 (null 表示未打开)
+  const [topoRule, setTopoRule] = useState<RouteRuleFields | null>(null);
+  // 拓扑应用后的字段变更 (暂存,等用户在表格中保存)
+  const [pendingChanges, setPendingChanges] = useState<Partial<RouteRuleFields>>({});
+
+  // 路由规则 table spec - 含完整时间路由字段
   const routeSpec: ResourceSpec = useMemo(() => ({
-    title: '路由规则明细',
-    description: '按优先级匹配、改写号码并选择中继；支持时间段路由与权重分流。',
+    title: '路由规则',
+    description: '按优先级匹配、改写号码并选择中继；支持时间段路由与权重分流。每条规则可独立编排可视化拓扑。',
     path: '/routing/rules',
     idKey: 'id',
     createLabel: '新建路由规则',
@@ -29,7 +36,7 @@ export function RoutesPage() {
       { key: 'gateway_id', label: '目标中继', required: true, placeholder: '填写已存在的中继 ID' },
       { key: 'cost', label: '路由成本', kind: 'number', required: true, defaultValue: 0 },
       { key: 'weight', label: '分流权重', kind: 'number', min: 1, defaultValue: 100 },
-      // 时间路由相关字段
+      // 时间路由字段
       { key: 'time_start', label: '生效开始 (HH:MM)', placeholder: '08:00', pattern: /^([01]\d|2[0-3]):[0-5]\d$/, patternMessage: '请输入 HH:MM 格式的时间' },
       { key: 'time_end', label: '生效结束 (HH:MM)', placeholder: '22:00', pattern: /^([01]\d|2[0-3]):[0-5]\d$/, patternMessage: '请输入 HH:MM 格式的时间' },
       { key: 'weekdays', label: '生效星期 (1-7, 逗号分隔)', placeholder: '1,2,3,4,5 (周一到周五)' },
@@ -43,12 +50,30 @@ export function RoutesPage() {
         { label: '播放忙音', value: 'play_busy' },
       ], defaultValue: 'next_rule' },
     ],
+    // 每行自定义操作: 拓扑编排按钮
+    customRowAction: {
+      label: '拓扑编排',
+      color: 'secondary',
+      onPress: (row: Entity) => {
+        const rule: RouteRuleFields = {
+          id: String(row.id ?? ''),
+          prefix: row.prefix ? String(row.prefix) : undefined,
+          priority: row.priority ? Number(row.priority) : undefined,
+          gateway_id: row.gateway_id ? String(row.gateway_id) : undefined,
+          cost: row.cost !== undefined ? Number(row.cost) : undefined,
+          weight: row.weight ? Number(row.weight) : undefined,
+          time_start: row.time_start ? String(row.time_start) : undefined,
+          time_end: row.time_end ? String(row.time_end) : undefined,
+          weekdays: row.weekdays ? String(row.weekdays) : undefined,
+          timezone: row.timezone ? String(row.timezone) : undefined,
+          caller_pattern: row.caller_pattern ? String(row.caller_pattern) : undefined,
+          failover_strategy: row.failover_strategy ? String(row.failover_strategy) : undefined,
+        };
+        setPendingChanges({});
+        setTopoRule(rule);
+      },
+    },
   }), []);
-
-  // 默认进入可视化拓扑编排模式
-  const [activeTab, setActiveTab] = useState<'visual' | 'table'>('visual');
-  const [topology, setTopology] = useState<RouteTopology>(() => createDefaultTopology());
-  const [savingTopology, setSavingTopology] = useState(false);
 
   // 路由仿真
   const [simOpen, setSimOpen] = useState(false);
@@ -73,23 +98,9 @@ export function RoutesPage() {
     }
   };
 
-  const handleSaveTopology = async () => {
-    setSavingTopology(true);
-    try {
-      // 后端暂未提供拓扑保存接口,这里本地保存并提示
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      message.success(`路由拓扑已保存 (${topology.nodes.length} 节点 / ${topology.edges.length} 连线)`);
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '保存失败');
-    } finally {
-      setSavingTopology(false);
-    }
-  };
-
-  const handleResetTopology = () => {
-    if (!confirm('确定要重置为默认拓扑吗？当前画布上的所有节点和连线都会丢失。')) return;
-    setTopology(createDefaultTopology());
-    message.info('已重置为默认拓扑');
+  const handleApplyTopology = (changes: Partial<RouteRuleFields>) => {
+    setPendingChanges(changes);
+    message.success('拓扑配置已应用,请在表格中点击"编辑"按钮保存到后端');
   };
 
   return (
@@ -103,100 +114,100 @@ export function RoutesPage() {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-base font-bold">路由策略编排</h2>
-              <Chip size="sm" color="secondary" variant="flat">时间路由 · 拓扑编排</Chip>
+              <Chip size="sm" color="secondary" variant="flat">表格驱动 · 拓扑可视化</Chip>
             </div>
             <p className="text-xs text-default-500 mt-0.5">
-              支持表格定义路由规则 + 拖拽式可视化拓扑编排画板，内置时间路由与主叫过滤
+              表格定义路由规则明细,每条规则支持独立的可视化拓扑编排,内置时间路由与主叫过滤
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <Tabs
-            selectedKey={activeTab}
-            onSelectionChange={(k) => setActiveTab(k as 'visual' | 'table')}
-            color="secondary"
-            variant="solid"
-            radius="full"
-            size="sm"
-          >
-            <Tab
-              key="visual"
-              title={
-                <div className="flex items-center gap-1.5 px-2">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>可视化拓扑编排</span>
-                </div>
-              }
-            />
-            <Tab
-              key="table"
-              title={
-                <div className="flex items-center gap-1.5 px-2">
-                  <TableIcon className="w-3.5 h-3.5" />
-                  <span>表格定义</span>
-                </div>
-              }
-            />
-          </Tabs>
-
-          <Button
-            color="primary"
-            className="font-bold"
-            startContent={<Send className="w-3.5 h-3.5" />}
-            onPress={() => setSimOpen(true)}
-          >
-            路由仿真
-          </Button>
-        </div>
+        <Button
+          color="primary"
+          className="font-bold"
+          startContent={<Send className="w-3.5 h-3.5" />}
+          onPress={() => setSimOpen(true)}
+        >
+          路由仿真
+        </Button>
       </div>
 
-      {/* 主视图 */}
-      {activeTab === 'visual' ? (
-        <Card className="shadow-sm">
-          <CardBody className="p-5 flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-amber-500" />
-                <span className="text-sm font-bold">可视化路由拓扑编排画板</span>
-                <Chip size="sm" variant="flat" color="warning">支持时间路由节点</Chip>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="flat"
-                  startContent={<RefreshCw className="w-3.5 h-3.5" />}
-                  onPress={handleResetTopology}
-                >
-                  重置默认
+      {/* 主视图: 表格 (基于 ResourceWorkspace) */}
+      <ResourceWorkspace spec={routeSpec} />
+
+      {/* 时间路由使用说明 */}
+      <Card className="shadow-sm">
+        <CardBody className="p-4 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-amber-500" />
+            <span className="text-sm font-bold">时间路由与拓扑编排使用说明</span>
+          </div>
+          <div className="text-xs text-default-600 dark:text-default-400 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 pl-6">
+            <p>· <span className="font-semibold">表格字段</span>: 直接编辑表格行即可修改规则参数</p>
+            <p>· <span className="font-semibold">拓扑编排</span>: 点击每行"拓扑编排"按钮,可视化编辑该规则的处理流程</p>
+            <p>· <span className="font-semibold">时间路由</span>: 填写 time_start/time_end/weekdays 即可启用</p>
+            <p>· <span className="font-semibold">双向同步</span>: 画布节点配置修改后,点击"应用拓扑到表格"回写</p>
+            <p>· <span className="font-semibold">工作时间</span>: 09:00-18:00 周一到周五 → 转坐席</p>
+            <p>· <span className="font-semibold">非工作时间</span>: 转 IVR 自助服务或语音留言</p>
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* 路由规则拓扑编排 Modal (每条规则独立画布) */}
+      <Modal
+        isOpen={topoRule !== null}
+        onOpenChange={(o) => !o && setTopoRule(null)}
+        size="full"
+        scrollBehavior="outside"
+      >
+        <ModalContent>
+          {() => (
+            <>
+              <ModalHeader className="flex items-center gap-2 border-b border-default-200 dark:border-slate-800">
+                <Network className="w-5 h-5 text-purple-600" />
+                <span>路由规则拓扑编排</span>
+                {topoRule && (
+                  <Chip size="sm" variant="flat" color="secondary" className="ml-2">
+                    规则: {topoRule.id}
+                  </Chip>
+                )}
+                {Object.keys(pendingChanges).length > 0 && (
+                  <Chip size="sm" variant="flat" color="warning" className="ml-2">
+                    有 {Object.keys(pendingChanges).length} 项变更待保存
+                  </Chip>
+                )}
+              </ModalHeader>
+              <ModalBody className="p-4">
+                {topoRule && (
+                  <RouteTopologyEditor
+                    rule={topoRule}
+                    onChange={handleApplyTopology}
+                  />
+                )}
+                {Object.keys(pendingChanges).length > 0 && (
+                  <div className="mt-2 p-3 bg-warning-50 dark:bg-warning-950/20 rounded-lg border border-warning-200 dark:border-warning-800">
+                    <p className="text-xs font-bold text-warning-700 dark:text-warning-300 mb-2">
+                      待应用的字段变更 (需在表格中编辑该规则并保存才能生效):
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(pendingChanges).map(([k, v]) => (
+                        <Chip key={k} size="sm" variant="flat">
+                          <span className="font-mono">{k}</span>: {String(v ?? '(空)')}
+                        </Chip>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </ModalBody>
+              <ModalFooter>
+                <Button variant="flat" onPress={() => setTopoRule(null)}>
+                  关闭
                 </Button>
-                <Button
-                  size="sm"
-                  color="secondary"
-                  className="font-bold text-white"
-                  startContent={<Save className="w-3.5 h-3.5" />}
-                  onPress={handleSaveTopology}
-                  isLoading={savingTopology}
-                >
-                  保存拓扑
-                </Button>
-              </div>
-            </div>
-            <RouteCanvas topology={topology} onChange={setTopology} />
-            <div className="p-3 bg-amber-500/5 dark:bg-amber-950/20 rounded-lg border border-amber-500/20 flex items-start gap-2">
-              <Clock className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-              <div className="text-xs text-amber-700 dark:text-amber-300">
-                <p className="font-bold mb-1">时间路由节点使用说明</p>
-                <p>· 工作时间 (09:00-18:00 周一到周五) → 转坐席队列</p>
-                <p>· 非工作时间 → 转 IVR 自助服务或语音留言</p>
-                <p>· 节假日可在「生效星期」字段配置 (如仅周末 6,7)</p>
-              </div>
-            </div>
-          </CardBody>
-        </Card>
-      ) : (
-        <ResourceWorkspace spec={routeSpec} />
-      )}
+              </ModalFooter>
+            </>
+          )}
+        </ModalContent>
+      </Modal>
 
       {/* 路由仿真 Modal */}
       <Modal isOpen={simOpen} onOpenChange={(o) => !o && setSimOpen(false)} size="lg">
@@ -204,9 +215,9 @@ export function RoutesPage() {
           <ModalHeader>路由仿真测试</ModalHeader>
           <ModalBody>
             <div className="flex flex-col gap-2 py-2">
-              <FieldLabel label="目标号码" required />
               <Input
                 variant="bordered"
+                label="目标号码"
                 placeholder="输入目标号码"
                 value={simDestination}
                 onValueChange={setSimDestination}

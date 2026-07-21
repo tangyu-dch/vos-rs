@@ -1,6 +1,8 @@
 // 资源工作台类型定义
 // 从 console.tsx 拆分而来，供 ResourceWorkspace 及各资源页面共用
 
+import type { Entity } from '@/services/resources';
+
 export type FieldKind = 'text' | 'textarea' | 'number' | 'duration' | 'switch' | 'select' | 'secret';
 
 export interface SelectOptionSpec {
@@ -37,4 +39,11 @@ export interface ResourceSpec {
   createLabel?: string;
   readOnly?: boolean;
   action?: 'credit';
+  /** 自定义行操作按钮 (在操作列最左侧渲染) */
+  customRowAction?: {
+    label: string;
+    icon?: string;
+    color?: 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
+    onPress: (row: Entity) => void;
+  };
 }

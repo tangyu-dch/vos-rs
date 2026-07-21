@@ -432,6 +432,17 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
                       )),
                       <TableCell key="actions">
                         <div className="flex items-center justify-end gap-1">
+                          {spec.customRowAction && (
+                            <Button
+                              size="sm"
+                              color={spec.customRowAction.color ?? 'secondary'}
+                              variant="flat"
+                              className="font-bold"
+                              onPress={() => spec.customRowAction!.onPress(row)}
+                            >
+                              {spec.customRowAction.label}
+                            </Button>
+                          )}
                           {spec.detailPath && (
                             <Button isIconOnly size="sm" variant="light" onPress={() => navigate(`${spec.detailPath}/${entityId(row, spec.idKey)}`)}>
                               <Eye className="w-4 h-4 text-default-500" />
