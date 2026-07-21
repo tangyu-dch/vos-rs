@@ -6,10 +6,32 @@ use serde::Deserialize;
 
 use crate::{config::RouterConfig, metrics};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SipNode {
     pub(crate) id: String,
     pub(crate) address: SocketAddr,
+    pub(crate) region: String,
+    pub(crate) anycast_ip: Option<std::net::IpAddr>,
+    pub(crate) management_url: Option<String>,
+    pub(crate) rtt_ms: f64,
+    pub(crate) packet_loss_rate: f64,
+}
+
+impl Eq for SipNode {}
+
+#[cfg(test)]
+impl SipNode {
+    pub(crate) fn new_test(id: impl Into<String>, address: SocketAddr) -> Self {
+        Self {
+            id: id.into(),
+            address,
+            region: "default".to_string(),
+            anycast_ip: None,
+            management_url: None,
+            rtt_ms: 5.0,
+            packet_loss_rate: 0.0,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -19,6 +41,16 @@ struct SipNodeRecord {
     router_mode: String,
     #[serde(default = "default_node_status")]
     status: String,
+    #[serde(default)]
+    region: Option<String>,
+    #[serde(default)]
+    anycast_ip: Option<std::net::IpAddr>,
+    #[serde(default)]
+    management_url: Option<String>,
+    #[serde(default)]
+    rtt_ms: Option<f64>,
+    #[serde(default)]
+    packet_loss_rate: Option<f64>,
 }
 
 fn default_node_status() -> String {
@@ -101,6 +133,11 @@ async fn refresh(
         discovered.push(SipNode {
             id: record.node_id,
             address,
+            region: record.region.unwrap_or_else(|| "default".to_string()),
+            anycast_ip: record.anycast_ip,
+            management_url: record.management_url,
+            rtt_ms: record.rtt_ms.unwrap_or(5.0),
+            packet_loss_rate: record.packet_loss_rate.unwrap_or(0.0),
         });
     }
     discovered.sort_by(|left, right| left.id.cmp(&right.id));

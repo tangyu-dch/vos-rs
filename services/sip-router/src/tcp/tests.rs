@@ -51,10 +51,10 @@ async fn test_tcp_proxy_adds_and_removes_own_via() {
 
     let router_listener = TcpListener::bind("127.0.0.1:0").await.expect("router");
     let router_addr = router_listener.local_addr().expect("router address");
-    let nodes = Arc::new(RwLock::new(Arc::from([SipNode {
-        id: "sip-a".to_string(),
-        address: backend_addr,
-    }])));
+    let nodes = Arc::new(RwLock::new(Arc::from([SipNode::new_test(
+        "sip-a",
+        backend_addr,
+    )])));
     let config = test_config(router_addr);
     let proxy_nodes = Arc::clone(&nodes);
     let routes = DialogRouteStore::without_redis_for_test(60);
@@ -92,14 +92,8 @@ async fn test_one_tcp_client_routes_two_call_ids_to_different_nodes() {
     let backend_a = TcpListener::bind("127.0.0.1:0").await.expect("backend a");
     let backend_b = TcpListener::bind("127.0.0.1:0").await.expect("backend b");
     let nodes_list = vec![
-        SipNode {
-            id: "sip-a".to_string(),
-            address: backend_a.local_addr().expect("backend a address"),
-        },
-        SipNode {
-            id: "sip-b".to_string(),
-            address: backend_b.local_addr().expect("backend b address"),
-        },
+        SipNode::new_test("sip-a", backend_a.local_addr().expect("backend a address")),
+        SipNode::new_test("sip-b", backend_b.local_addr().expect("backend b address")),
     ];
     let call_a = call_id_for_node("sip-a", &nodes_list);
     let call_b = call_id_for_node("sip-b", &nodes_list);

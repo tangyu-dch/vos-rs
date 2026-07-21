@@ -238,14 +238,8 @@ mod tests {
     async fn test_local_route_moves_when_owner_leaves_active_nodes() {
         let store = DialogRouteStore::without_redis_for_test(60);
         let first_nodes = vec![
-            SipNode {
-                id: "sip-a".to_string(),
-                address: "127.0.0.1:5061".parse().expect("address"),
-            },
-            SipNode {
-                id: "sip-b".to_string(),
-                address: "127.0.0.1:5062".parse().expect("address"),
-            },
+            SipNode::new_test("sip-a", "127.0.0.1:5061".parse().expect("address")),
+            SipNode::new_test("sip-b", "127.0.0.1:5062".parse().expect("address")),
         ];
         let owner = store
             .resolve("call-move", &first_nodes)
@@ -267,10 +261,7 @@ mod tests {
     #[tokio::test]
     async fn test_release_removes_local_route() {
         let store = DialogRouteStore::without_redis_for_test(60);
-        let nodes = vec![SipNode {
-            id: "sip-a".to_string(),
-            address: "127.0.0.1:5061".parse().expect("address"),
-        }];
+        let nodes = vec![SipNode::new_test("sip-a", "127.0.0.1:5061".parse().expect("address"))];
         store.resolve("call-release", &nodes).await.expect("owner");
         assert!(store.local.contains_key("call-release"));
 
@@ -303,14 +294,8 @@ mod tests {
         let first = DialogRouteStore::new(first_redis, 60);
         let second = DialogRouteStore::new(second_redis, 60);
         let nodes = vec![
-            SipNode {
-                id: "sip-a".to_string(),
-                address: "127.0.0.1:5061".parse().expect("address"),
-            },
-            SipNode {
-                id: "sip-b".to_string(),
-                address: "127.0.0.1:5062".parse().expect("address"),
-            },
+            SipNode::new_test("sip-a", "127.0.0.1:5061".parse().expect("address")),
+            SipNode::new_test("sip-b", "127.0.0.1:5062".parse().expect("address")),
         ];
 
         let first_owner = first.resolve(call_id, &nodes).await.expect("first owner");

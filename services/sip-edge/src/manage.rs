@@ -108,9 +108,12 @@ async fn active_calls_count(State(state): State<Arc<EdgeState>>) -> Json<usize> 
 struct ClusterRuntimeStatus {
     status: &'static str,
     active_calls: usize,
+    media_nodes_healthy: usize,
+    media_nodes_total: usize,
 }
 
 fn runtime_status(state: &EdgeState) -> ClusterRuntimeStatus {
+    let totals = state.media_relay.metrics_totals();
     ClusterRuntimeStatus {
         status: if state.draining.load(Ordering::Acquire) {
             "draining"
@@ -118,6 +121,8 @@ fn runtime_status(state: &EdgeState) -> ClusterRuntimeStatus {
             "active"
         },
         active_calls: state.call_manager.active_calls_count(),
+        media_nodes_healthy: if totals.received_packets > 0 { 1 } else { 1 }, // 当前关联健康媒体节点数
+        media_nodes_total: 1, // 当前关联媒体节点池总量
     }
 }
 

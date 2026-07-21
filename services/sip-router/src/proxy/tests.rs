@@ -114,13 +114,7 @@ fn test_uuid_call_ids_cover_both_nodes() {
 
 fn test_nodes() -> Vec<SipNode> {
     vec![
-        SipNode {
-            id: "sip-edge-a".to_string(),
-            address: "127.0.0.1:5061".parse().expect("address"),
-        },
-        SipNode {
-            id: "sip-edge-b".to_string(),
-            address: "127.0.0.1:5062".parse().expect("address"),
-        },
+        SipNode::new_test("sip-edge-a", "127.0.0.1:5061".parse().expect("address")),
+        SipNode::new_test("sip-edge-b", "127.0.0.1:5062".parse().expect("address")),
     ]
 }
