@@ -33,7 +33,8 @@ PERF_LOG_DIR ?= target/sipp_bench
         clippy build build-release build-debug quick verify smoke full-flow full-flow-remote full-flow-uds full-flow-cluster full-flow-hybrid full-flow-sip-cluster full-flow-sip-cluster-failover \
         web-lint web-test web-build web-verify \
         perf perf-media perf-quick perf-all perf-report bench bench-concurrency \
-        bench-concurrency-quick bench-concurrency-media bench-concurrency-recording doc \
+        bench-concurrency-quick bench-concurrency-media bench-concurrency-recording \
+        bench-sipp-signal bench-sipp-media bench-sipp-batch bench-sipp-single doc \
         run-sip-router run-sip-edge run-media-edge run-api-server run-cdr-worker cluster-check logs clean test-stun
 
 help:
@@ -60,6 +61,11 @@ help:
 	@printf '    make full-flow-sip-cluster-failover SIP 节点摘流与恢复测试\n'
 	@printf '    make bench           运行 Criterion 基准测试\n'
 	@printf '    make bench-xdp       运行 eBPF/XDP 旁路引擎极限压测 (400万+ ops/s)\n'
+	@printf '  SIPp 阶梯性能压测 (200~1500 CPS):\n'
+	@printf '    make bench-sipp-signal           纯信令阶梯压测 (200, 500, 1000, 1200, 1500 CPS)\n'
+	@printf '    make bench-sipp-media            信令+媒体组合阶梯压测 (200, 500, 1000, 1200, 1500 CPS)\n'
+	@printf '    make bench-sipp-batch            全模式批量阶梯拉测 (纯信令 + 带媒体)\n'
+	@printf '    make bench-sipp-single MODE=... CPS=... COUNT=... 单档定制压测\n'
 	@printf '  构建:\n'
 	@printf '    make build           debug 构建\n'
 	@printf '    make build-release   release 构建\n'
@@ -467,6 +473,23 @@ bench-concurrency-media: build-release
 
 bench-concurrency-recording: build-release
 	@$(PYTHON) tools/benchmark/bench.py --scenario recording --total 500 --cps 100 --duration 35 --sustain 30
+
+# ─── SIPp 阶梯性能压测 (200~1500 CPS) ──────────────────────
+
+MODE ?= signal
+CPS ?= 200
+COUNT ?= 1000
+
+bench-sipp-signal:
+	@bash tools/sipp/run_benchmark.sh signal batch
+
+bench-sipp-media:
+	@bash tools/sipp/run_benchmark.sh media batch
+
+bench-sipp-batch: bench-sipp-signal bench-sipp-media
+
+bench-sipp-single:
+	@bash tools/sipp/run_benchmark.sh $(MODE) $(CPS) $(COUNT)
 
 # ─── 运行 ──────────────────────────────────────────────
 
