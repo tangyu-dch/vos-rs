@@ -235,5 +235,40 @@ make full-flow-sip-cluster-failover
 - `make full-flow`：单 local 节点；
 - `make full-flow-remote`：单 HTTP remote 节点；
 - `make full-flow-uds`：单 UDS remote 节点；
-- `make full-flow-cluster`：双 remote 节点；
+- `make full-flow-cluster`：双 remote 节点，Call-ID 亲和调度；
 - `make full-flow-hybrid`：local 与 remote 混合调度。
+
+### 媒体集群测试前置条件（数据库）
+
+`make full-flow-cluster` 依赖以下数据库记录，首次运行前需执行一次：
+
+```sql
+-- 1. 分配主叫号码
+INSERT INTO number_inventory (number, gateway_id, owner_egress_trunk_id,
+  direction, max_concurrent, status)
+VALUES ('1001', 'sipp-egress', 'sipp-egress', 'both', 100, 'active')
+ON CONFLICT (number) DO UPDATE SET
+  gateway_id = 'sipp-egress', owner_egress_trunk_id = 'sipp-egress',
+  max_concurrent = 100, status = 'active';
+
+-- 2. 为 sipp-access-pass 开放出局策略
+INSERT INTO source_outbound_policies
+  (source_type, source_id, caller_mode, egress_mode, direct_egress_trunk_id, fallback_mode, enabled)
+VALUES ('trunk', 'sipp-access-pass', 'strict_passthrough', 'direct', 'sipp-egress', 'reject', true)
+ON CONFLICT (source_type, source_id) DO NOTHING;
+
+-- 3. 确保目标号段有路由（prefix 9 → sipp-egress）
+INSERT INTO sip_routes (id, name, prefix, gateway_id, priority, enabled)
+VALUES ('sipp-route-9', 'test-9xxxx', '9', 'sipp-egress', 100, true)
+ON CONFLICT (id) DO NOTHING;
+```
+
+端口约定（本机测试）：
+
+| 角色 | 端口 | 说明 |
+|------|------|------|
+| sip-edge | 5160 | SIP 信令监听 |
+| media-edge-a | 40000–40499 | RTP 池 A（node-a） |
+| media-edge-b | 41000–41499 | RTP 池 B（node-b） |
+| sipp caller | 5164 | 模拟主叫用户 |
+| sipp gateway | 5190 | 模拟被叫网关 |
