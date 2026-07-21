@@ -393,10 +393,14 @@ export default function IvrPage() {
         isOpen={topoIvr !== null}
         onOpenChange={(o) => !o && setTopoIvr(null)}
         size="full"
-        scrollBehavior="outside"
+        scrollBehavior="inside"
+        classNames={{
+          base: 'h-screen max-h-screen w-screen max-w-screen',
+          wrapper: 'h-screen max-h-screen',
+        }}
       >
-        <ModalContent>
-          <ModalHeader className="flex items-center gap-2 border-b border-default-200 dark:border-slate-800">
+        <ModalContent className="h-full">
+          <ModalHeader className="flex items-center gap-2 border-b border-default-200 dark:border-slate-800 shrink-0">
             <Network className="w-5 h-5 text-purple-600" />
             <span>IVR 拓扑编排</span>
             {topoIvr && (
@@ -410,7 +414,7 @@ export default function IvrPage() {
               </>
             )}
           </ModalHeader>
-          <ModalBody className="p-4">
+          <ModalBody className="flex-1 min-h-0 p-4 overflow-hidden">
             {topoIvr && (
               <IvrTopologyEditor flow={topoIvr} onSaved={handleTopologySaved} />
             )}

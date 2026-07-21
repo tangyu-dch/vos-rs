@@ -182,8 +182,8 @@ interface RouteTopologyEditorProps {
 export function RouteTopologyEditor({ rule, onChange }: RouteTopologyEditorProps) {
   const initialTopology = useMemo(() => topologyFromRule(rule), [rule.id]);  // 仅依赖 id,避免每次字段变都重建
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col gap-3 h-full min-h-0">
+      <div className="flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <Chip size="sm" variant="flat" color="secondary">规则: {rule.id}</Chip>
           <Chip size="sm" variant="flat" color="primary">
@@ -217,11 +217,11 @@ function RouteCanvasWithSync({
   const [topology, setTopology] = useState<RouteTopology>(initialTopology);
   const [applied, setApplied] = useState(false);
   return (
-    <div className="flex flex-col gap-2">
-      <div className="h-[560px]">
+    <div className="flex flex-col gap-2 h-full min-h-0">
+      <div className="flex-1 min-h-0">
         <RouteCanvas topology={topology} onChange={setTopology} />
       </div>
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-end gap-2 shrink-0">
         {applied && (
           <Chip size="sm" color="success" variant="flat" startContent={<CheckCircle2 className="w-3 h-3" />}>
             已应用,请点击保存使配置生效

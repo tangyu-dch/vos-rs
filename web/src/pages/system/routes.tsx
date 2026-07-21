@@ -158,12 +158,16 @@ export function RoutesPage() {
         isOpen={topoRule !== null}
         onOpenChange={(o) => !o && setTopoRule(null)}
         size="full"
-        scrollBehavior="outside"
+        scrollBehavior="inside"
+        classNames={{
+          base: 'h-screen max-h-screen w-screen max-w-screen',
+          wrapper: 'h-screen max-h-screen',
+        }}
       >
-        <ModalContent>
+        <ModalContent className="h-full">
           {() => (
             <>
-              <ModalHeader className="flex items-center gap-2 border-b border-default-200 dark:border-slate-800">
+              <ModalHeader className="flex items-center gap-2 border-b border-default-200 dark:border-slate-800 shrink-0">
                 <Network className="w-5 h-5 text-purple-600" />
                 <span>路由规则拓扑编排</span>
                 {topoRule && (
@@ -177,15 +181,17 @@ export function RoutesPage() {
                   </Chip>
                 )}
               </ModalHeader>
-              <ModalBody className="p-4">
+              <ModalBody className="flex-1 min-h-0 p-4 overflow-hidden flex flex-col gap-2">
                 {topoRule && (
-                  <RouteTopologyEditor
-                    rule={topoRule}
-                    onChange={handleApplyTopology}
-                  />
+                  <div className="flex-1 min-h-0">
+                    <RouteTopologyEditor
+                      rule={topoRule}
+                      onChange={handleApplyTopology}
+                    />
+                  </div>
                 )}
                 {Object.keys(pendingChanges).length > 0 && (
-                  <div className="mt-2 p-3 bg-warning-50 dark:bg-warning-950/20 rounded-lg border border-warning-200 dark:border-warning-800">
+                  <div className="shrink-0 p-3 bg-warning-50 dark:bg-warning-950/20 rounded-lg border border-warning-200 dark:border-warning-800">
                     <p className="text-xs font-bold text-warning-700 dark:text-warning-300 mb-2">
                       待应用的字段变更 (需在表格中编辑该规则并保存才能生效):
                     </p>
@@ -199,7 +205,7 @@ export function RoutesPage() {
                   </div>
                 )}
               </ModalBody>
-              <ModalFooter>
+              <ModalFooter className="shrink-0">
                 <Button variant="flat" onPress={() => setTopoRule(null)}>
                   关闭
                 </Button>

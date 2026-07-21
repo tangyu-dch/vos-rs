@@ -147,7 +147,7 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
 
   if (loading) {
     return (
-      <div className="h-[60vh] flex items-center justify-center">
+      <div className="h-full min-h-[400px] flex items-center justify-center">
         <LoadingState />
       </div>
     );
@@ -155,7 +155,7 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
 
   if (error) {
     return (
-      <div className="h-[60vh] flex items-center justify-center">
+      <div className="h-full min-h-[400px] flex items-center justify-center">
         <ErrorState error={error} retry={load} />
       </div>
     );
@@ -164,9 +164,9 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
   if (!topology) return null;
 
   return (
-    <div className="flex flex-col gap-3 h-[calc(100vh-220px)] min-h-[500px]">
+    <div className="flex flex-col gap-3 h-full min-h-0">
       {/* 顶部工具栏 */}
-      <div className="flex items-center justify-between gap-4 p-3 bg-content1 rounded-xl border border-default-200 dark:border-slate-800">
+      <div className="flex items-center justify-between gap-4 p-3 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 shrink-0">
         <div className="flex items-center gap-3 flex-wrap">
           <GitFork className="w-5 h-5 text-purple-600" />
           <Input
