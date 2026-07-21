@@ -204,9 +204,9 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
       </div>
 
       {/* 三栏布局: 左侧 palette + 中间 canvas + 右侧 inspector */}
-      <div className="flex gap-3 flex-1 min-h-0">
+      <div className="flex gap-3 flex-1 min-h-0 h-full">
         <NodePalette />
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 h-full">
           <IvrCanvas
             flow={topology}
             onChange={setTopology}

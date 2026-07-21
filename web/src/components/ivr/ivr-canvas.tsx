@@ -424,8 +424,8 @@ export function NodePalette() {
   ];
 
   return (
-    <div className="w-72 shrink-0 p-4 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex flex-col gap-3 overflow-y-auto">
-      <div className="flex items-center gap-2 pb-2 border-b border-default-200 dark:border-slate-800">
+    <div className="w-72 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex flex-col gap-3 overflow-y-auto">
+      <div className="flex items-center gap-2 pb-2 border-b border-default-200 dark:border-slate-800 shrink-0">
         <Plus className="w-4 h-4 text-purple-600" />
         <span className="text-xs font-bold">节点工具箱</span>
       </div>
@@ -476,7 +476,7 @@ interface InspectorProps {
 export function NodeInspector({ node, onChange }: InspectorProps) {
   if (!node) {
     return (
-      <div className="w-80 shrink-0 p-4 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex items-center justify-center">
+      <div className="w-80 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex items-center justify-center">
         <div className="text-center">
           <Sparkles className="w-8 h-8 text-default-300 mx-auto mb-2" />
           <p className="text-xs text-default-400">在画布中点击选中节点查看属性</p>
@@ -487,8 +487,8 @@ export function NodeInspector({ node, onChange }: InspectorProps) {
   const catalog = NODE_CATALOG_MAP[node.type];
   const Icon = ICON_MAP[catalog.icon] ?? Plus;
   return (
-    <div className="w-80 shrink-0 p-4 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex flex-col gap-3 overflow-y-auto">
-      <div className="flex items-center gap-2 pb-2 border-b border-default-200 dark:border-slate-800">
+    <div className="w-80 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex flex-col gap-3 overflow-y-auto">
+      <div className="flex items-center gap-2 pb-2 border-b border-default-200 dark:border-slate-800 shrink-0">
         <Sparkles className="w-4 h-4 text-purple-600" />
         <span className="text-xs font-bold">节点属性</span>
       </div>

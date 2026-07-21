@@ -275,10 +275,10 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
   };
 
   return (
-    <div className="flex gap-3 h-[640px]">
+    <div className="flex gap-3 h-full min-h-0">
       {/* 左侧节点工具箱 */}
-      <div className="w-64 shrink-0 p-3 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex flex-col gap-2 overflow-y-auto">
-        <div className="flex items-center gap-2 pb-2 border-b border-default-200 dark:border-slate-800">
+      <div className="w-64 shrink-0 h-full p-3 bg-content1 rounded-xl border border-default-200 dark:border-slate-800 flex flex-col gap-2 overflow-y-auto">
+        <div className="flex items-center gap-2 pb-2 border-b border-default-200 dark:border-slate-800 shrink-0">
           <Plus className="w-4 h-4 text-purple-600" />
           <span className="text-xs font-bold">路由节点</span>
         </div>

@@ -414,9 +414,11 @@ export default function IvrPage() {
               </>
             )}
           </ModalHeader>
-          <ModalBody className="flex-1 min-h-0 p-4 overflow-hidden">
+          <ModalBody className="flex-1 min-h-0 p-4 overflow-hidden flex flex-col">
             {topoIvr && (
-              <IvrTopologyEditor flow={topoIvr} onSaved={handleTopologySaved} />
+              <div className="flex-1 min-h-0">
+                <IvrTopologyEditor flow={topoIvr} onSaved={handleTopologySaved} />
+              </div>
             )}
           </ModalBody>
         </ModalContent>
