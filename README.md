@@ -2,18 +2,17 @@
 
 # VOS-RS
 
-**电信运营级 VoIP 软交换与媒体转发平台 · Rust 实现**
+**电信运营级 VoIP 软交换与 AI 智能媒体平台 · Rust 实现**
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-orange?logo=rust)](https://www.rust-lang.org/)
 [![Edition](https://img.shields.io/badge/Edition-2021-blue)](https://doc.rust-lang.org/edition-guide/)
-[![License](https://img.shields.io/badge/License-Proprietary-red)](./Cargo.toml)
+[![License: Non-Commercial](https://img.shields.io/badge/License-Non--Commercial-red.svg)](./LICENSE)
+[![CPS](https://img.shields.io/badge/CPS-5000%2B-emerald)](https://github.com/your-org/vos-rs)
+[![XDP](https://img.shields.io/badge/Media_Engine-eBPF%2FXDP-purple)](https://github.com/your-org/vos-rs)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14%2B-blue?logo=postgresql)](https://www.postgresql.org/)
-[![NATS](https://img.shields.io/badge/NATS-JetStream-blue?logo=nats.io)](https://nats.io/)
 [![React](https://img.shields.io/badge/React-18-blue?logo=react)](https://react.dev/)
-[![TailwindCSS](https://img.shields.io/badge/TailwindCSS-v4-blue?logo=tailwindcss)](https://tailwindcss.com/)
-[![HeroUI](https://img.shields.io/badge/HeroUI-v2.8-purple)](https://www.heroui.com/)
 
-对标商业软交换 VOS-3000 · 单机 5000+ 并发通话 · 1000+ CPS · AI-Native 可编程媒体控制
+对标商业软交换 VOS-3000 · 单机 5000+ CPS / 10万路并发转发 · Linux eBPF/XDP 内核旁路 · 可视化多级 IVR/路由拖拽画板
 
 </div>
 
@@ -798,6 +797,23 @@ A: 单节点推荐配置：
 - [Tailwind CSS](https://tailwindcss.com/) — 原子化 CSS 框架
 - [React](https://react.dev/) — UI 框架
 
+## 📄 许可证与严禁商业使用声明 (License & Non-Commercial Notice)
+
+> [!CAUTION]
+> ### ⛔ 严禁商业用途警告 (Strict Non-Commercial Restriction)
+> 本项目遵循 **[vos-rs 非商业用途开源许可协议 (Non-Commercial License)](./LICENSE)**。
+> **【绝对禁止】** 未经官方团队书面授权，任何人或机构不得将本项目代码、二进制文件、衍生作品或架构用于任何商业运营、收费 SaaS 云服务托管、商业产品集成销售或生产环境部署！
+
+> [!IMPORTANT]
+> ### 许可允许范围 (Permitted Uses)
+> - ✅ **个人学习与教学研究**
+> - ✅ **非商业性质的代码验证与测试**
+> - ✅ **学术探讨与非营利实验环境搭建**
+> 
+> 如需申请商业授权 (Commercial Licensing) 或生产部署许可，请联系官方邮箱：`tangyu.dch@gmail.com`
+
+---
+
 ### 协议参考
 
 - [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261) — SIP: Session Initiation Protocol
@@ -821,6 +837,6 @@ A: 单节点推荐配置：
 
 **[⬆ 回到顶部](#vos-rs)**
 
-Made with ❤️ by vos-rs team
+Made with ❤️ by vos-rs team · Non-Commercial License Protected
 
 </div>
