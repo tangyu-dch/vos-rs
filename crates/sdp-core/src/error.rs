@@ -25,10 +25,7 @@ impl fmt::Display for SdpError {
             Self::InvalidPort(port) => write!(f, "invalid SDP media port: {port}"),
             Self::MissingAudioRtpMedia => write!(f, "missing audio RTP media description"),
             Self::MissingCompatibleAudioCodec => {
-                write!(
-                    f,
-                    "SDP codec mismatch: missing compatible audio codec (SIP 488 Not Acceptable Here)"
-                )
+                write!(f, "missing compatible audio codec in SDP")
             }
             Self::MissingConnectionAddress => write!(f, "missing SDP connection address"),
             Self::TooLarge => write!(f, "SDP session description is too large"),
