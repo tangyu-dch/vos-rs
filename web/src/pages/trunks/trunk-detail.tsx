@@ -431,14 +431,14 @@ function RegistrationTab({ draft, set, registrations, endpoints, setEndpoints }:
           <Table aria-label="注册终端列表">
             <TableHeader>
               <TableColumn key="contact">联系地址</TableColumn>
-              <TableColumn key="node">所在节点</TableColumn>
+              <TableColumn key="node">来源 Socket / 节点</TableColumn>
               <TableColumn key="expires_at">过期时间</TableColumn>
             </TableHeader>
             <TableBody items={registrations}>
               {(row) => (
-                <TableRow key={String(row.contact ?? row.id ?? row.user_agent ?? '')}>
-                  <TableCell>{String(row.contact ?? '')}</TableCell>
-                  <TableCell>{String(row.node ?? '')}</TableCell>
+                <TableRow key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}>
+                  <TableCell>{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
+                  <TableCell>{String(row.received_from ?? row.node ?? '')}</TableCell>
                   <TableCell>{String(row.expires_at ?? '')}</TableCell>
                 </TableRow>
               )}
@@ -467,14 +467,14 @@ function AccessRegistrationStatus({ registrations }: { registrations: Entity[] }
         <Table aria-label="注册终端列表">
           <TableHeader>
             <TableColumn key="contact">联系地址</TableColumn>
-            <TableColumn key="node">所在节点</TableColumn>
+            <TableColumn key="node">来源 Socket / 节点</TableColumn>
             <TableColumn key="expires_at">过期时间</TableColumn>
           </TableHeader>
           <TableBody items={registrations}>
             {(row) => (
-              <TableRow key={String(row.contact ?? row.id ?? row.user_agent ?? '')}>
-                <TableCell>{String(row.contact ?? '')}</TableCell>
-                <TableCell>{String(row.node ?? '')}</TableCell>
+              <TableRow key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}>
+                <TableCell>{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
+                <TableCell>{String(row.received_from ?? row.node ?? '')}</TableCell>
                 <TableCell>{String(row.expires_at ?? '')}</TableCell>
               </TableRow>
             )}

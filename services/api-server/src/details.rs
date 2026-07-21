@@ -139,10 +139,28 @@ fn database_error(error: sqlx::Error) -> DetailError {
 #[cfg(test)]
 mod tests {
     use super::aor_username;
+    use cdr_core::SipRegistration;
+    use serde_json::json;
+    use time::OffsetDateTime;
 
     #[test]
     fn extracts_username_from_common_aor_forms() {
         assert_eq!(aor_username("alice"), "alice");
         assert_eq!(aor_username("sip:alice@example.com"), "alice");
+    }
+
+    #[test]
+    fn test_registration_details_serialization_compatible_with_web_frontend() {
+        let registration = SipRegistration {
+            aor: "sip:1001@127.0.0.1".to_string(),
+            contact_uri: "sip:1001@192.168.1.100:5060".to_string(),
+            received_from: "192.168.1.100:5060".to_string(),
+            expires_at: OffsetDateTime::now_utc(),
+            path: vec![],
+            updated_at: None,
+        };
+        let val = json!(registration);
+        assert_eq!(val["contact_uri"], "sip:1001@192.168.1.100:5060");
+        assert_eq!(val["received_from"], "192.168.1.100:5060");
     }
 }

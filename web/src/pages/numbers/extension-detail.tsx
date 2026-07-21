@@ -26,14 +26,14 @@ function RegistrationStatus({ registrations }: { registrations: Entity[] }) {
         <Table aria-label="注册终端列表">
           <TableHeader>
             <TableColumn key="contact">联系地址</TableColumn>
-            <TableColumn key="user_agent">设备标识</TableColumn>
+            <TableColumn key="received_from">来源 Socket / 设备标识</TableColumn>
             <TableColumn key="expires_at">过期时间</TableColumn>
           </TableHeader>
           <TableBody items={registrations}>
             {(row) => (
-              <TableRow key={String(row.contact ?? row.id ?? row.user_agent ?? '')}>
-                <TableCell>{String(row.contact ?? '')}</TableCell>
-                <TableCell>{String(row.user_agent ?? '')}</TableCell>
+              <TableRow key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}>
+                <TableCell>{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
+                <TableCell>{String(row.received_from ?? row.user_agent ?? row.node ?? '')}</TableCell>
                 <TableCell>{String(row.expires_at ?? '')}</TableCell>
               </TableRow>
             )}
