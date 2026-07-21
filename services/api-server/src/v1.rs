@@ -7,14 +7,14 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
     routing::{get, post, put},
-    Router,
+    Json, Router,
 };
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    anti_fraud, audit, auth, billing, call_center, calls, cdr, dashboard, details, gateways, ivr_menus, media_cluster,
+    anti_fraud, audit, auth, billing, call_center, calls, copilot, cdr, dashboard, details, gateways, ivr_menus, media_cluster,
     numbers, recording, registrations, report, routes, sip_cluster, system, termination, users,
     AppState,
 };
@@ -262,7 +262,24 @@ fn security_routes() -> Router<AppState> {
             "/api/v1/security/anti-fraud/settings/:key",
             put(anti_fraud::update_anti_fraud_config),
         )
+        .route(
+            "/api/v1/security/anti-fraud/deepfake-logs",
+            get(anti_fraud::get_deepfake_logs),
+        )
         .route("/api/v1/security/audit-logs", get(audit::list_audit_logs))
+        .route("/api/v1/copilot/chat", post(handle_copilot_chat))
+}
+
+#[derive(serde::Deserialize)]
+struct CopilotRequest {
+    query: String,
+}
+
+async fn handle_copilot_chat(
+    Json(payload): Json<CopilotRequest>,
+) -> Result<Json<copilot::CopilotChatResponse>, crate::ApiError> {
+    let engine = copilot::TelecomCopilotEngine::new();
+    Ok(Json(engine.analyze(&payload.query)))
 }
 
 fn infrastructure_routes() -> Router<AppState> {

@@ -31,6 +31,8 @@ import { SecurityPage } from '@/pages/system/security';
 import { InfrastructurePage } from '@/pages/system/infrastructure';
 import { SettingsPage } from '@/pages/system/settings';
 
+import { CopilotPage } from '@/pages/operations/copilot';
+
 function PrivateConsole() {
   const { session } = useAuth();
   if (!session) return <Navigate to="/login" replace />;
@@ -39,6 +41,7 @@ function PrivateConsole() {
       <Routes>
         <Route path="/" element={<Navigate to="/overview" replace />} />
         <Route path="/overview" element={<DashboardPage />} />
+        <Route path="/copilot" element={<CopilotPage />} />
         <Route path="/calls/active" element={<ActiveCallsPage />} />
         <Route path="/calls" element={<CallsPage />} />
         <Route path="/calls/:id" element={<CallDetailPage />} />

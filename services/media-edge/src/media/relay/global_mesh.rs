@@ -101,6 +101,21 @@ impl GlobalEdgeMeshEngine {
         })
     }
 
+    /// FEC 前向纠错冗余包恢复：利用 XOR 冗余校验包恢复在公网传输中丢弃的 RTP 报文
+    pub fn recover_lost_packet(&self, intact_packets: &[Vec<u8>], fec_parity: &[u8]) -> Vec<u8> {
+        let mut recovered = vec![0u8; fec_parity.len()];
+        for i in 0..fec_parity.len() {
+            let mut val = fec_parity[i];
+            for pkt in intact_packets {
+                if i < pkt.len() {
+                    val ^= pkt[i];
+                }
+            }
+            recovered[i] = val;
+        }
+        recovered
+    }
+
     /// 查询已注册节点的数量
     pub fn node_count(&self) -> usize {
         self.nodes.read().map(|m| m.len()).unwrap_or(0)
@@ -110,6 +125,20 @@ impl GlobalEdgeMeshEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_fec_packet_recovery() {
+        let engine = GlobalEdgeMeshEngine::new();
+
+        let pkt1 = vec![0x80, 0x00, 0x12, 0x34];
+        let pkt2 = vec![0x80, 0x00, 0x56, 0x78];
+        // FEC Parity = pkt1 ^ pkt2
+        let fec_parity = vec![0x80 ^ 0x80, 0x00 ^ 0x00, 0x12 ^ 0x56, 0x34 ^ 0x78];
+
+        // 假设 pkt2 在传输中丢失，使用 [pkt1] + fec_parity 恢复出 pkt2
+        let recovered_pkt2 = engine.recover_lost_packet(&[pkt1], &fec_parity);
+        assert_eq!(recovered_pkt2, pkt2);
+    }
 
     #[test]
     fn test_global_edge_mesh_path_selection() {

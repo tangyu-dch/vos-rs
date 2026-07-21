@@ -8,6 +8,7 @@ mod audit;
 mod auth;
 mod billing;
 mod calls;
+mod copilot;
 mod call_center;
 mod cdr;
 mod dashboard;

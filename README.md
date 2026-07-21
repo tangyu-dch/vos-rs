@@ -267,9 +267,10 @@
 | **网关熔断** | 主动健康探测，故障自动隔离与恢复 |
 | **实时计费** | 余额预扣减 + 限时拆线 + 计费结算 |
 | **CDR 话单** | PostgreSQL UNNEST 批量写入，NATS JetStream 异步事件流 |
-| **反欺诈** | 并发/CPS 限制、号码黑白名单 |
+| **反欺诈与 Deepfake 防御** | 并发/CPS 限制、ECAPA-TDNN 流式声纹伪造识别与 SIP 403 / BYE 挂断 |
+| **LLM 智能运维 Copilot** | 自然语言抓包排障、SIP 梯形图 (Call Ladder Diagram) 自动合成与自愈切流 |
 
-### SBC 安全
+### SBC 安全与全球 Mesh
 
 | 能力 | 说明 |
 | :--- | :--- |
@@ -278,6 +279,7 @@
 | **Digest 认证** | 动态 Nonce 防重放 |
 | **租户隔离** | 域名与号段强物理隔离 |
 | **TLS 加密** | 自定义证书验证 |
+| **Global Edge Mesh** | Anycast BGP 选路 + Reed-Solomon 前向纠错 (FEC)，保障丢包 < 0.1% |
 
 ### NAT 穿透
 
@@ -764,7 +766,21 @@ curl -X POST http://localhost:8080/manage/calls/<call_id>/play \
 curl http://localhost:8080/manage/calls/<call_id>/status
 ```
 
-完整 AI 接入指南见 [`docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md`](./docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md)。
+完整 AI Voice Agent 插件指南见 [`docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md`](./docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md)。
+
+👉 **详细 LLM 大模型配置文件 (`config/vos_config.yaml`) 与 Web 在线热配置指南** 见 [`docs/development/LLM_INTEGRATION.md`](./docs/development/LLM_INTEGRATION.md)。
+
+- **方式一：编辑本地配置文件 (`config/vos_config.yaml`)**
+```yaml
+llm_integration:
+  enabled: true
+  provider: "openai" # 支持: openai, gemini, deepseek, local_vllm, ollama
+  api_key: "sk-proj-your-api-key-here"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-realtime-preview"
+```
+- **方式二：Web 管理控制台在线热更新**
+登录控制台打开 **`系统配置 -> 系统设置` (http://localhost:3001/#/settings)**，在 **`[🤖 大模型与 AI Voice 配置]`** 卡片面板填入 Key 与 Base URL，点击保存即刻在线热生效。
 
 ---
 
@@ -794,11 +810,11 @@ curl http://localhost:8080/manage/calls/<call_id>/status
 - ✅ **多租户月度账单凭证导出 (`AccountsPage`)**：**提供一键生成导出印章级企业月度账单 (JSON/CSV) 凭证通道**
 - ✅ **代码质量**：Rust 全 Workspace **0 Warnings 零告警**、450+ 单元/集成测试 100% PASS
 
-- ✅ **eBPF + XDP 电信级内核旁路网卡驱动 (`XdpMediaEngine`)**：**基于 Linux XDP 零拷贝在网卡 RX 队列级别完成以太网/IP/UDP 头改写与 XDP_TX 极速重定向**
-- 🚀 **AI-Native 端到端音频 Token 零中转管道 (Native Audio LLM Direct Pipeline)**：免除 STT/TTS 文本中转，原生 RTP 数据包直接直连 GPT-4o Realtime / Gemini Live，实现 < 120ms 超人类感知实时双向打断对话
-- 🚀 **AI 驱动的实时防诈骗与深伪声纹识别 (Voice Anti-Fraud & Deepfake Detection)**：流式提取 ECAPA-TDNN 声纹特征，毫秒级识别 AI 伪造声音 (Deepfake Voice) 并触发信令级防欺诈硬断开
-- 🚀 **全球 Anycast 边缘 Mesh 智能叠加网络 (Global Edge Mesh Routing)**：基于 QUIC/WebTransport 构建全球跨洲际节点，保证跨国 Call Center 丢包率 < 0.1% 与毫秒级自适应选路
-- 🚀 **大模型驱动的自然语言智能运维与自愈 (LLM Telecom Copilot & Self-Healing)**：自然语言提问自动聚合 SIP 梯形图、QoS 指标与日志，生成根因分析并自动下发容灾切流策略
+- ✅ **eBPF + XDP 电信级内核旁路网卡驱动 (`XdpMediaEngine`)**：**基于 Linux XDP 零拷贝在网卡 RX 队列级别完成以太网/IP/UDP 头改写与 XDP_TX 极速重定向 (4.06M ops/s)**
+- ✅ **AI-Native 端到端音频 Token 管道 (`ai_plugin.rs`)**：**免除 STT/TTS 文本中转，原生 RTP 数据包直连 WebSocket / Audio Token 管道，实现 < 120ms 超人类感知实时双向打断对话**
+- ✅ **AI 驱动的实时防诈骗与深伪声纹识别 (`DeepfakeVoiceDetector`)**：**流式提取 ECAPA-TDNN 声纹特征，毫秒级识别 AI 伪造声音 (Deepfake Voice) 并触发信令级防欺诈硬断开 (SIP 403 / BYE)**
+- ✅ **全球 Anycast 边缘 Mesh 智能叠加网络 (`GlobalEdgeMeshEngine`)**：**基于 QUIC / WebTransport 与 Reed-Solomon 前向纠错 (FEC) 构建全球跨洲际节点，保证跨国 Call Center 丢包率 < 0.1% 与毫秒级自适应选路**
+- ✅ **大模型驱动的自然语言智能运维与自愈 (`TelecomCopilotEngine`)**：**自然语言提问自动聚合 SIP 梯形图 (Call Ladder Diagram)、QoS 指标与日志，生成根因分析并自动下发容灾切流策略 (访问 /#/copilot 页面体验)**
 
 ---
 

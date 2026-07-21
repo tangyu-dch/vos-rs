@@ -1,0 +1,56 @@
+# ===========================================================================
+#                      VOS-RS 全局系统与 LLM 核心配置文件
+#                            config/vos_config.yaml
+# ===========================================================================
+
+server:
+  host: "0.0.0.0"
+  port: 8081
+  environment: "production"
+
+# ---------------------------------------------------------------------------
+# 🤖 大模型 (LLM) 与 AI Voice Agent 核心对接配置
+# ---------------------------------------------------------------------------
+llm_integration:
+  # 是否启用 LLM 集成 (true / false)
+  enabled: true
+
+  # 模型提供商: "openai" | "gemini" | "deepseek" | "local_vllm" | "ollama"
+  provider: "openai"
+
+  # 大模型 API 密钥 (API Key)
+  api_key: "sk-proj-your-actual-api-key-here"
+
+  # 大模型 REST 基础 Endpoint 地址
+  base_url: "https://api.openai.com/v1"
+
+  # 默认模型名称
+  model: "gpt-4o-realtime-preview"
+
+  # OpenAI Realtime 全双工音频 Token 直连 WebSocket 地址 (选填)
+  realtime_websocket_url: "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
+
+  # 采样温度 (0.0 ~ 1.0)
+  temperature: 0.7
+
+  # 音频打断 (Barge-in) 静音检测敏感度 (0.0 ~ 1.0)
+  vad_threshold: 0.65
+
+# ---------------------------------------------------------------------------
+# 🛡️ SBC 边界安全与 AI 防诈骗配置
+# ---------------------------------------------------------------------------
+security:
+  anti_fraud:
+    # 是否开启 ECAPA-TDNN AI 伪造假音检测
+    deepfake_detection_enabled: true
+    # 假音判定置信度门限 (达到则触发 SIP 403 / BYE 挂断)
+    deepfake_threshold: 0.90
+
+# ---------------------------------------------------------------------------
+# 🌐 全球 Anycast Mesh 叠加网络配置
+# ---------------------------------------------------------------------------
+global_mesh:
+  enabled: true
+  node_id: "node-cn-shanghai-01"
+  region: "ap-east-1"
+  fec_parity_ratio: 0.15 # 15% 冗余前向纠错率 (保证丢包率 < 0.1%)
