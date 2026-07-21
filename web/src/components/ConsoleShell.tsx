@@ -5,7 +5,7 @@ import {
   Modal, ModalContent, ModalBody,
 } from '@heroui/react';
 import {
-  LayoutDashboard, PhoneCall, Users, BookOpen, GitBranch,
+  LayoutDashboard, PhoneCall, Users, BookOpen, GitBranch, GitFork,
   Grid, Server, ShieldCheck, ShieldAlert, Settings, LogOut, ChevronDown, Menu as MenuIcon, Activity,
   Sun, Moon, ChevronsLeft, ChevronsRight,
 } from 'lucide-react';
@@ -42,6 +42,7 @@ const groups: NavGroup[] = [
     { to: '/agents', label: '座席监控', icon: <Users className="w-4 h-4" /> },
   ] },
   { label: '中继与路由', icon: <Server className="w-3.5 h-3.5" />, items: [
+    { to: '/routing', label: '路由策略', icon: <GitFork className="w-4 h-4" /> },
     { to: '/trunks/access', label: '接入中继', icon: <Server className="w-4 h-4" /> },
     { to: '/trunks/egress', label: '落地中继', icon: <Server className="w-4 h-4" /> },
     { to: '/egress-groups', label: '落地分组', icon: <GitBranch className="w-4 h-4" /> },

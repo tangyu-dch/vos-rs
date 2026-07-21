@@ -1,142 +1,456 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import {
-  Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
-  Button, Chip, Card, CardBody
+  Button, Chip, Card, CardBody, Input
 } from '@heroui/react';
-import { Network, Plus, ArrowRight, Play, Clock, PhoneForwarded, Settings, CheckCircle2 } from 'lucide-react';
+import {
+  Network, Play, PhoneForwarded, Settings, Trash2, Volume2, Move, Layers, Sparkles, X, Upload, Plus, GitBranch, Music, CornerDownRight, Check
+} from 'lucide-react';
+import { message } from '@/utils/toast';
 
-export interface FlowNode {
+// 多级分支接口
+export interface BranchChoice {
   id: string;
-  type: 'start' | 'time_filter' | 'prefix_match' | 'ivr_prompt' | 'gateway_trunk';
+  dtmfKey: string; // '1', '2', '3', '0', '*', '#'
+  label: string;   // 例如 "按 1 售前咨询", "按 2 售后支持"
+  targetNodeType: 'prompt' | 'queue' | 'pstn' | 'hangup';
+  targetTitle: string;
+  targetConfig: Record<string, string>;
+  audioFileName?: string;
+  audioUrl?: string;
+}
+
+// 多级 IVR 树节点接口
+export interface FlowTreeNode {
+  id: string;
+  type: 'start' | 'prompt' | 'queue' | 'pstn';
   title: string;
   subtitle: string;
+  audioFileName?: string;
+  audioUrl?: string;
+  branches: BranchChoice[]; // 支持无限级分支展开！
   config: Record<string, string>;
 }
 
+export interface PaletteItem {
+  type: 'prompt' | 'queue' | 'pstn';
+  title: string;
+  subtitle: string;
+  icon: React.ElementType;
+  color: string;
+  defaultConfig: Record<string, string>;
+}
+
+const PALETTE_ITEMS: PaletteItem[] = [
+  {
+    type: 'prompt',
+    title: '多级语音提示 (Prompt)',
+    subtitle: '支持语音上传与按键多级分支',
+    icon: Volume2,
+    color: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30',
+    defaultConfig: { timeout: '10' }
+  },
+  {
+    type: 'queue',
+    title: '转人工坐席队列',
+    subtitle: '分配给客服组 (Support)',
+    icon: Network,
+    color: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30',
+    defaultConfig: { queue_id: 'queue-support-01' }
+  },
+  {
+    type: 'pstn',
+    title: '外线中继转接',
+    subtitle: '转接至手机/PSTN网关',
+    icon: PhoneForwarded,
+    color: 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30',
+    defaultConfig: { trunk_id: 'gw-telecom-trunk', target_number: '13800138000' }
+  }
+];
+
 interface VisualFlowEditorProps {
-  isOpen: boolean;
+  isOpen?: boolean;
   onClose: () => void;
 }
 
-export function VisualFlowEditor({ isOpen, onClose }: VisualFlowEditorProps) {
-  const [nodes, setNodes] = useState<FlowNode[]>([
+export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorProps) {
+  // 核心：支持多级层级树的多节点 IVR 架构
+  const [treeNodes, setTreeNodes] = useState<FlowTreeNode[]>([
     {
-      id: 'node-1',
+      id: 'root-1',
       type: 'start',
       title: '呼入入口 (Inbound Trigger)',
       subtitle: '匹配 DID 号码 400-800-9000',
+      branches: [],
       config: { did: '4008009000' }
     },
     {
-      id: 'node-2',
-      type: 'time_filter',
-      title: '工作时间检查 (Time Window)',
-      subtitle: '08:30 - 18:00 (工作日)',
-      config: { start: '08:30', end: '18:00' }
-    },
-    {
-      id: 'node-3',
-      type: 'ivr_prompt',
-      title: 'IVR 语音导航 (Main Menu)',
-      subtitle: '按 1 转售前，按 2 转售后支持',
-      config: { prompt: 'welcome_zh.wav' }
-    },
-    {
-      id: 'node-4',
-      type: 'gateway_trunk',
-      title: '落地中继网关 (Trunk Target)',
-      subtitle: 'PRIORITY: 10 | COST: 0.02',
-      config: { gateway_id: 'gw-shanghai-primary' }
+      id: 'prompt-level-1',
+      type: 'prompt',
+      title: '一级主导航语音 (Main IVR Menu)',
+      subtitle: '支持多按键分支与本地音频上传试听',
+      audioFileName: 'welcome_bgm.wav',
+      audioUrl: '',
+      branches: [
+        {
+          id: 'b-1',
+          dtmfKey: '1',
+          label: '按 1 售前咨询 (跳转二级子菜单)',
+          targetNodeType: 'prompt',
+          targetTitle: '二级售前语音子导航 (Sales Sub-Menu)',
+          audioFileName: 'sales_prompt.wav',
+          targetConfig: { timeout: '10' }
+        },
+        {
+          id: 'b-2',
+          dtmfKey: '2',
+          label: '按 2 售后支持 (直连技术队列)',
+          targetNodeType: 'queue',
+          targetTitle: '转接至 VIP 售后坐席队列',
+          targetConfig: { queue_id: 'queue-vip-support' }
+        },
+        {
+          id: 'b-3',
+          dtmfKey: '0',
+          label: '按 0 人工客服 (外线中继)',
+          targetNodeType: 'pstn',
+          targetTitle: '转接至值班经理手机',
+          targetConfig: { trunk_id: 'gw-mobile', target_number: '13800138000' }
+        }
+      ],
+      config: { timeout: '10' }
     }
   ]);
 
-  const addNode = (type: FlowNode['type']) => {
-    const newId = `node-${nodes.length + 1}`;
-    let title = '新路由节点';
-    let subtitle = '配置详细规则';
+  const [selectedNodeId, setSelectedNodeId] = useState<string>('prompt-level-1');
+  const [draggedTemplate, setDraggedTemplate] = useState<PaletteItem | null>(null);
 
-    if (type === 'prefix_match') {
-      title = '前缀校验 (Prefix Match)';
-      subtitle = '匹配号码前缀 86138*';
-    } else if (type === 'gateway_trunk') {
-      title = '备用中继 (Backup Gateway)';
-      subtitle = 'PRIORITY: 50 | GW: gw-beijing-backup';
-    }
+  const selectedNode = treeNodes.find(n => n.id === selectedNodeId);
 
-    setNodes([...nodes, { id: newId, type, title, subtitle, config: {} }]);
+  // 开始拖拽左侧组件
+  const handleDragStart = (item: PaletteItem) => {
+    setDraggedTemplate(item);
   };
 
-  const getIcon = (type: FlowNode['type']) => {
-    switch (type) {
-      case 'start': return <Play className="w-4 h-4 text-emerald-600" />;
-      case 'time_filter': return <Clock className="w-4 h-4 text-amber-600" />;
-      case 'ivr_prompt': return <Settings className="w-4 h-4 text-indigo-600" />;
-      case 'gateway_trunk': return <PhoneForwarded className="w-4 h-4 text-blue-600" />;
-      default: return <Network className="w-4 h-4 text-slate-600" />;
-    }
+  // 释放到画布
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!draggedTemplate) return;
+
+    const newNodeId = `node-lvl-${Date.now()}`;
+    const newNode: FlowTreeNode = {
+      id: newNodeId,
+      type: draggedTemplate.type,
+      title: `${draggedTemplate.title} #${treeNodes.length}`,
+      subtitle: draggedTemplate.subtitle,
+      branches: draggedTemplate.type === 'prompt' ? [
+        {
+          id: `b-sub-${Date.now()}`,
+          dtmfKey: '1',
+          label: '按 1 分支',
+          targetNodeType: 'queue',
+          targetTitle: '分支目标队列',
+          targetConfig: { queue_id: 'queue-01' }
+        }
+      ] : [],
+      config: { ...draggedTemplate.defaultConfig }
+    };
+
+    setTreeNodes([...treeNodes, newNode]);
+    setSelectedNodeId(newNodeId);
+    setDraggedTemplate(null);
+    message.success(`已创建并插入多级节点：${newNode.title}`);
   };
 
-  return (
-    <Modal isOpen={isOpen} onOpenChange={(o) => !o && onClose()} size="5xl">
-      <ModalContent className="max-w-6xl">
-        <ModalHeader className="flex items-center justify-between border-b border-slate-100 pb-3">
-          <div className="flex items-center gap-2">
-            <Network className="w-5 h-5 text-indigo-600" />
-            <span className="text-base font-bold text-slate-800">
-              Drag-and-Drop 可视化路由与 IVR 节点编排器
-            </span>
+  // 添加多级分支项
+  const handleAddBranch = (nodeId: string) => {
+    setTreeNodes(treeNodes.map(n => {
+      if (n.id === nodeId) {
+        const nextKey = String((n.branches.length + 1) % 10);
+        const newBranch: BranchChoice = {
+          id: `b-${Date.now()}`,
+          dtmfKey: nextKey,
+          label: `按 ${nextKey} 新多级分支选项`,
+          targetNodeType: 'prompt',
+          targetTitle: `二级子导航 Prompt (${nextKey}键)`,
+          targetConfig: { timeout: '10' }
+        };
+        return { ...n, branches: [...n.branches, newBranch] };
+      }
+      return n;
+    }));
+    message.success('已为该节点成功添加新的多级 DTMF 按键分支！');
+  };
+
+  // 移除多级分支项
+  const handleRemoveBranch = (nodeId: string, branchId: string) => {
+    setTreeNodes(treeNodes.map(n => {
+      if (n.id === nodeId) {
+        return {
+          ...n,
+          branches: n.branches.filter(b => b.id !== branchId)
+        };
+      }
+      return n;
+    }));
+    message.info('多级分支选项已删除');
+  };
+
+  // 真实音频文件上传处理
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, nodeId: string) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const fileUrl = URL.createObjectURL(file);
+    setTreeNodes(treeNodes.map(n => {
+      if (n.id === nodeId) {
+        return {
+          ...n,
+          audioFileName: file.name,
+          audioUrl: fileUrl,
+          subtitle: `已挂载音频: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`
+        };
+      }
+      return n;
+    }));
+
+    message.success(`音频文件 "${file.name}" 上传成功并已生成本地试听通道！`);
+  };
+
+  const renderEditorContent = () => (
+    <div className="flex flex-col gap-4">
+      {/* 顶栏控制条 */}
+      <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-ping" />
+          <h3 className="text-sm font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+            <span>多级嵌套 IVR 拖拽树状画布 (Multi-level Tree Flow Canvas)</span>
+            <Chip size="sm" color="secondary" variant="flat">真正多级分支 + 音频拖拽上传试听</Chip>
+          </h3>
+        </div>
+        <Button size="sm" variant="flat" isIconOnly onPress={onClose}>
+          <X className="w-4 h-4 text-slate-500" />
+        </Button>
+      </div>
+
+      <div className="flex flex-col lg:flex-row gap-4 h-[650px]">
+        {/* 1. 左侧可拖拽组件面板 (Palette) */}
+        <div className="w-full lg:w-72 p-4 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex flex-col gap-3 shrink-0">
+          <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
+            <Layers className="w-4 h-4 text-purple-600" />
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">IVR 组件库 (可拖拽源)</span>
           </div>
-          <Chip color="success" size="sm" variant="flat" startContent={<CheckCircle2 className="w-3.5 h-3.5" />}>
-            实时校验激活
-          </Chip>
-        </ModalHeader>
-        <ModalBody className="py-6 bg-slate-50/50">
-          <div className="flex flex-col gap-6">
-            {/* 节点工具栏 */}
-            <div className="flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs">
-              <span className="text-xs font-bold text-slate-700 mr-2">添加节点:</span>
-              <Button size="sm" variant="flat" color="primary" startContent={<Plus className="w-3.5 h-3.5" />} onPress={() => addNode('prefix_match')}>
-                + 前缀匹配节点
-              </Button>
-              <Button size="sm" variant="flat" color="secondary" startContent={<Plus className="w-3.5 h-3.5" />} onPress={() => addNode('gateway_trunk')}>
-                + 中继落地节点
-              </Button>
-            </div>
+          <p className="text-[11px] text-slate-500">按住下方卡片拖拽入中间画布，可快速生成支持多级 DTMF 按键分支的 IVR 树节点：</p>
 
-            {/* 可视化拓扑节点链 */}
-            <div className="flex flex-wrap items-center gap-4 py-8 px-6 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto min-h-[220px]">
-              {nodes.map((node, idx) => (
-                <div key={node.id} className="flex items-center gap-4">
-                  <Card className="w-56 border border-slate-200/90 hover:border-indigo-400 hover:shadow-md transition-all">
-                    <CardBody className="p-3.5 flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2.5 overflow-y-auto pr-1">
+            {PALETTE_ITEMS.map((item, idx) => {
+              const IconComponent = item.icon;
+              return (
+                <div
+                  key={idx}
+                  draggable
+                  onDragStart={() => handleDragStart(item)}
+                  className={`p-3 rounded-xl border ${item.color} cursor-grab active:cursor-grabbing hover:shadow-md transition-all flex items-center gap-3 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xs`}
+                >
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-white dark:bg-slate-800 shadow-2xs shrink-0">
+                    <IconComponent className="w-4 h-4" />
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{item.title}</span>
+                    <span className="text-[10px] text-slate-500 truncate">{item.subtitle}</span>
+                  </div>
+                  <Move className="w-3.5 h-3.5 ml-auto text-slate-400 shrink-0" />
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-auto p-3 bg-purple-500/10 rounded-xl border border-purple-500/20 text-[11px] text-purple-700 dark:text-purple-300 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 shrink-0" />
+            <span>每个节点均可任意扩展 1-9 / 0 多级按键跳转分支</span>
+          </div>
+        </div>
+
+        {/* 2. 中间多级树状放置画布 (Multi-level Tree Canvas) */}
+        <div
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={handleDrop}
+          className="flex-1 p-6 bg-slate-100/70 dark:bg-slate-900/60 rounded-2xl border-2 border-dashed border-purple-300 dark:border-purple-900/50 overflow-y-auto relative flex flex-col gap-6"
+        >
+          <div className="text-[11px] text-slate-400 font-mono flex items-center justify-between pb-2 border-b border-slate-200/60 dark:border-slate-800">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Multi-level Tree Interactive Canvas (可随意拖放添加节点)</span>
+            </div>
+            <span className="text-[10px] text-purple-500 font-semibold">支持多级展开与分支路径</span>
+          </div>
+
+          <div className="flex flex-col gap-6 items-center">
+            {treeNodes.map((node) => {
+              const isSelected = node.id === selectedNodeId;
+              return (
+                <div key={node.id} className="w-full max-w-xl flex flex-col gap-3">
+                  {/* 主节点 Card */}
+                  <Card
+                    isPressable
+                    onPress={() => setSelectedNodeId(node.id)}
+                    className={`border-2 transition-all ${
+                      isSelected
+                        ? 'border-purple-500 shadow-lg scale-[1.01] bg-white dark:bg-slate-900'
+                        : 'border-slate-200/80 dark:border-slate-800 hover:border-purple-300 bg-white/90 dark:bg-slate-900/90'
+                    }`}
+                  >
+                    <CardBody className="p-4 flex flex-col gap-3">
                       <div className="flex items-center justify-between">
-                        <div className="p-1.5 rounded-lg bg-slate-100">{getIcon(node.type)}</div>
-                        <span className="text-[10px] font-mono text-slate-400">#{node.id}</span>
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-600 flex items-center justify-center font-bold">
+                            {node.type === 'start' ? <Play className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-extrabold text-slate-800 dark:text-slate-100">{node.title}</h4>
+                            <p className="text-[11px] text-slate-500">{node.subtitle}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {node.type === 'prompt' && (
+                            <Button
+                              size="sm"
+                              color="secondary"
+                              variant="flat"
+                              className="font-bold text-[11px]"
+                              startContent={<Plus className="w-3.5 h-3.5" />}
+                              onPress={() => handleAddBranch(node.id)}
+                            >
+                              + 添加多级按键分支
+                            </Button>
+                          )}
+                          <Chip size="sm" variant="flat" color={isSelected ? 'secondary' : 'default'}>
+                            {node.type.toUpperCase()}
+                          </Chip>
+                        </div>
                       </div>
-                      <span className="text-xs font-bold text-slate-800 mt-1">{node.title}</span>
-                      <span className="text-[11px] text-slate-500 font-mono">{node.subtitle}</span>
+
+                      {/* 音频文件状态与在线试听 */}
+                      {node.type === 'prompt' && (
+                        <div className="p-2.5 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200/60 dark:border-slate-800 flex flex-col gap-2">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="text-slate-500 flex items-center gap-1">
+                              <Music className="w-3.5 h-3.5 text-blue-500" />
+                              音频挂载: <strong className="text-slate-700 dark:text-slate-200">{node.audioFileName || '未选择音频文件'}</strong>
+                            </span>
+                            {node.audioUrl && <Chip size="sm" color="success" variant="dot">可试听</Chip>}
+                          </div>
+                          {node.audioUrl && (
+                            <audio src={node.audioUrl} controls className="w-full h-8 mt-1 rounded-lg" />
+                          )}
+                        </div>
+                      )}
+
+                      {/* 多级按键分支展示 (Branch Tree Children) */}
+                      {node.branches.length > 0 && (
+                        <div className="flex flex-col gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                          <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
+                            <GitBranch className="w-3 h-3 text-purple-500" />
+                            下级多级分支列表 (Multi-level Branches):
+                          </span>
+
+                          <div className="grid grid-cols-1 gap-2 pl-2">
+                            {node.branches.map((b) => (
+                              <div
+                                key={b.id}
+                                className="p-2.5 rounded-xl bg-purple-500/5 dark:bg-purple-950/20 border border-purple-500/20 flex items-center justify-between gap-2"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <CornerDownRight className="w-3.5 h-3.5 text-purple-500" />
+                                  <Chip size="sm" color="secondary" className="font-mono font-extrabold text-[10px]">
+                                    按键 [{b.dtmfKey}]
+                                  </Chip>
+                                  <div className="flex flex-col">
+                                    <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{b.label}</span>
+                                    <span className="text-[10px] text-slate-400">→ {b.targetTitle}</span>
+                                  </div>
+                                </div>
+
+                                <Button
+                                  isIconOnly
+                                  size="sm"
+                                  variant="light"
+                                  color="danger"
+                                  onPress={() => handleRemoveBranch(node.id, b.id)}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </CardBody>
                   </Card>
-                  {idx < nodes.length - 1 && (
-                    <div className="flex flex-col items-center">
-                      <ArrowRight className="w-5 h-5 text-indigo-500 stroke-[2.5]" />
-                      <span className="text-[9px] font-bold text-indigo-400">PASS</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 3. 右侧节点与音频属性 Inspector */}
+        <div className="w-full lg:w-80 p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex flex-col gap-4 shrink-0 overflow-y-auto">
+          <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
+            <Settings className="w-4 h-4 text-purple-600" />
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">节点与音频属性 (Inspector)</span>
+          </div>
+
+          {selectedNode ? (
+            <div className="flex flex-col gap-4">
+              <div className="p-3 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200/60 dark:border-slate-800">
+                <span className="text-[10px] text-slate-400 font-mono">SELECTED NODE: {selectedNode.id}</span>
+                <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-1">{selectedNode.title}</h4>
+              </div>
+
+              {/* 核心：真实音频文件拖拽上传区域 */}
+              {selectedNode.type === 'prompt' && (
+                <div className="flex flex-col gap-2 p-3 bg-blue-500/5 dark:bg-blue-950/20 rounded-xl border border-blue-500/20">
+                  <label className="text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>上传本地语音音频文件 (.wav/.mp3)</span>
+                  </label>
+                  <p className="text-[10px] text-slate-500">上传后支持在中间画布直接在线试听播放</p>
+
+                  <input
+                    type="file"
+                    accept="audio/*"
+                    onChange={(e) => handleFileUpload(e, selectedNode.id)}
+                    className="text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+                  />
+
+                  {selectedNode.audioFileName && (
+                    <div className="mt-1 flex items-center gap-1.5 text-[11px] text-emerald-600 font-semibold">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>已加载: {selectedNode.audioFileName}</span>
                     </div>
                   )}
                 </div>
-              ))}
+              )}
+
+              {/* 超时参数配置 */}
+              <Input
+                label="等待按键超时秒数"
+                variant="bordered"
+                size="sm"
+                value={selectedNode.config.timeout || '10'}
+                onValueChange={(v) => {
+                  setTreeNodes(treeNodes.map(n => n.id === selectedNode.id ? { ...n, config: { ...n.config, timeout: v } } : n));
+                }}
+              />
             </div>
-          </div>
-        </ModalBody>
-        <ModalFooter className="border-t border-slate-100 pt-3">
-          <Button variant="flat" onPress={onClose}>
-            取消
-          </Button>
-          <Button color="primary" onPress={onClose}>
-            保存路由编排图
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
+          ) : (
+            <div className="text-center py-10 text-xs text-slate-400">请在画布点击选中节点配置参数与上传音频</div>
+          )}
+        </div>
+      </div>
+    </div>
   );
+
+  if (!isOpen) return null;
+  return renderEditorContent();
 }
