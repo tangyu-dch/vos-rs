@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Card, CardBody, Button, Chip, Input, Table, TableHeader, TableColumn,
   TableBody, TableRow, TableCell, Switch, Modal, ModalBody, ModalHeader,
   ModalContent, ModalFooter, useDisclosure,
 } from '@heroui/react';
-import { Plus, RefreshCw, Pencil, Trash2, Search, GitFork, Route as RouteIcon, Settings2 } from 'lucide-react';
+import { Plus, RefreshCw, Pencil, Trash2, Search, GitFork, Network } from 'lucide-react';
 import { api } from '@/services/client';
 import { ErrorState, LoadingState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
+import { IvrTopologyEditor, type IvrFlowFields } from '@/components/ivr/ivr-rule-binding';
 
 interface IvrListItem {
   id: string;
@@ -34,7 +34,6 @@ const emptyForm = {
 };
 
 export default function IvrPage() {
-  const navigate = useNavigate();
   const [data, setData] = useState<IvrListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -43,6 +42,8 @@ export default function IvrPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState(false);
   const { isOpen, onOpen, onClose } = useDisclosure();
+  // 当前正在编辑拓扑的 IVR (null 表示未打开拓扑编排 Modal)
+  const [topoIvr, setTopoIvr] = useState<IvrFlowFields | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -98,7 +99,7 @@ export default function IvrPage() {
         message.success('IVR 基础信息已更新');
       } else {
         await api.post('/ivr/menus', payload);
-        message.success('IVR 已创建，请进入画布编辑流程节点');
+        message.success('IVR 已创建，点击列表中的「拓扑编排」按钮开始配置节点');
       }
       onClose();
       void loadData();
@@ -150,12 +151,22 @@ export default function IvrPage() {
     onOpen();
   };
 
+  // 打开拓扑编排 Modal (与 routes 页一致: 表格行 → 独立画布 Modal)
   const openCanvas = (item: IvrListItem) => {
-    navigate(`/ivr/${item.id}/edit`);
+    setTopoIvr({
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      did: item.did,
+      welcome_prompt: item.welcome_prompt,
+      timeout_secs: item.timeout_secs,
+      enabled: item.enabled,
+    });
   };
 
-  const openRoutes = (item: IvrListItem) => {
-    navigate(`/ivr/${item.id}/routes`);
+  // 拓扑保存成功后刷新表格 (节点数等可能变化)
+  const handleTopologySaved = () => {
+    void loadData();
   };
 
   const filteredData = data.filter(
@@ -264,18 +275,10 @@ export default function IvrPage() {
                           color="secondary"
                           variant="flat"
                           className="font-bold"
-                          startContent={<Settings2 className="w-3.5 h-3.5" />}
+                          startContent={<Network className="w-3.5 h-3.5" />}
                           onPress={() => openCanvas(item)}
                         >
-                          画布编排
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="flat"
-                          startContent={<RouteIcon className="w-3.5 h-3.5" />}
-                          onPress={() => openRoutes(item)}
-                        >
-                          路由
+                          拓扑编排
                         </Button>
                         <Button
                           isIconOnly
@@ -315,7 +318,7 @@ export default function IvrPage() {
                   <span>{editing ? '编辑 IVR 基础信息' : '定义新 IVR 流程'}</span>
                 </div>
                 <p className="text-xs font-normal text-default-500">
-                  先填写基础信息创建 IVR，保存后进入画布编排页面拖拽配置多级节点
+                  先填写基础信息创建 IVR，保存后在列表中点击「拓扑编排」按钮即可拖拽配置多级节点
                 </p>
               </ModalHeader>
               <ModalBody className="p-6">
@@ -377,11 +380,41 @@ export default function IvrPage() {
               <ModalFooter>
                 <Button variant="flat" onPress={onModalClose}>取消</Button>
                 <Button color="secondary" className="font-bold text-white" onPress={handleSave}>
-                  {editing ? '保存基础信息' : '创建并进入画布编排'}
+                  {editing ? '保存基础信息' : '创建 IVR'}
                 </Button>
               </ModalFooter>
             </>
           )}
+        </ModalContent>
+      </Modal>
+
+      {/* IVR 拓扑编排 Modal (每个 IVR 独立画布, 与 routes 页一致) */}
+      <Modal
+        isOpen={topoIvr !== null}
+        onOpenChange={(o) => !o && setTopoIvr(null)}
+        size="full"
+        scrollBehavior="outside"
+      >
+        <ModalContent>
+          <ModalHeader className="flex items-center gap-2 border-b border-default-200 dark:border-slate-800">
+            <Network className="w-5 h-5 text-purple-600" />
+            <span>IVR 拓扑编排</span>
+            {topoIvr && (
+              <>
+                <Chip size="sm" variant="flat" color="secondary" className="ml-2">
+                  {topoIvr.id}
+                </Chip>
+                {topoIvr.did && (
+                  <Chip size="sm" variant="flat" color="primary">DID {topoIvr.did}</Chip>
+                )}
+              </>
+            )}
+          </ModalHeader>
+          <ModalBody className="p-4">
+            {topoIvr && (
+              <IvrTopologyEditor flow={topoIvr} onSaved={handleTopologySaved} />
+            )}
+          </ModalBody>
         </ModalContent>
       </Modal>
     </div>

@@ -22,7 +22,6 @@ import EgressGroupDetailPage from '@/pages/trunks/egress-group-detail';
 import AgentsPage from '@/pages/call-center/agents';
 import QueuesPage from '@/pages/call-center/queues';
 import IvrPage from '@/pages/call-center/ivr';
-import IvrEditorPage from '@/pages/call-center/ivr-editor';
 import { AccountsPage } from '@/pages/billing/accounts';
 import { RatesPage } from '@/pages/billing/rates';
 import { TransactionsPage } from '@/pages/billing/transactions';
@@ -59,8 +58,6 @@ function PrivateConsole() {
         <Route path="/queues" element={<ProtectedPage path="/queues"><QueuesPage /></ProtectedPage>} />
         <Route path="/agents" element={<ProtectedPage path="/agents"><AgentsPage /></ProtectedPage>} />
         <Route path="/ivr" element={<ProtectedPage path="/ivr"><IvrPage /></ProtectedPage>} />
-        <Route path="/ivr/:id/edit" element={<ProtectedPage path="/ivr"><IvrEditorPage /></ProtectedPage>} />
-        <Route path="/ivr/:id/routes" element={<ProtectedPage path="/ivr"><IvrEditorPage /></ProtectedPage>} />
 
         <Route path="/routing" element={<ProtectedPage path="/routing"><RoutesPage /></ProtectedPage>} />
         <Route path="/billing/accounts" element={<ProtectedPage path="/billing/accounts"><AccountsPage /></ProtectedPage>} />
