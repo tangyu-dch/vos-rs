@@ -51,10 +51,11 @@ impl PostgresCdrStore {
         weight: i32,
         time_start: Option<&str>,
         time_end: Option<&str>,
+        topology: Option<&serde_json::Value>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO sip_routes (id, prefix, priority, gateway_id, cost, weight, time_start, time_end) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+            "INSERT INTO sip_routes (id, prefix, priority, gateway_id, cost, weight, time_start, time_end, topology) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, '{}'::jsonb)) \
              ON CONFLICT (id) DO UPDATE \
              SET prefix = EXCLUDED.prefix, \
                  priority = EXCLUDED.priority, \
@@ -62,7 +63,8 @@ impl PostgresCdrStore {
                  cost = EXCLUDED.cost, \
                  weight = EXCLUDED.weight, \
                  time_start = EXCLUDED.time_start, \
-                 time_end = EXCLUDED.time_end"
+                 time_end = EXCLUDED.time_end, \
+                 topology = EXCLUDED.topology"
         )
         .bind(id)
         .bind(prefix)
@@ -72,6 +74,7 @@ impl PostgresCdrStore {
         .bind(weight)
         .bind(time_start)
         .bind(time_end)
+        .bind(topology)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -84,7 +87,7 @@ impl PostgresCdrStore {
         priority: i32,
         gateway_id: &str,
     ) -> Result<(), sqlx::Error> {
-        self.insert_route_with_cost(id, prefix, priority, gateway_id, 0.0, 1, None, None)
+        self.insert_route_with_cost(id, prefix, priority, gateway_id, 0.0, 1, None, None, None)
             .await
     }
 
@@ -100,11 +103,12 @@ impl PostgresCdrStore {
         weight: i32,
         time_start: Option<&str>,
         time_end: Option<&str>,
+        topology: Option<&serde_json::Value>,
     ) -> Result<bool, sqlx::Error> {
         let result = sqlx::query(
             "UPDATE sip_routes \
              SET prefix = $2, priority = $3, gateway_id = $4, cost = $5, weight = $6, \
-                 time_start = $7, time_end = $8 \
+                 time_start = $7, time_end = $8, topology = COALESCE($9, topology) \
              WHERE id = $1",
         )
         .bind(id)
@@ -115,6 +119,7 @@ impl PostgresCdrStore {
         .bind(weight)
         .bind(time_start)
         .bind(time_end)
+        .bind(topology)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
@@ -122,7 +127,7 @@ impl PostgresCdrStore {
 
     pub async fn list_routes_full(&self) -> Result<Vec<SipRoute>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, created_at FROM sip_routes ORDER BY priority, id"
+            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, topology, created_at FROM sip_routes ORDER BY priority, id"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -137,7 +142,8 @@ impl PostgresCdrStore {
                 weight: row.get(5),
                 time_start: row.get(6),
                 time_end: row.get(7),
-                created_at: row.get(8),
+                topology: row.get(8),
+                created_at: row.get(9),
             });
         }
         Ok(routes)
@@ -150,7 +156,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<SipRoute>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, created_at \
+            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, topology, created_at \
               FROM sip_routes ORDER BY priority, id LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -168,7 +174,8 @@ impl PostgresCdrStore {
                 weight: row.get(5),
                 time_start: row.get(6),
                 time_end: row.get(7),
-                created_at: row.get(8),
+                topology: row.get(8),
+                created_at: row.get(9),
             })
             .collect())
     }

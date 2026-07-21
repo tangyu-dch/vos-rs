@@ -307,6 +307,9 @@ pub struct SipRoute {
     pub time_start: Option<String>,
     /// 生效结束时间（HH:MM 格式）
     pub time_end: Option<String>,
+    /// 可视化拓扑编排数据（节点 + 边 + 视口）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology: Option<serde_json::Value>,
     /// 创建时间
     #[serde(
         with = "time::serde::rfc3339::option",

@@ -160,12 +160,17 @@ CREATE TABLE IF NOT EXISTS sip_routes (
     gateway_id TEXT NOT NULL REFERENCES sip_gateways(id) ON DELETE CASCADE,
     cost DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     weight INTEGER NOT NULL DEFAULT 100,
+    topology JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
 
 pub(super) const MIGRATION_ADD_ROUTE_WEIGHT: &str =
     "ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS weight INTEGER NOT NULL DEFAULT 100";
+
+/// 旧库升级: 为已存在的 sip_routes 补充 topology JSONB 字段, 用于持久化可视化拓扑编排
+pub(super) const MIGRATION_ADD_ROUTE_TOPOLOGY: &str =
+    "ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS topology JSONB NOT NULL DEFAULT '{}'::jsonb";
 
 pub(super) const CREATE_DTMF_EVENTS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS dtmf_events (

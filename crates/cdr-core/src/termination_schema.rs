@@ -196,6 +196,11 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
         name VARCHAR(100) NOT NULL,
         welcome_prompt VARCHAR(255) NOT NULL DEFAULT 'welcome.wav',
         timeout_secs INTEGER NOT NULL DEFAULT 10,
+        description TEXT DEFAULT '',
+        did VARCHAR(50) DEFAULT '',
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        nodes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        edges JSONB NOT NULL DEFAULT '[]'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"#,
     r#"CREATE TABLE IF NOT EXISTS ivr_actions (
@@ -207,6 +212,12 @@ pub(crate) const MIGRATE_TERMINATION_DOMAIN_SQL: &[&str] = &[
         webhook_method VARCHAR(10),
         PRIMARY KEY (ivr_id, dtmf_key)
     )"#,
+    // 旧库升级: 为已存在的 ivr_menus 补充新字段
+    r#"ALTER TABLE ivr_menus ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''"#,
+    r#"ALTER TABLE ivr_menus ADD COLUMN IF NOT EXISTS did VARCHAR(50) DEFAULT ''"#,
+    r#"ALTER TABLE ivr_menus ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE"#,
+    r#"ALTER TABLE ivr_menus ADD COLUMN IF NOT EXISTS nodes JSONB NOT NULL DEFAULT '[]'::jsonb"#,
+    r#"ALTER TABLE ivr_menus ADD COLUMN IF NOT EXISTS edges JSONB NOT NULL DEFAULT '[]'::jsonb"#,
     r#"ALTER TABLE ivr_actions ADD COLUMN IF NOT EXISTS waiting_prompt VARCHAR(255)"#,
     r#"ALTER TABLE ivr_actions ADD COLUMN IF NOT EXISTS webhook_method VARCHAR(10)"#,
     r#"CREATE TABLE IF NOT EXISTS call_queues (

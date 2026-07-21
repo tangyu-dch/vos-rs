@@ -130,6 +130,9 @@ impl PostgresCdrStore {
         sqlx::query(MIGRATION_ADD_ROUTE_WEIGHT)
             .execute(&self.pool)
             .await?;
+        sqlx::query(MIGRATION_ADD_ROUTE_TOPOLOGY)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(CREATE_SIP_REGISTRATIONS_TABLE_SQL)
             .execute(&self.pool)
             .await?;
