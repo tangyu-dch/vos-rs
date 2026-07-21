@@ -7,8 +7,8 @@
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-orange?logo=rust)](https://www.rust-lang.org/)
 [![Edition](https://img.shields.io/badge/Edition-2021-blue)](https://doc.rust-lang.org/edition-guide/)
 [![License: Non-Commercial](https://img.shields.io/badge/License-Non--Commercial-red.svg)](./LICENSE)
-[![CPS](https://img.shields.io/badge/CPS-5000%2B-emerald)](https://github.com/your-org/vos-rs)
-[![XDP](https://img.shields.io/badge/Media_Engine-eBPF%2FXDP-purple)](https://github.com/your-org/vos-rs)
+[![CPS](https://img.shields.io/badge/CPS-5000%2B-emerald)](https://github.com/tangyu-dch/vos-rs.git)
+[![XDP](https://img.shields.io/badge/Media_Engine-eBPF%2FXDP-purple)](https://github.com/tangyu-dch/vos-rs.git)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14%2B-blue?logo=postgresql)](https://www.postgresql.org/)
 [![React](https://img.shields.io/badge/React-18-blue?logo=react)](https://react.dev/)
 
@@ -554,7 +554,7 @@ vos-rs/
 
 ```bash
 # 1. 克隆项目仓库
-git clone https://github.com/your-org/vos-rs.git && cd vos-rs
+git clone https://github.com/tangyu-dch/vos-rs.git.git && cd vos-rs
 
 # 2. 启动所有服务（PostgreSQL + NATS + sip-edge + api-server + 前端镜像）
 docker compose -f deploy/docker/docker-compose.yml up -d --build

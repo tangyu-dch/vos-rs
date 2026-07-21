@@ -25,6 +25,7 @@ sip_edge:
     ws_bind: "127.0.0.1:5183"
   routing:
     default_gateway: "127.0.0.1:5170"
+    gateway_health_checks_enabled: false
   security:
     internal_secret: "sipp-test-secret"
   media:

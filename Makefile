@@ -311,20 +311,21 @@ full-flow-cluster:
 	VOS_RS_AUTH_BYPASS=true \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/edge-cluster.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 4; \
-	$(SIPP_BIN) 127.0.0.1:5160 -sf tools/sipp/scenarios/gateway_longcall.xml \
-		-i 127.0.0.1 -p 5190 -m 2 -l 10 -aa -nostdin >/dev/null 2>&1 & \
-	sleep 1; \
-	$(SIPP_BIN) 127.0.0.1:5160 -sf tools/sipp/scenarios/caller_longcall.xml \
-		-i 127.0.0.1 -p 5164 -s 91001 -m 1 -r 1 -l 1 -aa -nostdin \
-		> "$(FULL_FLOW_LOG_DIR)/caller-cluster.log" 2>&1 & CALLER_PID=$$!; \
-	sleep 1; \
 	RTP_PIDS=""; \
-	for PORT in 40000 40002 41000 41002; do \
-		python3 tools/sipp/wav_rtp_sender.py tools/sipp/test_speech.wav 127.0.0.1 $$PORT 50 4 >/dev/null 2>&1 & \
+	for PORT in 40000 40002 40004 40006 41000 41002 41004 41006; do \
+		python3 tools/sipp/wav_rtp_sender.py tools/sipp/test_speech.wav 127.0.0.1 $$PORT 120 4 >/dev/null 2>&1 & \
 		RTP_PIDS="$$RTP_PIDS $$!"; \
 	done; \
+	sleep 1; \
+	$(SIPP_BIN) 127.0.0.1:5160 -sf tools/sipp/scenarios/gateway_longcall.xml \
+		-i 127.0.0.1 -p 5190 -m 10 -l 10 -aa -nostdin >/dev/null 2>&1 & \
+	GW_PID=$$!; \
+	sleep 1; \
+	$(SIPP_BIN) 127.0.0.1:5160 -sf tools/sipp/scenarios/caller_longcall.xml \
+		-i 127.0.0.1 -p 5164 -s 91001 -m 4 -r 4 -l 4 -aa -nostdin \
+		>"$(FULL_FLOW_LOG_DIR)/caller-cluster.log" 2>&1 & CALLER_PID=$$!; \
 	wait $$CALLER_PID; \
-	sleep 8; \
+	sleep 3; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(FULL_FLOW_LOG_DIR)/caller-cluster.log"); \
 	WAV_COUNT=$$(find target/test_recordings -name "*.wav" 2>/dev/null | wc -l | tr -d ' '); \
 	A_ALLOC=$$(grep -c 'allocated media relay endpoint' "$(FULL_FLOW_LOG_DIR)/media-edge-a.log" || true); \
@@ -334,7 +335,7 @@ full-flow-cluster:
 	kill $$RTP_PIDS 2>/dev/null; wait $$RTP_PIDS 2>/dev/null || true; pkill -9 -f sipp 2>/dev/null; \
 	rm -f /tmp/media-edge-a.sock /tmp/media-edge-b.sock; \
 	TOTAL_ALLOC=$$(($$A_ALLOC + $$B_ALLOC)); \
-	if [ "$$SUCC" = "1" ] && [ "$$TOTAL_ALLOC" -ge "2" ]; then \
+	if [ "$$SUCC" -ge "4" ] && [ "$$WAV_COUNT" -ge "1" ] && [ "$$A_ALLOC" -ge "1" ] && [ "$$B_ALLOC" -ge "1" ]; then \
 		printf 'FULL-FLOW CLUSTER PASS: %s calls, %s WAV, node-a=%s, node-b=%s allocations\n' "$$SUCC" "$$WAV_COUNT" "$$A_ALLOC" "$$B_ALLOC"; \
 	else \
 		printf 'FULL-FLOW CLUSTER FAIL: %s calls, %s WAV, node-a=%s, node-b=%s allocations\n' "$$SUCC" "$$WAV_COUNT" "$$A_ALLOC" "$$B_ALLOC"; \

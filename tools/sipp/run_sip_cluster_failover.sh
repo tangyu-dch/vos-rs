@@ -88,7 +88,7 @@ run_calls() {
 
 invite_count() {
     local log_file="$1"
-    grep 'received SIP request' "${log_file}" | grep -c 'method=INVITE' || true
+    grep 'received SIP request' "${log_file}" | grep -E -c 'method.*INVITE' || true
 }
 
 require_dependencies
