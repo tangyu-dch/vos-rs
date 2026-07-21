@@ -435,15 +435,19 @@ full-flow-sip-cluster-failover:
 # ─── 性能测试 ──────────────────────────────────────────
 
 perf: build-release
+	@pkill -9 -f sipp 2>/dev/null || true
 	@$(PYTHON) tools/benchmark/bench.py --scenario signaling --total 1000 --cps 200 --duration 35 --sustain 30
 
 perf-media: build-release
+	@pkill -9 -f sipp 2>/dev/null || true
 	@$(PYTHON) tools/benchmark/bench.py --scenario media_relay --total 500 --cps 100 --duration 35 --sustain 30
 
 perf-quick: build-release
+	@pkill -9 -f sipp 2>/dev/null || true
 	@$(PYTHON) tools/benchmark/bench.py --scenario all --total 50 --cps 10 --duration 15 --sustain 10
 
 perf-all: build-release
+	@pkill -9 -f sipp 2>/dev/null || true
 	@$(PYTHON) tools/benchmark/bench.py --scenario all --total 500 --cps 100 --duration 35 --sustain 30
 
 perf-report:
@@ -463,15 +467,19 @@ perf-report:
 	fi
 
 bench-concurrency: build-release
+	@pkill -9 -f sipp 2>/dev/null || true
 	@$(PYTHON) tools/benchmark/bench.py --scenario all --total 500 --cps 100 --duration 35 --sustain 30
 
 bench-concurrency-quick: build-release
+	@pkill -9 -f sipp 2>/dev/null || true
 	@$(PYTHON) tools/benchmark/bench.py --scenario signaling --total 50 --cps 10 --duration 15 --sustain 10
 
 bench-concurrency-media: build-release
+	@pkill -9 -f sipp 2>/dev/null || true
 	@$(PYTHON) tools/benchmark/bench.py --scenario media_relay --total 500 --cps 100 --duration 35 --sustain 30
 
 bench-concurrency-recording: build-release
+	@pkill -9 -f sipp 2>/dev/null || true
 	@$(PYTHON) tools/benchmark/bench.py --scenario recording --total 500 --cps 100 --duration 35 --sustain 30
 
 # ─── SIPp 阶梯性能压测 (200~1500 CPS) ──────────────────────

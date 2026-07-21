@@ -5,11 +5,11 @@
     INVITE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
     Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
     Max-Forwards: 70
-    From: "benchmark" <sip:benchmark@[local_ip]:[local_port]>;tag=[pid]bench[call_number]
+    From: "13800138000" <sip:13800138000@[local_ip]:[local_port]>;tag=[pid]bench[call_number]
     To: <sip:[service]@[remote_ip]:[remote_port]>
     Call-ID: [call_id]
     CSeq: 1 INVITE
-    Contact: <sip:benchmark@[local_ip]:[local_port]>
+    Contact: <sip:13800138000@[local_ip]:[local_port]>
     Content-Type: application/sdp
     Content-Length: [len]
 
@@ -32,11 +32,11 @@
     ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
     Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
     Max-Forwards: 70
-    From: "benchmark" <sip:benchmark@[local_ip]:[local_port]>;tag=[pid]bench[call_number]
+    From: "13800138000" <sip:13800138000@[local_ip]:[local_port]>;tag=[pid]bench[call_number]
     To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
     Call-ID: [call_id]
     CSeq: 1 ACK
-    Contact: <sip:benchmark@[local_ip]:[local_port]>
+    Contact: <sip:13800138000@[local_ip]:[local_port]>
     Content-Length: 0
   ]]></send>
   <pause/>
@@ -44,11 +44,11 @@
     BYE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
     Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
     Max-Forwards: 70
-    From: "benchmark" <sip:benchmark@[local_ip]:[local_port]>;tag=[pid]bench[call_number]
+    From: "13800138000" <sip:13800138000@[local_ip]:[local_port]>;tag=[pid]bench[call_number]
     To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
     Call-ID: [call_id]
     CSeq: 2 BYE
-    Contact: <sip:benchmark@[local_ip]:[local_port]>
+    Contact: <sip:13800138000@[local_ip]:[local_port]>
     Content-Length: 0
   ]]></send>
   <recv response="200"/>

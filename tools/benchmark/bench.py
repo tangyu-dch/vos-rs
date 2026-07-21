@@ -587,8 +587,8 @@ def caller_command(config: BenchmarkConfig, scenario_file: Path) -> list[str]:
         "-cid_str", f"{config.call_id_namespace}-%u",
         "-i", config.edge_host,
         "-p", str(config.caller_port),
-        # Avoid production numeric billing prefixes for synthetic calls.
-        "-s", "benchmark",
+        # Route prefix matching requires '9' prefix.
+        "-s", "91001",
         "-m", str(config.total),
         "-r", str(config.cps),
         "-l", str(config.concurrent),
@@ -689,8 +689,8 @@ def build_config(args: argparse.Namespace, scenario: Scenario, run_dir: Path) ->
         concurrent=args.concurrent or args.total,
         edge_host="127.0.0.1",
         edge_port=5160,
-        gateway_port=5170,
-        caller_port=5164,
+        gateway_port=5190,
+        caller_port=50000,
         manage_url=args.manage_url,
         manage_token=args.manage_token or (
             "sipp-test-secret" if scenario == Scenario.RECORDING else "sipp-performance-secret"
@@ -785,6 +785,7 @@ def run_scenario(config: BenchmarkConfig, dry_run: bool) -> BenchmarkResult | No
     call_id_file = write_call_id_manifest(config)
     env = os.environ.copy()
     env["VOS_RS_CONFIG_FILE"] = str(config.edge_config)
+    env["VOS_RS_AUTH_BYPASS"] = "true"
     commands = {
         "edge": [str(config.edge_binary)],
         "gateway": gateway_command(config, gateway_xml),
