@@ -211,6 +211,8 @@ smoke:
 full-flow:
 	@printf 'Full-flow test: SIP signaling + RTP media + recording...\n'
 	@pkill -9 -f sip-edge 2>/dev/null || true
+	@pkill -9 -f media-edge 2>/dev/null || true
+	@pkill -9 -f wav_rtp_sender 2>/dev/null || true
 	@pkill -9 -f sipp 2>/dev/null || true
 	@psql -U "$${DB_USER:-tangyu}" -d "$${DB_NAME:-vos_rs}" -c "UPDATE gateway_health_status SET circuit_open = false, consecutive_failures = 0, state = 'closed';" 2>/dev/null || true
 	@$(CARGO) build --release -p sip-edge 2>/dev/null
@@ -219,15 +221,15 @@ full-flow:
 	@VOS_RS_CONFIG_FILE="$(FULL_FLOW_CONFIG_FILE)" \
 	target/release/sip-edge >"$(FULL_FLOW_LOG_DIR)/edge.log" 2>&1 & \
 	EDGE_PID=$$!; sleep 3; \
-	python3 tools/sipp/wav_rtp_sender.py tools/sipp/test_speech.wav 127.0.0.1 40000 50 2 >/dev/null 2>&1 & \
-	python3 tools/sipp/wav_rtp_sender.py tools/sipp/test_speech.wav 127.0.0.1 40002 50 2 >/dev/null 2>&1 & \
-	sleep 1; \
 	$(SIPP_BIN) 127.0.0.1:5160 -sf tools/sipp/scenarios/gateway_longcall.xml \
-		-i 127.0.0.1 -p 5170 -m 1 -aa -nostdin >/dev/null 2>&1 & \
+		-i 127.0.0.1 -p 5170 -m 1 -aa -nostdin > "$(FULL_FLOW_LOG_DIR)/gateway.log" 2>&1 & \
 	sleep 1; \
 	$(SIPP_BIN) 127.0.0.1:5160 -sf tools/sipp/scenarios/caller_longcall.xml \
 		-i 127.0.0.1 -p 5164 -s 13800138000 -m 1 -r 1 -l 1 -aa -nostdin \
-		> "$(FULL_FLOW_LOG_DIR)/caller.log" 2>&1; \
+		> "$(FULL_FLOW_LOG_DIR)/caller.log" 2>&1 & \
+	sleep 1; \
+	python3 tools/sipp/wav_rtp_sender.py tools/sipp/test_speech.wav 127.0.0.1 50000 50 8 >/dev/null 2>&1 & \
+	python3 tools/sipp/wav_rtp_sender.py tools/sipp/test_speech.wav 127.0.0.1 50002 50 8 >/dev/null 2>&1 & \
 	sleep 8; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(FULL_FLOW_LOG_DIR)/caller.log"); \
 	WAV_COUNT=$$(find target/test_recordings -name "*.wav" 2>/dev/null | wc -l | tr -d ' '); \

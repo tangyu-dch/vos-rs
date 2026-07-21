@@ -410,7 +410,7 @@ impl PostgresCdrStore {
     > {
         let rows = sqlx::query(
             "SELECT id, host, port, transport, reg_auth_type, reg_username, reg_password \
-             FROM sip_gateways WHERE enabled = TRUE AND reg_auth_type <> 'none'",
+             FROM sip_gateways WHERE enabled = TRUE AND supports_registration = TRUE",
         )
         .fetch_all(&self.pool)
         .await?;
