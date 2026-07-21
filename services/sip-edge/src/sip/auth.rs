@@ -24,6 +24,8 @@ static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AuthConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
     pub(crate) realm: String,
     pub(crate) nonce: String,
     pub(crate) users: HashMap<String, String>,
@@ -41,6 +43,7 @@ fn default_secret_key() -> String {
 impl AuthConfig {
     pub fn disabled() -> Self {
         Self {
+            enabled: Some(false),
             realm: DEFAULT_REALM.to_string(),
             nonce: DEFAULT_NONCE.to_string(),
             users: HashMap::new(),
@@ -55,6 +58,7 @@ impl AuthConfig {
         users: HashMap<String, String>,
     ) -> Self {
         Self {
+            enabled: None,
             realm: realm.into(),
             nonce: nonce.into(),
             users,
@@ -63,6 +67,9 @@ impl AuthConfig {
     }
 
     pub fn is_enabled(&self) -> bool {
+        if self.enabled == Some(false) {
+            return false;
+        }
         !self.users.is_empty()
     }
 

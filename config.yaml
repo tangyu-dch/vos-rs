@@ -3,6 +3,14 @@
 logging:
   filter: "info"
 
+auth:
+  enabled: false
+
+performance:
+  udp_workers: 16
+  udp_receive_buffer_bytes: 16777216
+  udp_send_buffer_bytes: 16777216
+
 # ==========================================
 # 1. 基础设施连接配置 (Connections)
 # ==========================================
@@ -95,15 +103,16 @@ sip_edge:
     manage_bind: "127.0.0.1:8082"
     ws_bind: "0.0.0.0:5062"
   routing:
-    default_gateway: ""
-    database_routes_enabled: true
-    gateway_health_checks_enabled: true
+    default_gateway: "127.0.0.1:5190"
+    database_routes_enabled: false
+    gateway_health_checks_enabled: false
   nat_traversal:
     stun_server: ""
     upnp_enabled: false
   security:
     internal_secret: "internal-dev-secret"
   auth:
+    enabled: false
     users: ""
     realm: "vos-rs"
     nonce: "vos-rs-dev-nonce"
@@ -118,8 +127,8 @@ sip_edge:
       - id: "local-media"
         type: "local"
         advertised_addr: "127.0.0.1"
-        port_min: 40000
-        port_max: 40100
+        port_min: 20000
+        port_max: 60000
         weight: 1
     # nodes:
     #   - id: "media-edge-1"
@@ -144,7 +153,7 @@ sip_edge:
     workers: 4
     queue_capacity: 10000
   billing:
-    balance_enforcement_enabled: true
+    balance_enforcement_enabled: false
     settlement_enabled: true
   performance:
     cdr_queue_capacity: 4096
@@ -197,3 +206,17 @@ cdr_worker:
     max_deliveries: 3
     nak_delay_ms: 5000
     db_retry_attempts: 5
+
+# ==========================================
+# 5. 大模型 (LLM) 与 AI Voice 对接统一配置
+# ==========================================
+llm_integration:
+  enabled: true
+  provider: "openai"
+  api_key: "sk-proj-your-api-key-here"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-realtime-preview"
+  realtime_websocket_url: "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
+  temperature: 0.7
+  vad_threshold: 0.65
+

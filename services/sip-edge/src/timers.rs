@@ -462,6 +462,9 @@ pub(crate) fn spawn_gateway_health_probe_loop(
 
         loop {
             interval.tick().await;
+            if !edge_config.gateway_health_checks_enabled {
+                continue;
+            }
             let Some(db) = edge_state.db_store.clone() else {
                 continue;
             };

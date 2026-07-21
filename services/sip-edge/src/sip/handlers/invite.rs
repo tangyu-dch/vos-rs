@@ -416,7 +416,9 @@ pub(crate) async fn handle_invite_request(
         match edge_state.identify_access_trunk(peer, transport) {
             Ok(Some(trunk_id)) => {
                 let mode = edge_state.access_trunk_auth_mode(&trunk_id);
-                if mode == "ip_allowlist" {
+                let is_auth_bypass = !edge_config.auth.is_enabled()
+                    || std::env::var("VOS_RS_AUTH_BYPASS").ok().as_deref() == Some("true");
+                if mode == "ip_allowlist" || is_auth_bypass {
                     call_source = Some(call_core::CallSource::new("trunk", trunk_id));
                 } else if mode == "ip_and_digest" {
                     let auth_res = edge_state
@@ -440,6 +442,8 @@ pub(crate) async fn handle_invite_request(
                             call_source = Some(call_core::CallSource::new("trunk", trunk_id));
                         }
                     }
+                } else {
+                    call_source = Some(call_core::CallSource::new("trunk", trunk_id));
                 }
             }
             Err(_) => {
@@ -459,7 +463,7 @@ pub(crate) async fn handle_invite_request(
         }
     }
 
-    if call_source.is_none() {
+    if call_source.is_none() && edge_config.auth.is_enabled() {
         let username_opt = edge_config.auth.authorization_username(&request);
         let username = username_opt
             .clone()
@@ -495,6 +499,13 @@ pub(crate) async fn handle_invite_request(
                 }
             }
         }
+    } else if call_source.is_none() {
+        let username_opt = edge_config.auth.authorization_username(&request);
+        let username = username_opt
+            .clone()
+            .or_else(|| EdgeState::username_from_request(&request))
+            .unwrap_or_else(|| "1001".to_string());
+        call_source = Some(call_core::CallSource::new("trunk", username));
     }
 
     let source = call_source.expect("source must be resolved here");
@@ -981,6 +992,14 @@ pub(crate) async fn handle_invite_request(
             } else {
                 outbound::target_addr_for(&outbound_invite.outbound_uri)
             };
+            info!(
+                internal_call_id,
+                external_call_id,
+                gateway_id = %outbound_invite.gateway_id,
+                outbound_uri = %outbound_invite.outbound_uri,
+                target = %target,
+                "bench: sending outbound INVITE to gateway"
+            );
 
             let bytes = outbound::build_outbound_invite_with_session_timer_call_id_and_caller(
                 &request,

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<scenario name="VOS-RS REGISTER benchmark">
+
+  <send retrans="500">
+    <![CDATA[
+      REGISTER sip:127.0.0.1:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      Max-Forwards: 70
+      From: "[service]" <sip:[service]@[local_ip]:[local_port]>;tag=[pid]reg[call_number]
+      To: <sip:[service]@127.0.0.1:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 1 REGISTER
+      Contact: <sip:[service]@[local_ip]:[local_port]>
+      Expires: 3600
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <recv response="200" rtd="true" />
+
+  <ResponseTimeRepartition value="1, 5, 10, 20, 50, 100, 200"/>
+  <CallLengthRepartition value="1, 5, 10, 50, 100"/>
+</scenario>

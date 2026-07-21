@@ -263,6 +263,7 @@ struct RecordingSection {
 
 #[derive(serde::Deserialize, Debug, Default)]
 struct AuthSection {
+    enabled: Option<bool>,
     users: Option<String>,
     realm: Option<String>,
     nonce: Option<String>,
@@ -430,12 +431,17 @@ impl EdgeConfig {
         media.recording_min_free_bytes = recording_section.min_free_bytes.unwrap_or(536_870_912);
         media.recording_max_file_bytes = recording_section.max_file_bytes.unwrap_or(134_217_728);
         media.recording_max_duration_secs = recording_section.max_duration_secs.unwrap_or(3_600);
-        let auth_users = auth_section
-            .users
-            .as_deref()
-            .map(parse_auth_users)
-            .unwrap_or_default();
+        let auth_users = if auth_section.enabled == Some(false) {
+            std::collections::HashMap::new()
+        } else {
+            auth_section
+                .users
+                .as_deref()
+                .map(parse_auth_users)
+                .unwrap_or_default()
+        };
         let auth = AuthConfig {
+            enabled: auth_section.enabled,
             realm: auth_section.realm.unwrap_or_else(|| "vos-rs".to_string()),
             nonce: auth_section
                 .nonce
