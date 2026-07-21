@@ -34,7 +34,7 @@ pub(crate) mod dtmf;
 pub(crate) mod live_transcode;
 pub(crate) mod metrics;
 pub(crate) mod recording;
-pub(crate) mod relay;
+pub mod relay;
 pub(crate) mod rtcp_processor;
 #[allow(dead_code)]
 pub(crate) mod sdp;
