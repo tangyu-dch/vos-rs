@@ -229,7 +229,7 @@ function RouteCanvasWithSync({
         )}
         <Button
           size="sm"
-          color="secondary"
+          color="primary"
           className="font-bold text-white"
           startContent={<CheckCircle2 className="w-3.5 h-3.5" />}
           onPress={() => {

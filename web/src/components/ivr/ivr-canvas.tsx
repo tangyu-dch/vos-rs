@@ -263,7 +263,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
                 cx={pos.x - node.position.x}
                 cy={pos.y - node.position.y}
                 r={PORT_RADIUS}
-                className="fill-secondary stroke-content1 hover:fill-secondary/80"
+                className="fill-primary stroke-content1 hover:fill-primary/80"
                 strokeWidth={2}
               />
               <foreignObject
@@ -296,7 +296,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
         <path
           d={edgePath(srcPos, dstPos)}
           fill="none"
-          className="stroke-secondary/70 group-hover:stroke-secondary"
+          className="stroke-primary/70 group-hover:stroke-primary"
           strokeWidth={2}
           markerEnd="url(#arrow)"
         />
@@ -335,7 +335,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
       <path
         d={edgePath(srcPos, drag.cursor)}
         fill="none"
-        className="stroke-secondary/70"
+        className="stroke-primary/70"
         strokeWidth={2}
         strokeDasharray="4 2"
       />
@@ -364,7 +364,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
             orient="auto"
             markerUnits="strokeWidth"
           >
-            <path d="M0,0 L0,6 L8,3 z" className="fill-secondary/70" />
+            <path d="M0,0 L0,6 L8,3 z" className="fill-primary/70" />
           </marker>
         </defs>
         {/* 网格背景 */}
@@ -426,7 +426,7 @@ export function NodePalette() {
   return (
     <div className="w-72 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 flex flex-col gap-3 overflow-y-auto">
       <div className="flex items-center gap-2 pb-2 border-b border-default-200 shrink-0">
-        <Plus className="w-4 h-4 text-secondary" />
+        <Plus className="w-4 h-4 text-primary" />
         <span className="text-xs font-bold">节点工具箱</span>
       </div>
       <p className="text-[10px] text-default-400">按住下方卡片拖入画布即可创建节点</p>
@@ -489,7 +489,7 @@ export function NodeInspector({ node, onChange }: InspectorProps) {
   return (
     <div className="w-80 shrink-0 h-full p-4 bg-content1 rounded-xl border border-default-200 flex flex-col gap-3 overflow-y-auto">
       <div className="flex items-center gap-2 pb-2 border-b border-default-200 shrink-0">
-        <Sparkles className="w-4 h-4 text-secondary" />
+        <Sparkles className="w-4 h-4 text-primary" />
         <span className="text-xs font-bold">节点属性</span>
       </div>
       <div className={`p-3 rounded-lg border ${catalog.color} flex items-center gap-2`}>

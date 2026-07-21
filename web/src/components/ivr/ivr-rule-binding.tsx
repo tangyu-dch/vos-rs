@@ -245,7 +245,7 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
       {/* 顶部工具栏 */}
       <div className="flex items-center justify-between gap-4 p-3 bg-content1 rounded-xl border border-default-200 shrink-0">
         <div className="flex items-center gap-3 flex-wrap">
-          <GitFork className="w-5 h-5 text-secondary" />
+          <GitFork className="w-5 h-5 text-primary" />
           <Input
             variant="underlined"
             className="max-w-xs"
@@ -269,7 +269,7 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
           </Button>
           <Button
             size="sm"
-            color="secondary"
+            color="primary"
             className="font-bold text-white"
             startContent={<Save className="w-3.5 h-3.5" />}
             onPress={handleSave}

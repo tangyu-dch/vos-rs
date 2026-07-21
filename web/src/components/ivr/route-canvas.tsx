@@ -212,7 +212,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
                 cx={pos.x - node.position.x}
                 cy={pos.y - node.position.y}
                 r={PORT_RADIUS}
-                className="fill-secondary stroke-content1 hover:fill-secondary/80"
+                className="fill-primary stroke-content1 hover:fill-primary/80"
                 strokeWidth={2}
               />
               <foreignObject x={pos.x - node.position.x - 30} y={pos.y - node.position.y - 22} width={60} height={16}>
@@ -239,7 +239,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
         <path
           d={edgePath(srcPos, dstPos)}
           fill="none"
-          className="stroke-secondary/70 group-hover:stroke-secondary"
+          className="stroke-primary/70 group-hover:stroke-primary"
           strokeWidth={2}
           markerEnd="url(#arrow-route)"
         />
@@ -270,7 +270,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
     if (!src) return null;
     const srcPos = getPortPosition(src, drag.fromPort.portId, 'out');
     return (
-      <path d={edgePath(srcPos, drag.cursor)} fill="none" className="stroke-secondary/70" strokeWidth={2} strokeDasharray="4 2" />
+      <path d={edgePath(srcPos, drag.cursor)} fill="none" className="stroke-primary/70" strokeWidth={2} strokeDasharray="4 2" />
     );
   };
 
@@ -279,7 +279,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
       {/* 左侧节点工具箱 */}
       <div className="w-64 shrink-0 h-full p-3 bg-content1 rounded-xl border border-default-200 flex flex-col gap-2 overflow-y-auto">
         <div className="flex items-center gap-2 pb-2 border-b border-default-200 shrink-0">
-          <Plus className="w-4 h-4 text-secondary" />
+          <Plus className="w-4 h-4 text-primary" />
           <span className="text-xs font-bold">路由节点</span>
         </div>
         {(['source', 'filter', 'action'] as const).map((cat) => {
@@ -328,7 +328,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
         >
           <defs>
             <marker id="arrow-route" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-              <path d="M0,0 L0,6 L8,3 z" className="fill-secondary/70" />
+              <path d="M0,0 L0,6 L8,3 z" className="fill-primary/70" />
             </marker>
           </defs>
           <pattern id="grid-route" width="20" height="20" patternUnits="userSpaceOnUse">
