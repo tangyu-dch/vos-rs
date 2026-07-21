@@ -64,6 +64,17 @@ impl GatewayHealth {
         }
     }
 
+    pub fn record_probe_success(&mut self) {
+        self.success_count += 1;
+        self.last_success = Some(Instant::now());
+        self.half_open_probe_in_flight = false;
+        self.consecutive_failures = 0;
+        self.half_open_successes = 0;
+        if self.state == CircuitState::HalfOpen || self.state == CircuitState::Open {
+            self.state = CircuitState::Closed;
+        }
+    }
+
     pub fn record_failure(&mut self) {
         self.failure_count += 1;
         self.consecutive_failures += 1;
@@ -159,6 +170,13 @@ impl GatewayHealthTracker {
             .entry(gateway_id.to_string())
             .or_default()
             .record_success();
+    }
+
+    pub fn record_probe_success(&self, gateway_id: &str) {
+        self.states
+            .entry(gateway_id.to_string())
+            .or_default()
+            .record_probe_success();
     }
 
     pub fn record_failure(&self, gateway_id: &str) {

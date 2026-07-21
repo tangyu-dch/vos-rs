@@ -119,7 +119,10 @@ impl MediaRelayState {
         if previous_target == Some(source) {
             return None;
         }
+        self.source_bindings
+            .insert(relay_port, SourceBinding { address: source });
         self.mark_relay_features_changed(peer_port);
+        self.mark_relay_features_changed(relay_port);
 
         self.metrics
             .entry(relay_port)

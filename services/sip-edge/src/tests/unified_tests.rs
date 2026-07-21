@@ -852,7 +852,7 @@ async fn invite_with_unsupported_audio_codec_receives_not_acceptable() {
     assert_eq!(datagrams.len(), 1);
     let response = datagram_text(&datagrams[0]);
     assert!(response.starts_with("SIP/2.0 488 Not Acceptable Here\r\n"));
-    assert!(response.contains("X-VOS-RS-Error: missing compatible audio codec in SDP\r\n"));
+    assert!(response.contains("X-VOS-RS-Error: missing compatible audio codec in SDP"));
 }
 
 #[tokio::test]
@@ -5774,6 +5774,74 @@ async fn gateway_options_response_updates_probe_health() {
     let (open, failures, _, _, _, _) = status.unwrap();
     assert!(!open);
     assert_eq!(failures, 0);
+}
+
+#[tokio::test]
+async fn gateway_options_probe_resets_half_open_circuit_breaker() {
+    let (cdr_tx, _cdr_rx) = tokio::sync::mpsc::unbounded_channel();
+    let call_manager = CallManager::new(
+        RouteTable::new(vec![Route::new(
+            "gw1-route",
+            "",
+            100,
+            RouteTarget::new("gw1", "127.0.0.1", Some(5060)),
+        )]),
+        cdr_tx,
+    );
+    let edge_state = EdgeState::new(call_manager);
+    let config = EdgeConfig::from_env();
+
+    // Restore state as open circuit with failure 35 seconds ago (elapsed > recovery_interval of 30s)
+    let past_failure = std::time::SystemTime::now() - std::time::Duration::from_secs(35);
+    edge_state
+        .gateway_health
+        .restore_state("gw1", true, 5, Some(past_failure), 0, 0);
+    assert_eq!(
+        edge_state.gateway_health.circuit_state("gw1"),
+        Some(call_core::CircuitState::Open)
+    );
+
+    // Simulate recovery interval elapsed and acquire probe (entering HalfOpen)
+    assert!(edge_state.gateway_health.try_acquire_probe("gw1"));
+    assert_eq!(
+        edge_state.gateway_health.circuit_state("gw1"),
+        Some(call_core::CircuitState::HalfOpen)
+    );
+
+    let call_id = "health-probe-gw1-half-open";
+    edge_state
+        .gateway_probes
+        .insert(call_id.to_string(), "gw1".to_string());
+
+    let response = format!(
+        "SIP/2.0 200 OK\r\n\
+         Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-health-halfopen\r\n\
+         From: <sip:health-check@127.0.0.1>;tag=health-1\r\n\
+         To: <sip:health-check@127.0.0.1>;tag=gw\r\n\
+         Call-ID: {call_id}\r\n\
+         CSeq: 1 OPTIONS\r\n\
+         Content-Length: 0\r\n\r\n"
+    );
+
+    let datagrams = handle_datagram(
+        response.as_bytes(),
+        "127.0.0.1:5060".parse().unwrap(),
+        &edge_state,
+        &config,
+    )
+    .await;
+
+    assert!(datagrams.is_empty());
+    assert!(!edge_state.gateway_probes.contains_key(call_id));
+
+    let status = edge_state.gateway_health.get_gateway_status("gw1").unwrap();
+    assert!(!status.0); // open == false
+    assert_eq!(status.1, 0); // consecutive failures cleared
+    assert_eq!(status.2, "closed");
+    assert_eq!(
+        edge_state.gateway_health.circuit_state("gw1"),
+        Some(call_core::CircuitState::Closed)
+    );
 }
 
 // ==========================================

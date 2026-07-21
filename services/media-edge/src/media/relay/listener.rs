@@ -174,6 +174,7 @@ pub(crate) async fn relay_media_port(
             local_port,
             source,
             anti_spoofing,
+            symmetric_rtp_learning,
             source_relearn_after_secs,
             &mut source_binding,
         ) {
@@ -217,6 +218,7 @@ pub(crate) async fn relay_media_port(
                     source,
                     packet_kind,
                     &mut learned_symmetric_source,
+                    &mut source_binding,
                 );
             }
 
@@ -404,6 +406,7 @@ pub(crate) async fn relay_media_port(
                 source,
                 packet_kind,
                 &mut learned_symmetric_source,
+                &mut source_binding,
             );
         }
 
@@ -584,11 +587,16 @@ fn track_symmetric_source(
     source: SocketAddr,
     packet_kind: MediaPacketKind,
     learned_source: &mut Option<SocketAddr>,
+    binding: &mut Option<CachedSourceBinding>,
 ) {
     if *learned_source == Some(source) {
         return;
     }
     *learned_source = Some(source);
+    *binding = Some(CachedSourceBinding {
+        address: source,
+        last_seen: std::time::Instant::now(),
+    });
     if let Some(update) = relay.learn_symmetric_source(local_port, source) {
         debug!(
             source_port = update.source_port,
@@ -606,6 +614,7 @@ fn accept_media_source(
     local_port: u16,
     source: SocketAddr,
     anti_spoofing: bool,
+    symmetric_rtp_learning: bool,
     relearn_after_secs: u64,
     binding: &mut Option<CachedSourceBinding>,
 ) -> bool {
@@ -620,8 +629,9 @@ fn accept_media_source(
             true
         }
         Some(current)
-            if now.duration_since(current.last_seen)
-                < std::time::Duration::from_secs(relearn_after_secs) =>
+            if !symmetric_rtp_learning
+                && now.duration_since(current.last_seen)
+                    < std::time::Duration::from_secs(relearn_after_secs) =>
         {
             relay.record_metric(local_port, |metrics| metrics.dropped_spoofed_packets += 1);
             false

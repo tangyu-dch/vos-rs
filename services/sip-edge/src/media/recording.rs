@@ -499,6 +499,24 @@ fn handle_recording_command(
                 if let Err(error) = recording_file.recorder.flush_recording() {
                     warn!(%error, session_id, "failed to finalize call recording");
                 }
+                let meta_path = wav_path.with_extension("json");
+                let duration_secs = recording_file.recorder.flushed_frames as f64 / RECORDING_SAMPLE_RATE as f64;
+                let meta_content = serde_json::json!({
+                    "call_id": call_id,
+                    "session_id": session_id,
+                    "segment_index": recording_file.segment_index,
+                    "wav_path": wav_path.to_string_lossy(),
+                    "sample_rate": RECORDING_SAMPLE_RATE,
+                    "channels": RECORDING_CHANNELS,
+                    "bits_per_sample": RECORDING_BITS_PER_SAMPLE,
+                    "flushed_frames": recording_file.recorder.flushed_frames,
+                    "duration_secs": duration_secs,
+                    "format": format_str,
+                    "created_at_ms": unix_timestamp_millis(),
+                });
+                if let Ok(meta_json) = serde_json::to_string_pretty(&meta_content) {
+                    let _ = fs::write(&meta_path, meta_json);
+                }
             }
             crate::media::transcode::transcode_and_upload_recording_async(
                 wav_path,
@@ -523,6 +541,31 @@ fn recorder_for_session<'a>(
         .ok_or_else(|| io::Error::other("recording session was not initialized"))
 }
 
+pub fn write_recording_segment_metadata(
+    session: &RecordingSessionInfo,
+    segment_index: u32,
+    flushed_frames: u64,
+) -> io::Result<()> {
+    let wav_path = recording_segment_path(session, segment_index);
+    let meta_path = wav_path.with_extension("json");
+    let duration_secs = flushed_frames as f64 / RECORDING_SAMPLE_RATE as f64;
+    let json_content = serde_json::json!({
+        "call_id": session.call_id,
+        "session_id": session.id,
+        "segment_index": segment_index,
+        "wav_path": wav_path.to_string_lossy(),
+        "sample_rate": RECORDING_SAMPLE_RATE,
+        "channels": RECORDING_CHANNELS,
+        "bits_per_sample": RECORDING_BITS_PER_SAMPLE,
+        "flushed_frames": flushed_frames,
+        "duration_secs": duration_secs,
+        "format": session.format_str,
+        "created_at_ms": unix_timestamp_millis(),
+    });
+    fs::write(&meta_path, serde_json::to_string_pretty(&json_content)?)?;
+    Ok(())
+}
+
 fn rotate_recording(
     recorders: &mut HashMap<u64, RecordingFile>,
     session: &RecordingSessionInfo,
@@ -533,6 +576,11 @@ fn rotate_recording(
         .unwrap_or(1);
     if let Some(mut previous) = recorders.remove(&session.id) {
         previous.recorder.flush_recording()?;
+        let _ = write_recording_segment_metadata(
+            session,
+            previous.segment_index,
+            previous.recorder.flushed_frames,
+        );
     }
     recorders.insert(session.id, RecordingFile::create(session, segment_index)?);
     Ok(())
@@ -664,7 +712,9 @@ impl WavCallRecorder {
         };
         let base = self.base_timestamps[channel.index()].unwrap_or(timestamp);
         let start_frame = u64::from(timestamp.wrapping_sub(base));
-        self.frames_written > 0 && start_frame.saturating_add(payload_len as u64) > max_frames
+        self.frames_written > 0
+            && (start_frame.saturating_add(payload_len as u64) > max_frames
+                || self.frames_written.saturating_add(payload_len as u64) > max_frames)
     }
 
     fn start_frame(&mut self, channel: RecordingChannel, timestamp: u32) -> u64 {

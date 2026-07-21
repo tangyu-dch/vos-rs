@@ -6,9 +6,9 @@
 // 后端 JSON 字段使用 snake_case (source_port), 前端 IvrEdge 使用 camelCase (sourcePort)
 // 在 load/save 时做转换
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Chip, Input } from '@heroui/react';
-import { Save, Play, GitFork } from 'lucide-react';
+import { Save, Play, GitFork, AlertCircle, AlertTriangle, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { api } from '@/services/client';
 import { ErrorState, LoadingState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
@@ -46,6 +46,139 @@ interface IvrNodeDto {
   description?: string;
   position: { x: number; y: number };
   config: Record<string, unknown>;
+}
+
+export interface IvrValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  orphanNodeIds: string[];
+  cyclicNodeIds: string[];
+}
+
+/** IVR 流程图节点合法性与防呆校验 (孤立节点 / 死循环 / 缺少入口) */
+export function validateIvrFlow(flow: IvrFlow): IvrValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const orphanNodeIds: string[] = [];
+  const cyclicNodeIds: string[] = [];
+
+  const { nodes, edges } = flow;
+
+  if (nodes.length === 0) {
+    return {
+      valid: false,
+      errors: ['IVR 流程节点不可为空，请至少添加一个【呼入入口】节点'],
+      warnings: [],
+      orphanNodeIds: [],
+      cyclicNodeIds: [],
+    };
+  }
+
+  // 1. 检查是否存在入口节点
+  const startNodes = nodes.filter((n) => n.type === 'start');
+  if (startNodes.length === 0) {
+    errors.push('流程缺少【呼入入口】(start) 节点，无法响应呼入路由');
+  }
+
+  // 构建邻接表
+  const adj = new Map<string, string[]>();
+  nodes.forEach((n) => adj.set(n.id, []));
+
+  edges.forEach((e) => {
+    if (adj.has(e.source) && adj.has(e.target)) {
+      adj.get(e.source)!.push(e.target);
+    }
+  });
+
+  // 2. 从 start 节点做 BFS 可达性分析 (查找孤立/不可达节点)
+  const visitedFromStart = new Set<string>();
+  const queue: string[] = startNodes.map((n) => n.id);
+  queue.forEach((id) => visitedFromStart.add(id));
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    const neighbors = adj.get(curr) || [];
+    for (const next of neighbors) {
+      if (!visitedFromStart.has(next)) {
+        visitedFromStart.add(next);
+        queue.push(next);
+      }
+    }
+  }
+
+  nodes.forEach((n) => {
+    if (!visitedFromStart.has(n.id)) {
+      orphanNodeIds.push(n.id);
+      errors.push(`检测到孤立游离节点: 【${n.title}】(${n.id})，从入口无法到达`);
+    }
+  });
+
+  // 3. 悬空分支 / 未连接输出校验
+  const terminalTypes = ['hangup', 'transfer_queue', 'transfer_ext', 'transfer_pstn', 'voicemail'];
+  nodes.forEach((n) => {
+    if (visitedFromStart.has(n.id) && !terminalTypes.includes(n.type)) {
+      const outEdges = edges.filter((e) => e.source === n.id);
+      if (outEdges.length === 0) {
+        warnings.push(`节点【${n.title}】未配置输出连线或终结处理`);
+      }
+    }
+  });
+
+  // 4. 死循环 / 环路结构校验 (DFS Cycle Detection)
+  const state = new Map<string, 'unvisited' | 'visiting' | 'visited'>();
+  nodes.forEach((n) => state.set(n.id, 'unvisited'));
+
+  const cycles: string[][] = [];
+  const currentPath: string[] = [];
+
+  function dfs(u: string) {
+    state.set(u, 'visiting');
+    currentPath.push(u);
+
+    const neighbors = adj.get(u) || [];
+    for (const v of neighbors) {
+      if (state.get(v) === 'visiting') {
+        const cycleStartIndex = currentPath.indexOf(v);
+        if (cycleStartIndex !== -1) {
+          cycles.push(currentPath.slice(cycleStartIndex));
+        }
+      } else if (state.get(v) === 'unvisited') {
+        dfs(v);
+      }
+    }
+
+    currentPath.pop();
+    state.set(u, 'visited');
+  }
+
+  startNodes.forEach((n) => {
+    if (state.get(n.id) === 'unvisited') {
+      dfs(n.id);
+    }
+  });
+
+  cycles.forEach((cycle) => {
+    const hasLoopNode = cycle.some((id) => nodes.find((n) => n.id === id)?.type === 'loop');
+    cycle.forEach((id) => {
+      if (!cyclicNodeIds.includes(id)) cyclicNodeIds.push(id);
+    });
+
+    const cycleNames = cycle.map((id) => nodes.find((n) => n.id === id)?.title || id).join(' -> ');
+    if (!hasLoopNode) {
+      errors.push(`检测到死循环/非法环路: 【${cycleNames} -> ${nodes.find((n) => n.id === cycle[0])?.title}】，缺少显式【循环跳转】节点或退出条件`);
+    } else {
+      warnings.push(`流程包含受控循环: ${cycleNames}`);
+    }
+  });
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    orphanNodeIds,
+    cyclicNodeIds,
+  };
 }
 
 // DTO → 前端 IvrEdge (snake_case → camelCase)
@@ -125,7 +258,6 @@ export function flowFromFields(fields: IvrFlowFields): IvrFlow {
 }
 
 // IVR 拓扑编辑器 (Modal 内使用)
-// 加载 IVR 完整流程 (含 nodes/edges), 提供三栏画布编辑 + 保存到后端
 interface IvrTopologyEditorProps {
   flow: IvrFlowFields;
   onSaved?: () => void;
@@ -139,7 +271,7 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [ivrName, setIvrName] = useState(flow.name);
 
-  // 加载 IVR 完整流程 (含 nodes/edges)
+  // 加载 IVR 完整流程
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -149,7 +281,6 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
       const menuNodeDtos = Array.isArray(menu.nodes) ? menu.nodes as IvrNodeDto[] : [];
       const menuEdgeDtos = Array.isArray(menu.edges) ? menu.edges as IvrEdgeDto[] : [];
 
-      // 后端无 nodes 时用 flowFromFields 生成默认拓扑
       const nodes: IvrNode[] = menuNodeDtos.length > 0
         ? menuNodeDtos.map(nodeFromDto)
         : flowFromFields(flow).nodes;
@@ -174,15 +305,23 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
     } finally {
       setLoading(false);
     }
-  }, [flow.id]);
+  }, [flow.id, flow.name]);
 
   useEffect(() => { void load(); }, [load]);
 
+  // 实时节点树图验证
+  const validation = useMemo(() => (topology ? validateIvrFlow(topology) : null), [topology]);
+
   const handleSave = async () => {
     if (!topology) return;
+
+    if (validation && !validation.valid) {
+      message.error(validation.errors[0] || 'IVR 流程树包含非法错误，无法保存');
+      return;
+    }
+
     setSaving(true);
     try {
-      // 转换为后端 DTO (snake_case)
       const payload = {
         id: topology.id,
         name: ivrName,
@@ -257,6 +396,30 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
             {topology.nodes.length} 节点 · {topology.edges.length} 连线
           </Chip>
           {topology.did && <Chip size="sm" variant="flat" color="primary">DID {topology.did}</Chip>}
+
+          {/* 节点树防呆校验状态 Chip */}
+          {validation && (
+            <Chip
+              size="sm"
+              variant="flat"
+              color={validation.errors.length > 0 ? 'danger' : validation.warnings.length > 0 ? 'warning' : 'success'}
+              startContent={
+                validation.errors.length > 0 ? (
+                  <AlertCircle className="w-3.5 h-3.5 text-danger" />
+                ) : validation.warnings.length > 0 ? (
+                  <AlertTriangle className="w-3.5 h-3.5 text-warning" />
+                ) : (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-success" />
+                )
+              }
+            >
+              {validation.errors.length > 0
+                ? `${validation.errors.length} 项流程错误`
+                : validation.warnings.length > 0
+                ? `${validation.warnings.length} 项流程警告`
+                : '流程节点树验证通过'}
+            </Chip>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -269,7 +432,7 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
           </Button>
           <Button
             size="sm"
-            color="primary"
+            color={validation && !validation.valid ? 'default' : 'primary'}
             className="font-bold text-white"
             startContent={<Save className="w-3.5 h-3.5" />}
             onPress={handleSave}
@@ -279,6 +442,24 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
           </Button>
         </div>
       </div>
+
+      {/* 流程错误/警告提示横幅 */}
+      {validation && (validation.errors.length > 0 || validation.warnings.length > 0) && (
+        <div className="p-3 bg-content2 rounded-xl border border-default-200 flex flex-col gap-1 text-tiny shrink-0">
+          {validation.errors.map((err, idx) => (
+            <div key={`err-${idx}`} className="flex items-center gap-1.5 text-danger font-medium">
+              <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+              <span>{err}</span>
+            </div>
+          ))}
+          {validation.warnings.map((warn, idx) => (
+            <div key={`warn-${idx}`} className="flex items-center gap-1.5 text-warning font-medium">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>{warn}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 三栏布局: 左侧 palette + 中间 canvas + 右侧 inspector */}
       <div className="flex gap-3 flex-1 min-h-0 h-full">
@@ -296,3 +477,4 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
     </div>
   );
 }
+

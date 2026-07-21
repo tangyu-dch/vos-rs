@@ -3,7 +3,7 @@ import {
   Button, Card, CardBody, Chip, Input, Select, SelectItem, Switch,
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Tabs, Tab,
 } from '@heroui/react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Server } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import type { Entity } from '@/services/resources';
 import {
@@ -360,8 +360,20 @@ function AccessAuthTab({ draft, set, rules, setRules }: { draft: Entity; set: (k
   );
 }
 
-function RegistrationTab({ draft, set, registrations, endpoints, setEndpoints }: { draft: Entity; set: (key: string, value: unknown) => void; registrations: Entity[]; endpoints: EgressEndpoint[]; setEndpoints: (endpoints: EgressEndpoint[]) => void }) {
+function RegistrationTab({
+  draft, set, registrations, endpoints, setEndpoints, onRefresh, refreshing,
+}: {
+  draft: Entity;
+  set: (key: string, value: unknown) => void;
+  registrations: Entity[];
+  endpoints: EgressEndpoint[];
+  setEndpoints: (endpoints: EgressEndpoint[]) => void;
+  onRefresh?: () => void;
+  refreshing?: boolean;
+}) {
   const mode = String(draft.egress_connection_type ?? 'static_peer');
+  const hasReg = registrations.length > 0;
+
   return (
     <div className="flex flex-col gap-5">
       <FormGrid>
@@ -422,9 +434,27 @@ function RegistrationTab({ draft, set, registrations, endpoints, setEndpoints }:
       <SectionBlock
         title="注册状态"
         actions={
-          <Chip size="sm" variant="flat" color={registrations.length ? 'success' : 'default'}>
-            {registrations.length ? '已有注册' : '暂无注册'}
-          </Chip>
+          <div className="flex items-center gap-2">
+            <Chip
+              size="sm"
+              variant="flat"
+              color={hasReg ? 'success' : 'default'}
+              startContent={<span className={`w-2 h-2 rounded-full ${hasReg ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}
+            >
+              {hasReg ? '已有注册 (正常)' : '暂无注册'}
+            </Chip>
+            {onRefresh && (
+              <Button
+                size="sm"
+                variant="flat"
+                isLoading={refreshing}
+                onPress={onRefresh}
+                startContent={<RefreshCw className="w-3.5 h-3.5" />}
+              >
+                刷新在线状态
+              </Button>
+            )}
+          </div>
         }
       >
         {registrations.length ? (
@@ -432,13 +462,17 @@ function RegistrationTab({ draft, set, registrations, endpoints, setEndpoints }:
             <TableHeader>
               <TableColumn key="contact">联系地址</TableColumn>
               <TableColumn key="node">来源 Socket / 节点</TableColumn>
+              <TableColumn key="status">状态</TableColumn>
               <TableColumn key="expires_at">过期时间</TableColumn>
             </TableHeader>
             <TableBody items={registrations}>
               {(row) => (
                 <TableRow key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}>
-                  <TableCell>{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
+                  <TableCell className="font-mono text-tiny">{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
                   <TableCell>{String(row.received_from ?? row.node ?? '')}</TableCell>
+                  <TableCell>
+                    <Chip size="sm" variant="dot" color="success">在线</Chip>
+                  </TableCell>
                   <TableCell>{String(row.expires_at ?? '')}</TableCell>
                 </TableRow>
               )}
@@ -452,15 +486,42 @@ function RegistrationTab({ draft, set, registrations, endpoints, setEndpoints }:
   );
 }
 
-function AccessRegistrationStatus({ registrations }: { registrations: Entity[] }) {
+function AccessRegistrationStatus({
+  registrations,
+  onRefresh,
+  refreshing,
+}: {
+  registrations: Entity[];
+  onRefresh?: () => void;
+  refreshing?: boolean;
+}) {
+  const hasReg = registrations.length > 0;
   return (
     <SectionBlock
       title="注册终端"
       description="仅注册认证或 IP 加认证模式会产生第三方注册状态。"
       actions={
-        <Chip size="sm" variant="flat" color={registrations.length ? 'success' : 'default'}>
-          {registrations.length ? `${registrations.length} 个在线注册` : '暂无注册'}
-        </Chip>
+        <div className="flex items-center gap-2">
+          <Chip
+            size="sm"
+            variant="flat"
+            color={hasReg ? 'success' : 'default'}
+            startContent={<span className={`w-2 h-2 rounded-full ${hasReg ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}
+          >
+            {hasReg ? `${registrations.length} 个在线注册` : '暂无注册'}
+          </Chip>
+          {onRefresh && (
+            <Button
+              size="sm"
+              variant="flat"
+              isLoading={refreshing}
+              onPress={onRefresh}
+              startContent={<RefreshCw className="w-3.5 h-3.5" />}
+            >
+              刷新状态
+            </Button>
+          )}
+        </div>
       }
     >
       {registrations.length ? (
@@ -468,13 +529,17 @@ function AccessRegistrationStatus({ registrations }: { registrations: Entity[] }
           <TableHeader>
             <TableColumn key="contact">联系地址</TableColumn>
             <TableColumn key="node">来源 Socket / 节点</TableColumn>
+            <TableColumn key="status">状态</TableColumn>
             <TableColumn key="expires_at">过期时间</TableColumn>
           </TableHeader>
           <TableBody items={registrations}>
             {(row) => (
               <TableRow key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}>
-                <TableCell>{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
+                <TableCell className="font-mono text-tiny">{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
                 <TableCell>{String(row.received_from ?? row.node ?? '')}</TableCell>
+                <TableCell>
+                  <Chip size="sm" variant="dot" color="success">在线</Chip>
+                </TableCell>
                 <TableCell>{String(row.expires_at ?? '')}</TableCell>
               </TableRow>
             )}
@@ -734,8 +799,8 @@ export default function TrunkDetailPage() {
         key: 'registration',
         title: '注册状态',
         content: role === 'egress'
-          ? <RegistrationTab draft={draft} set={set} registrations={data?.registrations || []} endpoints={endpoints} setEndpoints={setEndpoints} />
-          : <AccessRegistrationStatus registrations={data?.registrations || []} />,
+          ? <RegistrationTab draft={draft} set={set} registrations={data?.registrations || []} endpoints={endpoints} setEndpoints={setEndpoints} onRefresh={load} refreshing={loading} />
+          : <AccessRegistrationStatus registrations={data?.registrations || []} onRefresh={load} refreshing={loading} />,
       },
       {
         key: 'caller',
@@ -788,7 +853,7 @@ export default function TrunkDetailPage() {
       },
     ];
     return list.filter((tab) => !tab.hide);
-  }, [data, draft, groups, policy, pools, role, rules, trunks, endpoints]);
+  }, [data, draft, groups, policy, pools, role, rules, trunks, endpoints, load, loading]);
 
   if (loading) {
     return (
@@ -799,9 +864,43 @@ export default function TrunkDetailPage() {
     );
   }
 
+  const isEnabled = draft.enabled !== false;
+  const regCount = data?.registrations?.length ?? 0;
+  const isOnline = regCount > 0;
+
   return (
-    <section>
-      <DetailHeader loading={loading} saving={saving} onRefresh={load} onSave={save} />
+    <section className="flex flex-col gap-4">
+      {/* 顶集中继状态概览栏 */}
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-content1 rounded-xl border border-default-200">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+            <Server className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold text-foreground">中继 {id}</h2>
+              <Chip size="sm" variant="flat" color={role === 'access' ? 'secondary' : 'primary'}>
+                {role === 'access' ? '接入中继' : '落地中继'}
+              </Chip>
+              <Chip size="sm" variant="flat" color={isEnabled ? 'success' : 'danger'}>
+                {isEnabled ? '已启用' : '已禁用'}
+              </Chip>
+              <Chip
+                size="sm"
+                variant="flat"
+                color={isOnline ? 'success' : 'default'}
+                startContent={<span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}
+              >
+                {isOnline ? `在线 (${regCount} 个注册)` : '未注册/离线'}
+              </Chip>
+            </div>
+            <p className="text-tiny text-default-400 mt-0.5">SIP 中继对接、IP/Digest 鉴权与网关链路属性配置</p>
+          </div>
+        </div>
+
+        <DetailHeader loading={loading} saving={saving} onRefresh={load} onSave={save} />
+      </div>
+
       {error ? (
         <DetailErrorState error={error} />
       ) : (

@@ -313,3 +313,31 @@ fn test_get_gateway_status_full() {
     assert!(status.3.is_some()); // last_failure_at
     assert_eq!(status.4, 0); // half_open_successes
 }
+
+#[test]
+fn test_options_probe_success_resets_half_open_to_closed_immediately() {
+    let tracker = GatewayHealthTracker::new(HealthThresholds {
+        failure_threshold: 2,
+        recovery_interval: Duration::from_millis(1),
+        min_success_rate: 0.0,
+        min_samples: 100,
+    });
+
+    // Open circuit with 2 failures
+    tracker.record_failure("gw1");
+    tracker.record_failure("gw1");
+    assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::Open));
+
+    // Wait recovery interval and enter half-open via probe acquisition
+    std::thread::sleep(Duration::from_millis(2));
+    assert!(tracker.try_acquire_probe("gw1"));
+    assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::HalfOpen));
+
+    // OPTIONS probe 200 OK immediately resets HalfOpen -> Closed and zeroes consecutive failures
+    tracker.record_probe_success("gw1");
+    assert_eq!(tracker.circuit_state("gw1"), Some(CircuitState::Closed));
+    let status = tracker.get_gateway_status("gw1").unwrap();
+    assert!(!status.0); // circuit_open == false
+    assert_eq!(status.1, 0); // consecutive_failures == 0
+    assert_eq!(status.2, "closed");
+}

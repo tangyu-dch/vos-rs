@@ -551,20 +551,34 @@ fn chrono_like_epoch_millis() -> u128 {
 }
 
 pub(crate) fn record_probe_failure(edge_state: &EdgeState, gateway_id: &str, reason: String) {
+    let prev_state = edge_state.gateway_health.circuit_state(gateway_id);
     edge_state.gateway_health.record_failure(gateway_id);
     let status = edge_state.gateway_health.get_gateway_status(gateway_id);
-    warn!(gateway = gateway_id, %reason, "gateway OPTIONS health probe failed");
+    let consecutive_failures = status.as_ref().map(|s| s.1).unwrap_or(0);
+    let current_state_str = status.as_ref().map(|s| s.2.as_str()).unwrap_or("unknown");
+    warn!(
+        gateway = gateway_id,
+        %reason,
+        prev_state = ?prev_state,
+        current_state = current_state_str,
+        consecutive_failures,
+        "gateway OPTIONS health probe failed"
+    );
     if let Some(status) = status {
         persist_gateway_health(edge_state, gateway_id.to_string(), Some(status));
     }
 }
 
 pub(crate) fn record_probe_success(edge_state: &EdgeState, gateway_id: &str) {
-    edge_state.gateway_health.record_success(gateway_id);
+    let prev_state = edge_state.gateway_health.circuit_state(gateway_id);
+    edge_state.gateway_health.record_probe_success(gateway_id);
     let status = edge_state.gateway_health.get_gateway_status(gateway_id);
+    let current_state_str = status.as_ref().map(|s| s.2.as_str()).unwrap_or("unknown");
     info!(
         gateway = gateway_id,
-        "gateway OPTIONS health probe succeeded"
+        prev_state = ?prev_state,
+        current_state = current_state_str,
+        "gateway OPTIONS health probe succeeded — circuit state reset to Closed and failure count cleared"
     );
     persist_gateway_health(edge_state, gateway_id.to_string(), status);
 }

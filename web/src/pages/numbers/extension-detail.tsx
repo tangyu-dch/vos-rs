@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Card, CardBody, Chip, Input,
+  Button, Card, CardBody, Chip, Input,
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Tabs, Tab,
 } from '@heroui/react';
+import { RefreshCw, Phone, ShieldCheck } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import type { Entity } from '@/services/resources';
 import { getExtensionOutboundPolicy, getExtensionWorkspace, saveExtensionOutboundPolicy, updateExtensionPassword, type ExtensionWorkspaceData } from '@/services/extensions';
@@ -11,15 +12,44 @@ import { CallerPolicyForm, EgressBindingForm, WorkspaceField, emptyPolicy } from
 import { DetailErrorState, DetailHeader, DetailLoading, FormGrid, SectionBlock } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
 
-function RegistrationStatus({ registrations }: { registrations: Entity[] }) {
+function RegistrationStatus({
+  registrations,
+  onRefresh,
+  refreshing,
+}: {
+  registrations: Entity[];
+  onRefresh?: () => void;
+  refreshing?: boolean;
+}) {
+  const isOnline = registrations.length > 0;
   return (
     <SectionBlock
       title="注册终端"
       description="分机可同时注册多个终端，外呼策略始终按认证分机识别。"
       actions={
-        <Chip size="sm" variant="flat" color={registrations.length ? 'success' : 'default'}>
-          {registrations.length ? `${registrations.length} 个在线终端` : '当前离线'}
-        </Chip>
+        <div className="flex items-center gap-2">
+          <Chip
+            size="sm"
+            variant="flat"
+            color={isOnline ? 'success' : 'default'}
+            startContent={
+              <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-success animate-pulse' : 'bg-default-400'}`} />
+            }
+          >
+            {isOnline ? `${registrations.length} 个在线终端` : '当前离线'}
+          </Chip>
+          {onRefresh && (
+            <Button
+              size="sm"
+              variant="flat"
+              isLoading={refreshing}
+              onPress={onRefresh}
+              startContent={<RefreshCw className="w-3.5 h-3.5" />}
+            >
+              刷新在线状态
+            </Button>
+          )}
+        </div>
       }
     >
       {registrations.length ? (
@@ -27,13 +57,17 @@ function RegistrationStatus({ registrations }: { registrations: Entity[] }) {
           <TableHeader>
             <TableColumn key="contact">联系地址</TableColumn>
             <TableColumn key="received_from">来源 Socket / 设备标识</TableColumn>
+            <TableColumn key="status">状态</TableColumn>
             <TableColumn key="expires_at">过期时间</TableColumn>
           </TableHeader>
           <TableBody items={registrations}>
             {(row) => (
               <TableRow key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}>
-                <TableCell>{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
+                <TableCell className="font-mono text-tiny">{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
                 <TableCell>{String(row.received_from ?? row.user_agent ?? row.node ?? '')}</TableCell>
+                <TableCell>
+                  <Chip size="sm" variant="dot" color="success">在线</Chip>
+                </TableCell>
                 <TableCell>{String(row.expires_at ?? '')}</TableCell>
               </TableRow>
             )}
@@ -148,6 +182,9 @@ export default function ExtensionDetailPage() {
     }
   };
 
+  const isOnline = Boolean(data?.registrations && data.registrations.length > 0);
+  const regCount = data?.registrations?.length ?? 0;
+
   const tabs = useMemo<TabDef[]>(() => [
     {
       key: 'basic',
@@ -185,11 +222,11 @@ export default function ExtensionDetailPage() {
         </FormGrid>
       ),
     },
-    { key: 'registration', title: '注册状态', content: <RegistrationStatus registrations={data?.registrations || []} /> },
+    { key: 'registration', title: '注册状态', content: <RegistrationStatus registrations={data?.registrations || []} onRefresh={load} refreshing={loading} /> },
     { key: 'caller', title: '主叫策略', content: <CallerPolicyForm policy={policy} set={setPolicyField} pools={pools} numbers={data?.numbers || []} /> },
     { key: 'binding', title: '落地绑定', content: <EgressBindingForm policy={policy} set={setPolicyField} groups={groups} trunks={trunks} /> },
     { key: 'numbers', title: '号码归属', content: <NumberOwnership numbers={data?.numbers || []} /> },
-  ], [confirmPassword, data, groups, password, policy, pools, trunks, username]);
+  ], [confirmPassword, data, groups, loading, load, password, policy, pools, trunks, username]);
 
   if (loading) {
     return (
@@ -201,8 +238,37 @@ export default function ExtensionDetailPage() {
   }
 
   return (
-    <section>
-      <DetailHeader loading={loading} saving={saving} onRefresh={load} onSave={save} />
+    <section className="flex flex-col gap-4">
+      {/* 顶部分机状态概览栏 */}
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-content1 rounded-xl border border-default-200">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+            <Phone className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold text-foreground">分机 {username}</h2>
+              <Chip
+                size="sm"
+                variant="flat"
+                color={isOnline ? 'success' : 'default'}
+                startContent={<span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}
+              >
+                {isOnline ? `在线 (${regCount} 个终端)` : '未注册/离线'}
+              </Chip>
+              {Boolean(data?.credential?.configured) && (
+                <Chip size="sm" variant="dot" color="primary" startContent={<ShieldCheck className="w-3 h-3" />}>
+                  Digest 凭据就绪
+                </Chip>
+              )}
+            </div>
+            <p className="text-tiny text-default-400 mt-0.5">SIP 账号管理、注册终端追踪与出站路由策略配置</p>
+          </div>
+        </div>
+
+        <DetailHeader loading={loading} saving={saving} onRefresh={load} onSave={save} />
+      </div>
+
       {error ? (
         <DetailErrorState error={error} />
       ) : (
