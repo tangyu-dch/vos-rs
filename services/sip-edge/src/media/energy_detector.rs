@@ -134,7 +134,7 @@ mod tests {
         // 不过我们这里随便给点小数据
         let silence_payload = vec![0xD5; 160]; 
         
-        assert_eq!(detector.process_packet(&silence_payload, AudioCodec::Pcma), false);
+        assert!(!detector.process_packet(&silence_payload, AudioCodec::Pcma));
         assert_eq!(detector.active_frames, 0);
     }
 
@@ -146,20 +146,20 @@ mod tests {
         // A-law 中 0x2a 代表一个较大的正值。
         let loud_payload = vec![0x2a; 160];
         
-        assert_eq!(detector.process_packet(&loud_payload, AudioCodec::Pcma), false);
+        assert!(!detector.process_packet(&loud_payload, AudioCodec::Pcma));
         assert_eq!(detector.active_frames, 1);
         
-        assert_eq!(detector.process_packet(&loud_payload, AudioCodec::Pcma), false);
+        assert!(!detector.process_packet(&loud_payload, AudioCodec::Pcma));
         assert_eq!(detector.active_frames, 2);
         
         // 第三帧，达到 required_frames = 3
-        assert_eq!(detector.process_packet(&loud_payload, AudioCodec::Pcma), true);
+        assert!(detector.process_packet(&loud_payload, AudioCodec::Pcma));
         assert_eq!(detector.active_frames, 3);
         assert!(detector.is_talking());
         
         // 回落到静音
         let silence_payload = vec![0xD5; 160];
-        assert_eq!(detector.process_packet(&silence_payload, AudioCodec::Pcma), false);
+        assert!(!detector.process_packet(&silence_payload, AudioCodec::Pcma));
         assert_eq!(detector.active_frames, 0);
         assert!(!detector.is_talking());
     }
@@ -169,7 +169,7 @@ mod tests {
         let mut detector = RtpEnergyDetector::new(-45.0, 1);
         let payload = vec![0xFF; 160];
         
-        assert_eq!(detector.process_packet(&payload, AudioCodec::Opus), false);
+        assert!(!detector.process_packet(&payload, AudioCodec::Opus));
         assert_eq!(detector.active_frames, 0);
     }
 
@@ -190,6 +190,6 @@ mod tests {
         let mut detector = RtpEnergyDetector::new(-45.0, 1);
         let payload = vec![];
         
-        assert_eq!(detector.process_packet(&payload, AudioCodec::Pcma), false);
+        assert!(!detector.process_packet(&payload, AudioCodec::Pcma));
     }
 }

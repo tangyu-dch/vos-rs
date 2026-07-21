@@ -199,6 +199,7 @@ impl RegistrationStore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn apply_contact(
         &mut self,
         aor: &str,

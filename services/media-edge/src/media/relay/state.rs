@@ -1,7 +1,12 @@
 use super::*;
 
+impl Default for MediaRelayState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MediaRelayState {
-    #[cfg(test)]
     pub fn new() -> Self {
         Self::with_recording_pool(4, 10_000)
     }
@@ -90,6 +95,7 @@ impl MediaRelayState {
         self.mark_relay_features_changed(port);
     }
 
+    #[allow(dead_code)]
     pub(crate) fn clear_monitors(&self, port: u16) {
         if self.monitors.remove(&port).is_some() {
             self.mark_relay_features_changed(port);

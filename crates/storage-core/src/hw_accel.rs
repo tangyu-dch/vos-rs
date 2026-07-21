@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn test_software_fallback_encoder() {
-        let encoder = SoftwareFallbackEncoder::default();
+        let encoder = SoftwareFallbackEncoder;
         assert_eq!(encoder.name(), "software-fallback-cpu");
         let pcm = vec![100, -200, 300];
         let encoded = encoder.encode_pcm(&pcm, 8000, 1).unwrap();
