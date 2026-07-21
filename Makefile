@@ -183,7 +183,9 @@ verify: quick smoke full-flow
 
 smoke:
 	@printf 'Smoke test: running SIPp basic call flow...\n'
-	@psql -U "$${DB_USER:-tangyu}" -d "$${DB_NAME:-vos_rs}" -c "UPDATE gateway_health_status SET circuit_open = false, consecutive_failures = 0, state = 'closed' WHERE gateway_id = 'default';" 2>/dev/null || true
+	@pkill -9 -f sip-edge 2>/dev/null || true
+	@pkill -9 -f sipp 2>/dev/null || true
+	@psql -U "$${DB_USER:-tangyu}" -d "$${DB_NAME:-vos_rs}" -c "UPDATE gateway_health_status SET circuit_open = false, consecutive_failures = 0, state = 'closed';" 2>/dev/null || true
 	@$(CARGO) build --release -p sip-edge 2>/dev/null
 	@mkdir -p "$(SMOKE_LOG_DIR)"
 	@VOS_RS_CONFIG_FILE="$(SMOKE_CONFIG_FILE)" \
@@ -195,6 +197,7 @@ smoke:
 	$(SIPP_BIN) 127.0.0.1:5160 -sf tools/sipp/scenarios/caller_uac.xml \
 		-i 127.0.0.1 -p 5164 -s 13800138000 -m 1 -r 1 -l 1 -aa -nostdin \
 		> "$(SMOKE_LOG_DIR)/caller.log" 2>&1; \
+	sleep 1; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(SMOKE_LOG_DIR)/caller.log"); \
 	FAIL=$$(awk -F'|' '/Failed call/{gsub(/ /,"",$$3); print $$3}' "$(SMOKE_LOG_DIR)/caller.log"); \
 	kill $$EDGE_PID 2>/dev/null; wait $$EDGE_PID 2>/dev/null || true; pkill -9 -f sipp 2>/dev/null; \
@@ -207,7 +210,9 @@ smoke:
 
 full-flow:
 	@printf 'Full-flow test: SIP signaling + RTP media + recording...\n'
-	@psql -U "$${DB_USER:-tangyu}" -d "$${DB_NAME:-vos_rs}" -c "UPDATE gateway_health_status SET circuit_open = false, consecutive_failures = 0, state = 'closed' WHERE gateway_id = 'default';" 2>/dev/null || true
+	@pkill -9 -f sip-edge 2>/dev/null || true
+	@pkill -9 -f sipp 2>/dev/null || true
+	@psql -U "$${DB_USER:-tangyu}" -d "$${DB_NAME:-vos_rs}" -c "UPDATE gateway_health_status SET circuit_open = false, consecutive_failures = 0, state = 'closed';" 2>/dev/null || true
 	@$(CARGO) build --release -p sip-edge 2>/dev/null
 	@mkdir -p "$(FULL_FLOW_LOG_DIR)" target/test_recordings
 	@find target/test_recordings -name "*.wav" -delete 2>/dev/null || true
