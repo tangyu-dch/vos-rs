@@ -183,6 +183,7 @@ verify: quick smoke full-flow
 
 smoke:
 	@printf 'Smoke test: running SIPp basic call flow...\n'
+	@psql -U "$${DB_USER:-tangyu}" -d "$${DB_NAME:-vos_rs}" -c "UPDATE gateway_health_status SET circuit_open = false, consecutive_failures = 0, state = 'closed' WHERE gateway_id = 'default';" 2>/dev/null || true
 	@$(CARGO) build --release -p sip-edge 2>/dev/null
 	@mkdir -p "$(SMOKE_LOG_DIR)"
 	@VOS_RS_CONFIG_FILE="$(SMOKE_CONFIG_FILE)" \
@@ -206,6 +207,7 @@ smoke:
 
 full-flow:
 	@printf 'Full-flow test: SIP signaling + RTP media + recording...\n'
+	@psql -U "$${DB_USER:-tangyu}" -d "$${DB_NAME:-vos_rs}" -c "UPDATE gateway_health_status SET circuit_open = false, consecutive_failures = 0, state = 'closed' WHERE gateway_id = 'default';" 2>/dev/null || true
 	@$(CARGO) build --release -p sip-edge 2>/dev/null
 	@mkdir -p "$(FULL_FLOW_LOG_DIR)" target/test_recordings
 	@find target/test_recordings -name "*.wav" -delete 2>/dev/null || true
@@ -223,7 +225,7 @@ full-flow:
 		> "$(FULL_FLOW_LOG_DIR)/caller.log" 2>&1; \
 	sleep 8; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(FULL_FLOW_LOG_DIR)/caller.log"); \
-	WAV_COUNT=$$(ls target/test_recordings/*.wav 2>/dev/null | wc -l); \
+	WAV_COUNT=$$(find target/test_recordings -name "*.wav" 2>/dev/null | wc -l | tr -d ' '); \
 	kill $$EDGE_PID 2>/dev/null; wait $$EDGE_PID 2>/dev/null || true; pkill -9 -f sipp 2>/dev/null; pkill -9 -f wav_rtp_sender 2>/dev/null; \
 	if [ "$$SUCC" = "1" ] && [ "$$WAV_COUNT" -ge "1" ]; then \
 		printf 'FULL-FLOW PASS: %s call succeeded, %s WAV files\n' "$$SUCC" "$$WAV_COUNT"; \
@@ -254,7 +256,7 @@ full-flow-remote:
 		> "$(FULL_FLOW_LOG_DIR)/caller.log" 2>&1; \
 	sleep 8; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(FULL_FLOW_LOG_DIR)/caller.log"); \
-	WAV_COUNT=$$(ls target/test_recordings/*.wav 2>/dev/null | wc -l); \
+	WAV_COUNT=$$(find target/test_recordings -name "*.wav" 2>/dev/null | wc -l | tr -d ' '); \
 	kill $$EDGE_PID $$MEDIA_EDGE_PID 2>/dev/null; wait $$EDGE_PID $$MEDIA_EDGE_PID 2>/dev/null || true; pkill -9 -f sipp 2>/dev/null; pkill -9 -f wav_rtp_sender 2>/dev/null; \
 	if [ "$$SUCC" = "1" ] && [ "$$WAV_COUNT" -ge "1" ]; then \
 		printf 'FULL-FLOW REMOTE PASS: %s call succeeded, %s WAV files\n' "$$SUCC" "$$WAV_COUNT"; \
@@ -286,7 +288,7 @@ full-flow-uds:
 		> "$(FULL_FLOW_LOG_DIR)/caller.log" 2>&1; \
 	sleep 8; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(FULL_FLOW_LOG_DIR)/caller.log"); \
-	WAV_COUNT=$$(ls target/test_recordings/*.wav 2>/dev/null | wc -l); \
+	WAV_COUNT=$$(find target/test_recordings -name "*.wav" 2>/dev/null | wc -l | tr -d ' '); \
 	kill $$EDGE_PID $$MEDIA_EDGE_PID 2>/dev/null; wait $$EDGE_PID $$MEDIA_EDGE_PID 2>/dev/null || true; pkill -9 -f sipp 2>/dev/null; pkill -9 -f wav_rtp_sender 2>/dev/null; rm -f /tmp/media-edge-test.sock; \
 	if [ "$$SUCC" = "1" ] && [ "$$WAV_COUNT" -ge "1" ]; then \
 		printf 'FULL-FLOW UDS PASS: %s call succeeded, %s WAV files\n' "$$SUCC" "$$WAV_COUNT"; \
@@ -366,7 +368,7 @@ full-flow-hybrid:
 		> "$(FULL_FLOW_LOG_DIR)/caller-hybrid.log" 2>&1; \
 	sleep 8; \
 	SUCC=$$(awk -F'|' '/Successful call/{gsub(/ /,"",$$3); print $$3}' "$(FULL_FLOW_LOG_DIR)/caller-hybrid.log"); \
-	WAV_COUNT=$$(ls target/test_recordings/*.wav 2>/dev/null | wc -l); \
+	WAV_COUNT=$$(find target/test_recordings -name "*.wav" 2>/dev/null | wc -l | tr -d ' '); \
 	LOCAL_ALLOC=$$(grep -c 'allocated media relay endpoint (lock-free)' "$(FULL_FLOW_LOG_DIR)/edge-hybrid.log" || true); \
 	REMOTE_ALLOC=$$(grep -c 'allocated media relay endpoint' "$(FULL_FLOW_LOG_DIR)/media-edge-hybrid.log" || true); \
 	kill $$EDGE_PID $$MEDIA_PID 2>/dev/null; wait $$EDGE_PID $$MEDIA_PID 2>/dev/null || true; \

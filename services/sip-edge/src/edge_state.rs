@@ -755,10 +755,7 @@ impl EdgeState {
         } else {
             None
         };
-        let is_bypass = std::env::var("VOS_RS_AUTH_BYPASS")
-            .ok()
-            .as_deref()
-            == Some("true");
+        let is_bypass = std::env::var("VOS_RS_AUTH_BYPASS").ok().as_deref() == Some("true");
         let auth_required = if !auth.is_enabled() || is_bypass {
             false
         } else {

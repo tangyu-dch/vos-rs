@@ -523,7 +523,12 @@ async fn call_status(
     // 获取主叫端状态
     if let Some(ref rtp) = tx.caller_relay_rtp {
         caller_muted = state.media_relay.muted_ports.contains(&rtp.port);
-        caller_talking = state.media_relay.talking_status.get(&rtp.port).map(|v| *v).unwrap_or(false);
+        caller_talking = state
+            .media_relay
+            .talking_status
+            .get(&rtp.port)
+            .map(|v| *v)
+            .unwrap_or(false);
         if let Some(playback) = state.media_relay.playbacks.get(&rtp.port) {
             if let Ok(st) = playback.lock() {
                 caller_playback = serde_json::json!({
@@ -555,7 +560,12 @@ async fn call_status(
     // 获取被叫端状态
     if let Some(ref rtp) = tx.gateway_relay_rtp {
         callee_muted = state.media_relay.muted_ports.contains(&rtp.port);
-        callee_talking = state.media_relay.talking_status.get(&rtp.port).map(|v| *v).unwrap_or(false);
+        callee_talking = state
+            .media_relay
+            .talking_status
+            .get(&rtp.port)
+            .map(|v| *v)
+            .unwrap_or(false);
         if let Some(playback) = state.media_relay.playbacks.get(&rtp.port) {
             if let Ok(st) = playback.lock() {
                 callee_playback = serde_json::json!({

@@ -435,12 +435,22 @@ async fn main() -> Result<(), AnyError> {
                     let sub_state = edge_state_clone.clone();
                     tokio::spawn(async move {
                         use futures::StreamExt;
-                        if let Ok(mut subscriber) = sub_client.subscribe("vos_rs.cluster.registration.invalidate").await {
+                        if let Ok(mut subscriber) = sub_client
+                            .subscribe("vos_rs.cluster.registration.invalidate")
+                            .await
+                        {
                             tracing::info!("Subscribed to vos_rs.cluster.registration.invalidate");
                             while let Some(message) = subscriber.next().await {
                                 if let Ok(payload) = std::str::from_utf8(&message.payload) {
-                                    if let Ok(msg) = serde_json::from_str::<crate::sip::registrar::RegistrationInvalidateMsg>(payload) {
-                                        sub_state.registrar.write().await.invalidate_cache(&msg.aor);
+                                    if let Ok(msg) = serde_json::from_str::<
+                                        crate::sip::registrar::RegistrationInvalidateMsg,
+                                    >(payload)
+                                    {
+                                        sub_state
+                                            .registrar
+                                            .write()
+                                            .await
+                                            .invalidate_cache(&msg.aor);
                                         tracing::debug!(aor = %msg.aor, "invalidated registration cache from cluster broadcast");
                                     }
                                 }

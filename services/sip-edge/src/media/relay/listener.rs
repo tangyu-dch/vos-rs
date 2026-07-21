@@ -263,7 +263,7 @@ pub(crate) async fn relay_media_port(
                         }
                     }
                 }
-                
+
                 fast_path_counters.flush_if_needed(&relay, local_port);
 
                 // 优化二：统一排空积压包
@@ -287,12 +287,19 @@ pub(crate) async fn relay_media_port(
                     let peer_port = plan.peer_port;
                     for port in [Some(local_port), peer_port].into_iter().flatten() {
                         let is_local = port == local_port;
-                        let session_exists = if is_local { plan.crypto_session.is_some() } else { plan.peer_crypto_session.is_some() };
+                        let session_exists = if is_local {
+                            plan.crypto_session.is_some()
+                        } else {
+                            plan.peer_crypto_session.is_some()
+                        };
                         if session_exists {
                             continue;
                         }
-                        let Some(offer) = (if is_local { plan.pending_srtp.clone() } else { plan.peer_pending_srtp.clone() })
-                        else {
+                        let Some(offer) = (if is_local {
+                            plan.pending_srtp.clone()
+                        } else {
+                            plan.peer_pending_srtp.clone()
+                        }) else {
                             continue;
                         };
                         match MediaCryptoSession::from_sdes(
@@ -574,19 +581,23 @@ pub(crate) async fn relay_media_port(
                         .map(|v| *v)
                         .unwrap_or(rtp_core::AudioCodec::Pcma);
                     let pcm_samples: Option<Vec<i16>> = match codec {
-                        rtp_core::AudioCodec::Pcma => Some(rtp_packet
-                            .payload
-                            .iter()
-                            .map(|&b| crate::media::recording::decode_pcma(b))
-                            .collect()),
-                        rtp_core::AudioCodec::Pcmu => Some(rtp_packet
-                            .payload
-                            .iter()
-                            .map(|&b| crate::media::recording::decode_pcmu(b))
-                            .collect()),
+                        rtp_core::AudioCodec::Pcma => Some(
+                            rtp_packet
+                                .payload
+                                .iter()
+                                .map(|&b| crate::media::recording::decode_pcma(b))
+                                .collect(),
+                        ),
+                        rtp_core::AudioCodec::Pcmu => Some(
+                            rtp_packet
+                                .payload
+                                .iter()
+                                .map(|&b| crate::media::recording::decode_pcmu(b))
+                                .collect(),
+                        ),
                         _ => None,
                     };
-                    
+
                     if let Some(samples) = &pcm_samples {
                         let is_talking = energy_detector.process_pcm_sample(samples);
                         relay.talking_status.insert(local_port, is_talking);

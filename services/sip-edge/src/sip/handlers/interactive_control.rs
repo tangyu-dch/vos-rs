@@ -952,7 +952,10 @@ mod tests {
         let inst: VciInstruction = serde_json::from_str(hangup_json).unwrap();
         assert!(matches!(
             inst,
-            VciInstruction::Hangup { reason_code: 16, sip_cause: Some(200) }
+            VciInstruction::Hangup {
+                reason_code: 16,
+                sip_cause: Some(200)
+            }
         ));
 
         let redirect_json = r#"{

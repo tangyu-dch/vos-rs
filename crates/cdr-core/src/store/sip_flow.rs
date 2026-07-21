@@ -23,12 +23,15 @@ impl PostgresCdrStore {
             let day = date.day();
             let part_name = format!("sip_flows_y{:04}m{:02}d{:02}", year, month, day);
             let start = format!("{:04}-{:02}-{:02} 00:00:00+00", year, month, day);
-            
+
             let next_date = date + time::Duration::days(1);
             let next_year = next_date.year();
             let next_month = u8::from(next_date.month());
             let next_day = next_date.day();
-            let end = format!("{:04}-{:02}-{:02} 00:00:00+00", next_year, next_month, next_day);
+            let end = format!(
+                "{:04}-{:02}-{:02} 00:00:00+00",
+                next_year, next_month, next_day
+            );
 
             let ddl = format!(
                 "CREATE TABLE IF NOT EXISTS {} PARTITION OF sip_flows FOR VALUES FROM ('{}') TO ('{}')",

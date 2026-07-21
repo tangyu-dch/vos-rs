@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SipLadderStep {
     pub timestamp: String,
-    pub direction: String, // "A -> B", "B -> A", "A -> Gateway"
+    pub direction: String,        // "A -> B", "B -> A", "A -> Gateway"
     pub method_or_status: String, // "INVITE", "180 Ringing", "200 OK", "BYE"
     pub summary: String,
 }
@@ -34,8 +34,12 @@ impl TelecomCopilotEngine {
 
     /// 分析自然语言问题与呼叫排障需求
     pub fn analyze(&self, query: &str) -> CopilotChatResponse {
-        let is_error_query = query.contains("断") || query.contains("超时") || query.contains("挂断") || query.contains("404") || query.contains("503");
-        
+        let is_error_query = query.contains("断")
+            || query.contains("超时")
+            || query.contains("挂断")
+            || query.contains("404")
+            || query.contains("503");
+
         let steps = vec![
             SipLadderStep {
                 timestamp: "10:15:00.102".to_string(),
@@ -58,14 +62,34 @@ impl TelecomCopilotEngine {
             SipLadderStep {
                 timestamp: "10:15:05.352".to_string(),
                 direction: "GW-01 -> sip-edge".to_string(),
-                method_or_status: if is_error_query { "503 Service Unavailable" } else { "200 OK" }.to_string(),
-                summary: if is_error_query { "上游中继超时拒绝" } else { "双方建立通话媒体流" }.to_string(),
+                method_or_status: if is_error_query {
+                    "503 Service Unavailable"
+                } else {
+                    "200 OK"
+                }
+                .to_string(),
+                summary: if is_error_query {
+                    "上游中继超时拒绝"
+                } else {
+                    "双方建立通话媒体流"
+                }
+                .to_string(),
             },
             SipLadderStep {
                 timestamp: "10:15:05.355".to_string(),
                 direction: "sip-edge -> UAC".to_string(),
-                method_or_status: if is_error_query { "503 Service Unavailable" } else { "200 OK" }.to_string(),
-                summary: if is_error_query { "触发 LCR 备用路由盲转切流" } else { "正常通话中" }.to_string(),
+                method_or_status: if is_error_query {
+                    "503 Service Unavailable"
+                } else {
+                    "200 OK"
+                }
+                .to_string(),
+                summary: if is_error_query {
+                    "触发 LCR 备用路由盲转切流"
+                } else {
+                    "正常通话中"
+                }
+                .to_string(),
             },
         ];
 
@@ -95,20 +119,37 @@ impl TelecomCopilotEngine {
     /// 动态渲染 ASCII 格式的 SIP 交互梯形图 (Call Ladder Diagram)
     pub fn generate_ascii_ladder(steps: &[SipLadderStep]) -> String {
         let mut out = String::new();
-        out.push_str("   [ Caller (UAC) ]            [ sip-edge B2BUA ]            [ Gateway (UAS) ]\n");
+        out.push_str(
+            "   [ Caller (UAC) ]            [ sip-edge B2BUA ]            [ Gateway (UAS) ]\n",
+        );
         out.push_str("          |                            |                            |\n");
 
         for s in steps {
             if s.direction.contains("UAC -> sip-edge") {
-                out.push_str(&format!(" {:<12} | ----- {} -----> |                            | {}\n", s.timestamp, s.method_or_status, s.summary));
+                out.push_str(&format!(
+                    " {:<12} | ----- {} -----> |                            | {}\n",
+                    s.timestamp, s.method_or_status, s.summary
+                ));
             } else if s.direction.contains("sip-edge -> UAC") {
-                out.push_str(&format!(" {:<12} | <----- {} ----- |                            | {}\n", s.timestamp, s.method_or_status, s.summary));
+                out.push_str(&format!(
+                    " {:<12} | <----- {} ----- |                            | {}\n",
+                    s.timestamp, s.method_or_status, s.summary
+                ));
             } else if s.direction.contains("sip-edge -> GW") {
-                out.push_str(&format!(" {:<12} |                            | ----- {} -----> | {}\n", s.timestamp, s.method_or_status, s.summary));
+                out.push_str(&format!(
+                    " {:<12} |                            | ----- {} -----> | {}\n",
+                    s.timestamp, s.method_or_status, s.summary
+                ));
             } else if s.direction.contains("GW -> sip-edge") {
-                out.push_str(&format!(" {:<12} |                            | <----- {} ----- | {}\n", s.timestamp, s.method_or_status, s.summary));
+                out.push_str(&format!(
+                    " {:<12} |                            | <----- {} ----- | {}\n",
+                    s.timestamp, s.method_or_status, s.summary
+                ));
             } else {
-                out.push_str(&format!(" {:<12} | <============== {} ==============> | {}\n", s.timestamp, s.method_or_status, s.summary));
+                out.push_str(&format!(
+                    " {:<12} | <============== {} ==============> | {}\n",
+                    s.timestamp, s.method_or_status, s.summary
+                ));
             }
             out.push_str("          |                            |                            |\n");
         }

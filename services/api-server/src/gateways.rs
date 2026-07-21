@@ -267,7 +267,11 @@ pub async fn create_gateway(
         // Legacy reg_password must never be persisted as plaintext. Access
         // credentials are converted to Digest HA1 above; active upstream
         // registration will use a dedicated encrypted credential model.
-        reg_password: if is_access { None } else { req.reg_password.clone() },
+        reg_password: if is_access {
+            None
+        } else {
+            req.reg_password.clone()
+        },
         parent_gateway_id: None,
         caller_id_mode: req.caller_id_mode,
         virtual_caller: req.virtual_caller,
@@ -433,7 +437,11 @@ pub async fn update_gateway(
             .or(old.supports_registration),
         reg_auth_type: req.reg_auth_type.or_else(|| old.reg_auth_type.clone()),
         reg_username: req.reg_username.or_else(|| old.reg_username.clone()),
-        reg_password: if is_access { None } else { req.reg_password.clone() },
+        reg_password: if is_access {
+            None
+        } else {
+            req.reg_password.clone()
+        },
         parent_gateway_id: old.parent_gateway_id.clone(),
         caller_id_mode,
         virtual_caller,

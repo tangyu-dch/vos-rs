@@ -53,7 +53,11 @@ impl DeepfakeVoiceDetector {
     }
 
     /// 分析流式 PCM 音频采样（ECAPA-TDNN 特征提取与合成判别仿真）
-    pub(crate) fn analyze_audio_frame(&self, call_id: &str, pcm_samples: &[i16]) -> DeepfakeCheckResult {
+    pub(crate) fn analyze_audio_frame(
+        &self,
+        call_id: &str,
+        pcm_samples: &[i16],
+    ) -> DeepfakeCheckResult {
         if !self.enabled || pcm_samples.is_empty() {
             return DeepfakeCheckResult {
                 is_fake: false,
@@ -81,7 +85,11 @@ impl DeepfakeVoiceDetector {
         let zcr = zero_crossings as f32 / sample_count;
 
         // 生成特征声纹 Hash (基于 PCM 采样特征算法)
-        let voiceprint_hash = format!("vp_{:x}_{:x}", (mean_energy as u64) & 0xffff, zero_crossings);
+        let voiceprint_hash = format!(
+            "vp_{:x}_{:x}",
+            (mean_energy as u64) & 0xffff,
+            zero_crossings
+        );
 
         // 1. 检查声纹黑名单
         if let Ok(lock) = self.blacklisted_voiceprints.read() {
@@ -121,7 +129,10 @@ impl DeepfakeVoiceDetector {
             voiceprint_hash,
             action,
             reason: if is_fake {
-                format!("Deepfake voice score {confidence:.2} >= threshold {:.2}", self.threshold)
+                format!(
+                    "Deepfake voice score {confidence:.2} >= threshold {:.2}",
+                    self.threshold
+                )
             } else {
                 "Natural voice verified".to_string()
             },
@@ -137,7 +148,9 @@ mod tests {
     fn test_deepfake_detector_allow_natural_audio() {
         let detector = DeepfakeVoiceDetector::new(0.85);
         // 模拟交替高频天然音 (高 ZCR)
-        let natural_pcm: Vec<i16> = (0..320).map(|i| if i % 2 == 0 { 2000 } else { -2000 }).collect();
+        let natural_pcm: Vec<i16> = (0..320)
+            .map(|i| if i % 2 == 0 { 2000 } else { -2000 })
+            .collect();
         let res = detector.analyze_audio_frame("call-01", &natural_pcm);
         assert!(!res.is_fake);
         assert_eq!(res.action, DeepfakeAction::Allow);

@@ -129,11 +129,11 @@ mod tests {
     #[test]
     fn test_energy_detector_below_threshold() {
         let mut detector = RtpEnergyDetector::new(-40.0, 3);
-        
+
         // 生成全 0 负荷，G.711 A-law 的 0xD5 解码后接近 0
         // 不过我们这里随便给点小数据
-        let silence_payload = vec![0xD5; 160]; 
-        
+        let silence_payload = vec![0xD5; 160];
+
         assert!(!detector.process_packet(&silence_payload, AudioCodec::Pcma));
         assert_eq!(detector.active_frames, 0);
     }
@@ -141,22 +141,22 @@ mod tests {
     #[test]
     fn test_energy_detector_above_threshold() {
         let mut detector = RtpEnergyDetector::new(-45.0, 3);
-        
+
         // 构造一个会解码出较大振幅的负荷。
         // A-law 中 0x2a 代表一个较大的正值。
         let loud_payload = vec![0x2a; 160];
-        
+
         assert!(!detector.process_packet(&loud_payload, AudioCodec::Pcma));
         assert_eq!(detector.active_frames, 1);
-        
+
         assert!(!detector.process_packet(&loud_payload, AudioCodec::Pcma));
         assert_eq!(detector.active_frames, 2);
-        
+
         // 第三帧，达到 required_frames = 3
         assert!(detector.process_packet(&loud_payload, AudioCodec::Pcma));
         assert_eq!(detector.active_frames, 3);
         assert!(detector.is_talking());
-        
+
         // 回落到静音
         let silence_payload = vec![0xD5; 160];
         assert!(!detector.process_packet(&silence_payload, AudioCodec::Pcma));
@@ -168,7 +168,7 @@ mod tests {
     fn test_energy_detector_unsupported_codec() {
         let mut detector = RtpEnergyDetector::new(-45.0, 1);
         let payload = vec![0xFF; 160];
-        
+
         assert!(!detector.process_packet(&payload, AudioCodec::Opus));
         assert_eq!(detector.active_frames, 0);
     }
@@ -177,19 +177,19 @@ mod tests {
     fn test_energy_detector_reset() {
         let mut detector = RtpEnergyDetector::new(-45.0, 2);
         let loud_payload = vec![0x2a; 160];
-        
+
         detector.process_packet(&loud_payload, AudioCodec::Pcma);
         assert_eq!(detector.active_frames, 1);
-        
+
         detector.reset();
         assert_eq!(detector.active_frames, 0);
     }
-    
+
     #[test]
     fn test_energy_detector_empty_payload() {
         let mut detector = RtpEnergyDetector::new(-45.0, 1);
         let payload = vec![];
-        
+
         assert!(!detector.process_packet(&payload, AudioCodec::Pcma));
     }
 }

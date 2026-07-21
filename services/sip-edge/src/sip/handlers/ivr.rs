@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::time::Duration;
-use sip_core::{SipRequest, SipUri};
-use crate::{EdgeConfig, EdgeState};
 use crate::edge_state::PendingDatagram;
 use crate::sip::{outbound, response};
-use tracing::{info, warn, error, debug};
+use crate::{EdgeConfig, EdgeState};
+use sip_core::{SipRequest, SipUri};
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{debug, error, info, warn};
 
 pub(crate) async fn handle_ivr_locally(
     request: SipRequest,
@@ -33,7 +33,13 @@ pub(crate) async fn handle_ivr_locally(
             warn!(error = %e, "IVR 流程分配媒体端点失败");
             return vec![PendingDatagram::new(
                 peer.to_string(),
-                response::build_response_with_owned_headers(&request, 500, "Internal Server Error - Media Allocation Failed", &[], ""),
+                response::build_response_with_owned_headers(
+                    &request,
+                    500,
+                    "Internal Server Error - Media Allocation Failed",
+                    &[],
+                    "",
+                ),
             )];
         }
     };
@@ -46,7 +52,13 @@ pub(crate) async fn handle_ivr_locally(
             edge_state.media_relay.clear_target(a_relay_endpoint.port);
             return vec![PendingDatagram::new(
                 peer.to_string(),
-                response::build_response_with_owned_headers(&request, 400, "Bad Request - SDP Parsing Failed", &[], ""),
+                response::build_response_with_owned_headers(
+                    &request,
+                    400,
+                    "Bad Request - SDP Parsing Failed",
+                    &[],
+                    "",
+                ),
             )];
         }
     };
@@ -58,21 +70,38 @@ pub(crate) async fn handle_ivr_locally(
             edge_state.media_relay.clear_target(a_relay_endpoint.port);
             return vec![PendingDatagram::new(
                 peer.to_string(),
-                response::build_response_with_owned_headers(&request, 400, "Bad Request - Invalid SDP Address", &[], ""),
+                response::build_response_with_owned_headers(
+                    &request,
+                    400,
+                    "Bad Request - Invalid SDP Address",
+                    &[],
+                    "",
+                ),
             )];
         }
     };
 
     let codec = crate::media::sdp::negotiated_audio_codec(&request.body)
         .unwrap_or(rtp_core::AudioCodec::Pcma);
-    edge_state.media_relay.register_port_codec(a_relay_endpoint.port, codec);
+    edge_state
+        .media_relay
+        .register_port_codec(a_relay_endpoint.port, codec);
 
-    if let Err(e) = edge_state.media_relay.set_target(&a_relay_endpoint, &client_ep) {
+    if let Err(e) = edge_state
+        .media_relay
+        .set_target(&a_relay_endpoint, &client_ep)
+    {
         warn!(error = %e, "IVR 流程设置 RTP 转发目标失败");
         edge_state.media_relay.clear_target(a_relay_endpoint.port);
         return vec![PendingDatagram::new(
             peer.to_string(),
-            response::build_response_with_owned_headers(&request, 500, "Internal Server Error - Media Setup Failed", &[], ""),
+            response::build_response_with_owned_headers(
+                &request,
+                500,
+                "Internal Server Error - Media Setup Failed",
+                &[],
+                "",
+            ),
         )];
     }
 
@@ -109,18 +138,27 @@ pub(crate) async fn handle_ivr_locally(
         "OK",
         &[
             ("Content-Type".to_string(), "application/sdp".to_string()),
-            ("Contact".to_string(), format!("<sip:{}@{}>", internal_call_id, edge_config.advertised_addr)),
+            (
+                "Contact".to_string(),
+                format!("<sip:{}@{}>", internal_call_id, edge_config.advertised_addr),
+            ),
         ],
         &sdp_answer,
     );
 
     // 启动 DTMF 检测
-    edge_state.media_relay.register_port_dtmf_tracking(&internal_call_id, a_relay_endpoint.port, 101);
+    edge_state.media_relay.register_port_dtmf_tracking(
+        &internal_call_id,
+        a_relay_endpoint.port,
+        101,
+    );
 
     // 查找 IVR 菜单
-    let menu = edge_state.ivr_menus.read().ok().and_then(|lock| {
-        lock.get(&did_dest.target_id).cloned()
-    });
+    let menu = edge_state
+        .ivr_menus
+        .read()
+        .ok()
+        .and_then(|lock| lock.get(&did_dest.target_id).cloned());
 
     let Some(ivr_menu) = menu else {
         warn!(call_id = %internal_call_id, "未找到指定的 IVR 菜单配置");
@@ -150,7 +188,8 @@ pub(crate) async fn handle_ivr_locally(
             request_clone,
             peer,
             current_menu,
-        ).await;
+        )
+        .await;
     });
 
     vec![PendingDatagram::new(peer.to_string(), response_bytes)]
@@ -167,15 +206,22 @@ async fn run_ivr_menu_loop(
 ) {
     loop {
         let welcome_prompt = current_menu.welcome_prompt.clone();
-        let timeout_secs = if current_menu.timeout_secs > 0 { current_menu.timeout_secs } else { 10 };
-        
+        let timeout_secs = if current_menu.timeout_secs > 0 {
+            current_menu.timeout_secs
+        } else {
+            10
+        };
+
         debug!(call_id = %call_id, prompt = %welcome_prompt, "播放 IVR 欢迎提示音");
-        let _ = edge_state.media_relay.start_playback(
-            a_port,
-            std::path::PathBuf::from(&welcome_prompt),
-            crate::media::relay::PlaybackMode::Exclusive,
-            false,
-        ).await;
+        let _ = edge_state
+            .media_relay
+            .start_playback(
+                a_port,
+                std::path::PathBuf::from(&welcome_prompt),
+                crate::media::relay::PlaybackMode::Exclusive,
+                false,
+            )
+            .await;
 
         let start_time = std::time::Instant::now();
         let timeout = Duration::from_secs(timeout_secs as u64);
@@ -205,12 +251,15 @@ async fn run_ivr_menu_loop(
                         if let Some(prompt) = &action.waiting_prompt {
                             if !prompt.trim().is_empty() {
                                 info!(call_id = %call_id, prompt = %prompt, "播放按键触发等待/提示音频");
-                                let _ = edge_state.media_relay.start_playback(
-                                    a_port,
-                                    std::path::PathBuf::from(prompt),
-                                    crate::media::relay::PlaybackMode::Exclusive,
-                                    false,
-                                ).await;
+                                let _ = edge_state
+                                    .media_relay
+                                    .start_playback(
+                                        a_port,
+                                        std::path::PathBuf::from(prompt),
+                                        crate::media::relay::PlaybackMode::Exclusive,
+                                        false,
+                                    )
+                                    .await;
                             }
                         }
 
@@ -227,7 +276,8 @@ async fn run_ivr_menu_loop(
                                 action,
                                 &request,
                                 peer,
-                            ).await;
+                            )
+                            .await;
                             return;
                         }
                     } else {
@@ -235,7 +285,9 @@ async fn run_ivr_menu_loop(
                         accum.clear();
                         if retries >= 3 {
                             info!(call_id = %call_id, "IVR 超过最大重试次数，挂断呼叫");
-                            edge_state.call_manager.terminate_call_with_reason(&call_id, "IVR Max Retries Exceeded");
+                            edge_state
+                                .call_manager
+                                .terminate_call_with_reason(&call_id, "IVR Max Retries Exceeded");
                             return;
                         } else {
                             info!(call_id = %call_id, digit = %new_digit, retries, "IVR 无效按键，等待重试");
@@ -247,17 +299,26 @@ async fn run_ivr_menu_loop(
             if start_time.elapsed() > timeout {
                 info!(call_id = %call_id, "IVR 输入超时，释放呼叫");
                 edge_state.media_relay.stop_playback(a_port);
-                edge_state.call_manager.terminate_call_with_reason(&call_id, "IVR Timeout");
+                edge_state
+                    .call_manager
+                    .terminate_call_with_reason(&call_id, "IVR Timeout");
                 return;
             }
         }
 
         if let Some(menu_id) = next_menu_id {
-            if let Some(new_menu) = edge_state.ivr_menus.read().ok().and_then(|lock| lock.get(&menu_id).cloned()) {
+            if let Some(new_menu) = edge_state
+                .ivr_menus
+                .read()
+                .ok()
+                .and_then(|lock| lock.get(&menu_id).cloned())
+            {
                 current_menu = new_menu;
             } else {
                 warn!(call_id = %call_id, menu_id = %menu_id, "IVR 跳转目标菜单不存在");
-                edge_state.call_manager.terminate_call_with_reason(&call_id, "IVR Target Menu Not Found");
+                edge_state
+                    .call_manager
+                    .terminate_call_with_reason(&call_id, "IVR Target Menu Not Found");
                 return;
             }
         } else {
@@ -265,8 +326,6 @@ async fn run_ivr_menu_loop(
         }
     }
 }
-
-
 
 async fn execute_ivr_action(
     edge_state: &EdgeState,
@@ -303,7 +362,9 @@ async fn execute_ivr_action(
 
             let Some(uri) = outbound_uri else {
                 warn!(call_id, "IVR 转接目标地址未注册或未配置路由，挂断呼叫");
-                edge_state.call_manager.terminate_call_with_reason(call_id, "IVR Transfer Route Not Found");
+                edge_state
+                    .call_manager
+                    .terminate_call_with_reason(call_id, "IVR Transfer Route Not Found");
                 return;
             };
 
@@ -318,7 +379,9 @@ async fn execute_ivr_action(
                 Ok(ep) => ep,
                 Err(e) => {
                     warn!(call_id, "IVR 转接为 B-leg 分配媒体端点失败: {}", e);
-                    edge_state.call_manager.terminate_call_with_reason(call_id, "B-leg Media Alloc Fail");
+                    edge_state
+                        .call_manager
+                        .terminate_call_with_reason(call_id, "B-leg Media Alloc Fail");
                     return;
                 }
             };
@@ -345,20 +408,21 @@ async fn execute_ivr_action(
                 port = b_relay_endpoint.port,
             );
 
-            let target_peer = target_override_addr.clone().unwrap_or_else(|| {
-                outbound::target_addr_for(&uri)
-            });
+            let target_peer = target_override_addr
+                .clone()
+                .unwrap_or_else(|| outbound::target_addr_for(&uri));
 
-            let invite_bytes = outbound::build_outbound_invite_with_session_timer_call_id_and_caller(
-                template_request,
-                &uri,
-                &edge_config.advertised_addr,
-                sdp_offer.as_bytes(),
-                edge_config.session_expires_gateway,
-                &[],
-                &b_call_id,
-                None,
-            );
+            let invite_bytes =
+                outbound::build_outbound_invite_with_session_timer_call_id_and_caller(
+                    template_request,
+                    &uri,
+                    &edge_config.advertised_addr,
+                    sdp_offer.as_bytes(),
+                    edge_config.session_expires_gateway,
+                    &[],
+                    &b_call_id,
+                    None,
+                );
 
             let socket_sender = edge_state.socket.get().expect("socket initialized");
             if let Ok(addr) = target_peer.parse::<SocketAddr>() {
@@ -372,20 +436,35 @@ async fn execute_ivr_action(
         }
         "queue" => {
             info!(call_id, target = %action.action_target, "执行 IVR 排队动作");
-            let _ = edge_state.media_relay.start_playback(
-                _a_port,
-                std::path::PathBuf::from("moh.wav"),
-                crate::media::relay::PlaybackMode::Exclusive,
-                true,
-            ).await;
-            info!(call_id, "已将呼叫放入队列 {} 并播放 MOH", action.action_target);
+            let _ = edge_state
+                .media_relay
+                .start_playback(
+                    _a_port,
+                    std::path::PathBuf::from("moh.wav"),
+                    crate::media::relay::PlaybackMode::Exclusive,
+                    true,
+                )
+                .await;
+            info!(
+                call_id,
+                "已将呼叫放入队列 {} 并播放 MOH", action.action_target
+            );
         }
         "webhook" => {
             info!(call_id, target = %action.action_target, "执行 IVR 第三方 Webhook 动作");
             let method = action.webhook_method.as_deref().unwrap_or("POST");
             let client = reqwest::Client::new();
-            let caller = template_request.headers.get("From").map(|h| h.to_string()).unwrap_or_default();
-            let callee = template_request.uri.user.as_deref().unwrap_or("").to_string();
+            let caller = template_request
+                .headers
+                .get("From")
+                .map(|h| h.to_string())
+                .unwrap_or_default();
+            let callee = template_request
+                .uri
+                .user
+                .as_deref()
+                .unwrap_or("")
+                .to_string();
             let payload = serde_json::json!({
                 "call_id": call_id,
                 "dtmf_key": action.action_target,
@@ -393,9 +472,17 @@ async fn execute_ivr_action(
                 "callee": callee,
             });
             let res = if method.eq_ignore_ascii_case("GET") {
-                client.get(&action.action_target).query(&payload).send().await
+                client
+                    .get(&action.action_target)
+                    .query(&payload)
+                    .send()
+                    .await
             } else {
-                client.post(&action.action_target).json(&payload).send().await
+                client
+                    .post(&action.action_target)
+                    .json(&payload)
+                    .send()
+                    .await
             };
             if let Ok(resp) = res {
                 info!(call_id, status = %resp.status(), "第三方 Webhook 返回响应成功");
@@ -414,11 +501,15 @@ async fn execute_ivr_action(
         }
         "hangup" => {
             info!(call_id, "IVR 挂断动作触发，释放呼叫");
-            edge_state.call_manager.terminate_call_with_reason(call_id, "IVR Hangup Action");
+            edge_state
+                .call_manager
+                .terminate_call_with_reason(call_id, "IVR Hangup Action");
         }
         _ => {
             warn!(call_id, action_type = %action.action_type, "未知的 IVR 动作类型");
-            edge_state.call_manager.terminate_call_with_reason(call_id, "Unknown IVR Action Type");
+            edge_state
+                .call_manager
+                .terminate_call_with_reason(call_id, "Unknown IVR Action Type");
         }
     }
 }
@@ -426,12 +517,12 @@ async fn execute_ivr_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::edge_state::{IvrAction, InboundTransaction};
+    use crate::edge_state::{InboundTransaction, IvrAction};
     use crate::EdgeConfig;
-    use call_core::{CallManager, RouteTable, Route, RouteTarget};
-    use sip_core::{SipRequest, Method, SipUri, HeaderMap};
-    use std::sync::Arc;
+    use call_core::{CallManager, Route, RouteTable, RouteTarget};
+    use sip_core::{HeaderMap, Method, SipRequest, SipUri};
     use std::sync::atomic::{AtomicU16, Ordering};
+    use std::sync::Arc;
 
     static PORT_COUNTER: AtomicU16 = AtomicU16::new(10);
     fn get_test_ports() -> (u16, u16) {
@@ -446,14 +537,14 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(100);
         let call_manager = CallManager::new(RouteTable::default(), tx);
         let edge_state = EdgeState::new(call_manager);
-        
+
         let action = IvrAction {
             action_type: "hangup".to_string(),
             action_target: "".to_string(),
             waiting_prompt: None,
             webhook_method: None,
         };
-        
+
         let template_request = SipRequest {
             method: Method::Invite,
             uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
@@ -461,7 +552,7 @@ mod tests {
             headers: HeaderMap::new(),
             body: std::borrow::Cow::Borrowed(&[]),
         };
-        
+
         execute_ivr_action(
             &edge_state,
             &EdgeConfig::default(),
@@ -470,26 +561,25 @@ mod tests {
             &action,
             &template_request,
             "127.0.0.1:5060".parse().unwrap(),
-        ).await;
+        )
+        .await;
     }
 
     #[tokio::test]
     async fn test_execute_ivr_action_pstn_transfer() {
         let (tx, _rx) = tokio::sync::mpsc::channel(100);
-        let routes = RouteTable::new(vec![
-            Route::new(
-                "test-route",
-                "",
-                100,
-                RouteTarget::new("test-gateway", "192.0.2.200", Some(5060)),
-            )
-        ]);
+        let routes = RouteTable::new(vec![Route::new(
+            "test-route",
+            "",
+            100,
+            RouteTarget::new("test-gateway", "192.0.2.200", Some(5060)),
+        )]);
         let call_manager = CallManager::new(routes, tx);
         let edge_state = EdgeState::new(call_manager);
-        
+
         let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         edge_state.socket.set(Arc::new(socket)).unwrap();
-        
+
         let dummy_transaction = InboundTransaction {
             peer: "127.0.0.1:5060".to_string(),
             outbound_peer: None,
@@ -528,15 +618,17 @@ mod tests {
                 crate::edge_state::InviteResponseOrder::default(),
             )),
         };
-        edge_state.inbound_transactions.insert("test-call-id-123".to_string(), dummy_transaction);
-        
+        edge_state
+            .inbound_transactions
+            .insert("test-call-id-123".to_string(), dummy_transaction);
+
         let action = IvrAction {
             action_type: "pstn".to_string(),
             action_target: "123".to_string(),
             waiting_prompt: None,
             webhook_method: None,
         };
-        
+
         let template_request = SipRequest {
             method: Method::Invite,
             uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
@@ -544,14 +636,19 @@ mod tests {
             headers: HeaderMap::new(),
             body: std::borrow::Cow::Borrowed(&[]),
         };
-        
+
         let (port_min, port_max) = get_test_ports();
         let config = EdgeConfig {
             advertised_addr: "127.0.0.1:5060".to_string(),
-            media: crate::media::MediaConfig::new_with_symmetric_learning("127.0.0.1", port_min, port_max, true),
+            media: crate::media::MediaConfig::new_with_symmetric_learning(
+                "127.0.0.1",
+                port_min,
+                port_max,
+                true,
+            ),
             ..EdgeConfig::default()
         };
-        
+
         execute_ivr_action(
             &edge_state,
             &config,
@@ -560,12 +657,16 @@ mod tests {
             &action,
             &template_request,
             "127.0.0.1:5060".parse().unwrap(),
-        ).await;
-        
+        )
+        .await;
+
         let b_call_id = edge_state.get_external_call_id("test-call-id-123");
         assert!(b_call_id.is_some());
-        
-        let transaction = edge_state.inbound_transactions.get("test-call-id-123").unwrap();
+
+        let transaction = edge_state
+            .inbound_transactions
+            .get("test-call-id-123")
+            .unwrap();
         assert!(transaction.gateway_relay_rtp.is_some());
     }
 
@@ -574,14 +675,14 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(100);
         let call_manager = CallManager::new(RouteTable::default(), tx);
         let edge_state = EdgeState::new(call_manager);
-        
+
         let action = IvrAction {
             action_type: "queue".to_string(),
             action_target: "sales_queue".to_string(),
             waiting_prompt: None,
             webhook_method: None,
         };
-        
+
         let template_request = SipRequest {
             method: Method::Invite,
             uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
@@ -589,7 +690,7 @@ mod tests {
             headers: HeaderMap::new(),
             body: std::borrow::Cow::Borrowed(&[]),
         };
-        
+
         execute_ivr_action(
             &edge_state,
             &EdgeConfig::default(),
@@ -598,7 +699,8 @@ mod tests {
             &action,
             &template_request,
             "127.0.0.1:5060".parse().unwrap(),
-        ).await;
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -607,7 +709,7 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(100);
         let call_manager = CallManager::new(RouteTable::default(), tx);
         let edge_state = Arc::new(EdgeState::new(call_manager));
-        
+
         let menu1 = crate::edge_state::IvrMenu {
             id: "menu1".to_string(),
             name: "Menu 1".to_string(),
@@ -615,16 +717,19 @@ mod tests {
             timeout_secs: 1,
             actions: {
                 let mut m = std::collections::HashMap::new();
-                m.insert("1".to_string(), IvrAction {
-                    action_type: "menu".to_string(),
-                    action_target: "menu2".to_string(),
-                    waiting_prompt: None,
-                    webhook_method: None,
-                });
+                m.insert(
+                    "1".to_string(),
+                    IvrAction {
+                        action_type: "menu".to_string(),
+                        action_target: "menu2".to_string(),
+                        waiting_prompt: None,
+                        webhook_method: None,
+                    },
+                );
                 m
             },
         };
-        
+
         let menu2 = crate::edge_state::IvrMenu {
             id: "menu2".to_string(),
             name: "Menu 2".to_string(),
@@ -632,58 +737,72 @@ mod tests {
             timeout_secs: 1,
             actions: {
                 let mut m = std::collections::HashMap::new();
-                m.insert("2".to_string(), IvrAction {
-                    action_type: "hangup".to_string(),
-                    action_target: "".to_string(),
-                    waiting_prompt: None,
-                    webhook_method: None,
-                });
+                m.insert(
+                    "2".to_string(),
+                    IvrAction {
+                        action_type: "hangup".to_string(),
+                        action_target: "".to_string(),
+                        waiting_prompt: None,
+                        webhook_method: None,
+                    },
+                );
                 m
             },
         };
-        
-        edge_state.ivr_menus.write().unwrap().insert("menu1".to_string(), menu1.clone());
-        edge_state.ivr_menus.write().unwrap().insert("menu2".to_string(), menu2.clone());
-        
-        edge_state.inbound_transactions.insert("test-call-id-retry".to_string(), InboundTransaction {
-            peer: "127.0.0.1:5060".to_string(),
-            outbound_peer: None,
-            vias: vec![],
-            outbound_uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
-            inbound_from_tag: None,
-            inbound_to_tag: None,
-            last_inbound_cseq: None,
-            last_outbound_cseq: None,
-            caller_rtp: None,
-            gateway_relay_rtp: None,
-            gateway_rtp: None,
-            caller_relay_rtp: None,
-            original_request: None,
-            inbound_route_set: vec![],
-            outbound_route_set: vec![],
-            caller_contact: None,
-            callee_contact: None,
-            session_expires: None,
-            session_refresher: None,
-            last_session_refresh: None,
-            prack_rseq: 0,
-            gateway_100rel: false,
-            refer_subscription: None,
-            transfer_from_header: None,
-            transfer_to_header: None,
-            transfer_call_id: None,
-            transfer_contact: None,
-            transfer_peer: None,
-            transferee_is_caller: false,
-            callee_behind_nat: false,
-            active_forks: vec![],
-            max_duration_secs: None,
-            established_at: None,
-            invite_response_order: Arc::new(tokio::sync::Mutex::new(
-                crate::edge_state::InviteResponseOrder::default(),
-            )),
-        });
-        
+
+        edge_state
+            .ivr_menus
+            .write()
+            .unwrap()
+            .insert("menu1".to_string(), menu1.clone());
+        edge_state
+            .ivr_menus
+            .write()
+            .unwrap()
+            .insert("menu2".to_string(), menu2.clone());
+
+        edge_state.inbound_transactions.insert(
+            "test-call-id-retry".to_string(),
+            InboundTransaction {
+                peer: "127.0.0.1:5060".to_string(),
+                outbound_peer: None,
+                vias: vec![],
+                outbound_uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
+                inbound_from_tag: None,
+                inbound_to_tag: None,
+                last_inbound_cseq: None,
+                last_outbound_cseq: None,
+                caller_rtp: None,
+                gateway_relay_rtp: None,
+                gateway_rtp: None,
+                caller_relay_rtp: None,
+                original_request: None,
+                inbound_route_set: vec![],
+                outbound_route_set: vec![],
+                caller_contact: None,
+                callee_contact: None,
+                session_expires: None,
+                session_refresher: None,
+                last_session_refresh: None,
+                prack_rseq: 0,
+                gateway_100rel: false,
+                refer_subscription: None,
+                transfer_from_header: None,
+                transfer_to_header: None,
+                transfer_call_id: None,
+                transfer_contact: None,
+                transfer_peer: None,
+                transferee_is_caller: false,
+                callee_behind_nat: false,
+                active_forks: vec![],
+                max_duration_secs: None,
+                established_at: None,
+                invite_response_order: Arc::new(tokio::sync::Mutex::new(
+                    crate::edge_state::InviteResponseOrder::default(),
+                )),
+            },
+        );
+
         let template_request = SipRequest {
             method: Method::Invite,
             uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
@@ -691,7 +810,7 @@ mod tests {
             headers: HeaderMap::new(),
             body: std::borrow::Cow::Borrowed(&[]),
         };
-        
+
         // Instead of simulating DTMF, we wait for timeout to let it compile and run
         run_ivr_menu_loop(
             edge_state.clone(),
@@ -701,9 +820,12 @@ mod tests {
             template_request.clone(),
             "127.0.0.1:5060".parse().unwrap(),
             menu1.clone(),
-        ).await;
-        
+        )
+        .await;
+
         // Assert that the transaction is still there or something similar
-        assert!(edge_state.inbound_transactions.contains_key("test-call-id-retry"));
+        assert!(edge_state
+            .inbound_transactions
+            .contains_key("test-call-id-retry"));
     }
 }

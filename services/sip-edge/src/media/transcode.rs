@@ -279,7 +279,10 @@ pub fn transcode_and_upload_recording_async(
                         "amr" => Some("audio/amr"),
                         _ => None,
                     };
-                    match storage.put(&key, axum::body::Bytes::from(data), content_type).await {
+                    match storage
+                        .put(&key, axum::body::Bytes::from(data), content_type)
+                        .await
+                    {
                         Ok(()) => {
                             tracing::info!(key, "录音同步完成");
                         }

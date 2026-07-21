@@ -120,12 +120,20 @@ impl MediaRelayState {
         let peer_crypto_session =
             peer_port.and_then(|p| self.crypto_sessions.get(&p).map(|entry| entry.clone()));
 
-        let pending_srtp = self.pending_srtp.get(&relay_port).map(|entry| entry.clone());
-        let peer_pending_srtp = peer_port.and_then(|p| self.pending_srtp.get(&p).map(|entry| entry.clone()));
+        let pending_srtp = self
+            .pending_srtp
+            .get(&relay_port)
+            .map(|entry| entry.clone());
+        let peer_pending_srtp =
+            peer_port.and_then(|p| self.pending_srtp.get(&p).map(|entry| entry.clone()));
         let monitors = self.monitors.get(&relay_port).map(|entry| entry.clone());
         let websocket = self.websockets.get(&relay_port).map(|entry| entry.clone());
         let peer_playback_exclusive = peer_port
-            .and_then(|p| self.playback_modes.get(&p).map(|entry| *entry == PlaybackMode::Exclusive))
+            .and_then(|p| {
+                self.playback_modes
+                    .get(&p)
+                    .map(|entry| *entry == PlaybackMode::Exclusive)
+            })
             .unwrap_or(false);
         let muted = self.muted_ports.contains(&relay_port);
 

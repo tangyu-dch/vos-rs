@@ -38,12 +38,12 @@ mod playback;
 pub mod pool {
     pub use rtp_core::{PacketBufferPool, ReusablePacket};
 }
+pub mod io_uring;
 #[allow(dead_code)]
 pub mod sans_io;
 mod source;
 mod state;
 pub mod webrtc;
-pub mod io_uring;
 
 pub(crate) use listener::relay_media_port;
 #[allow(unused_imports)]

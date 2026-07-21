@@ -392,7 +392,15 @@ fn spawn_recording_worker(
 ) -> io::Result<()> {
     std::thread::Builder::new()
         .name(format!("vos-rs-recording-{worker_index}"))
-        .spawn(move || run_recording_worker(worker_index, receiver, pending_commands, tokio_handle, storage))
+        .spawn(move || {
+            run_recording_worker(
+                worker_index,
+                receiver,
+                pending_commands,
+                tokio_handle,
+                storage,
+            )
+        })
         .map(|_| ())
         .map_err(|error| {
             io::Error::new(

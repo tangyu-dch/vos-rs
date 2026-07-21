@@ -31,7 +31,7 @@ pub mod local;
 pub mod oss;
 
 pub use config::{StorageBackendKind, StorageConfig, StorageRule};
-pub use hw_accel::{HardwareAudioEncoder, SoftwareFallbackEncoder, HwAccelError};
+pub use hw_accel::{HardwareAudioEncoder, HwAccelError, SoftwareFallbackEncoder};
 
 #[derive(Debug, Error)]
 pub enum StorageError {

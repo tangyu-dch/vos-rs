@@ -25,7 +25,10 @@ pub(crate) async fn reload_number_routes(
     let members = database.list_extension_group_members().await?;
     let mut groups_map = std::collections::HashMap::new();
     for (group_id, username) in members {
-        groups_map.entry(group_id).or_insert_with(Vec::new).push(username);
+        groups_map
+            .entry(group_id)
+            .or_insert_with(Vec::new)
+            .push(username);
     }
     if let Ok(mut lock) = edge_state.extension_groups.write() {
         *lock = groups_map;
@@ -36,15 +39,18 @@ pub(crate) async fn reload_number_routes(
     let actions = database.list_ivr_actions().await?;
     let mut actions_map = std::collections::HashMap::new();
     for (ivr_id, dtmf_key, action_type, action_target, waiting_prompt, webhook_method) in actions {
-        actions_map.entry(ivr_id).or_insert_with(std::collections::HashMap::new).insert(
-            dtmf_key,
-            crate::edge_state::IvrAction {
-                action_type,
-                action_target,
-                waiting_prompt,
-                webhook_method,
-            },
-        );
+        actions_map
+            .entry(ivr_id)
+            .or_insert_with(std::collections::HashMap::new)
+            .insert(
+                dtmf_key,
+                crate::edge_state::IvrAction {
+                    action_type,
+                    action_target,
+                    waiting_prompt,
+                    webhook_method,
+                },
+            );
     }
 
     let mut menus_map = std::collections::HashMap::new();

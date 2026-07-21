@@ -114,7 +114,8 @@ impl MediaRelayState {
         recording_queue_capacity: usize,
         storage: Option<Arc<dyn storage_core::StorageBackend>>,
     ) -> Self {
-        let mut state = Self::with_recording_pool(recording_workers, recording_queue_capacity, storage);
+        let mut state =
+            Self::with_recording_pool(recording_workers, recording_queue_capacity, storage);
         state.mode = MediaRelayMode::Pool {
             pool: MediaNodePool::new(config),
         };
@@ -471,27 +472,27 @@ pub(crate) fn spawn_rtp_keepalive_loop(relay: MediaRelayState) {
                 for entry in relay.targets.iter() {
                     let port = *entry.key();
                     let target_addr = *entry.value();
-                if let Some(socket) = relay.active_sockets.get(&port) {
-                    let mut keepalive_packet = vec![0u8; 13];
-                    keepalive_packet[0] = 0x80;
-                    keepalive_packet[1] = 13; // Comfort Noise
-                    keepalive_packet[2] = 0x12;
-                    keepalive_packet[3] = 0x34;
-                    keepalive_packet[4] = 0x00;
-                    keepalive_packet[5] = 0x00;
-                    keepalive_packet[6] = 0x04;
-                    keepalive_packet[7] = 0xd2;
-                    keepalive_packet[8] = 0x12;
-                    keepalive_packet[9] = 0x34;
-                    keepalive_packet[10] = 0x56;
-                    keepalive_packet[11] = 0x78;
-                    keepalive_packet[12] = 0x00;
-                    if let Err(e) = socket.send_to(&keepalive_packet, target_addr).await {
-                        tracing::debug!("RTP keepalive send failed on port {}: {}", port, e);
+                    if let Some(socket) = relay.active_sockets.get(&port) {
+                        let mut keepalive_packet = vec![0u8; 13];
+                        keepalive_packet[0] = 0x80;
+                        keepalive_packet[1] = 13; // Comfort Noise
+                        keepalive_packet[2] = 0x12;
+                        keepalive_packet[3] = 0x34;
+                        keepalive_packet[4] = 0x00;
+                        keepalive_packet[5] = 0x00;
+                        keepalive_packet[6] = 0x04;
+                        keepalive_packet[7] = 0xd2;
+                        keepalive_packet[8] = 0x12;
+                        keepalive_packet[9] = 0x34;
+                        keepalive_packet[10] = 0x56;
+                        keepalive_packet[11] = 0x78;
+                        keepalive_packet[12] = 0x00;
+                        if let Err(e) = socket.send_to(&keepalive_packet, target_addr).await {
+                            tracing::debug!("RTP keepalive send failed on port {}: {}", port, e);
+                        }
                     }
                 }
             }
-        }
-    });
+        });
     }
 }

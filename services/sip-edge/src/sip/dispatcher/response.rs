@@ -71,7 +71,10 @@ pub(crate) async fn dispatch_response(
     }
 
     if let Some(ref reg_call_id) = call_id {
-        let is_outbound_reg = edge_state.outbound_registrations.iter().any(|entry| entry.value().call_id == *reg_call_id);
+        let is_outbound_reg = edge_state
+            .outbound_registrations
+            .iter()
+            .any(|entry| entry.value().call_id == *reg_call_id);
         if is_outbound_reg {
             return crate::sip::outbound_reg::handle_outbound_register_response(
                 edge_state,

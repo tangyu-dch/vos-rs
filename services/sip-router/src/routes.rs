@@ -261,7 +261,10 @@ mod tests {
     #[tokio::test]
     async fn test_release_removes_local_route() {
         let store = DialogRouteStore::without_redis_for_test(60);
-        let nodes = vec![SipNode::new_test("sip-a", "127.0.0.1:5061".parse().expect("address"))];
+        let nodes = vec![SipNode::new_test(
+            "sip-a",
+            "127.0.0.1:5061".parse().expect("address"),
+        )];
         store.resolve("call-release", &nodes).await.expect("owner");
         assert!(store.local.contains_key("call-release"));
 

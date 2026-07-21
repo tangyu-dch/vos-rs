@@ -14,9 +14,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    anti_fraud, audit, auth, billing, call_center, calls, copilot, cdr, dashboard, details, gateways, ivr_menus, media_cluster,
-    numbers, recording, registrations, report, routes, sip_cluster, system, termination, users,
-    AppState,
+    anti_fraud, audit, auth, billing, call_center, calls, cdr, copilot, dashboard, details,
+    gateways, ivr_menus, media_cluster, numbers, recording, registrations, report, routes,
+    sip_cluster, system, termination, users, AppState,
 };
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;

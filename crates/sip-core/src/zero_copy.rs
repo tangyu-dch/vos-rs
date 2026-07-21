@@ -1,11 +1,11 @@
 //! # SIP 零拷贝解析器 (Zero-Copy SIP Message Parser)
-//! 
-//! 本模块借由 Rust 的借用生命周期 `'a`，直接在传入的 Raw Datagram Byte Buffer (`&'a [u8]`) 
+//!
+//! 本模块借由 Rust 的借用生命周期 `'a`，直接在传入的 Raw Datagram Byte Buffer (`&'a [u8]`)
 //! 上构建 SIP 报文的头域与请求行/响应行切片，完全零堆分配 (Zero Heap Allocation)，
 //! 为 1000+ CPS 的高频 SIP 报文吞吐提供极好的 CPU 缓存友好度与性能。
 
-use std::str;
 use crate::error::SipParseError;
+use std::str;
 
 /// 零拷贝 SIP 头域切片 (`&'a str`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,8 +35,9 @@ pub struct ZeroCopySipMessage<'a> {
 impl<'a> ZeroCopySipMessage<'a> {
     /// 从原始字节切片直接零拷贝解析 SIP 报文
     pub fn parse(raw: &'a [u8]) -> Result<Self, SipParseError> {
-        let input = str::from_utf8(raw).map_err(|_| SipParseError::InvalidHeaderLine("invalid utf-8".into()))?;
-        
+        let input = str::from_utf8(raw)
+            .map_err(|_| SipParseError::InvalidHeaderLine("invalid utf-8".into()))?;
+
         let mut lines = input.split("\r\n");
         let first_line = lines.next().ok_or(SipParseError::EmptyMessage)?;
 
@@ -58,7 +59,11 @@ impl<'a> ZeroCopySipMessage<'a> {
             let method = parts.next().unwrap_or("");
             let uri = parts.next().unwrap_or("");
             let version = parts.next().unwrap_or("SIP/2.0");
-            request_line = Some(ZeroCopyRequestLine { method, uri, version });
+            request_line = Some(ZeroCopyRequestLine {
+                method,
+                uri,
+                version,
+            });
         }
 
         let mut headers = Vec::with_capacity(16);
@@ -124,7 +129,10 @@ test";
         assert_eq!(req.method, "INVITE");
         assert_eq!(req.uri, "sip:1001@192.168.1.1");
         assert_eq!(msg.header_value("Call-ID"), Some("test-call-id-999"));
-        assert_eq!(msg.header_value("from"), Some("<sip:1000@192.168.1.1>;tag=abc"));
+        assert_eq!(
+            msg.header_value("from"),
+            Some("<sip:1000@192.168.1.1>;tag=abc")
+        );
         assert_eq!(msg.body, b"test");
     }
 

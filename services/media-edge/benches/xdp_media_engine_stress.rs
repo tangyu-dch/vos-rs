@@ -12,13 +12,16 @@ use media_edge::media::relay::ebpf::XdpMediaEngine;
 
 fn main() {
     println!("=== 开始 Vos-rs XDP Media Engine 极限并发压力测试 ===");
-    
+
     let engine = Arc::new(XdpMediaEngine::new("eth0").expect("无法初始化 XDP 引擎"));
     let concurrency_threads = 8;
     let ops_per_thread = 20_000; // 总计 160,000 次高频写入与撤销
 
     println!("压测线程数: {concurrency_threads}");
-    println!("每线程操作数: {ops_per_thread} (总计 {} 次操作)", concurrency_threads * ops_per_thread * 2);
+    println!(
+        "每线程操作数: {ops_per_thread} (总计 {} 次操作)",
+        concurrency_threads * ops_per_thread * 2
+    );
 
     let start_time = Instant::now();
     let mut handles = vec![];

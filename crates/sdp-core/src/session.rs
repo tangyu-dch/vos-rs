@@ -277,8 +277,8 @@ impl SessionDescription {
             .position(|media| {
                 (media.media_type.eq_ignore_ascii_case("audio")
                     && media.protocol.to_ascii_uppercase().contains("RTP"))
-                || (media.media_type.eq_ignore_ascii_case("image")
-                    && media.protocol.to_ascii_uppercase().contains("UDPTL"))
+                    || (media.media_type.eq_ignore_ascii_case("image")
+                        && media.protocol.to_ascii_uppercase().contains("UDPTL"))
             })
             .ok_or(SdpError::MissingAudioRtpMedia)
     }
@@ -496,10 +496,16 @@ fn parse_line(line: &str) -> SdpResult<(char, &str)> {
 
 fn parse_connection_line(value: &str, line: &str) -> SdpResult<ConnectionAddress> {
     let mut parts = value.split_whitespace();
-    let network_type = parts.next().ok_or_else(|| SdpError::InvalidConnectionLine(line.to_string()))?;
-    let address_type = parts.next().ok_or_else(|| SdpError::InvalidConnectionLine(line.to_string()))?;
-    let address = parts.next().ok_or_else(|| SdpError::InvalidConnectionLine(line.to_string()))?;
-    
+    let network_type = parts
+        .next()
+        .ok_or_else(|| SdpError::InvalidConnectionLine(line.to_string()))?;
+    let address_type = parts
+        .next()
+        .ok_or_else(|| SdpError::InvalidConnectionLine(line.to_string()))?;
+    let address = parts
+        .next()
+        .ok_or_else(|| SdpError::InvalidConnectionLine(line.to_string()))?;
+
     if parts.next().is_some() {
         return Err(SdpError::InvalidConnectionLine(line.to_string()));
     }
@@ -509,9 +515,17 @@ fn parse_connection_line(value: &str, line: &str) -> SdpResult<ConnectionAddress
 
 fn parse_media_line(value: &str, line: &str, line_index: usize) -> SdpResult<MediaDescription> {
     let mut parts = value.split_whitespace();
-    let media_type = parts.next().ok_or_else(|| SdpError::InvalidMediaLine(line.to_string()))?.to_string();
-    let port_str = parts.next().ok_or_else(|| SdpError::InvalidMediaLine(line.to_string()))?;
-    let protocol = parts.next().ok_or_else(|| SdpError::InvalidMediaLine(line.to_string()))?.to_string();
+    let media_type = parts
+        .next()
+        .ok_or_else(|| SdpError::InvalidMediaLine(line.to_string()))?
+        .to_string();
+    let port_str = parts
+        .next()
+        .ok_or_else(|| SdpError::InvalidMediaLine(line.to_string()))?;
+    let protocol = parts
+        .next()
+        .ok_or_else(|| SdpError::InvalidMediaLine(line.to_string()))?
+        .to_string();
 
     let port = port_str
         .split_once('/')
@@ -597,14 +611,14 @@ fn parse_ice_attribute(line: &str, parameters: &mut IceParameters) {
 fn parse_candidate_attribute(line: &str) -> Option<IceCandidate> {
     let value = line.strip_prefix("a=candidate:")?;
     let mut parts = value.split_whitespace();
-    
+
     let foundation = parts.next()?.to_string();
     let component = parts.next()?.parse().ok()?;
     let transport = parts.next()?.to_ascii_lowercase();
     let priority = parts.next()?.parse().ok()?;
     let address = parts.next()?.to_string();
     let port = parts.next()?.parse().ok()?;
-    
+
     if parts.next()? != "typ" {
         return None;
     }

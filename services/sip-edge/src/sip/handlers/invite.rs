@@ -593,12 +593,22 @@ pub(crate) async fn handle_invite_request(
         mut outbound_invite,
     } = if let Some(ref did_dest) = inbound_did_destination {
         if did_dest.target_type == "ivr" {
-            return super::ivr::handle_ivr_locally(request, peer, edge_state, edge_config, did_dest).await;
+            return super::ivr::handle_ivr_locally(
+                request,
+                peer,
+                edge_state,
+                edge_config,
+                did_dest,
+            )
+            .await;
         } else if did_dest.target_type == "extension_group" {
-            let members = edge_state.extension_groups.read().ok().and_then(|lock| {
-                lock.get(&did_dest.target_id).cloned()
-            }).unwrap_or_default();
-            
+            let members = edge_state
+                .extension_groups
+                .read()
+                .ok()
+                .and_then(|lock| lock.get(&did_dest.target_id).cloned())
+                .unwrap_or_default();
+
             let mut group_contacts = Vec::new();
             for member in members {
                 let mut member_uri = request.uri.clone();
@@ -607,7 +617,7 @@ pub(crate) async fn handle_invite_request(
                     group_contacts.push(contact);
                 }
             }
-            
+
             if group_contacts.is_empty() {
                 warn!(group_id = %did_dest.target_id, "分机组内没有在线成员");
                 return vec![PendingDatagram::new(
@@ -621,7 +631,7 @@ pub(crate) async fn handle_invite_request(
                     ),
                 )];
             }
-            
+
             let first_contact = &group_contacts[0];
             if let Ok(outbound_uri) = SipUri::from_str(&first_contact.uri) {
                 let outcome = response::response_for_invite_to_uri_with_direction(
@@ -630,23 +640,35 @@ pub(crate) async fn handle_invite_request(
                     outbound_uri,
                     call_direction,
                 );
-                
-                let internal_call_id = request.headers.get("call-id").map(|v| v.as_str().to_string()).unwrap_or_default();
+
+                let internal_call_id = request
+                    .headers
+                    .get("call-id")
+                    .map(|v| v.as_str().to_string())
+                    .unwrap_or_default();
                 let mut candidates = Vec::new();
                 for contact in group_contacts {
                     if let Ok(mut outbound_uri) = SipUri::from_str(&contact.uri) {
-                        if let Ok(received_addr) = contact.received_from.parse::<std::net::SocketAddr>() {
+                        if let Ok(received_addr) =
+                            contact.received_from.parse::<std::net::SocketAddr>()
+                        {
                             outbound_uri.host = received_addr.ip().to_string().into();
                             outbound_uri.port = Some(received_addr.port());
                         }
                         candidates.push(call_core::SelectedRoute {
                             route_id: format!("group-{}", did_dest.target_id),
-                            target: call_core::RouteTarget::new("extension-group-gateway", outbound_uri.host.to_string(), outbound_uri.port),
+                            target: call_core::RouteTarget::new(
+                                "extension-group-gateway",
+                                outbound_uri.host.to_string(),
+                                outbound_uri.port,
+                            ),
                             outbound_uri,
                         });
                     }
                 }
-                edge_state.call_manager.set_candidates(&call_core::CallId::new(internal_call_id), candidates);
+                edge_state
+                    .call_manager
+                    .set_candidates(&call_core::CallId::new(internal_call_id), candidates);
                 outcome
             } else {
                 return vec![PendingDatagram::new(
@@ -935,7 +957,9 @@ pub(crate) async fn handle_invite_request(
                 .get("x-call-forking")
                 .map(|v| v.as_str().trim().to_lowercase() == "true")
                 .unwrap_or(false)
-            || inbound_did_destination.as_ref().is_some_and(|d| d.target_type == "extension_group");
+            || inbound_did_destination
+                .as_ref()
+                .is_some_and(|d| d.target_type == "extension_group");
 
         let managed_resources = crate::resource_lease::requires_single_leg(
             edge_state,

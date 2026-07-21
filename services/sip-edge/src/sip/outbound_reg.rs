@@ -1,9 +1,9 @@
+use crate::edge_state::OutboundRegState;
+use crate::{EdgeConfig, EdgeState};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::{EdgeConfig, EdgeState};
-use crate::edge_state::OutboundRegState;
-use tracing::{info, warn, error};
-use std::net::SocketAddr;
+use tracing::{error, info, warn};
 
 pub(crate) fn spawn_outbound_registration_loop(
     edge_state: Arc<EdgeState>,
@@ -12,15 +12,15 @@ pub(crate) fn spawn_outbound_registration_loop(
     tokio::spawn(async move {
         // 等待几秒以完成系统初始化
         tokio::time::sleep(Duration::from_secs(5)).await;
-        
+
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
-            
+
             let Some(ref db) = edge_state.db_store else {
                 continue;
             };
-            
+
             let gateways = match db.load_outbound_registrations().await {
                 Ok(gw) => gw,
                 Err(e) => {
@@ -28,10 +28,10 @@ pub(crate) fn spawn_outbound_registration_loop(
                     continue;
                 }
             };
-            
+
             for (id, host, port, transport, _reg_auth_type, username, password) in gateways {
                 let port_val = port.unwrap_or(5060);
-                
+
                 // 检查是否已有注册状态，没有则新建
                 let state_exists = edge_state.outbound_registrations.contains_key(&id);
                 if !state_exists {
@@ -52,30 +52,34 @@ pub(crate) fn spawn_outbound_registration_loop(
                         last_reg_success: None,
                         challenge: None,
                     };
-                    edge_state.outbound_registrations.insert(id.clone(), reg_state);
+                    edge_state
+                        .outbound_registrations
+                        .insert(id.clone(), reg_state);
                 }
-                
+
                 // 检查是否需要触发注册请求
                 if let Some(mut reg_state) = edge_state.outbound_registrations.get_mut(&id) {
                     let now = std::time::Instant::now();
-                    let should_register = match (reg_state.last_reg_sent, reg_state.last_reg_success) {
-                        (None, _) => true,
-                        (Some(sent), None) => now.duration_since(sent).as_secs() > 15, // 首次发送未响应，15秒后重试
-                        (Some(_), Some(success)) => {
-                            // 在过期时间过半时触发续期注册
-                            now.duration_since(success).as_secs() >= (reg_state.expires / 2) as u64
-                        }
-                    };
-                    
+                    let should_register =
+                        match (reg_state.last_reg_sent, reg_state.last_reg_success) {
+                            (None, _) => true,
+                            (Some(sent), None) => now.duration_since(sent).as_secs() > 15, // 首次发送未响应，15秒后重试
+                            (Some(_), Some(success)) => {
+                                // 在过期时间过半时触发续期注册
+                                now.duration_since(success).as_secs()
+                                    >= (reg_state.expires / 2) as u64
+                            }
+                        };
+
                     if should_register {
                         reg_state.last_reg_sent = Some(now);
                         reg_state.cseq += 1;
-                        
+
                         let request_bytes = build_register_request(&reg_state, &config, None);
                         let target = format!("{}:{}", reg_state.host, port_val);
-                        
+
                         info!(gateway_id = %id, target = %target, cseq = reg_state.cseq, "主动向运营商中继发送 REGISTER 注册包");
-                        
+
                         let edge_state_clone = Arc::clone(&edge_state);
                         tokio::spawn(async move {
                             send_datagram(&edge_state_clone, &target, &request_bytes).await;
@@ -97,7 +101,7 @@ pub(crate) fn build_register_request(
     } else {
         format!("{}:5060", config.advertised_addr)
     };
-    
+
     let mut request = format!(
         "REGISTER sip:{} SIP/2.0\r\n\
          Via: SIP/2.0/UDP {};branch=z9hG4bK-{}\r\n\
@@ -122,12 +126,12 @@ pub(crate) fn build_register_request(
         local_contact,
         reg_state.expires
     );
-    
+
     if let Some(auth) = auth_header {
         request.push_str(auth);
         request.push_str("\r\n");
     }
-    
+
     request.push_str("Content-Length: 0\r\n\r\n");
     request.into_bytes()
 }
@@ -174,16 +178,16 @@ pub(crate) fn handle_outbound_register_response(
             break;
         }
     }
-    
+
     let Some(gw_id) = target_gw_id else {
         return vec![];
     };
-    
+
     let mut reg_state = match edge_state.outbound_registrations.get_mut(&gw_id) {
         Some(s) => s,
         None => return vec![],
     };
-    
+
     let status = response.status_code;
     if status == 200 {
         info!(gateway_id = %gw_id, "向运营商注册成功 (200 OK)");
@@ -195,9 +199,13 @@ pub(crate) fn handle_outbound_register_response(
         }
         return vec![];
     }
-    
+
     if status == 401 || status == 407 {
-        let auth_hdr_name = if status == 401 { "www-authenticate" } else { "proxy-authenticate" };
+        let auth_hdr_name = if status == 401 {
+            "www-authenticate"
+        } else {
+            "proxy-authenticate"
+        };
         let auth_hdr_val = match response.headers.get(auth_hdr_name) {
             Some(val) => val.as_str(),
             None => {
@@ -205,7 +213,7 @@ pub(crate) fn handle_outbound_register_response(
                 return vec![];
             }
         };
-        
+
         let auth_params = match crate::sip::auth::parse_digest_authorization(auth_hdr_val) {
             Some(p) => p,
             None => {
@@ -213,15 +221,18 @@ pub(crate) fn handle_outbound_register_response(
                 return vec![];
             }
         };
-        
+
         let realm = auth_params.get("realm").cloned().unwrap_or_default();
         let nonce = auth_params.get("nonce").cloned().unwrap_or_default();
         let opaque = auth_params.get("opaque").cloned();
-        let algorithm = auth_params.get("algorithm").cloned().unwrap_or_else(|| "MD5".to_string());
-        
+        let algorithm = auth_params
+            .get("algorithm")
+            .cloned()
+            .unwrap_or_else(|| "MD5".to_string());
+
         let method = "REGISTER";
         let req_uri = format!("sip:{}", reg_state.host);
-        
+
         let qop_val = auth_params.get("qop").cloned();
         let auth_header = if let Some(qop) = qop_val {
             let cnonce = &uuid::Uuid::new_v4().to_string()[..8].to_string();
@@ -235,8 +246,10 @@ pub(crate) fn handle_outbound_register_response(
                 &req_uri,
                 Some((&qop, nc, cnonce)),
             );
-            
-            let opaque_str = opaque.map(|o| format!(", opaque=\"{}\"", o)).unwrap_or_default();
+
+            let opaque_str = opaque
+                .map(|o| format!(", opaque=\"{}\"", o))
+                .unwrap_or_default();
             format!(
                 "Authorization: Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=\"{}\", qop=\"{}\", nc={}, cnonce=\"{}\"{}",
                 reg_state.username, realm, nonce, req_uri, resp, algorithm, qop, nc, cnonce, opaque_str
@@ -251,21 +264,26 @@ pub(crate) fn handle_outbound_register_response(
                 &req_uri,
                 None,
             );
-            let opaque_str = opaque.map(|o| format!(", opaque=\"{}\"", o)).unwrap_or_default();
+            let opaque_str = opaque
+                .map(|o| format!(", opaque=\"{}\"", o))
+                .unwrap_or_default();
             format!(
                 "Authorization: Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=\"{}\"{}",
                 reg_state.username, realm, nonce, req_uri, resp, algorithm, opaque_str
             )
         };
-        
+
         reg_state.cseq += 1;
         let request_bytes = build_register_request(&reg_state, edge_config, Some(&auth_header));
         let target = format!("{}:{}", reg_state.host, reg_state.port.unwrap_or(5060));
-        
+
         info!(gateway_id = %gw_id, cseq = reg_state.cseq, "重新发送带有摘要认证凭据的 REGISTER 请求");
-        return vec![crate::edge_state::PendingDatagram::new(target, request_bytes)];
+        return vec![crate::edge_state::PendingDatagram::new(
+            target,
+            request_bytes,
+        )];
     }
-    
+
     warn!(gateway_id = %gw_id, status = status, "运营商拒绝了我们的 REGISTER 注册");
     vec![]
 }
@@ -273,11 +291,11 @@ pub(crate) fn handle_outbound_register_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sip_core::{SipResponse, HeaderMap, HeaderName, HeaderValue};
     use crate::edge_state::OutboundRegState;
     use crate::EdgeConfig;
     use call_core::{CallManager, RouteTable};
-    
+    use sip_core::{HeaderMap, HeaderName, HeaderValue, SipResponse};
+
     #[test]
     fn test_build_register_request() {
         let reg_state = OutboundRegState {
@@ -295,15 +313,15 @@ mod tests {
             last_reg_success: None,
             challenge: None,
         };
-        
+
         let config = EdgeConfig {
             advertised_addr: "192.168.1.100:5060".to_string(),
             ..EdgeConfig::default()
         };
-        
+
         let bytes = build_register_request(&reg_state, &config, None);
         let request_str = String::from_utf8(bytes).unwrap();
-        
+
         assert!(request_str.contains("REGISTER sip:sip.operator.com SIP/2.0"));
         assert!(request_str.contains("From: <sip:user123@sip.operator.com>;tag=abcde"));
         assert!(request_str.contains("To: <sip:user123@sip.operator.com>"));
@@ -312,13 +330,13 @@ mod tests {
         assert!(request_str.contains("Expires: 3600"));
         assert!(request_str.contains("Contact: <sip:user123@192.168.1.100:5060;transport=udp>"));
     }
-    
+
     #[tokio::test]
     async fn test_handle_outbound_register_response_200_ok() {
         let (tx, _rx) = tokio::sync::mpsc::channel(100);
         let call_manager = CallManager::new(RouteTable::default(), tx);
         let edge_state = EdgeState::new(call_manager);
-        
+
         let reg_state = OutboundRegState {
             gateway_id: "test_gw".to_string(),
             host: "sip.operator.com".to_string(),
@@ -334,15 +352,17 @@ mod tests {
             last_reg_success: None,
             challenge: None,
         };
-        
-        edge_state.outbound_registrations.insert("test_gw".to_string(), reg_state);
-        
+
+        edge_state
+            .outbound_registrations
+            .insert("test_gw".to_string(), reg_state);
+
         let mut headers = HeaderMap::new();
         headers.insert(
             HeaderName::new("expires").unwrap(),
-            HeaderValue::new("1800")
+            HeaderValue::new("1800"),
         );
-        
+
         let response = SipResponse {
             version: std::borrow::Cow::Borrowed("SIP/2.0"),
             status_code: 200,
@@ -350,9 +370,14 @@ mod tests {
             headers,
             body: std::borrow::Cow::Borrowed(&[]),
         };
-        
-        let pending = handle_outbound_register_response(&edge_state, &EdgeConfig::default(), &response, "test-call-id-12345");
-        
+
+        let pending = handle_outbound_register_response(
+            &edge_state,
+            &EdgeConfig::default(),
+            &response,
+            "test-call-id-12345",
+        );
+
         assert!(pending.is_empty());
         let updated_state = edge_state.outbound_registrations.get("test_gw").unwrap();
         assert_eq!(updated_state.expires, 1800);
@@ -364,7 +389,7 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(100);
         let call_manager = CallManager::new(RouteTable::default(), tx);
         let edge_state = EdgeState::new(call_manager);
-        
+
         let reg_state = OutboundRegState {
             gateway_id: "test_gw".to_string(),
             host: "sip.operator.com".to_string(),
@@ -380,15 +405,19 @@ mod tests {
             last_reg_success: None,
             challenge: None,
         };
-        
-        edge_state.outbound_registrations.insert("test_gw".to_string(), reg_state);
-        
+
+        edge_state
+            .outbound_registrations
+            .insert("test_gw".to_string(), reg_state);
+
         let mut headers = HeaderMap::new();
         headers.insert(
             HeaderName::new("www-authenticate").unwrap(),
-            HeaderValue::new("Digest realm=\"sip.operator.com\", nonce=\"1a2b3c4d\", algorithm=MD5")
+            HeaderValue::new(
+                "Digest realm=\"sip.operator.com\", nonce=\"1a2b3c4d\", algorithm=MD5",
+            ),
         );
-        
+
         let response = SipResponse {
             version: std::borrow::Cow::Borrowed("SIP/2.0"),
             status_code: 401,
@@ -396,13 +425,18 @@ mod tests {
             headers,
             body: std::borrow::Cow::Borrowed(&[]),
         };
-        
-        let pending = handle_outbound_register_response(&edge_state, &EdgeConfig::default(), &response, "test-call-id-12345");
-        
+
+        let pending = handle_outbound_register_response(
+            &edge_state,
+            &EdgeConfig::default(),
+            &response,
+            "test-call-id-12345",
+        );
+
         assert_eq!(pending.len(), 1);
         let pending_dg = &pending[0];
         assert_eq!(pending_dg.target, "sip.operator.com:5060");
-        
+
         let request_str = String::from_utf8(pending_dg.bytes.clone()).unwrap();
         assert!(request_str.contains("REGISTER sip:sip.operator.com SIP/2.0"));
         assert!(request_str.contains("Authorization: Digest"));

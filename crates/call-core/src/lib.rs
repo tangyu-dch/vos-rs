@@ -29,7 +29,10 @@ mod billing;
 mod call;
 mod caller_identity;
 
-pub use acd::{AcdEngine, AgentSession, AgentState as AcdAgentState, AllocationStrategy, EnqueueResult, WaitingCall};
+pub use acd::{
+    AcdEngine, AgentSession, AgentState as AcdAgentState, AllocationStrategy, EnqueueResult,
+    WaitingCall,
+};
 pub use billing::AtomicBillingBucket;
 pub use call::{
     Call, CallDirection, CallId, CallLeg, CallState, FailureCause, LegDirection, LegId, LegState,

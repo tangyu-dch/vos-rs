@@ -273,13 +273,15 @@ impl PostgresCdrStore {
             .await?;
         // 兼容处理：检查是否存在旧的非分区 sip_flows 表，若存在则重命名为 sip_flows_old
         if let Ok(Some(relkind)) = sqlx::query_scalar::<_, String>(
-            "SELECT relkind::text FROM pg_class WHERE relname = 'sip_flows'"
+            "SELECT relkind::text FROM pg_class WHERE relname = 'sip_flows'",
         )
         .fetch_optional(&self.pool)
         .await
         {
             if relkind == "r" {
-                tracing::info!("Found old non-partitioned sip_flows table. Renaming it to sip_flows_old.");
+                tracing::info!(
+                    "Found old non-partitioned sip_flows table. Renaming it to sip_flows_old."
+                );
                 let _ = sqlx::query("DROP TABLE IF EXISTS sip_flows_old CASCADE")
                     .execute(&self.pool)
                     .await;

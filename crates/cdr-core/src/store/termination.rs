@@ -487,13 +487,34 @@ impl PostgresCdrStore {
     }
 
     /// 列出所有 IVR 动作。
-    pub async fn list_ivr_actions(&self) -> Result<Vec<(String, String, String, String, Option<String>, Option<String>)>, sqlx::Error> {
+    pub async fn list_ivr_actions(
+        &self,
+    ) -> Result<
+        Vec<(
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        )>,
+        sqlx::Error,
+    > {
         let rows = sqlx::query("SELECT ivr_id, dtmf_key, action_type, action_target, waiting_prompt, webhook_method FROM ivr_actions")
             .fetch_all(&self.pool)
             .await?;
         Ok(rows
             .into_iter()
-            .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4), row.get(5)))
+            .map(|row| {
+                (
+                    row.get(0),
+                    row.get(1),
+                    row.get(2),
+                    row.get(3),
+                    row.get(4),
+                    row.get(5),
+                )
+            })
             .collect())
     }
 }

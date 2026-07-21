@@ -43,7 +43,13 @@ pub(crate) async fn handle_register_request(
     let outcome = {
         let mut registrar_guard = edge_state.registrar.write().await;
         registrar_guard
-            .handle_register(&request, peer, SystemTime::now(), None, edge_state.nats_connection().as_ref())
+            .handle_register(
+                &request,
+                peer,
+                SystemTime::now(),
+                None,
+                edge_state.nats_connection().as_ref(),
+            )
             .await
     };
 

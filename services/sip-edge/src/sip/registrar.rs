@@ -224,10 +224,18 @@ impl RegistrationStore {
                 let msg = RegistrationInvalidateMsg {
                     aor: aor.to_string(),
                     action: "unregister".to_string(),
-                    timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                    timestamp: SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
                 };
                 if let Some(nats) = nats_client {
-                    let _ = nats.publish("vos_rs.cluster.registration.invalidate", serde_json::to_string(&msg).unwrap_or_default().into()).await;
+                    let _ = nats
+                        .publish(
+                            "vos_rs.cluster.registration.invalidate",
+                            serde_json::to_string(&msg).unwrap_or_default().into(),
+                        )
+                        .await;
                 }
                 Ok(())
             }
@@ -251,10 +259,18 @@ impl RegistrationStore {
                     let msg = RegistrationInvalidateMsg {
                         aor: aor.to_string(),
                         action: "unregister".to_string(),
-                        timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                        timestamp: SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
                     };
                     if let Some(nats) = nats_client {
-                        let _ = nats.publish("vos_rs.cluster.registration.invalidate", serde_json::to_string(&msg).unwrap_or_default().into()).await;
+                        let _ = nats
+                            .publish(
+                                "vos_rs.cluster.registration.invalidate",
+                                serde_json::to_string(&msg).unwrap_or_default().into(),
+                            )
+                            .await;
                     }
                     return Ok(());
                 }
@@ -293,10 +309,18 @@ impl RegistrationStore {
                 let msg = RegistrationInvalidateMsg {
                     aor: aor.to_string(),
                     action: "register".to_string(),
-                    timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                    timestamp: SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
                 };
                 if let Some(nats) = nats_client {
-                    let _ = nats.publish("vos_rs.cluster.registration.invalidate", serde_json::to_string(&msg).unwrap_or_default().into()).await;
+                    let _ = nats
+                        .publish(
+                            "vos_rs.cluster.registration.invalidate",
+                            serde_json::to_string(&msg).unwrap_or_default().into(),
+                        )
+                        .await;
                 }
                 Ok(())
             }

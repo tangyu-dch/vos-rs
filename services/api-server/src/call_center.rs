@@ -60,7 +60,10 @@ pub(crate) async fn list_queues(
             .await
             .unwrap_or_default();
 
-        let agents: Vec<String> = agent_rows.into_iter().map(|ar| ar.get("agent_id")).collect();
+        let agents: Vec<String> = agent_rows
+            .into_iter()
+            .map(|ar| ar.get("agent_id"))
+            .collect();
 
         items.push(CallQueue {
             id,
@@ -148,10 +151,12 @@ pub(crate) async fn list_agents(
     State(state): State<AppState>,
 ) -> Result<Json<PaginatedResponse<AgentStatus>>, ApiError> {
     let pool = state.store.pool();
-    let rows = sqlx::query("SELECT agent_id, name, extension, status FROM call_agents ORDER BY created_at DESC")
-        .fetch_all(pool)
-        .await
-        .map_err(|e| ApiError::internal(format!("查询座席列表失败: {e}")))?;
+    let rows = sqlx::query(
+        "SELECT agent_id, name, extension, status FROM call_agents ORDER BY created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ApiError::internal(format!("查询座席列表失败: {e}")))?;
 
     let mut items = Vec::new();
     for r in rows {

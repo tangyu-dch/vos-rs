@@ -90,12 +90,10 @@ pub(crate) async fn list_menus(
     State(state): State<AppState>,
 ) -> Result<Json<PaginatedResponse<IvrMenu>>, ApiError> {
     let pool = state.store.pool();
-    let rows = sqlx::query(
-        "SELECT id FROM ivr_menus ORDER BY created_at DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| ApiError::internal(format!("查询 IVR 菜单失败: {e}")))?;
+    let rows = sqlx::query("SELECT id FROM ivr_menus ORDER BY created_at DESC")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| ApiError::internal(format!("查询 IVR 菜单失败: {e}")))?;
 
     let mut items = Vec::new();
     for row in rows {

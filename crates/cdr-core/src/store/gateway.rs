@@ -398,13 +398,13 @@ impl PostgresCdrStore {
         &self,
     ) -> Result<
         Vec<(
-            String, // id
-            String, // host
+            String,      // id
+            String,      // host
             Option<u16>, // port
-            String, // transport
-            String, // reg_auth_type
-            String, // reg_username
-            String, // reg_password
+            String,      // transport
+            String,      // reg_auth_type
+            String,      // reg_username
+            String,      // reg_password
         )>,
         sqlx::Error,
     > {

@@ -153,10 +153,10 @@ mod tests {
     #[test]
     fn test_longest_idle_strategy() {
         let mut acd = AcdEngine::new("q1", AllocationStrategy::LongestIdle);
-        
+
         let mut a1 = AgentSession::new("agent1");
         let mut a2 = AgentSession::new("agent2");
-        
+
         a1.set_state(AgentState::Idle);
         a1.last_state_change = SystemTime::now() - Duration::from_secs(100); // a1 is much older
 
@@ -167,10 +167,16 @@ mod tests {
         acd.add_agent(a2);
 
         let res = acd.enqueue_call("call1".into(), 0);
-        assert_eq!(res, EnqueueResult::Allocated("call1".into(), "agent1".into()));
+        assert_eq!(
+            res,
+            EnqueueResult::Allocated("call1".into(), "agent1".into())
+        );
 
         let res2 = acd.enqueue_call("call2".into(), 0);
-        assert_eq!(res2, EnqueueResult::Allocated("call2".into(), "agent2".into()));
+        assert_eq!(
+            res2,
+            EnqueueResult::Allocated("call2".into(), "agent2".into())
+        );
 
         let res3 = acd.enqueue_call("call3".into(), 0);
         assert_eq!(res3, EnqueueResult::QueuedPlayMoh);
@@ -179,7 +185,7 @@ mod tests {
     #[test]
     fn test_round_robin_strategy() {
         let mut acd = AcdEngine::new("q1", AllocationStrategy::RoundRobin);
-        
+
         let mut a1 = AgentSession::new("agent1");
         let mut a2 = AgentSession::new("agent2");
         a1.set_state(AgentState::Idle);
@@ -190,8 +196,14 @@ mod tests {
         let res1 = acd.enqueue_call("call1".into(), 0);
         let res2 = acd.enqueue_call("call2".into(), 0);
 
-        assert_eq!(res1, EnqueueResult::Allocated("call1".into(), "agent1".into()));
-        assert_eq!(res2, EnqueueResult::Allocated("call2".into(), "agent2".into()));
+        assert_eq!(
+            res1,
+            EnqueueResult::Allocated("call1".into(), "agent1".into())
+        );
+        assert_eq!(
+            res2,
+            EnqueueResult::Allocated("call2".into(), "agent2".into())
+        );
     }
 
     #[test]
@@ -210,7 +222,9 @@ mod tests {
 
         // Try allocate again
         let res2 = acd.try_allocate();
-        assert_eq!(res2, EnqueueResult::Allocated("call1".into(), "agent1".into()));
+        assert_eq!(
+            res2,
+            EnqueueResult::Allocated("call1".into(), "agent1".into())
+        );
     }
 }
-
