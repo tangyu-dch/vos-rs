@@ -317,7 +317,9 @@ fn ivr_routes() -> Router<AppState> {
         )
         .route(
             "/api/v1/ivr/menus/:id",
-            put(ivr_menus::update_menu).delete(ivr_menus::delete_menu),
+            get(ivr_menus::get_menu)
+                .put(ivr_menus::update_menu)
+                .delete(ivr_menus::delete_menu),
         )
 }
 

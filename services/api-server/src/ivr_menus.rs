@@ -46,34 +46,7 @@ pub(crate) async fn list_menus(
     let mut items = Vec::new();
     for row in rows {
         let id: String = row.get("id");
-        let name: String = row.get("name");
-        let welcome_prompt: String = row.get("welcome_prompt");
-        let timeout_secs: i32 = row.get("timeout_secs");
-
-        let action_rows = sqlx::query("SELECT dtmf_key, action_type, action_target, waiting_prompt, webhook_method FROM ivr_actions WHERE ivr_id = $1")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
-
-        let mappings = action_rows
-            .into_iter()
-            .map(|r| IvrMapping {
-                dtmf_key: r.get("dtmf_key"),
-                action_type: r.get("action_type"),
-                action_target: r.get("action_target"),
-                waiting_prompt: r.get("waiting_prompt"),
-                webhook_method: r.get("webhook_method"),
-            })
-            .collect();
-
-        items.push(IvrMenu {
-            id,
-            name,
-            welcome_prompt: Some(welcome_prompt),
-            timeout_secs: Some(timeout_secs as u32),
-            mappings,
-        });
+        items.push(load_menu_by_id(pool, &id).await?);
     }
 
     let total = items.len() as i64;
@@ -83,6 +56,62 @@ pub(crate) async fn list_menus(
         page: 1,
         page_size: 20,
     }))
+}
+
+/// 获取单个 IVR 菜单 (含 mappings)
+pub(crate) async fn get_menu(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<IvrMenu>, ApiError> {
+    let pool = state.store.pool();
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ivr_menus WHERE id = $1)")
+        .bind(&id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| ApiError::internal(format!("查询 IVR 菜单失败: {e}")))?;
+    if !exists {
+        return Err(ApiError::internal(format!("IVR 菜单 {id} 不存在")));
+    }
+    Ok(Json(load_menu_by_id(pool, &id).await?))
+}
+
+/// 从数据库加载单个 IVR 菜单 (含 mappings)
+async fn load_menu_by_id(pool: &sqlx::PgPool, id: &str) -> Result<IvrMenu, ApiError> {
+    let row = sqlx::query("SELECT id, name, welcome_prompt, timeout_secs FROM ivr_menus WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| ApiError::internal(format!("查询 IVR 菜单 {id} 失败: {e}")))?;
+
+    let menu_id: String = row.get("id");
+    let name: String = row.get("name");
+    let welcome_prompt: String = row.get("welcome_prompt");
+    let timeout_secs: i32 = row.get("timeout_secs");
+
+    let action_rows = sqlx::query("SELECT dtmf_key, action_type, action_target, waiting_prompt, webhook_method FROM ivr_actions WHERE ivr_id = $1")
+        .bind(&menu_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    let mappings = action_rows
+        .into_iter()
+        .map(|r| IvrMapping {
+            dtmf_key: r.get("dtmf_key"),
+            action_type: r.get("action_type"),
+            action_target: r.get("action_target"),
+            waiting_prompt: r.get("waiting_prompt"),
+            webhook_method: r.get("webhook_method"),
+        })
+        .collect();
+
+    Ok(IvrMenu {
+        id: menu_id,
+        name,
+        welcome_prompt: Some(welcome_prompt),
+        timeout_secs: Some(timeout_secs as u32),
+        mappings,
+    })
 }
 
 pub(crate) async fn create_menu(
