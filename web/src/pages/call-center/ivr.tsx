@@ -42,6 +42,10 @@ export default function IvrPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState(false);
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const deleteModal = useDisclosure();
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [saving, setSaving] = useState(false);
   // 当前正在编辑拓扑的 IVR (null 表示未打开拓扑编排 Modal)
   const [topoIvr, setTopoIvr] = useState<IvrFlowFields | null>(null);
 
@@ -82,6 +86,7 @@ export default function IvrPage() {
 
   const handleSave = async () => {
     if (!validate()) return;
+    setSaving(true);
     const payload = {
       id: form.id,
       name: form.name,
@@ -105,17 +110,29 @@ export default function IvrPage() {
       void loadData();
     } catch (err) {
       message.error(err instanceof Error ? err.message : '保存 IVR 失败');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm(`确定要删除 IVR 流程 ${id} 吗？此操作不可撤销。`)) return;
+  const requestDelete = (id: string) => {
+    setDeleteId(id);
+    deleteModal.onOpen();
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteId) return;
+    setDeleting(true);
     try {
-      await api.delete(`/ivr/menus/${id}`);
+      await api.delete(`/ivr/menus/${deleteId}`);
       message.success('IVR 已删除');
+      deleteModal.onClose();
+      setDeleteId(null);
       void loadData();
     } catch (err) {
       message.error(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -238,7 +255,31 @@ export default function IvrPage() {
                 <TableColumn align="center">启用</TableColumn>
                 <TableColumn align="end">操作</TableColumn>
               </TableHeader>
-              <TableBody emptyContent="暂无 IVR 流程，点击右上角定义新 IVR 开始">
+              <TableBody
+                emptyContent={
+                  <div className="flex flex-col items-center justify-center p-8 gap-4">
+                    <div className="text-default-400 text-3xl">🔍</div>
+                    <div className="text-center">
+                      <p className="text-sm font-semibold text-foreground">
+                        {searchKey.trim() ? '没有找到匹配的 IVR 流程' : '暂无 IVR 流程'}
+                      </p>
+                      <p className="text-xs text-default-400 mt-1">
+                        {searchKey.trim() ? '请尝试调整您的搜索关键字' : '点击右上角定义新 IVR 开始'}
+                      </p>
+                    </div>
+                    {searchKey.trim() && (
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onPress={() => setSearchKey('')}
+                      >
+                        重置筛选条件
+                      </Button>
+                    )}
+                  </div>
+                }
+              >
                 {filteredData.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell className="font-mono font-bold text-purple-600">{item.id}</TableCell>
@@ -293,7 +334,7 @@ export default function IvrPage() {
                           size="sm"
                           color="danger"
                           variant="light"
-                          onPress={() => handleDelete(item.id)}
+                          onPress={() => requestDelete(item.id)}
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
@@ -379,7 +420,7 @@ export default function IvrPage() {
               </ModalBody>
               <ModalFooter>
                 <Button variant="flat" onPress={onModalClose}>取消</Button>
-                <Button color="secondary" className="font-bold text-white" onPress={handleSave}>
+                <Button color="secondary" className="font-bold text-white" isLoading={saving} onPress={handleSave}>
                   {editing ? '保存基础信息' : '创建 IVR'}
                 </Button>
               </ModalFooter>
@@ -421,6 +462,24 @@ export default function IvrPage() {
               </div>
             )}
           </ModalBody>
+        </ModalContent>
+      </Modal>
+
+      {/* 二次确认删除 Modal */}
+      <Modal isOpen={deleteModal.isOpen} onOpenChange={(o) => !o && deleteModal.onClose()}>
+        <ModalContent>
+          <ModalHeader className="flex gap-2 items-center">
+            <span className="text-danger font-bold">二次确认删除</span>
+          </ModalHeader>
+          <ModalBody>
+            <p className="text-sm text-default-500">
+              确定要删除 IVR 流程 <strong className="text-danger">{deleteId}</strong> 吗？此操作将永久清理其对应配置与流拓扑，不可撤销。
+            </p>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={deleteModal.onClose}>取消</Button>
+            <Button color="danger" isLoading={deleting} onPress={confirmDelete}>确认删除</Button>
+          </ModalFooter>
         </ModalContent>
       </Modal>
     </div>

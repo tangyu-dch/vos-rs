@@ -91,7 +91,18 @@ export function ActiveCallsPage() {
               <TableColumn key="gateway">中继网关</TableColumn>
               <TableColumn key="actions" align="end">操作</TableColumn>
             </TableHeader>
-            <TableBody items={rows} emptyContent="当前无活跃通话">
+            <TableBody
+              items={rows}
+              emptyContent={
+                <div className="flex flex-col items-center justify-center p-8 gap-4">
+                  <div className="text-default-400 text-3xl">📞</div>
+                  <div className="text-center">
+                    <p className="text-sm font-semibold text-foreground">当前无活跃通话</p>
+                    <p className="text-xs text-default-400 mt-1">系统处于空闲/待机状态，建立通话后将在此实时展示信令流</p>
+                  </div>
+                </div>
+              }
+            >
               {(row) => (
                 <TableRow key={entityId(row, 'call_id')}>
                   <TableCell>

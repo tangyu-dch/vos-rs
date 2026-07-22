@@ -423,7 +423,31 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
                   <TableColumn key="actions" align="end">操作</TableColumn>,
                 ]}
               </TableHeader>
-              <TableBody items={visibleRows} emptyContent="暂无数据">
+              <TableBody
+                items={visibleRows}
+                emptyContent={
+                  <div className="flex flex-col items-center justify-center p-8 gap-4">
+                    <div className="text-default-400 text-3xl">🔍</div>
+                    <div className="text-center">
+                      <p className="text-sm font-semibold text-foreground">没有找到匹配的数据</p>
+                      <p className="text-xs text-default-400 mt-1">请尝试调整您的搜索关键字或状态筛选条件</p>
+                    </div>
+                    {(normalizedQuery !== '' || statusFilter !== 'all') && (
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onPress={() => {
+                          setQuery('');
+                          setStatusFilter('all');
+                        }}
+                      >
+                        重置筛选条件
+                      </Button>
+                    )}
+                  </div>
+                }
+              >
                 {(row) => (
                   <TableRow key={entityId(row, spec.idKey)}>
                     {[
