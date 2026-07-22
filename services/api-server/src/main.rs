@@ -363,6 +363,59 @@ async fn audit_log(
     response
 }
 
+fn validate_runtime_secrets(
+    jwt_secret: &str,
+    internal_secret: &str,
+    admin_password: &str,
+    operator_password: &str,
+    financier_password: &str,
+) -> anyhow::Result<()> {
+    let production =
+        env::var("VOS_RS_ENV").is_ok_and(|value| value.eq_ignore_ascii_case("production"));
+    validate_runtime_secrets_for_environment(
+        production,
+        jwt_secret,
+        internal_secret,
+        admin_password,
+        operator_password,
+        financier_password,
+    )
+}
+
+fn validate_runtime_secrets_for_environment(
+    production: bool,
+    jwt_secret: &str,
+    internal_secret: &str,
+    admin_password: &str,
+    operator_password: &str,
+    financier_password: &str,
+) -> anyhow::Result<()> {
+    if !production {
+        return Ok(());
+    }
+    if jwt_secret.len() < 32 || jwt_secret.contains("change-in-production") {
+        anyhow::bail!("生产环境 VOS_RS_API_JWT_SECRET 必须是至少 32 字符的随机密钥");
+    }
+    if internal_secret.len() < 24
+        || matches!(
+            internal_secret,
+            "internal-dev-secret" | "compose-internal-secret"
+        )
+    {
+        anyhow::bail!("生产环境 VOS_RS_INTERNAL_SECRET 必须是至少 24 字符的随机密钥");
+    }
+    for (name, value, default) in [
+        ("VOS_RS_ADMIN_PASSWORD", admin_password, "admin"),
+        ("VOS_RS_OPERATOR_PASSWORD", operator_password, "operator"),
+        ("VOS_RS_FINANCIER_PASSWORD", financier_password, "financier"),
+    ] {
+        if value.len() < 12 || value == default || value.ends_with("-change-me") {
+            anyhow::bail!("生产环境 {name} 必须是至少 12 字符的非默认密码");
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let logging_filter = config_logging_filter("api_server=info,tower_http=info");
@@ -373,7 +426,8 @@ async fn main() -> anyhow::Result<()> {
 
     let config_file_path =
         env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
-    let config_content = std::fs::read_to_string(&config_file_path).unwrap_or_default();
+    let config_content = std::fs::read_to_string(&config_file_path)
+        .map_err(|error| anyhow::anyhow!("读取配置文件 {config_file_path} 失败: {error}"))?;
 
     #[derive(serde::Deserialize, Debug, Default)]
     struct ApiServerConfig {
@@ -456,7 +510,8 @@ async fn main() -> anyhow::Result<()> {
         realm: Option<String>,
     }
 
-    let config: ApiServerConfig = serde_yaml::from_str(&config_content).unwrap_or_default();
+    let config: ApiServerConfig = serde_yaml::from_str(&config_content)
+        .map_err(|error| anyhow::anyhow!("解析配置文件 {config_file_path} 失败: {error}"))?;
     let conn_section = config.connections.unwrap_or_default();
     let db_section = conn_section.database.unwrap_or_default();
     let api_section = config.api_server.unwrap_or_default();
@@ -480,14 +535,16 @@ async fn main() -> anyhow::Result<()> {
             )
         }
     } else {
-        "postgres://tangyu@127.0.0.1:5432/vos_rs".to_string()
+        return Err(anyhow::anyhow!(
+            "配置文件缺少完整的 connections.database 配置"
+        ));
     };
 
     let max_connections = db_section.max_connections.unwrap_or(10);
     let store = match PostgresCdrStore::connect(&database_url, max_connections).await {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!(database_url, error = %e, "PostgreSQL 数据库连接失败，请检查连接配置。VOS-RS 必须有 PostgreSQL 运行！");
+            tracing::error!(error = %e, "PostgreSQL 数据库连接失败，请检查连接配置。VOS-RS 必须有 PostgreSQL 运行！");
             return Err(e.into());
         }
     };
@@ -508,14 +565,14 @@ async fn main() -> anyhow::Result<()> {
     let redis_client = match redis::Client::open(redis_url.clone()) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!(redis_url, error = %e, "Redis 客户端打开失败。VOS-RS 必须有 Redis 运行！");
+            tracing::error!(error = %e, "Redis 客户端打开失败。VOS-RS 必须有 Redis 运行！");
             return Err(e.into());
         }
     };
     let redis_client = match redis::aio::ConnectionManager::new(redis_client).await {
         Ok(conn) => conn,
         Err(e) => {
-            tracing::error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
+            tracing::error!(error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
             return Err(e.into());
         }
     };
@@ -586,24 +643,34 @@ async fn main() -> anyhow::Result<()> {
         .timeout(std::time::Duration::from_secs(3))
         .build()?;
 
-    let jwt_secret = api_security
-        .jwt_secret
-        .clone()
-        .unwrap_or_else(|| "vos-rs-secret-key-change-in-production".to_string())
-        .into_bytes();
+    let jwt_secret = env::var("VOS_RS_API_JWT_SECRET")
+        .ok()
+        .or(api_security.jwt_secret.clone())
+        .unwrap_or_else(|| "vos-rs-secret-key-change-in-production".to_string());
 
-    let admin_password = admin_credentials
-        .admin_password
+    let admin_password = env::var("VOS_RS_ADMIN_PASSWORD")
+        .ok()
+        .or(admin_credentials.admin_password)
         .unwrap_or_else(|| "admin".to_string());
-    let operator_password = admin_credentials
-        .operator_password
+    let operator_password = env::var("VOS_RS_OPERATOR_PASSWORD")
+        .ok()
+        .or(admin_credentials.operator_password)
         .unwrap_or_else(|| "operator".to_string());
-    let financier_password = admin_credentials
-        .financier_password
+    let financier_password = env::var("VOS_RS_FINANCIER_PASSWORD")
+        .ok()
+        .or(admin_credentials.financier_password)
         .unwrap_or_else(|| "financier".to_string());
-    let internal_secret = api_security
-        .internal_secret
+    let internal_secret = env::var("VOS_RS_INTERNAL_SECRET")
+        .ok()
+        .or(api_security.internal_secret)
         .unwrap_or_else(|| "internal-dev-secret".to_string());
+    validate_runtime_secrets(
+        &jwt_secret,
+        &internal_secret,
+        &admin_password,
+        &operator_password,
+        &financier_password,
+    )?;
 
     let state = AppState {
         store: Arc::new(store),
@@ -612,7 +679,7 @@ async fn main() -> anyhow::Result<()> {
         sip_manage_base,
         internal_client,
         nats_client,
-        jwt_secret,
+        jwt_secret: jwt_secret.into_bytes(),
         admin_password,
         operator_password,
         financier_password,
@@ -775,7 +842,10 @@ fn config_logging_filter(default: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_page, redact_sensitive_json_value, sanitize_audit_json, PageQuery};
+    use super::{
+        normalize_page, redact_sensitive_json_value, sanitize_audit_json,
+        validate_runtime_secrets_for_environment, PageQuery,
+    };
     use serde_json::json;
 
     #[test]
@@ -813,5 +883,33 @@ mod tests {
         };
 
         assert_eq!(normalize_page(&query), (1, 100, 0));
+    }
+
+    #[test]
+    fn production_rejects_default_runtime_secrets() {
+        let error = validate_runtime_secrets_for_environment(
+            true,
+            "api-jwt-change-in-production",
+            "internal-dev-secret",
+            "admin",
+            "operator",
+            "financier",
+        )
+        .expect_err("production defaults must be rejected");
+
+        assert!(error.to_string().contains("VOS_RS_API_JWT_SECRET"));
+    }
+
+    #[test]
+    fn development_allows_local_runtime_defaults() {
+        assert!(validate_runtime_secrets_for_environment(
+            false,
+            "development",
+            "internal-dev-secret",
+            "admin",
+            "operator",
+            "financier",
+        )
+        .is_ok());
     }
 }

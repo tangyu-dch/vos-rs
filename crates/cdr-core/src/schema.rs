@@ -364,6 +364,19 @@ CREATE TABLE IF NOT EXISTS billing_ledger (
 )
 "#;
 
+pub(super) const CREATE_BILLING_CREDITS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS billing_credits (
+    idempotency_key TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    amount NUMERIC(20, 8) NOT NULL CHECK (amount > 0),
+    balance_after NUMERIC(20, 8) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+pub(super) const CREATE_BILLING_CREDITS_USERNAME_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_billing_credits_username ON billing_credits (username, created_at DESC)";
+
 pub(super) const CREATE_LEDGER_USERNAME_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_billing_ledger_username ON billing_ledger (username)";
 pub(super) const CREATE_LEDGER_CREATED_AT_INDEX_SQL: &str =
@@ -404,6 +417,8 @@ CREATE TABLE IF NOT EXISTS number_inventory (
 
 pub(super) const MIGRATE_BILLING_ACCOUNTS_SQL: &[&str] = &[
     "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS id BIGSERIAL",
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(20, 8) NOT NULL DEFAULT 0.0",
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'CNY'",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_accounts_id ON billing_accounts (id)",
 ];
 

@@ -177,6 +177,12 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_BILLING_LEDGER_TABLE_SQL)
             .execute(&self.pool)
             .await?;
+        sqlx::query(CREATE_BILLING_CREDITS_TABLE_SQL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_BILLING_CREDITS_USERNAME_INDEX_SQL)
+            .execute(&self.pool)
+            .await?;
         sqlx::raw_sql(MIGRATE_BILLING_INTERVALS_SQL)
             .execute(&self.pool)
             .await?;

@@ -1,6 +1,7 @@
 use call_core::{
-    CallDirection, CallError, CallEvent, CallId, CallManager, CallState, CallerNumberDirectory,
-    CdrStatus, Route, RouteTable, RouteTarget,
+    CallDirection, CallError, CallEvent, CallId, CallManager, CallSource, CallState,
+    CallerNumberDirectory, CdrStatus, OutboundPolicyDirectory, Route, RouteTable, RouteTarget,
+    RuntimeEgressPolicy, RuntimeSourcePolicy,
 };
 
 #[test]
@@ -34,6 +35,64 @@ fn owned_caller_number_never_fails_over_to_another_gateway() {
     assert_eq!(
         outcome.failover_uri.expect("failover URI").host,
         "gw1-backup.example.com"
+    );
+}
+
+#[test]
+fn direct_policy_routes_without_legacy_routes_and_fails_over_between_endpoints() {
+    let source = CallSource::new("trunk", "access-a");
+    let endpoint_routes = vec![
+        Route::new(
+            "endpoint-primary",
+            "",
+            0,
+            RouteTarget::new("egress-a", "primary.example.com", Some(5060)),
+        )
+        .with_endpoint_priority(100),
+        Route::new(
+            "endpoint-backup",
+            "",
+            0,
+            RouteTarget::new("egress-a", "backup.example.com", Some(5060)),
+        )
+        .with_endpoint_priority(10),
+    ];
+    let directory = OutboundPolicyDirectory::new(
+        [("1001".to_string(), "egress-a".to_string(), 0)],
+        [("1001".to_string(), source.clone())],
+        [RuntimeSourcePolicy {
+            source: source.clone(),
+            caller_mode: "strict_passthrough".to_string(),
+            fixed_number: None,
+            caller_pool_id: None,
+            egress: RuntimeEgressPolicy::Direct("egress-a".to_string()),
+        }],
+        [],
+        [],
+    )
+    .with_egress_routes([("egress-a".to_string(), endpoint_routes)]);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let manager = CallManager::new(RouteTable::default(), tx);
+    manager.update_outbound_policies(directory);
+    let call_id = "direct-endpoint-failover@example.com";
+
+    let initial = manager
+        .handle_inbound_invite_with_source_and_health(
+            &invite_request(call_id, "13800138000"),
+            Some(&source),
+            None,
+        )
+        .expect("direct policy should not require a legacy route");
+    assert_eq!(initial.outbound_uri.host, "primary.example.com");
+
+    let failover = manager
+        .handle_outbound_response(&outbound_response(503, "Unavailable", call_id))
+        .expect("retryable failure should advance to the backup endpoint");
+    assert_eq!(failover.gateway_id, "egress-a");
+    assert_eq!(failover.failover_gateway_id.as_deref(), Some("egress-a"));
+    assert_eq!(
+        failover.failover_uri.as_ref().map(|uri| uri.host.as_ref()),
+        Some("backup.example.com")
     );
 }
 use sip_core::{parse_message, SipUri};

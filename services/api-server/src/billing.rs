@@ -1,13 +1,13 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
 use crate::{normalize_page, parse_dt, AppState, PageQuery, PaginatedResponse};
-use cdr_core::{BillingAccount, BillingRate, LedgerEntry, ReconcileResult};
+use cdr_core::{BillingAccount, BillingRate, CreditAccountOutcome, LedgerEntry, ReconcileResult};
 
 #[derive(Debug, Deserialize)]
 pub struct RateBody {
@@ -64,6 +64,19 @@ fn invalid(message: impl Into<String>) -> E {
 fn has_max_three_decimals(value: f64) -> bool {
     let scaled = value * 1_000.0;
     (scaled - scaled.round()).abs() < 1e-7
+}
+
+fn idempotency_key(headers: &HeaderMap) -> Result<&str, E> {
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or_else(|| invalid("充值请求必须提供 128 字符以内的 Idempotency-Key"))?;
+    if !key.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(invalid("Idempotency-Key 只能包含可见 ASCII 字符"));
+    }
+    Ok(key)
 }
 
 #[cfg(test)]
@@ -222,6 +235,7 @@ pub async fn list_accounts(
 pub async fn credit_account(
     State(state): State<AppState>,
     Path(username): Path<String>,
+    headers: HeaderMap,
     Json(b): Json<CreditBody>,
 ) -> Result<Json<CreditResult>, E> {
     if !b.amount.is_finite() || !(0.001..=100_000_000.0).contains(&b.amount) {
@@ -233,18 +247,32 @@ pub async fn credit_account(
     if username.is_empty() || username.len() > 128 {
         return Err(invalid("账户名长度无效"));
     }
-    let balance = state
+    let key = idempotency_key(&headers)?;
+    let outcome = state
         .store
-        .credit_account(&username, b.amount)
+        .credit_account(&username, b.amount, key)
         .await
         .map_err(err)?;
-    if let Err(error) = crate::hot_cache::set_billing_balance(&state, &username, balance).await {
-        tracing::warn!(
-            %username,
-            balance,
-            error = %error.error,
-            "充值已提交到数据库，但 Redis 余额缓存同步失败；返回成功以避免客户端重复充值"
-        );
+    let (balance, applied) = match outcome {
+        CreditAccountOutcome::Applied(balance) => (balance, true),
+        CreditAccountOutcome::Replayed(balance) => (balance, false),
+        CreditAccountOutcome::Conflict => {
+            return Err((
+                StatusCode::CONFLICT,
+                "Idempotency-Key 已用于其他账户或金额".to_string(),
+            ));
+        }
+    };
+    if applied {
+        if let Err(error) = crate::hot_cache::set_billing_balance(&state, &username, balance).await
+        {
+            tracing::warn!(
+                %username,
+                balance,
+                error = %error.error,
+                "充值已提交到数据库，但 Redis 余额缓存同步失败；返回成功以避免客户端重复充值"
+            );
+        }
     }
     Ok(Json(CreditResult { username, balance }))
 }
@@ -302,7 +330,9 @@ pub async fn reconcile(
 
 #[cfg(test)]
 mod tests {
-    use super::{has_max_three_decimals, resolve_rate, validate_rate, StatusCode};
+    use super::{
+        has_max_three_decimals, idempotency_key, resolve_rate, validate_rate, HeaderMap, StatusCode,
+    };
 
     #[test]
     fn rejects_negative_or_non_finite_rates() {
@@ -342,5 +372,16 @@ mod tests {
         assert!((equivalent - 0.5).abs() < f64::EPSILON);
         assert!(resolve_rate(None, Some(6), Some(0.0501)).is_err());
         assert!(resolve_rate(None, Some(7), Some(0.05)).is_ok());
+    }
+
+    #[test]
+    fn requires_valid_credit_idempotency_key() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            idempotency_key(&headers).unwrap_err().0,
+            StatusCode::BAD_REQUEST
+        );
+        headers.insert("idempotency-key", "credit-123".parse().unwrap());
+        assert_eq!(idempotency_key(&headers).unwrap(), "credit-123");
     }
 }

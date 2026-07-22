@@ -44,25 +44,26 @@ impl Default for MediaEdgeServiceConfig {
 
 impl MediaEdgeServiceConfig {
     /// 从 `VOS_RS_CONFIG_FILE` 指定的 YAML 加载；未指定时读取当前目录的 config.yaml。
-    pub fn load() -> Self {
+    pub fn load() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let path = std::env::var("VOS_RS_CONFIG_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("config.yaml"));
-        let Ok(content) = fs::read_to_string(path) else {
-            return Self::default();
-        };
+        let content = fs::read_to_string(&path)
+            .map_err(|error| format!("读取配置文件 {} 失败: {error}", path.display()))?;
         Self::from_yaml(&content)
     }
 
-    fn from_yaml(content: &str) -> Self {
+    fn from_yaml(content: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let defaults = Self::default();
-        let section = serde_yaml::from_str::<RootConfig>(content)
-            .ok()
-            .and_then(|root| root.media_edge)
+        let section = serde_yaml::from_str::<RootConfig>(content)?
+            .media_edge
             .unwrap_or_default();
-        Self {
+        let mut config = Self {
             control_bind: section.control_bind.unwrap_or(defaults.control_bind),
-            control_token: section.control_token.unwrap_or(defaults.control_token),
+            control_token: std::env::var("VOS_RS_MEDIA_CONTROL_TOKEN")
+                .ok()
+                .or(section.control_token)
+                .unwrap_or(defaults.control_token),
             uds_path: section.uds_path.unwrap_or(defaults.uds_path),
             recording_workers: section
                 .recording_workers
@@ -72,7 +73,12 @@ impl MediaEdgeServiceConfig {
                 .recording_queue_capacity
                 .unwrap_or(defaults.recording_queue_capacity)
                 .max(1),
+        };
+        config.control_token = config.control_token.trim().to_string();
+        if !config.control_bind.ip().is_loopback() && config.control_token.is_empty() {
+            return Err("非回环 Media Edge 控制端口必须配置 control_token".into());
         }
+        Ok(config)
     }
 }
 
@@ -84,11 +90,22 @@ mod tests {
     fn parses_media_edge_section() {
         let config = MediaEdgeServiceConfig::from_yaml(
             "media_edge:\n  control_bind: 127.0.0.1:3131\n  control_token: test-token\n  uds_path: /tmp/test.sock\n  recording_workers: 8\n  recording_queue_capacity: 2048\n",
-        );
+        )
+        .expect("valid config");
         assert_eq!(config.control_bind, "127.0.0.1:3131".parse().unwrap());
         assert_eq!(config.control_token, "test-token");
         assert_eq!(config.uds_path, "/tmp/test.sock");
         assert_eq!(config.recording_workers, 8);
         assert_eq!(config.recording_queue_capacity, 2048);
+    }
+
+    #[test]
+    fn rejects_public_control_bind_without_token() {
+        let error = MediaEdgeServiceConfig::from_yaml(
+            "media_edge:\n  control_bind: 0.0.0.0:3030\n  control_token: ''\n",
+        )
+        .expect_err("public control endpoint must require authentication");
+
+        assert!(error.to_string().contains("control_token"));
     }
 }

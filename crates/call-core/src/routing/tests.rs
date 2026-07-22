@@ -51,6 +51,22 @@ fn test_lcr_cost_sort() {
 }
 
 #[test]
+fn endpoint_priority_orders_failover_within_same_route() {
+    let routes = vec![
+        Route::new("backup", "86", 100, make_target("backup.example.com"))
+            .with_endpoint_priority(10),
+        Route::new("primary", "86", 100, make_target("primary.example.com"))
+            .with_endpoint_priority(100),
+    ];
+    let candidates = RouteTable::new(routes)
+        .select_candidates(&make_uri("8613800138000"))
+        .expect("endpoint routes should match");
+
+    assert_eq!(candidates[0].target.host, "primary.example.com");
+    assert_eq!(candidates[1].target.host, "backup.example.com");
+}
+
+#[test]
 fn test_gateway_health_circuit_breaker() {
     let tracker = GatewayHealthTracker::new(HealthThresholds {
         failure_threshold: 3,

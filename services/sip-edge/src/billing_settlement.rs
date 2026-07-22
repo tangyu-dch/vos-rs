@@ -103,4 +103,14 @@ mod tests {
         assert_eq!(maximum_duration_secs(0.4, 6, 0.05), Some(48));
         assert_eq!(maximum_duration_secs(0.0, 6, 0.05), None);
     }
+
+    #[test]
+    fn maximum_duration_includes_credit_limit_in_available_funds() {
+        let balance = -0.25;
+        let credit_limit = 1.0;
+        assert_eq!(
+            maximum_duration_secs(balance + credit_limit, 6, 0.05),
+            Some(90)
+        );
+    }
 }

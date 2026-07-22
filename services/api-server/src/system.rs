@@ -1,4 +1,4 @@
-use crate::metrics::{MediaMetricsSnapshot, Metrics};
+use crate::metrics::{CdrMetricsSnapshot, MediaMetricsSnapshot, Metrics};
 use crate::AppState;
 use axum::{
     extract::State,
@@ -36,6 +36,21 @@ pub async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoRespo
             Err(error) => tracing::debug!(%error, "failed to decode sip-edge media metrics"),
         },
         Err(error) => tracing::debug!(%error, "failed to fetch sip-edge media metrics"),
+    }
+
+    let cdr_url = format!("{}/manage/cdr-metrics", state.sip_manage_base);
+    match state
+        .internal_client
+        .get(&cdr_url)
+        .header("X-VOS-Token", &state.internal_secret)
+        .send()
+        .await
+    {
+        Ok(response) => match response.json::<CdrMetricsSnapshot>().await {
+            Ok(snapshot) => Metrics::update_cdr_metrics(&snapshot),
+            Err(error) => tracing::debug!(%error, "failed to decode sip-edge CDR metrics"),
+        },
+        Err(error) => tracing::debug!(%error, "failed to fetch sip-edge CDR metrics"),
     }
 
     let mut headers = HeaderMap::new();

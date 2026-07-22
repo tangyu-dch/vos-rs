@@ -1,8 +1,9 @@
 use crate::pool_selection::PoolSelectionCursor;
 use crate::{
     CallError, CallResult, CallerIdentity, CallerIdentityMode, CallerPoolStrategy,
-    CdrAuditSnapshot, GatewayId, SelectedRoute,
+    CdrAuditSnapshot, GatewayHealthTracker, GatewayId, Route, RouteTable, SelectedRoute,
 };
+use sip_core::SipUri;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -60,6 +61,8 @@ pub struct RuntimeEgressGroupMember {
     pub group_id: String,
     pub gateway_id: String,
     pub destination_prefix: String,
+    pub priority: i32,
+    pub weight: u32,
 }
 
 /// New source-owned outbound policy data, atomically refreshed with routes.
@@ -70,6 +73,7 @@ pub struct OutboundPolicyDirectory {
     policies: HashMap<CallSource, RuntimeSourcePolicy>,
     pools: HashMap<String, RuntimeCallerPool>,
     group_members: HashMap<String, Vec<RuntimeEgressGroupMember>>,
+    egress_routes: HashMap<GatewayId, Vec<Route>>,
     selection_cursors: HashMap<String, Arc<PoolSelectionCursor>>,
 }
 
@@ -140,6 +144,102 @@ impl OutboundPolicyDirectory {
                 .push(member);
         }
         directory
+    }
+
+    /// Attaches the current signaling endpoints for every termination gateway.
+    pub fn with_egress_routes(
+        mut self,
+        routes: impl IntoIterator<Item = (String, Vec<Route>)>,
+    ) -> Self {
+        self.egress_routes.extend(
+            routes
+                .into_iter()
+                .map(|(gateway_id, routes)| (GatewayId::new(gateway_id), routes)),
+        );
+        self
+    }
+
+    /// Builds termination candidates directly from a source policy.
+    ///
+    /// `None` means the source has no explicit policy and legacy routes should
+    /// remain authoritative.
+    pub fn select_source_candidates(
+        &self,
+        source: &CallSource,
+        destination: &SipUri,
+        direction: &str,
+        health: Option<&GatewayHealthTracker>,
+    ) -> CallResult<Option<Vec<SelectedRoute>>> {
+        let Some(policy) = self.policies.get(source) else {
+            return Ok(None);
+        };
+        // Direct candidate construction is enabled only after the runtime has
+        // supplied its endpoint directory. This preserves compatibility for
+        // embedders that still provide explicit legacy routes.
+        if self.egress_routes.is_empty() {
+            return Ok(None);
+        }
+        let destination_number = destination.user.as_deref().unwrap_or_default();
+        let routes = self.policy_routes(policy, destination_number)?;
+        let table = RouteTable::new(routes);
+        let candidates = match health {
+            Some(health) => {
+                table.select_healthy_candidates(destination, health, Some(direction))?
+            }
+            None => table.select_candidates_for_direction(destination, direction)?,
+        };
+        Ok(Some(candidates))
+    }
+
+    fn policy_routes(
+        &self,
+        policy: &RuntimeSourcePolicy,
+        destination: &str,
+    ) -> CallResult<Vec<Route>> {
+        let members = match &policy.egress {
+            RuntimeEgressPolicy::Direct(gateway_id) => vec![RuntimeEgressGroupMember {
+                group_id: String::new(),
+                gateway_id: gateway_id.clone(),
+                destination_prefix: String::new(),
+                priority: 0,
+                weight: 100,
+            }],
+            RuntimeEgressPolicy::Group(group_id) => self
+                .group_members
+                .get(group_id)
+                .into_iter()
+                .flatten()
+                .filter(|member| destination.starts_with(&member.destination_prefix))
+                .cloned()
+                .collect(),
+        };
+        let mut routes = Vec::new();
+        for member in members {
+            let gateway_id = GatewayId::new(&member.gateway_id);
+            let Some(endpoint_routes) = self.egress_routes.get(&gateway_id) else {
+                continue;
+            };
+            let priority = u16::try_from(member.priority.max(0)).unwrap_or(u16::MAX);
+            for endpoint_route in endpoint_routes {
+                routes.push(
+                    Route::with_cost_and_weight(
+                        format!("policy:{}:{}", member.gateway_id, endpoint_route.id),
+                        member.destination_prefix.clone(),
+                        priority,
+                        0.0,
+                        member.weight.max(1),
+                        endpoint_route.target.clone(),
+                    )
+                    .with_endpoint_priority(endpoint_route.endpoint_priority),
+                );
+            }
+        }
+        if routes.is_empty() {
+            return Err(CallError::CallerIdentityUnavailable(
+                "source policy has no configured termination endpoint for destination".to_string(),
+            ));
+        }
+        Ok(routes)
     }
 
     /// Preserves stateful selection cursors for unchanged pools during a configuration refresh.
@@ -448,11 +548,15 @@ mod pool_fallback_tests {
                     group_id: "group-a".to_string(),
                     gateway_id: "egress-a".to_string(),
                     destination_prefix: String::new(),
+                    priority: 100,
+                    weight: 1,
                 },
                 RuntimeEgressGroupMember {
                     group_id: "group-a".to_string(),
                     gateway_id: "egress-b".to_string(),
                     destination_prefix: String::new(),
+                    priority: 100,
+                    weight: 1,
                 },
             ],
         )
@@ -529,6 +633,70 @@ mod pool_fallback_tests {
 
         assert_eq!(selections.len(), 1);
         assert_eq!(selections[0].0.presented_number, "10001");
+    }
+
+    #[test]
+    fn group_policy_builds_candidates_without_legacy_routes() {
+        let source = CallSource::new("trunk", "access-a");
+        let directory = OutboundPolicyDirectory::new(
+            [],
+            [],
+            [RuntimeSourcePolicy {
+                source: source.clone(),
+                caller_mode: "strict_passthrough".to_string(),
+                fixed_number: None,
+                caller_pool_id: None,
+                egress: RuntimeEgressPolicy::Group("group-a".to_string()),
+            }],
+            [],
+            [
+                RuntimeEgressGroupMember {
+                    group_id: "group-a".to_string(),
+                    gateway_id: "egress-a".to_string(),
+                    destination_prefix: "13".to_string(),
+                    priority: 100,
+                    weight: 1,
+                },
+                RuntimeEgressGroupMember {
+                    group_id: "group-a".to_string(),
+                    gateway_id: "egress-b".to_string(),
+                    destination_prefix: String::new(),
+                    priority: 200,
+                    weight: 1,
+                },
+            ],
+        )
+        .with_egress_routes([
+            (
+                "egress-a".to_string(),
+                vec![Route::new(
+                    "endpoint-a",
+                    "",
+                    0,
+                    RouteTarget::new("egress-a", "a.example.com", Some(5060)),
+                )],
+            ),
+            (
+                "egress-b".to_string(),
+                vec![Route::new(
+                    "endpoint-b",
+                    "",
+                    0,
+                    RouteTarget::new("egress-b", "b.example.com", Some(5060)),
+                )],
+            ),
+        ]);
+        let destination =
+            SipUri::from_str("sip:13800138000@example.com").expect("valid destination URI");
+
+        let candidates = directory
+            .select_source_candidates(&source, &destination, "outbound", None)
+            .expect("group policy should resolve")
+            .expect("source has an explicit group policy");
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].target.gateway_id.as_str(), "egress-a");
+        assert_eq!(candidates[1].target.gateway_id.as_str(), "egress-b");
     }
 }
 

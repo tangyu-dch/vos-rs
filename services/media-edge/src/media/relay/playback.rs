@@ -1,15 +1,18 @@
 use super::*;
 
 impl MediaRelayState {
-    pub fn start_playback(
+    pub async fn start_playback(
         &self,
         port: u16,
         file_path: std::path::PathBuf,
         mode: PlaybackMode,
         loop_playback: bool,
     ) -> Result<(), String> {
-        let samples = crate::media::wav::load_wav_pcm(&file_path)
-            .map_err(|e| format!("加载音频文件失败: {e}"))?;
+        let samples =
+            tokio::task::spawn_blocking(move || crate::media::wav::load_wav_pcm(file_path))
+                .await
+                .map_err(|error| format!("加载音频文件线程异常: {error}"))?
+                .map_err(|e| format!("加载音频文件失败: {e}"))?;
 
         self.stop_playback(port);
 
@@ -136,18 +139,18 @@ impl MediaRelayState {
                 }
             }
 
-            let is_exclusive = playback_state
-                .lock()
-                .map(|state| state.mode == PlaybackMode::Exclusive)
-                .unwrap_or(false);
-            if is_exclusive {
-                if let Some(peer_port) = relay.peer_ports.get(&port).map(|entry| *entry) {
-                    relay.mark_resume_after_exclusive(peer_port);
+            if relay.cleanup_finished_playback(port, &playback_state) {
+                let is_exclusive = playback_state
+                    .lock()
+                    .map(|state| state.mode == PlaybackMode::Exclusive)
+                    .unwrap_or(false);
+                if is_exclusive {
+                    if let Some(peer_port) = relay.peer_ports.get(&port).map(|entry| *entry) {
+                        relay.mark_resume_after_exclusive(peer_port);
+                    }
                 }
+                relay.mark_port_and_peer_features_changed(port);
             }
-            relay.playbacks.remove(&port);
-            relay.playback_loops.remove(&port);
-            relay.mark_port_and_peer_features_changed(port);
         });
 
         Ok(())
@@ -173,5 +176,22 @@ impl MediaRelayState {
         if changed {
             self.mark_port_and_peer_features_changed(port);
         }
+    }
+
+    fn cleanup_finished_playback(
+        &self,
+        port: u16,
+        playback_state: &Arc<std::sync::Mutex<PlaybackState>>,
+    ) -> bool {
+        let dashmap::mapref::entry::Entry::Occupied(entry) = self.playbacks.entry(port) else {
+            return false;
+        };
+        if !Arc::ptr_eq(entry.get(), playback_state) {
+            return false;
+        }
+
+        self.playback_loops.remove(&port);
+        entry.remove();
+        true
     }
 }

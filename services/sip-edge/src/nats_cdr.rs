@@ -1,4 +1,5 @@
 use async_nats::jetstream::{self, stream};
+use async_nats::{header::NATS_MESSAGE_ID, HeaderMap};
 use call_core::CallCdr;
 use cdr_core::CdrEvent;
 
@@ -33,9 +34,12 @@ impl NatsCdrPublisher {
     }
 
     pub async fn publish_cdr(&self, cdr: &CallCdr) -> Result<(), AnyError> {
+        let mut headers = HeaderMap::new();
+        headers.insert(NATS_MESSAGE_ID, cdr.call_id.as_str());
         self.jetstream
-            .publish(
+            .publish_with_headers(
                 self.subject.clone(),
+                headers,
                 CdrEvent::from_call_cdr(cdr).to_json_bytes().into(),
             )
             .await?

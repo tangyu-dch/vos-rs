@@ -2,6 +2,7 @@
 members = [
     "crates/call-core",
     "crates/cdr-core",
+    "crates/media-core",
     "crates/rtp-core",
     "crates/sdp-core",
     "crates/sip-core",

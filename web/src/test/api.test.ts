@@ -12,7 +12,7 @@ vi.mock('axios', () => ({
   },
 }));
 
-import { ApiError, unwrap } from '@/services/client';
+import { ApiError, shouldRetryRequest, unwrap } from '@/services/client';
 
 describe('v1 API client', () => {
   it('unwraps the standard success envelope', () => {
@@ -31,5 +31,12 @@ describe('v1 API client', () => {
 
   it('accepts an unwrapped response during migration', () => {
     expect(unwrap(['node-a'])).toEqual(['node-a']);
+  });
+
+  it('retries transient reads but never retries writes', () => {
+    expect(shouldRetryRequest('GET', 502, undefined, true)).toBe(true);
+    expect(shouldRetryRequest('get', undefined, 'ECONNABORTED', false)).toBe(true);
+    expect(shouldRetryRequest('POST', 502, undefined, true)).toBe(false);
+    expect(shouldRetryRequest('PUT', undefined, 'ERR_NETWORK', false)).toBe(false);
   });
 });

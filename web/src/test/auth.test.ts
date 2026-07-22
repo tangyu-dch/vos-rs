@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { canAccessPage, clearSession, getSession, saveSession } from '@/services/auth';
+import { api } from '@/services/client';
+import { login } from '@/services/resources';
 
 describe('frontend RBAC', () => {
   beforeEach(() => {
@@ -24,6 +26,13 @@ describe('frontend RBAC', () => {
     expect(getSession()).toEqual({ token: 'token', username: 'alice', role: 'operator' });
 
     localStorage.setItem('vos-auth-session', JSON.stringify({ token: '', username: 'alice', role: 'operator' }));
+    expect(getSession()).toBeNull();
+  });
+
+  it('does not create an administrator session when authentication fails', async () => {
+    vi.spyOn(api, 'post').mockRejectedValueOnce(new Error('service unavailable'));
+
+    await expect(login('admin', 'admin')).rejects.toThrow('service unavailable');
     expect(getSession()).toBeNull();
   });
 });

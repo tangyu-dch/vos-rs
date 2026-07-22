@@ -43,6 +43,7 @@ pub(crate) mod utils;
 #[allow(dead_code)]
 pub(crate) mod wav;
 
+#[allow(unused_imports)]
 pub use self::config::MediaConfig;
 pub use self::live_transcode::LiveTranscoder;
 pub use self::relay::MediaRelayState;

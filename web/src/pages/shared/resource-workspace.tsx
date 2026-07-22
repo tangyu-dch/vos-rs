@@ -196,6 +196,7 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
   const [draft, setDraft] = useState<Entity>({});
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [actionRow, setActionRow] = useState<Entity | null>(null);
+  const [actionIdempotencyKey, setActionIdempotencyKey] = useState('');
   const [amount, setAmount] = useState<number>(100);
   const [fieldOptions, setFieldOptions] = useState<Record<string, SelectOptionSpec[]>>({});
   const [confirmRow, setConfirmRow] = useState<Entity | null>(null);
@@ -314,9 +315,14 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
     if (!actionRow || spec.action !== 'credit') return;
     try {
       setSaving(true);
-      await api.post(`${spec.path}/${encodeURIComponent(entityId(actionRow, spec.idKey))}/credit`, { amount });
+      await api.post(
+        `${spec.path}/${encodeURIComponent(entityId(actionRow, spec.idKey))}/credit`,
+        { amount },
+        { headers: { 'Idempotency-Key': actionIdempotencyKey } },
+      );
       message.success('充值成功');
       setActionRow(null);
+      setActionIdempotencyKey('');
       await load();
     } catch (reason) {
       message.error(reason instanceof Error ? reason.message : '操作失败');
@@ -473,7 +479,15 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
                             </Button>
                           )}
                           {spec.action === 'credit' && (
-                            <Button size="sm" variant="flat" color="primary" onPress={() => setActionRow(row)}>充值</Button>
+                            <Button
+                              size="sm"
+                              variant="flat"
+                              color="primary"
+                              onPress={() => {
+                                setActionIdempotencyKey(crypto.randomUUID());
+                                setActionRow(row);
+                              }}
+                            >充值</Button>
                           )}
                           {!spec.readOnly && (
                             <Button isIconOnly size="sm" variant="light" onPress={() => void openForm(row)}>
@@ -540,7 +554,16 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
         </ModalContent>
       </Modal>
 
-      <Modal isOpen={Boolean(actionRow)} onOpenChange={(o) => !o && setActionRow(null)} size="sm">
+      <Modal
+        isOpen={Boolean(actionRow)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setActionRow(null);
+            setActionIdempotencyKey('');
+          }
+        }}
+        size="sm"
+      >
         <ModalContent>
           <ModalHeader>账户充值 · {actionRow ? entityId(actionRow, spec.idKey) : ''}</ModalHeader>
           <ModalBody>
@@ -557,7 +580,10 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
             </div>
           </ModalBody>
           <ModalFooter>
-            <Button variant="flat" onPress={() => setActionRow(null)}>取消</Button>
+            <Button variant="flat" onPress={() => {
+              setActionRow(null);
+              setActionIdempotencyKey('');
+            }}>取消</Button>
             <Button color="primary" isLoading={saving} onPress={runAction}>确认充值</Button>
           </ModalFooter>
         </ModalContent>

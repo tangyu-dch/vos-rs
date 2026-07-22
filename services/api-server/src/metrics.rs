@@ -24,6 +24,12 @@ pub struct Metrics {
     pub recordings_total: Counter,
     #[allow(dead_code)]
     pub cdr_processed_total: Counter,
+    pub cdr_queue_overflow_total: Gauge,
+    pub cdr_spooled_total: Gauge,
+    pub cdr_replayed_total: Gauge,
+    pub cdr_spool_failures_total: Gauge,
+    pub cdr_spool_pending_records: Gauge,
+    pub cdr_unrecoverable_dropped_total: Gauge,
     pub media_received_packets: Gauge,
     pub media_forwarded_packets: Gauge,
     pub media_dropped_invalid_packets: Gauge,
@@ -82,6 +88,16 @@ pub struct MediaMetricsSnapshot {
     pub webrtc_dtls_connected: u64,
     #[serde(default)]
     pub webrtc_dtls_failed: u64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct CdrMetricsSnapshot {
+    queue_overflow_total: u64,
+    spooled_total: u64,
+    replayed_total: u64,
+    spool_failures_total: u64,
+    pending_spool_records: u64,
+    unrecoverable_dropped_total: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,6 +208,42 @@ impl Metrics {
             "cdr_processed_total",
             "Total CDR records processed",
             cdr_processed_total.clone(),
+        );
+        let cdr_queue_overflow_total = Gauge::default();
+        registry.register(
+            "cdr_queue_overflow_total",
+            "CDRs diverted because the in-memory queue was full",
+            cdr_queue_overflow_total.clone(),
+        );
+        let cdr_spooled_total = Gauge::default();
+        registry.register(
+            "cdr_spooled_total",
+            "CDRs appended to the durable local replay spool",
+            cdr_spooled_total.clone(),
+        );
+        let cdr_replayed_total = Gauge::default();
+        registry.register(
+            "cdr_replayed_total",
+            "CDRs successfully replayed from the durable spool",
+            cdr_replayed_total.clone(),
+        );
+        let cdr_spool_failures_total = Gauge::default();
+        registry.register(
+            "cdr_spool_failures_total",
+            "CDR spool append, rotation, or decoding failures",
+            cdr_spool_failures_total.clone(),
+        );
+        let cdr_spool_pending_records = Gauge::default();
+        registry.register(
+            "cdr_spool_pending_records",
+            "CDR records currently waiting in the durable replay spool",
+            cdr_spool_pending_records.clone(),
+        );
+        let cdr_unrecoverable_dropped_total = Gauge::default();
+        registry.register(
+            "cdr_unrecoverable_dropped_total",
+            "CDRs lost after both queue delivery and durable spool append failed",
+            cdr_unrecoverable_dropped_total.clone(),
         );
 
         let media_received_packets = Gauge::default();
@@ -384,6 +436,12 @@ impl Metrics {
             active_gateways,
             recordings_total,
             cdr_processed_total,
+            cdr_queue_overflow_total,
+            cdr_spooled_total,
+            cdr_replayed_total,
+            cdr_spool_failures_total,
+            cdr_spool_pending_records,
+            cdr_unrecoverable_dropped_total,
             media_received_packets,
             media_forwarded_packets,
             media_dropped_invalid_packets,
@@ -501,6 +559,28 @@ impl Metrics {
             .set(saturating_i64(snapshot.webrtc_dtls_failed));
     }
 
+    pub fn update_cdr_metrics(snapshot: &CdrMetricsSnapshot) {
+        let metrics = Self::global();
+        metrics
+            .cdr_queue_overflow_total
+            .set(saturating_i64(snapshot.queue_overflow_total));
+        metrics
+            .cdr_spooled_total
+            .set(saturating_i64(snapshot.spooled_total));
+        metrics
+            .cdr_replayed_total
+            .set(saturating_i64(snapshot.replayed_total));
+        metrics
+            .cdr_spool_failures_total
+            .set(saturating_i64(snapshot.spool_failures_total));
+        metrics
+            .cdr_spool_pending_records
+            .set(saturating_i64(snapshot.pending_spool_records));
+        metrics
+            .cdr_unrecoverable_dropped_total
+            .set(saturating_i64(snapshot.unrecoverable_dropped_total));
+    }
+
     pub fn encode_metrics() -> String {
         let metrics = Self::global();
         let mut buffer = String::new();
@@ -552,5 +632,22 @@ mod tests {
         assert!(output.contains("media_recording_dropped_packets 4"));
         assert!(output.contains("media_recording_queue_depth 12"));
         assert!(output.contains("media_rtcp_max_rtt_ms 22"));
+    }
+
+    #[test]
+    fn test_cdr_pipeline_metrics_are_encoded_for_prometheus() {
+        Metrics::update_cdr_metrics(&CdrMetricsSnapshot {
+            queue_overflow_total: 3,
+            spooled_total: 4,
+            replayed_total: 2,
+            spool_failures_total: 1,
+            pending_spool_records: 2,
+            unrecoverable_dropped_total: 0,
+        });
+
+        let output = Metrics::encode_metrics();
+        assert!(output.contains("cdr_queue_overflow_total 3"));
+        assert!(output.contains("cdr_spool_pending_records 2"));
+        assert!(output.contains("cdr_unrecoverable_dropped_total 0"));
     }
 }

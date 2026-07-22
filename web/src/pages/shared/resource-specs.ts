@@ -62,11 +62,12 @@ export const numbers: ResourceSpec = {
 };
 
 export const accounts: ResourceSpec = {
-  title: '计费账户', description: '查看余额、币种和账户可用状态。', path: '/billing/accounts',
+  title: '计费账户', description: '查看余额、授信额度、币种和账户可用状态。', path: '/billing/accounts',
   idKey: 'username', readOnly: true, action: 'credit',
   fields: [
     { key: 'username', label: '账户' },
     { key: 'balance', label: '余额', kind: 'number' },
+    { key: 'credit_limit', label: '授信额度', kind: 'number' },
     { key: 'currency', label: '币种' },
     { key: 'created_at', label: '创建时间' },
   ],

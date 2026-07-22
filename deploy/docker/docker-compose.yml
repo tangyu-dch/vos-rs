@@ -304,6 +304,9 @@ volumes:
   vos_rs_recordings:
     driver: local
     name: vos_rs_recordings
+  vos_rs_cdr_spool:
+    driver: local
+    name: vos_rs_cdr_spool
   vos_rs_rustfs:
     driver: local
     # RustFS 升级或本地测试发生元数据不兼容时，可通过

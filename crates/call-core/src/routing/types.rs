@@ -198,6 +198,12 @@ pub struct Route {
     /// 权重越高，被选为第一候选的概率越大
     /// 默认为 100
     pub weight: u32,
+    /// Priority of a signaling endpoint within the same gateway.
+    ///
+    /// Route priority is evaluated first; this value only orders multiple
+    /// endpoints that belong to an otherwise equivalent route.
+    #[serde(default)]
+    pub endpoint_priority: i32,
     /// 路由目标（网关地址和配置）
     pub target: RouteTarget,
 }
@@ -215,6 +221,7 @@ impl Route {
             priority,
             cost: 0.0,
             weight: 100,
+            endpoint_priority: 0,
             target,
         }
     }
@@ -232,6 +239,7 @@ impl Route {
             priority,
             cost,
             weight: 100,
+            endpoint_priority: 0,
             target,
         }
     }
@@ -250,8 +258,15 @@ impl Route {
             priority,
             cost,
             weight,
+            endpoint_priority: 0,
             target,
         }
+    }
+
+    /// Sets the signaling endpoint priority used for deterministic failover order.
+    pub fn with_endpoint_priority(mut self, endpoint_priority: i32) -> Self {
+        self.endpoint_priority = endpoint_priority;
+        self
     }
 
     #[allow(dead_code)]

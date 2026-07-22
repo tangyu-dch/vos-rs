@@ -1,5 +1,7 @@
+use crate::cdr_spool::CdrSpool;
 use crate::config::EdgeConfig;
 use crate::edge_state::CdrSinks;
+use crate::nats_cdr::NatsCdrPublisher;
 use call_core::CallCdr;
 use cdr_core::PostgresCdrStore;
 use std::time::Duration;
@@ -20,7 +22,27 @@ pub(crate) async fn cdr_sinks_from_config(config: &EdgeConfig) -> Result<CdrSink
         }
     };
 
-    Ok(CdrSinks { postgres })
+    let nats = match (
+        config.nats_url.as_deref(),
+        config.nats_cdr_subject.as_deref(),
+        config.nats_cdr_stream.as_deref(),
+    ) {
+        (Some(url), Some(subject), Some(stream)) if !url.trim().is_empty() => {
+            match NatsCdrPublisher::connect(url, subject, stream).await {
+                Ok(publisher) => {
+                    info!(stream, subject, "NATS JetStream CDR persistence enabled");
+                    Some(publisher)
+                }
+                Err(error) => {
+                    warn!(%error, "NATS CDR publisher unavailable; falling back to PostgreSQL with local spool protection");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
+    Ok(CdrSinks { postgres, nats })
 }
 
 pub(crate) async fn flush_cdr_batch(
@@ -28,6 +50,14 @@ pub(crate) async fn flush_cdr_batch(
     cdrs: &[CallCdr],
 ) -> Result<(), AnyError> {
     if cdrs.is_empty() {
+        return Ok(());
+    }
+
+    if let Some(publisher) = &cdr_sinks.nats {
+        for cdr in cdrs {
+            publisher.publish_cdr(cdr).await?;
+        }
+        debug!(count = cdrs.len(), "published batch CDRs to NATS JetStream");
         return Ok(());
     }
 
@@ -39,17 +69,30 @@ pub(crate) async fn flush_cdr_batch(
         return Ok(());
     }
 
-    debug!(count = cdrs.len(), "discarded batch CDRs without CDR sink");
-    Ok(())
+    Err(std::io::Error::other("no CDR persistence sink is available").into())
 }
 
-pub(crate) async fn flush_cdr_batch_with_retry_and_wal(cdr_sinks: &CdrSinks, batch: &[CallCdr]) {
+pub(crate) async fn flush_cdr_batch_with_retry_and_spool(
+    cdr_sinks: &CdrSinks,
+    spool: &CdrSpool,
+    batch: &[CallCdr],
+) {
+    flush_cdr_batch_with_retry_policy(cdr_sinks, spool, batch, 3, Duration::from_secs(1)).await;
+}
+
+pub(crate) async fn flush_cdr_batch_with_retry_policy(
+    cdr_sinks: &CdrSinks,
+    spool: &CdrSpool,
+    batch: &[CallCdr],
+    attempts: usize,
+    retry_delay: Duration,
+) {
     if batch.is_empty() {
         return;
     }
 
     let mut success = false;
-    for attempt in 1..=3 {
+    for attempt in 1..=attempts.max(1) {
         match flush_cdr_batch(cdr_sinks, batch).await {
             Ok(_) => {
                 success = true;
@@ -57,37 +100,22 @@ pub(crate) async fn flush_cdr_batch_with_retry_and_wal(cdr_sinks: &CdrSinks, bat
             }
             Err(e) => {
                 warn!(attempt, error = %e, "批量发送 CDR 失败，正在重试...");
-                tokio::time::sleep(Duration::from_millis(1000)).await;
+                tokio::time::sleep(retry_delay).await;
             }
         }
     }
 
     if !success {
-        tracing::error!("致命错误: 连续 3 次批量刷新 CDR 失败！为防止数据丢失，正将 CDR 数据追加写入本地 logs/cdr_dlq.jsonl 死信归档...");
-
-        let _ = tokio::fs::create_dir_all("logs").await;
-        if let Ok(mut file) = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("logs/cdr_dlq.jsonl")
-            .await
-        {
-            use tokio::io::AsyncWriteExt;
-            for cdr in batch {
-                if let Ok(json_str) = serde_json::to_string(cdr) {
-                    let _ = file.write_all(format!("{}\n", json_str).as_bytes()).await;
-                }
-            }
-            let _ = file.flush().await;
-            info!(
+        match spool.append_batch(batch) {
+            Ok(()) => info!(
                 count = batch.len(),
-                "已成功将未送达的批量 CDR 追加归档至本地 logs/cdr_dlq.jsonl 中"
-            );
-        } else {
-            tracing::error!(
+                "CDR persistence failed; batch saved to durable replay spool"
+            ),
+            Err(error) => tracing::error!(
+                %error,
                 count = batch.len(),
-                "极其严重: 写入本地 logs/cdr_dlq.jsonl 文件失败！CDR 数据将丢弃！"
-            );
+                "CDR persistence and durable spool append both failed"
+            ),
         }
     }
 }

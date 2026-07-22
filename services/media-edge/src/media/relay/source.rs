@@ -35,24 +35,18 @@ impl MediaRelayState {
     pub fn metrics_totals(&self) -> MediaRelayMetrics {
         let mut totals = MediaRelayMetrics::default();
         for entry in self.metrics.iter() {
-            let metrics = entry.value();
-            totals.received_packets += metrics.received_packets;
-            totals.forwarded_packets += metrics.forwarded_packets;
-            totals.dropped_invalid_packets += metrics.dropped_invalid_packets;
-            totals.dropped_no_target_packets += metrics.dropped_no_target_packets;
-            totals.send_errors += metrics.send_errors;
-            totals.learned_source_updates += metrics.learned_source_updates;
-            totals.recorded_packets += metrics.recorded_packets;
-            totals.recording_dropped_packets += metrics.recording_dropped_packets;
-            totals.recording_errors += metrics.recording_errors;
-            totals.fast_path_packets += metrics.fast_path_packets;
-
-            if metrics.rtcp_quality.reports > 0 {
-                totals.rtcp_quality.merge(metrics.rtcp_quality);
-                totals.rtcp_window.merge(metrics.rtcp_window);
-                totals.rtcp_quality_alerts += metrics.rtcp_quality_alerts;
-                totals.rtcp_quality_degraded |= metrics.rtcp_quality_degraded;
-            }
+            totals.merge(*entry.value());
+        }
+        for session in self.webrtc_sessions.iter() {
+            totals.webrtc_ice_connected |= session
+                .ice_connected
+                .load(std::sync::atomic::Ordering::Acquire);
+            totals.webrtc_dtls_connected |= session
+                .dtls_connected
+                .load(std::sync::atomic::Ordering::Acquire);
+            totals.webrtc_dtls_failed |= session
+                .dtls_failed
+                .load(std::sync::atomic::Ordering::Acquire);
         }
         totals.recording_workers = self.recording_pool.worker_count() as u64;
         totals.recording_queue_capacity = self.recording_pool.total_capacity() as u64;

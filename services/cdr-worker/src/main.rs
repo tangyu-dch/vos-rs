@@ -107,8 +107,10 @@ async fn main() -> Result<(), AnyError> {
 
     let config_file_path =
         env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
-    let config_content = std::fs::read_to_string(&config_file_path).unwrap_or_default();
-    let config: CdrWorkerConfig = serde_yaml::from_str(&config_content).unwrap_or_default();
+    let config_content = std::fs::read_to_string(&config_file_path)
+        .map_err(|error| format!("读取配置文件 {config_file_path} 失败: {error}"))?;
+    let config: CdrWorkerConfig = serde_yaml::from_str(&config_content)
+        .map_err(|error| format!("解析配置文件 {config_file_path} 失败: {error}"))?;
 
     let conn_section = config.connections.unwrap_or_default();
     let db_section = conn_section.database.unwrap_or_default();
@@ -186,7 +188,7 @@ async fn main() -> Result<(), AnyError> {
     let store = match PostgresCdrStore::connect(&database_url, max_connections).await {
         Ok(s) => s,
         Err(e) => {
-            error!(database_url, error = %e, "PostgreSQL 数据库连接失败。VOS-RS 必须有 PostgreSQL 运行！");
+            error!(error = %e, "PostgreSQL 数据库连接失败。VOS-RS 必须有 PostgreSQL 运行！");
             return Err(e.into());
         }
     };
@@ -195,14 +197,14 @@ async fn main() -> Result<(), AnyError> {
     let redis_client = match redis::Client::open(redis_url.clone()) {
         Ok(c) => c,
         Err(e) => {
-            error!(redis_url, error = %e, "Redis 客户端打开失败。VOS-RS 必须有 Redis 运行！");
+            error!(error = %e, "Redis 客户端打开失败。VOS-RS 必须有 Redis 运行！");
             return Err(e.into());
         }
     };
     let _redis_conn = match redis_client.get_multiplexed_tokio_connection().await {
         Ok(conn) => conn,
         Err(e) => {
-            error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
+            error!(error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
             return Err(e.into());
         }
     };

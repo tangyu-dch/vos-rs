@@ -9,6 +9,7 @@ rust-version.workspace = true
 async-nats = "0.38"
 cdr-core = { path = "../../crates/cdr-core" }
 call-core = { path = "../../crates/call-core" }
+media-core = { path = "../../crates/media-core" }
 dashmap = "6"
 md5 = "0.7"
 uuid = { version = "1", features = ["v4"] }
@@ -43,5 +44,3 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"                                                  # ICE credential 随机生成
-opus = "0.3.0"
-rubato = "0.15"

@@ -1,943 +1,53 @@
-use rtp_core::{AudioCodec, PacketBufferPool, ReusablePacket, RtpPacketView};
+mod direct_writer;
+
+use rtp_core::RtpPacketView;
 use sdp_core::SdpError;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
-use std::ffi::CString;
 use std::fmt;
-use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
-use std::mem::MaybeUninit;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use std::{fs, io};
-use tracing::warn;
 
 use crate::media::config::MediaConfig;
 use crate::media::relay::MediaRelayState;
-use crate::media::utils::unix_timestamp_millis;
+use direct_writer::DirectIoWavWriterFactory;
+pub use media_core::recording::{
+    available_disk_bytes, cleanup_expired_recordings, decode_pcma, decode_pcmu,
+    recording_file_stem, RecordingChannel, RecordingLeg, RecordingPool, RecordingSession,
+};
+use media_core::recording::{RecordingFinalizer, RecordingWriterFactory};
 
-#[cfg(target_os = "linux")]
-fn open_direct_io_file(path: &std::path::Path) -> io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .custom_flags(libc::O_DIRECT)
-        .open(path)
+struct MediaEdgeRecordingFinalizer {
+    tokio_handle: Option<tokio::runtime::Handle>,
 }
 
-#[cfg(target_os = "macos")]
-fn open_direct_io_file(path: &std::path::Path) -> io::Result<std::fs::File> {
-    use std::os::unix::io::AsRawFd;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)?;
-    let fd = file.as_raw_fd();
-    unsafe {
-        let _ = libc::fcntl(fd, libc::F_NOCACHE, 1);
-    }
-    Ok(file)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn open_direct_io_file(path: &std::path::Path) -> io::Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)
-}
-
-pub const RECORDING_SAMPLE_RATE: u32 = 8_000;
-pub const RECORDING_CHANNELS: u16 = 2;
-pub const RECORDING_BITS_PER_SAMPLE: u16 = 16;
-pub const RECORDING_FLUSH_INTERVAL_FRAMES: u64 = 1024; // 1024 frames = 4096 bytes (1 disk block)
-pub const RECORDING_WORKER_DRAIN_LIMIT: usize = 256;
-const RECORDING_PACKET_POOL_CAPACITY: usize = 4_096;
-
-static NEXT_RECORDING_SESSION_ID: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Debug, Clone)]
-pub struct RecordingLeg {
-    pub session: Arc<RecordingSession>,
-    pub channel: RecordingChannel,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecordingChannel {
-    Caller,
-    Gateway,
-}
-
-impl RecordingChannel {
-    pub fn index(self) -> usize {
-        match self {
-            Self::Caller => 0,
-            Self::Gateway => 1,
+impl RecordingFinalizer for MediaEdgeRecordingFinalizer {
+    fn finalize(&self, wav_path: PathBuf, format: String, _call_id: String) {
+        let format = crate::media::transcode::RecordingFormat::from_str(&format);
+        if format == crate::media::transcode::RecordingFormat::Wav {
+            return;
         }
+        let Some(handle) = &self.tokio_handle else {
+            tracing::warn!(path = ?wav_path, "Tokio 句柄不可用，跳过录音转码");
+            return;
+        };
+        let _guard = handle.enter();
+        crate::media::transcode::transcode_recording_async(wav_path, format);
     }
 }
 
-#[derive(Debug)]
-pub struct RecordingSession {
-    pub info: Arc<RecordingSessionInfo>,
-    pub pool: Arc<RecordingPool>,
-}
-
-impl RecordingSession {
-    pub fn new(
-        wav_path: PathBuf,
-        min_free_bytes: u64,
-        max_file_bytes: u64,
-        max_duration_secs: u64,
-        pool: Arc<RecordingPool>,
-        format_str: String,
-    ) -> Self {
-        Self {
-            info: Arc::new(RecordingSessionInfo {
-                id: NEXT_RECORDING_SESSION_ID.fetch_add(1, Ordering::Relaxed),
-                wav_path,
-                min_free_bytes,
-                max_file_bytes,
-                max_duration_secs,
-                last_disk_check_ms: AtomicU64::new(0),
-                format_str,
-            }),
-            pool,
-        }
-    }
-
-    pub fn try_record(
-        &self,
-        channel: RecordingChannel,
-        packet: RtpPacketView<'_>,
-    ) -> io::Result<bool> {
-        if AudioCodec::from_static_payload_type(packet.payload_type).is_none()
-            || packet.payload.is_empty()
-        {
-            return Ok(false);
-        }
-
-        self.pool.try_record(
-            Arc::clone(&self.info),
-            RecordedRtpPacket {
-                channel,
-                payload_type: packet.payload_type,
-                timestamp: packet.timestamp,
-                payload: self.pool.copy_payload(packet.payload),
-            },
-        )
-    }
-
-    #[cfg(test)]
-    pub fn flush(&self) -> io::Result<()> {
-        self.pool.flush(Arc::clone(&self.info))
-    }
-}
-
-impl Drop for RecordingSession {
-    fn drop(&mut self) {
-        self.pool.finish(
-            self.info.id,
-            self.info.wav_path.clone(),
-            self.info.format_str.clone(),
-        );
-    }
-}
-
-#[derive(Debug)]
-pub struct RecordingSessionInfo {
-    pub id: u64,
-    pub wav_path: PathBuf,
-    pub min_free_bytes: u64,
-    pub max_file_bytes: u64,
-    pub max_duration_secs: u64,
-    pub last_disk_check_ms: AtomicU64,
-    /// 录音完成后的转码格式（"wav" / "opus" / "amr"）
-    pub format_str: String,
-}
-
-impl RecordingSessionInfo {
-    pub fn max_file_frames(&self) -> Option<u64> {
-        let duration_frames = (self.max_duration_secs > 0).then(|| {
-            self.max_duration_secs
-                .saturating_mul(u64::from(RECORDING_SAMPLE_RATE))
-        });
-        let size_frames = (self.max_file_bytes > 4096)
-            .then(|| (self.max_file_bytes - 4096) / u64::from(RECORDING_CHANNELS * 2));
-        match (duration_frames, size_frames) {
-            (Some(duration), Some(size)) => Some(duration.min(size)),
-            (Some(duration), None) => Some(duration),
-            (None, Some(size)) => Some(size),
-            (None, None) => None,
-        }
-    }
-
-    pub fn ensure_disk_space(&self) -> io::Result<()> {
-        if self.min_free_bytes == 0 {
-            return Ok(());
-        }
-
-        let now = unix_timestamp_millis() as u64;
-        let last_check = self.last_disk_check_ms.load(Ordering::Relaxed);
-        if now.saturating_sub(last_check) < 1_000 {
-            return Ok(());
-        }
-        if self
-            .last_disk_check_ms
-            .compare_exchange(last_check, now, Ordering::Relaxed, Ordering::Relaxed)
-            .is_err()
-        {
-            return Ok(());
-        }
-
-        let directory = self.wav_path.parent().unwrap_or_else(|| Path::new("."));
-        let available = available_disk_bytes(directory)?;
-        if available < self.min_free_bytes {
-            return Err(io::Error::other(format!(
-                "recording disk free space {available} bytes is below configured minimum {} bytes",
-                self.min_free_bytes
-            )));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct RecordingPool {
-    workers: Vec<RecordingWorkerHandle>,
-    queue_capacity: usize,
-    packet_pool: PacketBufferPool,
-}
-
-#[derive(Debug)]
-pub struct RecordingWorkerHandle {
-    sender: tokio::sync::mpsc::Sender<RecordingCommand>,
-    pending_commands: Arc<AtomicUsize>,
-}
-
-impl RecordingPool {
-    pub fn new(worker_count: usize, queue_capacity: usize) -> Self {
-        let worker_count = worker_count.max(1);
-        // 至少保留一个槽位给 Finish/Flush 控制命令。
-        let queue_capacity = queue_capacity.max(2);
-        let mut workers = Vec::with_capacity(worker_count);
-        for worker_index in 0..worker_count {
-            let (sender, receiver) = tokio::sync::mpsc::channel(queue_capacity);
-            let pending_commands = Arc::new(AtomicUsize::new(0));
-            match spawn_recording_worker(worker_index, receiver, Arc::clone(&pending_commands)) {
-                Ok(()) => workers.push(RecordingWorkerHandle {
-                    sender,
-                    pending_commands,
-                }),
-                Err(error) => warn!(%error, worker_index, "failed to spawn recording worker"),
-            }
-        }
-        Self {
-            workers,
-            queue_capacity,
-            packet_pool: PacketBufferPool::new(RECORDING_PACKET_POOL_CAPACITY),
-        }
-    }
-
-    pub fn worker_count(&self) -> usize {
-        self.workers.len()
-    }
-
-    pub fn queued_commands(&self) -> usize {
-        self.workers
-            .iter()
-            .map(|worker| worker.pending_commands.load(Ordering::Relaxed))
-            .sum()
-    }
-
-    pub fn total_capacity(&self) -> usize {
-        self.workers.len() * self.queue_capacity
-    }
-
-    pub fn try_record(
-        &self,
-        session: Arc<RecordingSessionInfo>,
-        packet: RecordedRtpPacket,
-    ) -> io::Result<bool> {
-        self.try_send_packet(session.id, RecordingCommand::Packet { session, packet })?;
-        Ok(true)
-    }
-
-    fn copy_payload(&self, payload: &[u8]) -> ReusablePacket {
-        self.packet_pool.copy(payload)
-    }
-
-    #[cfg(test)]
-    pub fn flush(&self, session: Arc<RecordingSessionInfo>) -> io::Result<()> {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.send(
-            session.id,
-            RecordingCommand::Flush {
-                session,
-                reply: sender,
-            },
-        )?;
-        receiver
-            .recv()
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "recording worker is stopped"))?
-    }
-
-    pub fn finish(&self, session_id: u64, wav_path: std::path::PathBuf, format_str: String) {
-        let _ = self.try_send(
-            session_id,
-            RecordingCommand::Finish {
-                session_id,
-                wav_path,
-                format_str,
-            },
-        );
-    }
-
-    /// 投递 RTP 数据包时为 Finish/Flush 控制命令保留一个队列槽位。
-    /// 多个 RTP 接收任务并发写入时，使用 CAS 预留计数，发送失败再回滚。
-    fn try_send_packet(&self, session_id: u64, command: RecordingCommand) -> io::Result<()> {
-        let worker = self.worker(session_id)?;
-        let packet_limit = self.queue_capacity.saturating_sub(1);
-        let mut pending = worker.pending_commands.load(Ordering::Acquire);
-        loop {
-            if pending >= packet_limit {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "recording queue reserved for control command",
-                ));
-            }
-            match worker.pending_commands.compare_exchange(
-                pending,
-                pending + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(current) => pending = current,
-            }
-        }
-
-        match worker.sender.try_send(command) {
-            Ok(()) => Ok(()),
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                worker.pending_commands.fetch_sub(1, Ordering::AcqRel);
-                Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "recording queue is full",
-                ))
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                worker.pending_commands.fetch_sub(1, Ordering::AcqRel);
-                Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "recording worker is stopped",
-                ))
-            }
-        }
-    }
-
-    fn try_send(&self, session_id: u64, command: RecordingCommand) -> io::Result<()> {
-        let worker = self.worker(session_id)?;
-        match worker.sender.try_send(command) {
-            Ok(()) => {
-                worker.pending_commands.fetch_add(1, Ordering::Relaxed);
-                Ok(())
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "recording queue is full",
-            )),
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "recording worker is stopped",
-            )),
-        }
-    }
-
-    #[cfg(test)]
-    fn send(&self, session_id: u64, command: RecordingCommand) -> io::Result<()> {
-        let worker = self.worker(session_id)?;
-        worker.sender.blocking_send(command).map_err(|_| {
-            io::Error::new(io::ErrorKind::BrokenPipe, "recording worker is stopped")
-        })?;
-        worker.pending_commands.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    }
-
-    fn worker(&self, session_id: u64) -> io::Result<&RecordingWorkerHandle> {
-        if self.workers.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "recording worker pool is unavailable",
-            ));
-        }
-        let index = session_id as usize % self.workers.len();
-        Ok(&self.workers[index])
-    }
-}
-
-fn spawn_recording_worker(
-    worker_index: usize,
-    receiver: tokio::sync::mpsc::Receiver<RecordingCommand>,
-    pending_commands: Arc<AtomicUsize>,
-) -> io::Result<()> {
-    std::thread::Builder::new()
-        .name(format!("vos-rs-recording-{worker_index}"))
-        .spawn(move || run_recording_worker(worker_index, receiver, pending_commands))
-        .map(|_| ())
-        .map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("failed to spawn recording worker: {error}"),
-            )
-        })
-}
-
-fn run_recording_worker(
-    worker_index: usize,
-    mut receiver: tokio::sync::mpsc::Receiver<RecordingCommand>,
-    pending_commands: Arc<AtomicUsize>,
-) {
-    let mut recorders = HashMap::<u64, RecordingFile>::new();
-    while let Some(command) = receiver.blocking_recv() {
-        pending_commands.fetch_sub(1, Ordering::Relaxed);
-        handle_recording_command(command, &mut recorders);
-
-        for _ in 0..RECORDING_WORKER_DRAIN_LIMIT {
-            let Ok(command) = receiver.try_recv() else {
-                break;
-            };
-            pending_commands.fetch_sub(1, Ordering::Relaxed);
-            handle_recording_command(command, &mut recorders);
-        }
-    }
-
-    for (session_id, mut recording_file) in recorders {
-        if let Err(error) = recording_file.recorder.flush_recording() {
-            warn!(%error, session_id, worker_index, "failed to finalize call recording");
-        }
-    }
-}
-
-fn handle_recording_command(
-    command: RecordingCommand,
-    recorders: &mut HashMap<u64, RecordingFile>,
-) {
-    match command {
-        RecordingCommand::Packet { session, packet } => {
-            if let Err(error) = session.ensure_disk_space() {
-                warn!(%error, session_id = session.id, "recording disk protection stopped packet write");
-                return;
-            }
-            let should_rotate = recorders
-                .get(&session.id)
-                .map(|recording_file| {
-                    recording_file.recorder.would_exceed_limit(
-                        packet.channel,
-                        packet.timestamp,
-                        packet.payload.as_slice().len(),
-                        session.max_file_frames(),
-                    )
-                })
-                .unwrap_or(false);
-            if should_rotate {
-                if let Err(error) = rotate_recording(recorders, &session) {
-                    warn!(%error, session_id = session.id, "failed to rotate call recording");
-                    return;
-                }
-            }
-            let recording_file = match recorder_for_session(recorders, &session) {
-                Ok(recording_file) => recording_file,
-                Err(error) => {
-                    warn!(%error, session_id = session.id, "failed to open call recording");
-                    return;
-                }
-            };
-            if let Err(error) = recording_file.recorder.record(
-                packet.channel,
-                packet.payload_type,
-                packet.timestamp,
-                packet.payload.as_slice(),
-            ) {
-                warn!(%error, session_id = session.id, "failed to write RTP packet to recording");
-            }
-        }
-        #[cfg(test)]
-        RecordingCommand::Flush { session, reply } => {
-            let result = recorder_for_session(recorders, &session)
-                .and_then(|recording_file| recording_file.recorder.flush_recording());
-            let _ = reply.send(result);
-        }
-        RecordingCommand::Finish {
-            session_id,
-            wav_path,
-            format_str,
-        } => {
-            if let Some(mut recording_file) = recorders.remove(&session_id) {
-                if let Err(error) = recording_file.recorder.flush_recording() {
-                    warn!(%error, session_id, "failed to finalize call recording");
-                }
-                let meta_path = wav_path.with_extension("json");
-                let duration_secs = recording_file.recorder.flushed_frames as f64 / RECORDING_SAMPLE_RATE as f64;
-                let meta_content = serde_json::json!({
-                    "session_id": session_id,
-                    "segment_index": recording_file.segment_index,
-                    "wav_path": wav_path.to_string_lossy(),
-                    "sample_rate": RECORDING_SAMPLE_RATE,
-                    "channels": RECORDING_CHANNELS,
-                    "bits_per_sample": RECORDING_BITS_PER_SAMPLE,
-                    "flushed_frames": recording_file.recorder.flushed_frames,
-                    "duration_secs": duration_secs,
-                    "format": format_str,
-                    "created_at_ms": unix_timestamp_millis(),
-                });
-                if let Ok(meta_json) = serde_json::to_string_pretty(&meta_content) {
-                    let _ = fs::write(&meta_path, meta_json);
-                }
-            }
-            // 录音完成后异步转码（wav 格式无操作）
-            crate::media::transcode::transcode_recording_async(
-                wav_path,
-                crate::media::transcode::RecordingFormat::from_str(&format_str),
-            );
-        }
-    }
-}
-
-fn recorder_for_session<'a>(
-    recorders: &'a mut HashMap<u64, RecordingFile>,
-    session: &RecordingSessionInfo,
-) -> io::Result<&'a mut RecordingFile> {
-    if let std::collections::hash_map::Entry::Vacant(entry) = recorders.entry(session.id) {
-        entry.insert(RecordingFile::create(session, 0)?);
-    }
-    recorders
-        .get_mut(&session.id)
-        .ok_or_else(|| io::Error::other("recording session was not initialized"))
-}
-
-pub fn write_recording_segment_metadata(
-    session: &RecordingSessionInfo,
-    segment_index: u32,
-    flushed_frames: u64,
-) -> io::Result<()> {
-    let wav_path = recording_segment_path(session, segment_index);
-    let meta_path = wav_path.with_extension("json");
-    let duration_secs = flushed_frames as f64 / RECORDING_SAMPLE_RATE as f64;
-    let json_content = serde_json::json!({
-        "session_id": session.id,
-        "segment_index": segment_index,
-        "wav_path": wav_path.to_string_lossy(),
-        "sample_rate": RECORDING_SAMPLE_RATE,
-        "channels": RECORDING_CHANNELS,
-        "bits_per_sample": RECORDING_BITS_PER_SAMPLE,
-        "flushed_frames": flushed_frames,
-        "duration_secs": duration_secs,
-        "format": session.format_str,
-        "created_at_ms": unix_timestamp_millis(),
+pub(crate) fn new_recording_pool(worker_count: usize, queue_capacity: usize) -> RecordingPool {
+    let finalizer: Arc<dyn RecordingFinalizer> = Arc::new(MediaEdgeRecordingFinalizer {
+        tokio_handle: tokio::runtime::Handle::try_current().ok(),
     });
-    fs::write(&meta_path, serde_json::to_string_pretty(&json_content)?)?;
-    Ok(())
-}
-
-fn rotate_recording(
-    recorders: &mut HashMap<u64, RecordingFile>,
-    session: &RecordingSessionInfo,
-) -> io::Result<()> {
-    let segment_index = recorders
-        .get(&session.id)
-        .map(|recording_file| recording_file.segment_index + 1)
-        .unwrap_or(1);
-    if let Some(mut previous) = recorders.remove(&session.id) {
-        previous.recorder.flush_recording()?;
-        let _ = write_recording_segment_metadata(
-            session,
-            previous.segment_index,
-            previous.recorder.flushed_frames,
-        );
-    }
-    recorders.insert(session.id, RecordingFile::create(session, segment_index)?);
-    Ok(())
-}
-
-pub struct RecordingFile {
-    pub segment_index: u32,
-    pub recorder: WavCallRecorder,
-}
-
-impl RecordingFile {
-    pub fn create(session: &RecordingSessionInfo, segment_index: u32) -> io::Result<Self> {
-        let wav_path = recording_segment_path(session, segment_index);
-        let recorder = WavCallRecorder::create(wav_path)?;
-        Ok(Self {
-            segment_index,
-            recorder,
-        })
-    }
-}
-
-pub struct RecordedRtpPacket {
-    pub channel: RecordingChannel,
-    pub payload_type: u8,
-    pub timestamp: u32,
-    pub payload: ReusablePacket,
-}
-
-pub enum RecordingCommand {
-    Packet {
-        session: Arc<RecordingSessionInfo>,
-        packet: RecordedRtpPacket,
-    },
-    #[cfg(test)]
-    Flush {
-        session: Arc<RecordingSessionInfo>,
-        reply: std::sync::mpsc::Sender<io::Result<()>>,
-    },
-    Finish {
-        session_id: u64,
-        /// WAV 文件路径，用于录音完成后的转码后处理
-        wav_path: std::path::PathBuf,
-        /// 目标转码格式字符串（如 "opus"、"amr"、"wav"）
-        format_str: String,
-    },
-}
-
-#[derive(Debug)]
-pub struct WavCallRecorder {
-    file: File,
-    frames_written: u64,
-    flushed_frames: u64,
-    base_timestamps: [Option<u32>; 2],
-    frames_since_flush: u64,
-    interleaved_samples: Vec<i16>,
-    write_buffer: Vec<u8>,
-}
-
-impl WavCallRecorder {
-    pub fn create(path: PathBuf) -> io::Result<Self> {
-        let mut file = open_direct_io_file(&path)?;
-        write_wav_header(&mut file, 0)?;
-        Ok(Self {
-            file,
-            frames_written: 0,
-            flushed_frames: 0,
-            base_timestamps: [None, None],
-            frames_since_flush: 0,
-            interleaved_samples: Vec::new(),
-            write_buffer: Vec::new(),
-        })
-    }
-
-    pub fn record(
-        &mut self,
-        channel: RecordingChannel,
-        payload_type: u8,
-        timestamp: u32,
-        payload: &[u8],
-    ) -> io::Result<bool> {
-        let codec = match AudioCodec::from_static_payload_type(payload_type) {
-            Some(c) => c,
-            None => return Ok(false),
-        };
-        if payload.is_empty() {
-            return Ok(false);
-        }
-
-        let num_samples = payload.len();
-        let start_frame = self.start_frame(channel, timestamp);
-        self.ensure_frames(start_frame + num_samples as u64)?;
-        if start_frame < self.flushed_frames {
-            return Ok(true);
-        }
-
-        for (sample_index, &payload_byte) in payload.iter().enumerate() {
-            let sample = match codec {
-                AudioCodec::Pcmu => decode_pcmu(payload_byte),
-                AudioCodec::Pcma => decode_pcma(payload_byte),
-                _ => continue, // G722, G729, Opus not supported for recording
-            };
-            let frame = start_frame + sample_index as u64;
-            self.set_sample(frame, channel, sample);
-        }
-
-        self.frames_since_flush += num_samples as u64;
-        if self.frames_since_flush >= RECORDING_FLUSH_INTERVAL_FRAMES {
-            self.flush_ready_frames(false)?;
-            self.frames_since_flush = 0;
-        }
-        Ok(true)
-    }
-
-    pub fn would_exceed_limit(
-        &self,
-        channel: RecordingChannel,
-        timestamp: u32,
-        payload_len: usize,
-        max_frames: Option<u64>,
-    ) -> bool {
-        let Some(max_frames) = max_frames else {
-            return false;
-        };
-        let base = self.base_timestamps[channel.index()].unwrap_or(timestamp);
-        let start_frame = u64::from(timestamp.wrapping_sub(base));
-        self.frames_written > 0
-            && (start_frame.saturating_add(payload_len as u64) > max_frames
-                || self.frames_written.saturating_add(payload_len as u64) > max_frames)
-    }
-
-    fn start_frame(&mut self, channel: RecordingChannel, timestamp: u32) -> u64 {
-        let base = self.base_timestamps[channel.index()].get_or_insert(timestamp);
-        u64::from(timestamp.wrapping_sub(*base))
-    }
-
-    fn ensure_frames(&mut self, target_frames: u64) -> io::Result<()> {
-        if self.frames_written >= target_frames || target_frames <= self.flushed_frames {
-            return Ok(());
-        }
-
-        let buffered_frames = target_frames - self.flushed_frames;
-        let samples = buffered_frames as usize * usize::from(RECORDING_CHANNELS);
-        self.interleaved_samples.resize(samples, 0);
-        self.frames_written = target_frames;
-        Ok(())
-    }
-
-    fn set_sample(&mut self, frame: u64, channel: RecordingChannel, sample: i16) {
-        let relative_frame = frame - self.flushed_frames;
-        let offset = relative_frame as usize * usize::from(RECORDING_CHANNELS) + channel.index();
-        if let Some(slot) = self.interleaved_samples.get_mut(offset) {
-            *slot = sample;
-        }
-    }
-
-    fn flush_ready_frames(&mut self, final_flush: bool) -> io::Result<()> {
-        let buffered_frames = self.frames_written.saturating_sub(self.flushed_frames);
-        if buffered_frames == 0 {
-            if final_flush {
-                self.refresh_header()?;
-                self.flush()?;
-            }
-            return Ok(());
-        }
-
-        let frames_to_write = if final_flush {
-            let rem = buffered_frames % 1024;
-            if rem > 0 {
-                let padding = 1024 - rem;
-                let padding_samples = padding as usize * usize::from(RECORDING_CHANNELS);
-                self.interleaved_samples
-                    .resize(self.interleaved_samples.len() + padding_samples, 0);
-                self.frames_written += padding;
-                buffered_frames + padding
-            } else {
-                buffered_frames
-            }
-        } else {
-            buffered_frames / 1024 * 1024
-        };
-
-        if frames_to_write == 0 {
-            return Ok(());
-        }
-
-        let sample_count = frames_to_write as usize * usize::from(RECORDING_CHANNELS);
-        self.write_buffer.clear();
-        self.write_buffer.reserve(sample_count * 2);
-        for sample in self.interleaved_samples.iter().take(sample_count) {
-            self.write_buffer.extend_from_slice(&sample.to_le_bytes());
-        }
-
-        self.file.seek(SeekFrom::End(0))?;
-        self.file.write_all(&self.write_buffer)?;
-        self.interleaved_samples.drain(..sample_count);
-        self.flushed_frames += frames_to_write;
-        self.refresh_header()?;
-        self.flush()
-    }
-
-    fn refresh_header(&mut self) -> io::Result<()> {
-        let data_bytes = u32::try_from(self.flushed_frames * u64::from(RECORDING_CHANNELS) * 2)
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "WAV recording is too large")
-            })?;
-        self.file.seek(SeekFrom::Start(0))?;
-        write_wav_header(&mut self.file, data_bytes)?;
-        self.file.seek(SeekFrom::End(0))?;
-        Ok(())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()
-    }
-
-    pub fn flush_recording(&mut self) -> io::Result<()> {
-        self.flush_ready_frames(true)
-    }
-}
-
-pub fn write_wav_header(file: &mut File, data_bytes: u32) -> io::Result<()> {
-    let byte_rate = RECORDING_SAMPLE_RATE
-        * u32::from(RECORDING_CHANNELS)
-        * u32::from(RECORDING_BITS_PER_SAMPLE)
-        / 8;
-    let block_align = RECORDING_CHANNELS * RECORDING_BITS_PER_SAMPLE / 8;
-    let riff_size = 36_u32.saturating_add(data_bytes);
-
-    let mut header = [0u8; 4096];
-    header[0..4].copy_from_slice(b"RIFF");
-    header[4..8].copy_from_slice(&riff_size.to_le_bytes());
-    header[8..12].copy_from_slice(b"WAVE");
-    header[12..16].copy_from_slice(b"fmt ");
-    header[16..20].copy_from_slice(&16_u32.to_le_bytes());
-    header[20..22].copy_from_slice(&1_u16.to_le_bytes());
-    header[22..24].copy_from_slice(&RECORDING_CHANNELS.to_le_bytes());
-    header[24..28].copy_from_slice(&RECORDING_SAMPLE_RATE.to_le_bytes());
-    header[28..32].copy_from_slice(&byte_rate.to_le_bytes());
-    header[32..34].copy_from_slice(&block_align.to_le_bytes());
-    header[34..36].copy_from_slice(&RECORDING_BITS_PER_SAMPLE.to_le_bytes());
-    header[36..40].copy_from_slice(b"data");
-    header[40..44].copy_from_slice(&data_bytes.to_le_bytes());
-
-    file.write_all(&header)?;
-    Ok(())
-}
-
-pub(crate) fn decode_pcmu(sample: u8) -> i16 {
-    let sample = !sample;
-    let sign = sample & 0x80;
-    let exponent = (sample >> 4) & 0x07;
-    let mantissa = sample & 0x0f;
-    let magnitude = (((i16::from(mantissa)) << 3) + 0x84) << exponent;
-
-    if sign != 0 {
-        0x84 - magnitude
-    } else {
-        magnitude - 0x84
-    }
-}
-
-pub(crate) fn decode_pcma(sample: u8) -> i16 {
-    let sample = sample ^ 0x55;
-    let sign = sample & 0x80;
-    let exponent = (sample & 0x70) >> 4;
-    let mantissa = sample & 0x0f;
-    let magnitude = if exponent == 0 {
-        (i16::from(mantissa) << 4) + 8
-    } else {
-        ((i16::from(mantissa) << 4) + 0x108) << (exponent - 1)
-    };
-
-    if sign != 0 {
-        magnitude
-    } else {
-        -magnitude
-    }
-}
-
-pub fn recording_file_stem(call_id: &str) -> String {
-    let sanitized = call_id
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    format!("{}-{}", sanitized, unix_timestamp_millis())
-}
-
-pub fn recording_segment_path(session: &RecordingSessionInfo, segment_index: u32) -> PathBuf {
-    if segment_index == 0 {
-        return session.wav_path.clone();
-    }
-
-    let directory = session.wav_path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = session
-        .wav_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("recording");
-    let segment_stem = format!("{stem}-part-{segment_index:04}");
-    directory.join(format!("{segment_stem}.wav"))
-}
-
-pub fn cleanup_expired_recordings(
-    dir: &Path,
-    retention_secs: u64,
-    protected_paths: &HashSet<PathBuf>,
-) -> io::Result<()> {
-    if retention_secs == 0 {
-        return Ok(());
-    }
-
-    let retention = Duration::from_secs(retention_secs);
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if protected_paths.contains(&path) || !entry.file_type()?.is_file() {
-            continue;
-        }
-
-        let is_recording_artifact = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.eq_ignore_ascii_case("wav"))
-            .unwrap_or(false);
-        if !is_recording_artifact {
-            continue;
-        }
-
-        let is_expired = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .and_then(|modified| modified.elapsed().map_err(io::Error::other))
-            .map(|age| age >= retention)
-            .unwrap_or(false);
-        if is_expired {
-            fs::remove_file(path)?;
-        }
-    }
-    Ok(())
-}
-
-pub fn available_disk_bytes(path: &Path) -> io::Result<u64> {
-    #[cfg(unix)]
-    {
-        let path_str = CString::new(path.as_os_str().to_str().unwrap_or(".")).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidInput, "recording path contains NUL")
-        })?;
-        let mut statistics = MaybeUninit::<libc::statvfs>::uninit();
-        let result = unsafe { libc::statvfs(path_str.as_ptr(), statistics.as_mut_ptr()) };
-        if result != 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        let statistics = unsafe { statistics.assume_init() };
-        let block_size = u128::from(if statistics.f_frsize == 0 {
-            statistics.f_bsize
-        } else {
-            statistics.f_frsize
-        });
-        let available = block_size * u128::from(statistics.f_bavail);
-        Ok(available.min(u128::from(u64::MAX)) as u64)
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Ok(u64::MAX)
-    }
+    let writer_factory: Arc<dyn RecordingWriterFactory> = Arc::new(DirectIoWavWriterFactory);
+    RecordingPool::with_writer_factory(
+        worker_count,
+        queue_capacity,
+        Some(finalizer),
+        writer_factory,
+    )
 }
 
 pub fn recording_error(error: io::Error) -> MediaError {
@@ -960,17 +70,19 @@ pub enum MediaError {
 }
 
 impl fmt::Display for MediaError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidUtf8 => write!(f, "SDP body is not valid UTF-8"),
-            Self::InvalidEndpoint(endpoint) => write!(f, "invalid RTP endpoint: {endpoint}"),
-            Self::PortRangeExhausted { port_min, port_max } => {
-                write!(f, "RTP port range exhausted: {port_min}-{port_max}")
+            Self::InvalidUtf8 => write!(formatter, "SDP body is not valid UTF-8"),
+            Self::InvalidEndpoint(endpoint) => {
+                write!(formatter, "invalid RTP endpoint: {endpoint}")
             }
-            Self::Recording(error) => write!(f, "recording error: {error}"),
-            Self::RecordingQueueFull => write!(f, "recording queue is full"),
-            Self::Sdp(error) => write!(f, "{error}"),
-            Self::Io(error) => write!(f, "media IO error: {error}"),
+            Self::PortRangeExhausted { port_min, port_max } => {
+                write!(formatter, "RTP port range exhausted: {port_min}-{port_max}")
+            }
+            Self::Recording(error) => write!(formatter, "recording error: {error}"),
+            Self::RecordingQueueFull => write!(formatter, "recording queue is full"),
+            Self::Sdp(error) => write!(formatter, "{error}"),
+            Self::Io(error) => write!(formatter, "media IO error: {error}"),
         }
     }
 }
@@ -983,7 +95,6 @@ impl From<SdpError> for MediaError {
     }
 }
 
-// Implement recording-specific actions on MediaRelayState
 impl MediaRelayState {
     pub fn start_call_recording(
         &self,
@@ -996,16 +107,8 @@ impl MediaRelayState {
             return Ok(None);
         }
 
-        let rtp_port_for = |port: u16| {
-            if port % 2 == 1 {
-                Some(port - 1)
-            } else {
-                Some(port)
-            }
-        };
-
-        let caller_relay_port = rtp_port_for(caller_relay_port).unwrap_or(caller_relay_port);
-        let gateway_relay_port = rtp_port_for(gateway_relay_port).unwrap_or(gateway_relay_port);
+        let caller_relay_port = normalize_rtp_port(caller_relay_port);
+        let gateway_relay_port = normalize_rtp_port(gateway_relay_port);
         self.ensure_recording_dir(&config.recording_dir)
             .map_err(recording_error)?;
         self.enforce_recording_storage_policy(
@@ -1015,9 +118,11 @@ impl MediaRelayState {
         )
         .map_err(recording_error)?;
 
-        let stem = recording_file_stem(call_id);
-        let wav_path = config.recording_dir.join(format!("{stem}.wav"));
+        let wav_path = config
+            .recording_dir
+            .join(format!("{}.wav", recording_file_stem(call_id)));
         let session = Arc::new(RecordingSession::new(
+            call_id.to_string(),
             wav_path.clone(),
             config.recording_min_free_bytes,
             config.recording_max_file_bytes,
@@ -1029,7 +134,7 @@ impl MediaRelayState {
         self.recordings.insert(
             caller_relay_port,
             RecordingLeg {
-                session: session.clone(),
+                session: Arc::clone(&session),
                 channel: RecordingChannel::Caller,
             },
         );
@@ -1042,48 +147,42 @@ impl MediaRelayState {
         );
         self.mark_relay_features_changed(caller_relay_port);
         self.mark_relay_features_changed(gateway_relay_port);
-
         Ok(Some(wav_path))
     }
 
-    fn ensure_recording_dir(&self, dir: &Path) -> io::Result<()> {
+    fn ensure_recording_dir(&self, directory: &Path) -> io::Result<()> {
         let should_create = {
             let mut inner = self
                 .state
                 .lock()
                 .map_err(|_| io::Error::other("media relay lock poisoned"))?;
-            inner.recording_dirs.insert(dir.to_path_buf())
+            inner.recording_dirs.insert(directory.to_path_buf())
         };
         if !should_create {
             return Ok(());
         }
-
-        if let Err(error) = fs::create_dir_all(dir) {
+        if let Err(error) = fs::create_dir_all(directory) {
             let mut inner = self
                 .state
                 .lock()
                 .map_err(|_| io::Error::other("media relay lock poisoned"))?;
-            inner.recording_dirs.remove(dir);
+            inner.recording_dirs.remove(directory);
             return Err(error);
         }
-
         Ok(())
     }
 
     fn enforce_recording_storage_policy(
         &self,
-        dir: &Path,
+        directory: &Path,
         retention_secs: u64,
         min_free_bytes: u64,
     ) -> io::Result<()> {
-        let protected_paths = self.active_recording_paths();
-        cleanup_expired_recordings(dir, retention_secs, &protected_paths)?;
-
+        cleanup_expired_recordings(directory, retention_secs, &self.active_recording_paths())?;
         if min_free_bytes == 0 {
             return Ok(());
         }
-
-        let available = available_disk_bytes(dir)?;
+        let available = available_disk_bytes(directory)?;
         if available < min_free_bytes {
             return Err(io::Error::other(format!(
                 "recording disk free space {available} bytes is below configured minimum {min_free_bytes} bytes"
@@ -1095,10 +194,7 @@ impl MediaRelayState {
     fn active_recording_paths(&self) -> HashSet<PathBuf> {
         self.recordings
             .iter()
-            .flat_map(|entry| {
-                let info = &entry.value().session.info;
-                [info.wav_path.clone()]
-            })
+            .map(|entry| entry.value().session.info.wav_path.clone())
             .collect()
     }
 
@@ -1108,11 +204,9 @@ impl MediaRelayState {
         relay_port: u16,
         packet: RtpPacketView<'_>,
     ) -> Result<bool, MediaError> {
-        let recording = self.recordings.get(&relay_port).map(|v| v.clone());
-        let Some(recording) = recording else {
+        let Some(recording) = self.recordings.get(&relay_port).map(|value| value.clone()) else {
             return Ok(false);
         };
-
         recording
             .session
             .try_record(recording.channel, packet)
@@ -1121,11 +215,17 @@ impl MediaRelayState {
 
     #[cfg(test)]
     pub(crate) fn flush_recording_for_test(&self, relay_port: u16) -> Result<(), MediaError> {
-        let recording = self.recordings.get(&relay_port).map(|v| v.clone());
-        let Some(recording) = recording else {
+        let Some(recording) = self.recordings.get(&relay_port).map(|value| value.clone()) else {
             return Ok(());
         };
-
         recording.session.flush().map_err(recording_error)
+    }
+}
+
+fn normalize_rtp_port(port: u16) -> u16 {
+    if port % 2 == 1 {
+        port - 1
+    } else {
+        port
     }
 }

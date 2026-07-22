@@ -34,6 +34,8 @@ __pycache__/
 /test_recordings/
 recording/
 recordings/
+!crates/media-core/src/recording/
+!crates/media-core/src/recording/**
 /test_recordings/**/
 **/test-recordings/
 tools/sipp/test_speech.wav
@@ -46,6 +48,8 @@ tools/sipp/*.log
 
 # Build output
 web/dist/
+web/playwright-report/
+web/test-results/
 
 # MiMoCode
 .mimocode/

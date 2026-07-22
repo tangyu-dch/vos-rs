@@ -23,8 +23,8 @@ struct AppState {
 }
 
 #[tokio::main]
-async fn main() {
-    let service_config = config::MediaEdgeServiceConfig::load();
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let service_config = config::MediaEdgeServiceConfig::load()?;
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(config_logging_filter("media_edge=info")))
         .init();
@@ -70,8 +70,9 @@ async fn main() {
     let addr = service_config.control_bind;
     info!(%addr, "Media Edge Web API listening");
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
 }
 
 fn config_logging_filter(default: &str) -> String {

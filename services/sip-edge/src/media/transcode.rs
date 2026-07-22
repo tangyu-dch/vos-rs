@@ -1,124 +1,7 @@
 //! G.711 PCMA (A-law) and PCMU (u-law) transcoding conversions.
 
-use std::sync::OnceLock;
-
-static PCMA_TO_PCMU_TABLE: OnceLock<[u8; 256]> = OnceLock::new();
-static PCMU_TO_PCMA_TABLE: OnceLock<[u8; 256]> = OnceLock::new();
-
-fn get_pcma_to_pcmu_table() -> &'static [u8; 256] {
-    PCMA_TO_PCMU_TABLE.get_or_init(|| {
-        let mut table = [0u8; 256];
-        for (i, value) in table.iter_mut().enumerate() {
-            let pcm = crate::media::recording::decode_pcma(i as u8);
-            *value = linear_to_ulaw(pcm);
-        }
-        table
-    })
-}
-
-fn get_pcmu_to_pcma_table() -> &'static [u8; 256] {
-    PCMU_TO_PCMA_TABLE.get_or_init(|| {
-        let mut table = [0u8; 256];
-        for (i, value) in table.iter_mut().enumerate() {
-            let pcm = crate::media::recording::decode_pcmu(i as u8);
-            *value = linear_to_alaw(pcm);
-        }
-        table
-    })
-}
-
-pub fn linear_to_ulaw(mut pcm: i16) -> u8 {
-    let sign = if pcm < 0 {
-        pcm = -pcm;
-        0x80
-    } else {
-        0
-    };
-    if pcm > 32635 {
-        pcm = 32635;
-    }
-    let pcm = pcm + 0x84;
-    let mut exponent = 7;
-    let mut mask = 0x4000;
-    while (pcm & mask) == 0 && exponent > 0 {
-        exponent -= 1;
-        mask >>= 1;
-    }
-    let mantissa = (pcm >> (exponent + 3)) & 0x0f;
-    let ulaw = (sign | (exponent << 4) | mantissa) as u8;
-    !ulaw
-}
-
-pub fn linear_to_alaw(mut pcm: i16) -> u8 {
-    let sign = if pcm < 0 {
-        pcm = -pcm;
-        0
-    } else {
-        0x80
-    };
-    if pcm > 32635 {
-        pcm = 32635;
-    }
-    let mut exponent = 7;
-    let mut mask = 0x4000;
-    while (pcm & mask) == 0 && exponent > 0 {
-        exponent -= 1;
-        mask >>= 1;
-    }
-    let mantissa = if exponent == 0 {
-        (pcm >> 4) & 0x0f
-    } else {
-        (pcm >> (exponent + 3)) & 0x0f
-    };
-    let alaw = (sign | (exponent << 4) | mantissa) as u8;
-    alaw ^ 0x55
-}
-
-pub fn transcode_pcma_to_pcmu_inplace(payload: &mut [u8]) {
-    let table = get_pcma_to_pcmu_table();
-    for byte in payload.iter_mut() {
-        *byte = table[*byte as usize];
-    }
-}
-
-pub fn transcode_pcmu_to_pcma_inplace(payload: &mut [u8]) {
-    let table = get_pcmu_to_pcma_table();
-    for byte in payload.iter_mut() {
-        *byte = table[*byte as usize];
-    }
-}
-
-/// 录音后处理转码格式。
-///
-/// `Wav` — 不做任何处理（默认）
-/// `Opus` — 通过 ffmpeg 转码为 Opus/WebM，适合存储与流媒体
-/// `Amr` — 通过 ffmpeg 转码为 AMR-NB，适合移动端存档
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RecordingFormat {
-    Wav,
-    Opus,
-    Amr,
-}
-
-impl RecordingFormat {
-    /// 从配置字符串解析格式，大小写不敏感。未知值 fallback 到 `Wav`。
-    pub fn from_str(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "opus" => Self::Opus,
-            "amr" => Self::Amr,
-            _ => Self::Wav,
-        }
-    }
-
-    /// 目标文件扩展名
-    pub fn extension(&self) -> &'static str {
-        match self {
-            Self::Wav => "wav",
-            Self::Opus => "opus",
-            Self::Amr => "amr",
-        }
-    }
-}
+pub use media_core::g711::*;
+pub use media_core::recording::RecordingFormat;
 
 /// 通话结束后异步转码录音文件。
 ///
@@ -270,7 +153,7 @@ pub fn transcode_and_upload_recording_async(
             } else {
                 "wav"
             };
-            let key = format!("recordings/rec-{}.{}", call_id, extension);
+            let key = recording_storage_key(&final_path, &call_id, extension);
             match tokio::fs::read(&final_path).await {
                 Ok(data) => {
                     let content_type = match extension {
@@ -297,6 +180,14 @@ pub fn transcode_and_upload_recording_async(
             }
         }
     });
+}
+
+fn recording_storage_key(final_path: &std::path::Path, call_id: &str, extension: &str) -> String {
+    final_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("rec-{call_id}.{extension}"))
 }
 
 #[cfg(test)]
@@ -340,19 +231,20 @@ mod tests {
     }
 
     #[test]
-    fn test_recording_format_from_str() {
-        assert_eq!(RecordingFormat::from_str("wav"), RecordingFormat::Wav);
-        assert_eq!(RecordingFormat::from_str("WAV"), RecordingFormat::Wav);
-        assert_eq!(RecordingFormat::from_str("opus"), RecordingFormat::Opus);
-        assert_eq!(RecordingFormat::from_str("Opus"), RecordingFormat::Opus);
-        assert_eq!(RecordingFormat::from_str("amr"), RecordingFormat::Amr);
-        assert_eq!(RecordingFormat::from_str("unknown"), RecordingFormat::Wav);
-    }
+    fn recording_storage_keys_preserve_segment_file_names() {
+        let first = recording_storage_key(
+            std::path::Path::new("/recordings/call-123.wav"),
+            "call-123",
+            "wav",
+        );
+        let second = recording_storage_key(
+            std::path::Path::new("/recordings/call-123-part-0001.wav"),
+            "call-123",
+            "wav",
+        );
 
-    #[test]
-    fn test_recording_format_extension() {
-        assert_eq!(RecordingFormat::Wav.extension(), "wav");
-        assert_eq!(RecordingFormat::Opus.extension(), "opus");
-        assert_eq!(RecordingFormat::Amr.extension(), "amr");
+        assert_eq!(first, "call-123.wav");
+        assert_eq!(second, "call-123-part-0001.wav");
+        assert_ne!(first, second);
     }
 }

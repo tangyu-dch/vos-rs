@@ -1,18 +1,25 @@
 use super::*;
 use crate::media::metrics::RtcpQualityWindow;
-use crate::media::recording::{decode_pcma, decode_pcmu, RecordingPool};
+use crate::media::recording::{decode_pcma, decode_pcmu, new_recording_pool};
 use crate::media::sdp::{is_sdp_body, parse_sdp_rtp_endpoint, rewrite_sdp_body};
 use crate::media::utils::rtt_millis_from_compact_ntp;
-use rtp_core::{SrtpConfig, SrtpContext};
+use rtp_core::SrtpConfig;
 use sdp_core::RtpEndpoint;
 use sip_core::{HeaderMap, HeaderName, HeaderValue};
-use std::{fs, net::SocketAddr, path::PathBuf};
+use std::{
+    fs::{self, File},
+    io::Write,
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::net::UdpSocket;
 use tokio::time::{sleep, timeout, Duration};
 
 #[test]
 fn recording_pool_reports_capacity_and_queue_depth() {
-    let pool = RecordingPool::new(2, 3);
+    let pool = new_recording_pool(2, 3);
 
     assert_eq!(pool.worker_count(), 2);
     assert_eq!(pool.total_capacity(), 6);
@@ -26,12 +33,8 @@ fn media_crypto_session_round_trips_rtp_payload() {
         master_salt: [9u8; 14],
         profile: rtp_core::SrtpProfile::Aes128CmHmacSha1_80,
     };
-    let mut sender = MediaCryptoSession {
-        context: SrtpContext::new(config.clone(), 0x0102_0304),
-    };
-    let mut receiver = MediaCryptoSession {
-        context: SrtpContext::new(config, 0x0102_0304),
-    };
+    let mut sender = MediaCryptoSession::new(config.clone(), 0x0102_0304);
+    let mut receiver = MediaCryptoSession::new(config, 0x0102_0304);
     let mut packet = vec![
         0x80, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x01, 0x02, 0x03, 0x04, 1, 2, 3, 4,
     ];
@@ -165,15 +168,18 @@ fn records_pcmu_and_pcma_rtp_to_stereo_wav() {
         u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]),
         8_000
     );
+    assert_eq!(&bytes[36..40], b"JUNK");
+    assert_eq!(&bytes[4088..4092], b"data");
     assert_eq!(
-        u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]),
-        4096
+        u32::from_le_bytes([bytes[4092], bytes[4093], bytes[4094], bytes[4095]]),
+        8
     );
     assert_eq!(bytes.len(), 8192);
     assert_eq!(i16::from_le_bytes([bytes[4096], bytes[4097]]), 0);
     assert_eq!(i16::from_le_bytes([bytes[4098], bytes[4099]]), 8);
     assert_eq!(i16::from_le_bytes([bytes[4100], bytes[4101]]), 0);
     assert_eq!(i16::from_le_bytes([bytes[4102], bytes[4103]]), 8);
+    assert_eq!(crate::media::wav::load_wav_pcm(&wav_path).unwrap(), [4, 4]);
 
     assert!(!wav_path.with_extension("json").exists());
 }
@@ -664,6 +670,96 @@ async fn rtp_relay_listener_tracks_packets_without_target() {
     }
 }
 
+#[tokio::test]
+async fn playback_starts_sends_rtp_and_stops_on_dynamic_udp_port() {
+    let relay = MediaRelayState::new();
+    let source_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    let source_port = source_socket.local_addr().unwrap().port();
+    relay
+        .active_sockets
+        .insert(source_port, Arc::clone(&source_socket));
+
+    let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    relay.set_target_addr(source_port, receiver.local_addr().unwrap());
+    relay.register_port_codec(source_port, rtp_core::AudioCodec::Pcma);
+
+    let wav_path = test_playback_wav("playback_starts_sends_rtp_and_stops");
+    relay
+        .start_playback(source_port, wav_path.clone(), PlaybackMode::Exclusive, true)
+        .await
+        .unwrap();
+    assert!(relay.playbacks.contains_key(&source_port));
+
+    let mut buffer = [0_u8; 1500];
+    let (size, sender) = timeout(Duration::from_secs(1), receiver.recv_from(&mut buffer))
+        .await
+        .expect("playback should send RTP")
+        .unwrap();
+    let packet = rtp_core::RtpPacketView::parse(&buffer[..size]).unwrap();
+    assert!(packet.marker);
+    assert_eq!(packet.payload_type, 8);
+    assert_eq!(packet.payload.len(), 160);
+    assert_eq!(sender, source_socket.local_addr().unwrap());
+
+    relay.stop_playback(source_port);
+    assert!(!relay.playbacks.contains_key(&source_port));
+    let _ = fs::remove_file(wav_path);
+}
+
+#[tokio::test]
+async fn playback_load_failure_keeps_existing_playback_running() {
+    let relay = MediaRelayState::new();
+    let port = unused_even_udp_port();
+    let wav_path = test_playback_wav("playback_load_failure_keeps_existing_playback");
+    relay
+        .start_playback(port, wav_path.clone(), PlaybackMode::Background, true)
+        .await
+        .unwrap();
+    let existing = relay.playbacks.get(&port).unwrap().clone();
+
+    let missing_path = wav_path.with_extension("missing.wav");
+    let error = relay
+        .start_playback(port, missing_path, PlaybackMode::Exclusive, false)
+        .await
+        .unwrap_err();
+
+    assert!(error.starts_with("加载音频文件失败:"));
+    let current = relay.playbacks.get(&port).unwrap().clone();
+    assert!(Arc::ptr_eq(&existing, &current));
+
+    relay.stop_playback(port);
+    let _ = fs::remove_file(wav_path);
+}
+
+#[tokio::test]
+async fn replacing_playback_keeps_the_new_generation_alive() {
+    let relay = MediaRelayState::new();
+    let port = unused_even_udp_port();
+    let wav_path = test_playback_wav("replacing_playback_keeps_new_generation");
+    relay
+        .start_playback(port, wav_path.clone(), PlaybackMode::Background, true)
+        .await
+        .unwrap();
+    let first = relay.playbacks.get(&port).unwrap().clone();
+
+    relay
+        .start_playback(port, wav_path.clone(), PlaybackMode::Exclusive, true)
+        .await
+        .unwrap();
+    let second = relay.playbacks.get(&port).unwrap().clone();
+    assert!(!Arc::ptr_eq(&first, &second));
+
+    sleep(Duration::from_millis(50)).await;
+    let current = relay.playbacks.get(&port).unwrap().clone();
+    assert!(Arc::ptr_eq(&second, &current));
+    assert!(relay.playback_loops.contains_key(&port));
+
+    relay.stop_playback(port);
+    assert!(!relay.playbacks.contains_key(&port));
+    assert!(!relay.playback_loops.contains_key(&port));
+    let _ = fs::remove_file(wav_path);
+}
+
 async fn wait_for_metrics(
     relay: &MediaRelayState,
     port: u16,
@@ -735,6 +831,26 @@ fn test_recording_dir(name: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+fn test_playback_wav(name: &str) -> PathBuf {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "media-edge-{name}-{}-{suffix}.wav",
+        std::process::id()
+    ));
+    let samples = [1_000_i16; 320];
+    let data_bytes = u32::try_from(samples.len() * std::mem::size_of::<i16>()).unwrap();
+    let mut file = File::create(&path).unwrap();
+    media_core::recording::write_wav_header(&mut file, data_bytes).unwrap();
+    for sample in samples {
+        file.write_all(&sample.to_le_bytes()).unwrap();
+    }
+    file.flush().unwrap();
+    path
 }
 
 #[test]

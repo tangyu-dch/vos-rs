@@ -1,4 +1,6 @@
-use crate::models::{BillingAccount, BillingRate, LedgerEntry, ReconcileResult};
+use crate::models::{
+    BillingAccount, BillingRate, CreditAccountOutcome, LedgerEntry, ReconcileResult,
+};
 use crate::utils;
 use crate::PostgresCdrStore;
 use sqlx::Row;
@@ -99,7 +101,7 @@ impl PostgresCdrStore {
     // ===== 计费：账户 =====
     pub async fn list_accounts(&self) -> Result<Vec<BillingAccount>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT username, balance, currency, created_at FROM billing_accounts ORDER BY username",
+            "SELECT username, balance::DOUBLE PRECISION, credit_limit::DOUBLE PRECISION, currency, created_at FROM billing_accounts ORDER BY username",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -108,8 +110,9 @@ impl PostgresCdrStore {
             out.push(BillingAccount {
                 username: row.get(0),
                 balance: row.get(1),
-                currency: row.get(2),
-                created_at: row.get(3),
+                credit_limit: row.get(2),
+                currency: row.get(3),
+                created_at: row.get(4),
             });
         }
         Ok(out)
@@ -122,7 +125,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<BillingAccount>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT username, balance, currency, created_at FROM billing_accounts \
+            "SELECT username, balance::DOUBLE PRECISION, credit_limit::DOUBLE PRECISION, currency, created_at FROM billing_accounts \
              ORDER BY username LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -134,8 +137,9 @@ impl PostgresCdrStore {
             .map(|row| BillingAccount {
                 username: row.get(0),
                 balance: row.get(1),
-                currency: row.get(2),
-                created_at: row.get(3),
+                credit_limit: row.get(2),
+                currency: row.get(3),
+                created_at: row.get(4),
             })
             .collect())
     }
@@ -148,21 +152,54 @@ impl PostgresCdrStore {
         Ok(row.0)
     }
 
-    pub async fn credit_account(&self, username: &str, amount: f64) -> Result<f64, sqlx::Error> {
-        sqlx::query(
+    pub async fn credit_account(
+        &self,
+        username: &str,
+        amount: f64,
+        idempotency_key: &str,
+    ) -> Result<CreditAccountOutcome, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(idempotency_key)
+            .execute(&mut *tx)
+            .await?;
+
+        let existing: Option<(String, f64, f64)> = sqlx::query_as(
+            "SELECT username, amount::DOUBLE PRECISION, balance_after::DOUBLE PRECISION \
+             FROM billing_credits WHERE idempotency_key = $1",
+        )
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some((existing_username, existing_amount, balance_after)) = existing {
+            tx.commit().await?;
+            if existing_username == username && (existing_amount - amount).abs() < 1e-9 {
+                return Ok(CreditAccountOutcome::Replayed(balance_after));
+            }
+            return Ok(CreditAccountOutcome::Conflict);
+        }
+
+        let balance: f64 = sqlx::query_scalar(
             "INSERT INTO billing_accounts (username, balance) VALUES ($1, $2) \
-             ON CONFLICT (username) DO UPDATE SET balance = billing_accounts.balance + $2",
+             ON CONFLICT (username) DO UPDATE SET balance = billing_accounts.balance + $2 \
+             RETURNING balance::DOUBLE PRECISION",
         )
         .bind(username)
         .bind(amount)
-        .execute(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
-        let balance: f64 =
-            sqlx::query_scalar("SELECT balance FROM billing_accounts WHERE username=$1")
-                .bind(username)
-                .fetch_one(&self.pool)
-                .await?;
-        Ok(balance)
+        sqlx::query(
+            "INSERT INTO billing_credits (idempotency_key, username, amount, balance_after) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(idempotency_key)
+        .bind(username)
+        .bind(amount)
+        .bind(balance)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(CreditAccountOutcome::Applied(balance))
     }
 
     // ===== 实时计费 =====

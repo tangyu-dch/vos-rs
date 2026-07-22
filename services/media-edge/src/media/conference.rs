@@ -1,4 +1,8 @@
 use dashmap::DashMap;
+use media_core::conference::{
+    encode_conference_frame, mix_conference_frames, take_conference_frame, ConferenceCodec,
+    CONFERENCE_FRAME_SAMPLES,
+};
 use rtp_core::AudioCodec;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -45,59 +49,23 @@ impl Conference {
             return;
         }
 
-        // 1. 从所有参会人员的缓冲中提取 20ms (160 采样) 的 PCM 音频
-        // 若缓冲不足，或者成员被静音，则用静音（0）填充
         let mut participant_frames = HashMap::with_capacity(self.participants.len());
         for (&port, p) in &mut self.participants {
-            let mut frame = vec![0_i16; 160];
-            if !p.muted {
-                let len = p.pcm_buffer.len().min(160);
-                if len > 0 {
-                    frame[..len].copy_from_slice(&p.pcm_buffer[..len]);
-                    p.pcm_buffer.drain(..len);
-                }
-            } else {
-                // 如果被静音了，虽然不把他的音频混合进会议，但我们依然要清空他的输入缓冲，防止取消静音后累积爆音
-                let len = p.pcm_buffer.len().min(160);
-                if len > 0 {
-                    p.pcm_buffer.drain(..len);
-                }
-            }
-            participant_frames.insert(port, frame);
+            participant_frames.insert(port, take_conference_frame(&mut p.pcm_buffer, p.muted));
         }
 
-        // 2. 为每个参会者计算 mix-minus 混音（混合除了自己以外其他人的声音）
         for (&port, p) in &mut self.participants {
-            let mut mixed_frame = vec![0_i32; 160];
-
-            for (&other_port, frame) in &participant_frames {
-                if other_port == port {
-                    continue; // 排除自己，避免回音
-                }
-                for i in 0..160 {
-                    mixed_frame[i] += frame[i] as i32;
-                }
-            }
-
-            // 3. 限制振幅，防止溢出破音
-            let mut output_frame = vec![0_i16; 160];
-            for i in 0..160 {
-                output_frame[i] = mixed_frame[i].clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-            }
-
-            // 4. 将 PCM 编码为对应的 G.711 格式
-            let payload: Vec<u8> = match p.codec {
-                AudioCodec::Pcmu => output_frame
+            let output_frame = mix_conference_frames(
+                participant_frames
                     .iter()
-                    .map(|&sample| crate::media::transcode::linear_to_ulaw(sample))
-                    .collect(),
-                _ => output_frame // 其它默认为 PCMA
-                    .iter()
-                    .map(|&sample| crate::media::transcode::linear_to_alaw(sample))
-                    .collect(),
+                    .filter_map(|(other_port, frame)| (*other_port != port).then_some(frame)),
+            );
+            let codec = match p.codec {
+                AudioCodec::Pcmu => ConferenceCodec::Pcmu,
+                _ => ConferenceCodec::Pcma,
             };
+            let payload = encode_conference_frame(&output_frame, codec);
 
-            // 5. 构建并发送 RTP 报文
             let pt = p.codec.static_payload_type().unwrap_or(8);
             let rtp_packet = build_rtp_packet(pt, p.sequence, p.timestamp, p.ssrc, &payload);
 
@@ -112,7 +80,7 @@ impl Conference {
 
             // 6. 更新 RTP 序号与时间戳
             p.sequence = p.sequence.wrapping_add(1);
-            p.timestamp = p.timestamp.wrapping_add(160);
+            p.timestamp = p.timestamp.wrapping_add(CONFERENCE_FRAME_SAMPLES as u32);
         }
     }
 }
@@ -157,7 +125,7 @@ impl ConferenceManager {
             pcm_buffer: Vec::new(),
             ssrc: 12345 + port as u32,
             sequence: 1,
-            timestamp: 160,
+            timestamp: CONFERENCE_FRAME_SAMPLES as u32,
             muted: false,
         };
         conf.participants.insert(port, participant);

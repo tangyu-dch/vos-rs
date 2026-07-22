@@ -313,7 +313,20 @@ impl CallManager {
             },
         );
 
-        let candidates = {
+        let policy_candidates = source
+            .map(|source| {
+                self.outbound_policies.load().select_source_candidates(
+                    source,
+                    &call.inbound.remote_uri,
+                    &call.direction,
+                    health,
+                )
+            })
+            .transpose()?
+            .flatten();
+        let candidates = if let Some(candidates) = policy_candidates {
+            Ok(candidates)
+        } else {
             let routes = self.routes.load();
             match health {
                 Some(health) => routes.select_healthy_candidates(

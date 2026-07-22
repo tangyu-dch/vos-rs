@@ -95,11 +95,15 @@ fn directory(source: CallSource) -> OutboundPolicyDirectory {
                 group_id: "group-a".to_string(),
                 gateway_id: "egress-a".to_string(),
                 destination_prefix: String::new(),
+                priority: 100,
+                weight: 1,
             },
             RuntimeEgressGroupMember {
                 group_id: "group-a".to_string(),
                 gateway_id: "egress-b".to_string(),
                 destination_prefix: String::new(),
+                priority: 100,
+                weight: 1,
             },
         ],
     )

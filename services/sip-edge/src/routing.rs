@@ -28,7 +28,7 @@ pub(crate) async fn reload_routes_from_database(
     let gateway_details = db.list_gateways_full().await?;
     let endpoints = db.list_enabled_egress_endpoints().await?;
     let caller_numbers = db.list_numbers().await?;
-    let mut gateway_map = db_gateways
+    let gateway_map = db_gateways
         .into_iter()
         .filter(|gw| {
             let role = gw.9.as_deref().unwrap_or("egress");
@@ -69,15 +69,38 @@ pub(crate) async fn reload_routes_from_database(
             (host.clone(), port.unwrap_or(5060), id.clone())
         })
         .collect::<Vec<_>>();
+    let mut endpoint_routes = HashMap::<String, Vec<Route>>::new();
     for endpoint in endpoints {
-        if let Some(gateway) = gateway_map.get_mut(&endpoint.trunk_id) {
+        if let Some(gateway) = gateway_map.get(&endpoint.trunk_id) {
             if let Ok(port) = u16::try_from(endpoint.port) {
                 gateway_identities.push((endpoint.host.clone(), port, endpoint.trunk_id.clone()));
+                let mut target = RouteTarget::new(&endpoint.trunk_id, endpoint.host, Some(port));
+                target.transport = Some(endpoint.transport);
+                target.max_capacity = gateway.3;
+                target.caller_id_mode.clone_from(&gateway.4);
+                target.virtual_caller.clone_from(&gateway.5);
+                target.prefix_rules.clone_from(&gateway.6);
+                target.max_concurrent = gateway.7;
+                endpoint_routes.entry(endpoint.trunk_id).or_default().push(
+                    Route::new(format!("endpoint-{}", endpoint.id), "", 0, target)
+                        .with_endpoint_priority(endpoint.priority),
+                );
             }
-            gateway.0 = endpoint.host;
-            gateway.1 = u16::try_from(endpoint.port).ok();
-            gateway.2 = endpoint.transport;
         }
+    }
+    for (gateway_id, gateway) in &gateway_map {
+        endpoint_routes
+            .entry(gateway_id.clone())
+            .or_insert_with(|| {
+                let mut target = RouteTarget::new(gateway_id, gateway.0.clone(), gateway.1);
+                target.transport = Some(gateway.2.clone());
+                target.max_capacity = gateway.3;
+                target.caller_id_mode.clone_from(&gateway.4);
+                target.virtual_caller.clone_from(&gateway.5);
+                target.prefix_rules.clone_from(&gateway.6);
+                target.max_concurrent = gateway.7;
+                vec![Route::new(format!("gateway-{gateway_id}"), "", 0, target)]
+            });
     }
     edge_state.replace_gateway_endpoint_cache(gateway_identities);
     edge_state
@@ -110,7 +133,14 @@ pub(crate) async fn reload_routes_from_database(
                     })
             }),
         ));
-    refresh_termination_runtime(edge_state, db, &gateway_details, &now_hhmm_or_current()).await?;
+    refresh_termination_runtime(
+        edge_state,
+        db,
+        &gateway_details,
+        &now_hhmm_or_current(),
+        endpoint_routes.clone(),
+    )
+    .await?;
 
     let mut routes = Vec::new();
     let now_hhmm = cdr_core::current_hhmm();
@@ -130,32 +160,20 @@ pub(crate) async fn reload_routes_from_database(
         ) {
             continue;
         }
-        if let Some((
-            host,
-            port,
-            transport,
-            max_capacity,
-            caller_id_mode,
-            virtual_caller,
-            prefix_rules,
-            max_concurrent,
-        )) = gateway_map.get(&gateway_id)
-        {
-            let mut target = RouteTarget::new(&gateway_id, host.clone(), *port);
-            target.transport = Some(transport.clone());
-            target.max_capacity = *max_capacity;
-            target.caller_id_mode = caller_id_mode.clone();
-            target.virtual_caller = virtual_caller.clone();
-            target.prefix_rules = prefix_rules.clone();
-            target.max_concurrent = *max_concurrent;
-            routes.push(Route::with_cost_and_weight(
-                id,
-                prefix,
-                priority,
-                cost,
-                weight as u32,
-                target,
-            ));
+        if let Some(targets) = endpoint_routes.get(&gateway_id) {
+            for endpoint_route in targets {
+                routes.push(
+                    Route::with_cost_and_weight(
+                        format!("{id}:{}", endpoint_route.id),
+                        prefix.clone(),
+                        priority,
+                        cost,
+                        weight as u32,
+                        endpoint_route.target.clone(),
+                    )
+                    .with_endpoint_priority(endpoint_route.endpoint_priority),
+                );
+            }
         }
     }
     // An empty database table is authoritative and must clear stale in-memory routes.
@@ -170,6 +188,7 @@ async fn refresh_termination_runtime(
     db: &PostgresCdrStore,
     gateways: &[cdr_core::SipGateway],
     now_hhmm: &str,
+    endpoint_routes: HashMap<String, Vec<Route>>,
 ) -> Result<(), AnyError> {
     let owners = db.list_runtime_number_owners().await?;
     let allocations = db.list_number_allocations(None).await?;
@@ -186,9 +205,8 @@ async fn refresh_termination_runtime(
         .filter(|group| group.enabled)
         .map(|group| group.id)
         .collect::<std::collections::HashSet<_>>();
-    edge_state
-        .call_manager
-        .update_outbound_policies(OutboundPolicyDirectory::new(
+    edge_state.call_manager.update_outbound_policies(
+        OutboundPolicyDirectory::new(
             owners,
             allocations
                 .into_iter()
@@ -218,8 +236,12 @@ async fn refresh_termination_runtime(
                     group_id: member.group_id,
                     gateway_id: member.egress_trunk_id,
                     destination_prefix: member.destination_prefix,
+                    priority: member.priority,
+                    weight: u32::try_from(member.weight).unwrap_or(1),
                 }),
-        ));
+        )
+        .with_egress_routes(endpoint_routes),
+    );
 
     edge_state.replace_did_destinations(dids.into_iter().map(|d| (d.number.clone(), d)).collect());
     if let Ok(mut current) = edge_state.trunk_billing_accounts.write() {
@@ -443,6 +465,8 @@ pub(crate) async fn warm_hot_path_redis_cache(
         .del("vos_rs:billing:prices")
         .ignore()
         .del("vos_rs:billing:balances")
+        .ignore()
+        .del("vos_rs:billing:credit_limits")
         .ignore();
     for (username, password) in credentials {
         pipeline
@@ -473,7 +497,17 @@ pub(crate) async fn warm_hot_path_redis_cache(
     }
     for account in accounts {
         pipeline
-            .hset("vos_rs:billing:balances", account.username, account.balance)
+            .hset(
+                "vos_rs:billing:balances",
+                &account.username,
+                account.balance,
+            )
+            .ignore()
+            .hset(
+                "vos_rs:billing:credit_limits",
+                account.username,
+                account.credit_limit,
+            )
             .ignore();
     }
     pipeline.query_async::<()>(&mut connection).await?;

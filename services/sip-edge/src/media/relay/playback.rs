@@ -142,19 +142,18 @@ impl MediaRelayState {
                 }
             }
 
-            let is_exclusive = playback_state
-                .lock()
-                .map(|state| state.mode == PlaybackMode::Exclusive)
-                .unwrap_or(false);
-            if is_exclusive {
-                if let Some(peer_port) = relay.peer_ports.get(&port).map(|entry| *entry) {
-                    relay.mark_resume_after_exclusive(peer_port);
+            if relay.cleanup_finished_playback(port, &playback_state) {
+                let is_exclusive = playback_state
+                    .lock()
+                    .map(|state| state.mode == PlaybackMode::Exclusive)
+                    .unwrap_or(false);
+                if is_exclusive {
+                    if let Some(peer_port) = relay.peer_ports.get(&port).map(|entry| *entry) {
+                        relay.mark_resume_after_exclusive(peer_port);
+                    }
                 }
+                relay.mark_port_and_peer_features_changed(port);
             }
-            relay.playbacks.remove(&port);
-            relay.playback_modes.remove(&port);
-            relay.playback_loops.remove(&port);
-            relay.mark_port_and_peer_features_changed(port);
         });
 
         Ok(())
@@ -181,5 +180,23 @@ impl MediaRelayState {
         if changed {
             self.mark_port_and_peer_features_changed(port);
         }
+    }
+
+    fn cleanup_finished_playback(
+        &self,
+        port: u16,
+        playback_state: &Arc<std::sync::Mutex<PlaybackState>>,
+    ) -> bool {
+        let dashmap::mapref::entry::Entry::Occupied(entry) = self.playbacks.entry(port) else {
+            return false;
+        };
+        if !Arc::ptr_eq(entry.get(), playback_state) {
+            return false;
+        }
+
+        self.playback_modes.remove(&port);
+        self.playback_loops.remove(&port);
+        entry.remove();
+        true
     }
 }

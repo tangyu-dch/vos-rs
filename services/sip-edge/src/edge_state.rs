@@ -195,17 +195,46 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RedisBalanceCheck {
     pub(crate) has_balance: bool,
+    pub(crate) account_found: bool,
+    pub(crate) rate_found: bool,
     pub(crate) balance: f64,
+    pub(crate) credit_limit: f64,
     pub(crate) billing_interval_secs: u32,
     pub(crate) price_per_interval: f64,
 }
 
 type RedisBillingPipelineResult = (
     Option<f64>,
+    Option<f64>,
     Vec<Option<u32>>,
     Vec<Option<f64>>,
     Vec<Option<f64>>,
 );
+
+fn build_balance_check(
+    balance: Option<f64>,
+    credit_limit: Option<f64>,
+    pulse: Option<(u32, f64)>,
+    legacy_rate: Option<f64>,
+) -> RedisBalanceCheck {
+    let account_found = balance.is_some();
+    let balance = balance.unwrap_or(0.0);
+    let credit_limit = credit_limit.unwrap_or(0.0).max(0.0);
+    let rate_found = pulse.is_some() || legacy_rate.is_some();
+    let (billing_interval_secs, price_per_interval) =
+        pulse.unwrap_or_else(|| (60, legacy_rate.unwrap_or(0.0)));
+    RedisBalanceCheck {
+        has_balance: account_found
+            && rate_found
+            && (price_per_interval == 0.0 || balance + credit_limit >= price_per_interval),
+        account_found,
+        rate_found,
+        balance,
+        credit_limit,
+        billing_interval_secs,
+        price_per_interval,
+    }
+}
 
 const POSITIVE_REGISTRATION_CACHE_TTL: Duration = Duration::from_secs(5);
 const NEGATIVE_REGISTRATION_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -214,6 +243,7 @@ const MAX_REGISTRATION_CACHE_ENTRIES: usize = 10_000;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CdrSinks {
     pub(crate) postgres: Option<PostgresCdrStore>,
+    pub(crate) nats: Option<crate::nats_cdr::NatsCdrPublisher>,
 }
 
 #[allow(dead_code)]
@@ -434,6 +464,8 @@ pub(crate) struct ParkedCall {
 
 pub(crate) struct EdgeState {
     pub(crate) call_manager: std::sync::Arc<CallManager>,
+    pub(crate) cdr_pipeline_metrics:
+        std::sync::OnceLock<std::sync::Arc<crate::cdr_spool::CdrPipelineMetrics>>,
     pub(crate) gateway_health: GatewayHealthTracker,
     pub(crate) inbound_transactions: dashmap::DashMap<String, InboundTransaction>,
     pub(crate) media_relay: MediaRelayState,
@@ -528,6 +560,7 @@ impl EdgeState {
 
         Self {
             call_manager: std::sync::Arc::new(call_manager),
+            cdr_pipeline_metrics: std::sync::OnceLock::new(),
             gateway_health: GatewayHealthTracker::new(call_core::HealthThresholds::default()),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay,
@@ -603,6 +636,7 @@ impl EdgeState {
 
         Self {
             call_manager: std::sync::Arc::new(call_manager),
+            cdr_pipeline_metrics: std::sync::OnceLock::new(),
             gateway_health: GatewayHealthTracker::default(),
             inbound_transactions: dashmap::DashMap::new(),
             media_relay: MediaRelayState::new(),
@@ -786,6 +820,9 @@ impl EdgeState {
             .cmd("HGET")
             .arg("vos_rs:billing:balances")
             .arg(username)
+            .cmd("HGET")
+            .arg("vos_rs:billing:credit_limits")
+            .arg(username)
             .cmd("HMGET")
             .arg("vos_rs:billing:intervals");
         for prefix in &prefixes {
@@ -799,21 +836,19 @@ impl EdgeState {
         for prefix in &prefixes {
             pipeline.arg(prefix);
         }
-        let (balance, intervals, prices, legacy_rates): RedisBillingPipelineResult =
+        let (balance, credit_limit, intervals, prices, legacy_rates): RedisBillingPipelineResult =
             pipeline.query_async(&mut connection).await.ok()?;
-        let balance = balance.unwrap_or(0.0);
         let pulse = intervals
             .into_iter()
             .zip(prices)
             .find_map(|(interval, price)| interval.zip(price));
-        let (billing_interval_secs, price_per_interval) =
-            pulse.unwrap_or_else(|| (60, legacy_rates.into_iter().flatten().next().unwrap_or(0.0)));
-        Some(RedisBalanceCheck {
-            has_balance: balance >= price_per_interval || price_per_interval == 0.0,
+        let legacy_rate = legacy_rates.into_iter().flatten().next();
+        Some(build_balance_check(
             balance,
-            billing_interval_secs,
-            price_per_interval,
-        })
+            credit_limit,
+            pulse,
+            legacy_rate,
+        ))
     }
 
     /// 查找注册绑定的 Contact 地址。先查本地注册表，未命中再查 Redis。
@@ -1709,7 +1744,7 @@ fn log_media_target_metrics(
 
 #[cfg(test)]
 mod gateway_identity_tests {
-    use super::GatewayIdentityCache;
+    use super::{build_balance_check, GatewayIdentityCache};
 
     fn identify(cache: &GatewayIdentityCache, peer: &str) -> Option<String> {
         cache.identify(peer.parse().expect("valid test peer"))
@@ -1773,5 +1808,20 @@ mod gateway_identity_tests {
         ]);
 
         assert_eq!(identify(&cache, "192.0.2.10:5060"), None);
+    }
+
+    #[test]
+    fn billing_check_distinguishes_missing_data_and_uses_credit_limit() {
+        let missing_account = build_balance_check(None, None, Some((60, 0.5)), None);
+        assert!(!missing_account.account_found);
+        assert!(!missing_account.has_balance);
+
+        let missing_rate = build_balance_check(Some(10.0), Some(0.0), None, None);
+        assert!(!missing_rate.rate_found);
+        assert!(!missing_rate.has_balance);
+
+        let credit = build_balance_check(Some(-0.25), Some(1.0), Some((6, 0.05)), None);
+        assert!(credit.has_balance);
+        assert_eq!(credit.balance + credit.credit_limit, 0.75);
     }
 }

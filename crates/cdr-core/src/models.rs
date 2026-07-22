@@ -355,6 +355,7 @@ pub struct BillingRate {
 pub struct BillingAccount {
     pub username: String,
     pub balance: f64,
+    pub credit_limit: f64,
     pub currency: String,
     #[serde(
         with = "time::serde::rfc3339::option",
@@ -362,6 +363,14 @@ pub struct BillingAccount {
         skip_serializing_if = "Option::is_none"
     )]
     pub created_at: Option<OffsetDateTime>,
+}
+
+/// Result of applying a credit operation through its idempotency boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CreditAccountOutcome {
+    Applied(f64),
+    Replayed(f64),
+    Conflict,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -509,9 +509,7 @@ pub(crate) async fn handle_invite_request(
     }
 
     let source = call_source.expect("source must be resolved here");
-    let billing_account = if from_gw {
-        None
-    } else if source.source_type == "extension" {
+    let billing_account = if source.source_type == "extension" {
         Some(source.source_id.clone())
     } else {
         edge_state.resolve_trunk_billing_account(&source.source_id)
@@ -787,12 +785,34 @@ pub(crate) async fn handle_invite_request(
     let mut billing_pulse: Option<(u32, f64)> = None;
 
     // 呼叫热路径只从 Redis 读取余额和费率，不回退查询 PostgreSQL。
-    if edge_config.balance_enforcement_enabled && !from_gw && outbound_invite.is_some() {
+    if edge_config.balance_enforcement_enabled && outbound_invite.is_some() {
         let callee = request.uri.user.as_deref().unwrap_or("");
         if let Some(caller_user) = billing_account.as_deref() {
             match edge_state.redis_balance_check(caller_user, callee).await {
+                Some(check) if !check.account_found => {
+                    warn!(caller = %caller_user, "pre-call billing account is missing from Redis cache");
+                    return vec![PendingDatagram::new(
+                        peer.to_string(),
+                        response::error_for_call_error(
+                            &request,
+                            &call_core::CallError::GatewayUnavailable("计费账户未配置".to_string()),
+                        ),
+                    )];
+                }
+                Some(check) if !check.rate_found => {
+                    warn!(caller = %caller_user, callee, "pre-call billing rate is not configured");
+                    return vec![PendingDatagram::new(
+                        peer.to_string(),
+                        response::error_for_call_error(
+                            &request,
+                            &call_core::CallError::GatewayUnavailable(
+                                "被叫号码未配置费率".to_string(),
+                            ),
+                        ),
+                    )];
+                }
                 Some(check) if !check.has_balance => {
-                    warn!(caller = %caller_user, balance = check.balance, interval = check.billing_interval_secs, price = check.price_per_interval, "pre-call Redis balance check failed");
+                    warn!(caller = %caller_user, balance = check.balance, credit_limit = check.credit_limit, interval = check.billing_interval_secs, price = check.price_per_interval, "pre-call Redis balance check failed");
                     return vec![PendingDatagram::new(
                         peer.to_string(),
                         response::error_for_call_error(
@@ -804,14 +824,23 @@ pub(crate) async fn handle_invite_request(
                 Some(check) if check.price_per_interval > 0.0 => {
                     billing_pulse = Some((check.billing_interval_secs, check.price_per_interval));
                     calculated_max_duration = crate::billing_settlement::maximum_duration_secs(
-                        check.balance,
+                        check.balance + check.credit_limit,
                         check.billing_interval_secs,
                         check.price_per_interval,
                     );
                 }
                 Some(_) => {}
                 None => {
-                    warn!(caller = %caller_user, "Redis balance check unavailable, allowing call");
+                    warn!(caller = %caller_user, "Redis balance check unavailable, rejecting call");
+                    return vec![PendingDatagram::new(
+                        peer.to_string(),
+                        response::error_for_call_error(
+                            &request,
+                            &call_core::CallError::GatewayUnavailable(
+                                "计费服务暂不可用".to_string(),
+                            ),
+                        ),
+                    )];
                 }
             }
         }

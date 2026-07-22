@@ -12,12 +12,6 @@ export async function login(username: string, password: string): Promise<AuthSes
     saveSession(session);
     return session;
   } catch (err: any) {
-    // 开发环境或默认测试凭据（admin / admin 或 admin / admin123）无缝登录体验
-    if (username === 'admin' && (password === 'admin' || password === 'admin123')) {
-      const fallbackSession: AuthSession = { token: 'mock-dev-token-admin', username: 'admin', role: 'admin' };
-      saveSession(fallbackSession);
-      return fallbackSession;
-    }
     const reason = err?.response?.data?.message || err?.message || '用户名或密码错误';
     throw new Error(reason, { cause: err });
   }

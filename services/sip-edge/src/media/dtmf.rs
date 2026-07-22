@@ -1,47 +1,16 @@
-//! # DTMF 处理
-//!
-//! 本模块实现了 DTMF（Dual-Tone Multi-Frequency）信号的检测和处理，包括：
-//!
-//! - **RFC 2833**：RTP telephone-event 检测
-//! - **SIP INFO**：SIP INFO 方式的 DTMF 传递
-//! - **DTMF 累积**：按通话累积 DTMF 数字序列
-//! - **审计记录**：DTMF 事件写入审计表
-//!
-//! ## 支持的 DTMF 数字
-//!
-//! ```text
-//! 0-9, *, #, A-D
-//! ```
-//!
-//! ## 事件格式
-//!
-//! RFC 2833 telephone-event：
-//! - Event: DTMF 数字（0-15）
-//! - End: 事件结束标志
-//! - Duration: 事件持续时间
+//! DTMF integration with relay state, metrics, and CDR audit records.
 
 use crate::media::relay::MediaRelayState;
 use cdr_core::DtmfEventRecord;
-use rtp_core::{RtpPacketView, TelephoneEvent};
+use rtp_core::RtpPacketView;
 use tracing::{debug, warn};
 
-#[derive(Debug, Clone)]
-pub struct DtmfState {
-    pub call_id: String,
-    pub payload_type: u8,
-    pub last_timestamp: Option<u32>,
-}
+pub use media_core::dtmf::DtmfTracker as DtmfState;
 
 impl MediaRelayState {
     pub fn register_port_dtmf_tracking(&self, call_id: &str, port: u16, payload_type: u8) {
-        self.dtmf_states.insert(
-            port,
-            DtmfState {
-                call_id: call_id.to_string(),
-                payload_type,
-                last_timestamp: None,
-            },
-        );
+        self.dtmf_states
+            .insert(port, DtmfState::new(call_id, payload_type));
         self.mark_relay_features_changed(port);
     }
 
@@ -69,17 +38,16 @@ impl MediaRelayState {
             warn!(call_id, "DTMF 状态锁已中毒，跳过 SIP INFO DTMF");
             return;
         };
-        let acc = inner
+        inner
             .dtmf_accumulators
             .entry(call_id.to_string())
-            .or_default();
-        acc.push(digit);
-        let record = DtmfEventRecord::from_sip_info(call_id, digit);
+            .or_default()
+            .push(digit);
         inner
             .dtmf_event_log
             .entry(call_id.to_string())
             .or_default()
-            .push(record);
+            .push(DtmfEventRecord::from_sip_info(call_id, digit));
         debug!(call_id, digit = %digit, "reconstructed DTMF digit from SIP INFO");
     }
 
@@ -100,52 +68,82 @@ impl MediaRelayState {
     }
 
     pub(crate) fn process_dtmf_packet(&self, local_port: u16, packet: RtpPacketView<'_>) {
-        let (call_id, last_timestamp) = {
-            let Some(state) = self.dtmf_states.get(&local_port) else {
-                return;
-            };
-            if packet.payload_type != state.payload_type {
-                return;
-            }
-            (state.call_id.clone(), state.last_timestamp)
-        };
-
-        let Ok(event) = TelephoneEvent::parse(packet.payload) else {
-            return;
-        };
-        let Some(digit) = event.digit() else {
+        let observation = self
+            .dtmf_states
+            .get_mut(&local_port)
+            .and_then(|mut state| state.observe(packet));
+        let Some(observation) = observation else {
             return;
         };
 
-        let timestamp = packet.timestamp;
-        if Some(timestamp) != last_timestamp {
-            if let Some(mut state) = self.dtmf_states.get_mut(&local_port) {
-                state.last_timestamp = Some(timestamp);
-            }
-            let Ok(mut inner) = self.state.lock() else {
-                warn!(call_id, "DTMF 状态锁已中毒，跳过 RTP DTMF");
-                return;
-            };
-            let acc = inner.dtmf_accumulators.entry(call_id.clone()).or_default();
-            acc.push(digit);
-            let record =
-                DtmfEventRecord::from_rtp(&call_id, digit, timestamp, event.duration, event.volume);
-            inner
-                .dtmf_event_log
-                .entry(call_id.clone())
-                .or_default()
-                .push(record);
-            drop(inner);
-            self.metrics.entry(local_port).or_default().dtmf_events += 1;
-            debug!(
-                call_id,
-                digit = %digit,
-                timestamp,
-                duration = event.duration,
-                end = event.end,
-                volume = event.volume,
-                "reconstructed RTP DTMF digit"
+        let Ok(mut inner) = self.state.lock() else {
+            warn!(
+                call_id = observation.call_id,
+                "DTMF 状态锁已中毒，跳过 RTP DTMF"
             );
-        }
+            return;
+        };
+        inner
+            .dtmf_accumulators
+            .entry(observation.call_id.clone())
+            .or_default()
+            .push(observation.digit);
+        inner
+            .dtmf_event_log
+            .entry(observation.call_id.clone())
+            .or_default()
+            .push(DtmfEventRecord::from_rtp(
+                &observation.call_id,
+                observation.digit,
+                observation.rtp_timestamp,
+                observation.duration,
+                observation.volume,
+            ));
+        drop(inner);
+
+        self.metrics.entry(local_port).or_default().dtmf_events += 1;
+        debug!(
+            call_id = observation.call_id,
+            digit = %observation.digit,
+            timestamp = observation.rtp_timestamp,
+            duration = observation.duration,
+            end = observation.end,
+            volume = observation.volume,
+            "reconstructed RTP DTMF digit"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cdr_core::DtmfSource;
+    use rtp_core::RtpPacket;
+
+    fn process(relay: &MediaRelayState, timestamp: u32, payload: Vec<u8>) {
+        let bytes = RtpPacket::new(101, 1, timestamp, 42, payload)
+            .unwrap()
+            .encode()
+            .unwrap();
+        relay.process_dtmf_packet(40_000, RtpPacketView::parse(&bytes).unwrap());
+    }
+
+    #[tokio::test]
+    async fn dtmf_adapter_records_and_counts_each_timestamp_once() {
+        let relay = MediaRelayState::new();
+        relay.register_port_dtmf_tracking("call-dtmf", 40_000, 101);
+
+        process(&relay, 160, vec![5, 0, 0, 80]);
+        process(&relay, 160, vec![5, 0x80, 1, 64]);
+        process(&relay, 320, vec![11, 0x8a, 1, 64]);
+
+        assert_eq!(relay.get_dtmf_digits("call-dtmf").as_deref(), Some("5#"));
+        assert_eq!(relay.metrics.get(&40_000).unwrap().dtmf_events, 2);
+        let events = relay.take_dtmf_events("call-dtmf");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].source, DtmfSource::Rtp);
+        assert_eq!(events[1].rtp_timestamp, Some(320));
+        assert_eq!(events[1].duration_ms, Some(320));
+        assert_eq!(events[1].volume, Some(10));
     }
 }

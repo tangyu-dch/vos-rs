@@ -173,6 +173,7 @@ fn edge_config() -> EdgeConfig {
         udp_workers_auto: false,
         udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+        balance_enforcement_enabled: false,
         ..Default::default()
     }
 }
@@ -210,6 +211,7 @@ fn edge_config_with_auth() -> EdgeConfig {
         udp_workers_auto: false,
         udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+        balance_enforcement_enabled: false,
         ..Default::default()
     }
 }
@@ -640,10 +642,10 @@ async fn test_invite_did_routing_to_extension_group() {
             "4008003".to_string(),
             "carrier-a".to_string(),
         )]));
-    
+
     register_contact(&edge_state, "1002", "192.0.2.102", 5060).await;
     register_contact(&edge_state, "1003", "192.0.2.103", 5060).await;
-    
+
     edge_state.replace_did_destinations(HashMap::from([(
         "4008003".to_string(),
         cdr_core::DidDestination {
@@ -655,11 +657,14 @@ async fn test_invite_did_routing_to_extension_group() {
             updated_at: time::OffsetDateTime::now_utc(),
         },
     )]));
-    
+
     if let Ok(mut lock) = edge_state.extension_groups.write() {
-        lock.insert("group-1".to_string(), vec!["1002".to_string(), "1003".to_string()]);
+        lock.insert(
+            "group-1".to_string(),
+            vec!["1002".to_string(), "1003".to_string()],
+        );
     }
-    
+
     let invite = concat!(
         "INVITE sip:4008003@example.com SIP/2.0\r\n",
         "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-did-group\r\n",
@@ -671,14 +676,20 @@ async fn test_invite_did_routing_to_extension_group() {
         "Content-Length: 0\r\n",
         "\r\n"
     );
-    
-    let datagrams = handle_datagram(invite.as_bytes(), "192.0.2.10:5060".parse().unwrap(), &edge_state, &edge_config()).await;
-    
+
+    let datagrams = handle_datagram(
+        invite.as_bytes(),
+        "192.0.2.10:5060".parse().unwrap(),
+        &edge_state,
+        &edge_config(),
+    )
+    .await;
+
     assert_eq!(datagrams.len(), 3);
-    
+
     let trying = datagram_text(&datagrams[0]);
     assert!(trying.starts_with("SIP/2.0 100 Trying"));
-    
+
     let targets: Vec<String> = datagrams[1..3].iter().map(|d| d.target.clone()).collect();
     assert!(targets.contains(&"192.0.2.102:5060".to_string()));
     assert!(targets.contains(&"192.0.2.103:5060".to_string()));
@@ -688,7 +699,7 @@ async fn test_invite_did_routing_to_extension_group() {
 async fn test_invite_did_routing_to_ivr() {
     let edge_state = Arc::new(state_with_default_route());
     edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
-    
+
     edge_state.replace_gateway_cache([("192.0.2.10".to_string(), "carrier-a".to_string())]);
     edge_state
         .call_manager
@@ -696,7 +707,7 @@ async fn test_invite_did_routing_to_ivr() {
             "4008004".to_string(),
             "carrier-a".to_string(),
         )]));
-    
+
     edge_state.replace_did_destinations(HashMap::from([(
         "4008004".to_string(),
         cdr_core::DidDestination {
@@ -708,7 +719,7 @@ async fn test_invite_did_routing_to_ivr() {
             updated_at: time::OffsetDateTime::now_utc(),
         },
     )]));
-    
+
     if let Ok(mut lock) = edge_state.ivr_menus.write() {
         lock.insert(
             "menu-1".to_string(),
@@ -717,18 +728,19 @@ async fn test_invite_did_routing_to_ivr() {
                 name: "Welcome Menu".to_string(),
                 welcome_prompt: "welcome.wav".to_string(),
                 timeout_secs: 5,
-                actions: HashMap::from([
-                    ("1".to_string(), crate::edge_state::IvrAction {
+                actions: HashMap::from([(
+                    "1".to_string(),
+                    crate::edge_state::IvrAction {
                         action_type: "hangup".to_string(),
                         action_target: "".to_string(),
                         waiting_prompt: None,
                         webhook_method: None,
-                    })
-                ]),
-            }
+                    },
+                )]),
+            },
         );
     }
-    
+
     let body = sdp_body();
     let invite = format!(
         "INVITE sip:4008004@example.com SIP/2.0\r\n\
@@ -744,9 +756,15 @@ async fn test_invite_did_routing_to_ivr() {
         body.len(),
         body
     );
-    
-    let datagrams = handle_datagram(invite.as_bytes(), "192.0.2.10:5060".parse().unwrap(), &edge_state, &edge_config()).await;
-    
+
+    let datagrams = handle_datagram(
+        invite.as_bytes(),
+        "192.0.2.10:5060".parse().unwrap(),
+        &edge_state,
+        &edge_config(),
+    )
+    .await;
+
     assert_eq!(datagrams.len(), 1);
     let response = datagram_text(&datagrams[0]);
     assert!(response.starts_with("SIP/2.0 200 OK"));
@@ -5482,7 +5500,7 @@ async fn test_client_transaction_timeout_triggers_failover() {
 // FILE: dtmf_cdr_tests.rs
 // ==========================================
 #[tokio::test]
-async fn flush_completed_cdrs_discards_when_postgres_is_disabled() {
+async fn flush_completed_cdrs_fail_when_all_persistence_sinks_are_disabled() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let edge_state = EdgeState::new(CallManager::new(
         RouteTable::new(vec![Route::new(
@@ -5511,7 +5529,7 @@ async fn flush_completed_cdrs_discards_when_postgres_is_disabled() {
     let _ = handle_datagram(bye.as_bytes(), peer(), &edge_state, &edge_config()).await;
     let cdr = rx.try_recv().expect("CDR should exist");
     let cdrs = vec![cdr];
-    flush_cdr_batch(&CdrSinks::default(), &cdrs).await.unwrap();
+    assert!(flush_cdr_batch(&CdrSinks::default(), &cdrs).await.is_err());
 
     assert!(rx.try_recv().is_err());
 }

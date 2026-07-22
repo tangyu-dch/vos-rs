@@ -13,6 +13,14 @@ export class ApiError extends Error {
 }
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 30000, headers: { 'Content-Type': 'application/json' } });
+
+export function shouldRetryRequest(method: string | undefined, status: number | undefined, errorCode: string | undefined, hasResponse: boolean): boolean {
+  const normalizedMethod = String(method || 'GET').toUpperCase();
+  const isIdempotentRead = normalizedMethod === 'GET' || normalizedMethod === 'HEAD' || normalizedMethod === 'OPTIONS';
+  const isTransient = errorCode === 'ECONNABORTED' || status === 502 || (!hasResponse && errorCode !== 'ECONNABORTED');
+  return isIdempotentRead && isTransient;
+}
+
 http.interceptors.request.use((config) => {
   const token = getAccessToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
@@ -24,10 +32,8 @@ http.interceptors.response.use(undefined, async (error) => {
   
   // Retry logic for timeout, network error or 502
   const isTimeout = error.code === 'ECONNABORTED';
-  const isNetworkError = !error.response && error.code !== 'ECONNABORTED';
-  const is502 = status === 502;
-  
-  if (config && (isTimeout || is502 || isNetworkError)) {
+
+  if (config && shouldRetryRequest(config.method, status, error.code, Boolean(error.response))) {
     config.retryCount = config.retryCount || 0;
     if (config.retryCount < 3) {
       config.retryCount += 1;
@@ -59,7 +65,7 @@ export async function request<T>(config: AxiosRequestConfig): Promise<T> {
 
 export const api = {
   get: <T>(url: string, params?: object, signal?: AbortSignal) => request<T>({ method: 'GET', url, params, signal }),
-  post: <T>(url: string, data?: unknown) => request<T>({ method: 'POST', url, data }),
+  post: <T>(url: string, data?: unknown, config?: AxiosRequestConfig) => request<T>({ ...config, method: 'POST', url, data }),
   patch: <T>(url: string, data?: unknown) => request<T>({ method: 'PATCH', url, data }),
   put: <T>(url: string, data?: unknown) => request<T>({ method: 'PUT', url, data }),
   delete: <T>(url: string) => request<T>({ method: 'DELETE', url }),

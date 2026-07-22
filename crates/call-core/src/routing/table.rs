@@ -126,6 +126,7 @@ impl RouteTable {
                         .partial_cmp(&right.cost)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
+                .then_with(|| right.endpoint_priority.cmp(&left.endpoint_priority))
         });
 
         let mut grouped_routes = Vec::new();
@@ -138,7 +139,8 @@ impl RouteTable {
                 let first = current_group[0];
                 let is_equivalent = first.prefix.len() == route.prefix.len()
                     && first.priority == route.priority
-                    && (first.cost - route.cost).abs() < 1e-9;
+                    && (first.cost - route.cost).abs() < 1e-9
+                    && first.endpoint_priority == route.endpoint_priority;
                 if is_equivalent {
                     current_group.push(route);
                 } else {
@@ -198,6 +200,7 @@ impl RouteTable {
                         .partial_cmp(&right.cost)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
+                .then_with(|| right.endpoint_priority.cmp(&left.endpoint_priority))
         });
 
         let mut grouped_routes = Vec::new();
@@ -210,7 +213,8 @@ impl RouteTable {
                 let first = current_group[0];
                 let is_equivalent = first.prefix.len() == route.prefix.len()
                     && first.priority == route.priority
-                    && (first.cost - route.cost).abs() < 1e-9;
+                    && (first.cost - route.cost).abs() < 1e-9
+                    && first.endpoint_priority == route.endpoint_priority;
                 if is_equivalent {
                     current_group.push(route);
                 } else {

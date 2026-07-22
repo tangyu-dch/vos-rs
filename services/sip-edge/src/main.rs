@@ -1,10 +1,12 @@
 pub(crate) mod billing_settlement;
 pub(crate) mod cdr;
+pub(crate) mod cdr_spool;
 pub(crate) mod cluster;
 pub(crate) mod config;
 pub(crate) mod edge_state;
 mod manage;
 pub(crate) mod media;
+pub(crate) mod nats_cdr;
 pub(crate) mod net;
 pub(crate) mod number_routing;
 pub(crate) mod resource_lease;
@@ -15,7 +17,7 @@ pub(crate) mod timers;
 mod webhook_delivery;
 mod webhooks;
 
-pub(crate) use cdr::{cdr_sinks_from_config, flush_cdr_batch_with_retry_and_wal};
+pub(crate) use cdr::{cdr_sinks_from_config, flush_cdr_batch_with_retry_and_spool};
 pub(crate) use number_routing::{reload_number_routes, spawn_number_route_refresh};
 pub(crate) use routing::{
     parse_gateway_target, reload_routes_from_database, route_table_from_config,
@@ -74,8 +76,54 @@ use tracing_subscriber::EnvFilter;
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
+fn validate_bootstrap_config() -> Result<(), AnyError> {
+    let path = std::env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
+    let content = std::fs::read_to_string(&path)
+        .map_err(|error| std::io::Error::other(format!("读取配置文件 {path} 失败: {error}")))?;
+    serde_yaml::from_str::<serde_yaml::Value>(&content)
+        .map_err(|error| std::io::Error::other(format!("解析配置文件 {path} 失败: {error}")))?;
+    Ok(())
+}
+
+fn validate_runtime_security(config: &EdgeConfig) -> Result<(), AnyError> {
+    let production =
+        std::env::var("VOS_RS_ENV").is_ok_and(|value| value.eq_ignore_ascii_case("production"));
+    validate_runtime_security_for_environment(config, production)
+}
+
+fn validate_runtime_security_for_environment(
+    config: &EdgeConfig,
+    production: bool,
+) -> Result<(), AnyError> {
+    if !production {
+        return Ok(());
+    }
+    if config.internal_secret.len() < 24
+        || matches!(
+            config.internal_secret.as_str(),
+            "internal-dev-secret" | "compose-internal-secret"
+        )
+    {
+        return Err(std::io::Error::other(
+            "生产环境 VOS_RS_INTERNAL_SECRET 必须是至少 24 字符的随机密钥",
+        )
+        .into());
+    }
+    if config.auth.secret_key.len() < 24 || config.auth.secret_key.contains("change-me") {
+        return Err(std::io::Error::other(
+            "生产环境 SIP Digest secret_key 必须是至少 24 字符的随机密钥",
+        )
+        .into());
+    }
+    if config.tls_insecure_skip_verify || config.tls_allow_test_certificate {
+        return Err(std::io::Error::other("生产环境禁止跳过 TLS 校验或启用测试证书").into());
+    }
+    Ok(())
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), AnyError> {
+    validate_bootstrap_config()?;
     let mut edge_config = EdgeConfig::from_env();
     init_tracing(&config_logging_filter("sip_edge=info"));
     edge_config.validate_cluster()?;
@@ -109,7 +157,7 @@ async fn main() -> Result<(), AnyError> {
     let redis_client = match redis::Client::open(redis_url.clone()) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!(redis_url, error = %e, "Redis 客户端打开失败。VOS-RS 必须有 Redis 运行！");
+            tracing::error!(error = %e, "Redis 客户端打开失败。VOS-RS 必须有 Redis 运行！");
             return Err(e.into());
         }
     };
@@ -117,7 +165,7 @@ async fn main() -> Result<(), AnyError> {
     {
         Ok(conn) => Some(conn),
         Err(e) => {
-            tracing::error!(redis_url, error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
+            tracing::error!(error = %e, "Redis 连接失败，请检查服务状态。VOS-RS 必须有 Redis 运行！");
             return Err(e.into());
         }
     };
@@ -131,6 +179,13 @@ async fn main() -> Result<(), AnyError> {
     } else {
         info!("dynamic Redis/PostgreSQL configuration override is disabled");
     }
+    if let Ok(secret) = std::env::var("VOS_RS_INTERNAL_SECRET") {
+        edge_config.internal_secret = secret;
+    }
+    if let Ok(secret) = std::env::var("VOS_RS_SIP_AUTH_SECRET") {
+        edge_config.auth.secret_key = secret;
+    }
+    validate_runtime_security(&edge_config)?;
     // 动态配置可能替换媒体节点池，必须在创建监听和媒体状态前再次校验。
     edge_config.validate_cluster()?;
 
@@ -173,15 +228,18 @@ async fn main() -> Result<(), AnyError> {
     let cdr_queue_capacity = edge_config.cdr_queue_capacity;
     let cdr_persistence_enabled = edge_config.cdr_persistence_enabled;
     let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
+    let cdr_spool = cdr_spool::CdrSpool::open(cdr_spool::configured_spool_dir())?;
+    let cdr_pipeline_metrics = cdr_spool.metrics();
+    let durable_cdr_sink = cdr_spool::DurableCdrSink::new(cdr_tx, cdr_spool.clone());
     let (call_manager, webhook_receiver) = if edge_config.webhooks.enabled {
         let (event_sender, event_receiver) =
             tokio::sync::mpsc::channel(edge_config.webhooks.queue_capacity);
         (
-            CallManager::new_with_event_sink(route_table, cdr_tx, event_sender),
+            CallManager::new_with_event_sink(route_table, durable_cdr_sink, event_sender),
             Some(event_receiver),
         )
     } else {
-        (CallManager::new(route_table, cdr_tx), None)
+        (CallManager::new(route_table, durable_cdr_sink), None)
     };
 
     if let Some(event_receiver) = webhook_receiver {
@@ -204,6 +262,10 @@ async fn main() -> Result<(), AnyError> {
         db_store.clone(),
         &edge_config,
     ));
+    edge_state
+        .cdr_pipeline_metrics
+        .set(cdr_pipeline_metrics)
+        .ok();
     edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
 
     // 将 Redis 连接注入 EdgeState（用于集群注册状态共享）
@@ -234,7 +296,9 @@ async fn main() -> Result<(), AnyError> {
 
     // Start background task to flush CDRs in batches (every 100ms or 100 entries)
     let cdr_sinks_bg = Arc::clone(&cdr_sinks);
-    tokio::spawn(async move {
+    let cdr_spool_bg = cdr_spool.clone();
+    let (cdr_shutdown_tx, mut cdr_shutdown_rx) = tokio::sync::oneshot::channel();
+    let cdr_worker = tokio::spawn(async move {
         let mut batch = Vec::new();
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         loop {
@@ -242,7 +306,7 @@ async fn main() -> Result<(), AnyError> {
                 Some(cdr) = cdr_rx.recv() => {
                     batch.push(cdr);
                     if batch.len() >= 100 && cdr_persistence_enabled {
-                        flush_cdr_batch_with_retry_and_wal(&cdr_sinks_bg, &batch).await;
+                        flush_cdr_batch_with_retry_and_spool(&cdr_sinks_bg, &cdr_spool_bg, &batch).await;
                         batch.clear();
                     } else if batch.len() >= 100 {
                         batch.clear();
@@ -250,15 +314,29 @@ async fn main() -> Result<(), AnyError> {
                 }
                 _ = interval.tick() => {
                     if !batch.is_empty() && cdr_persistence_enabled {
-                        flush_cdr_batch_with_retry_and_wal(&cdr_sinks_bg, &batch).await;
+                        flush_cdr_batch_with_retry_and_spool(&cdr_sinks_bg, &cdr_spool_bg, &batch).await;
                         batch.clear();
                     } else if !batch.is_empty() {
                         batch.clear();
                     }
                 }
+                _ = &mut cdr_shutdown_rx => {
+                    while let Ok(cdr) = cdr_rx.try_recv() {
+                        batch.push(cdr);
+                    }
+                    if !batch.is_empty() && cdr_persistence_enabled {
+                        flush_cdr_batch_with_retry_and_spool(
+                            &cdr_sinks_bg,
+                            &cdr_spool_bg,
+                            &batch,
+                        ).await;
+                    }
+                    break;
+                }
             }
         }
     });
+    cdr_spool::spawn_replay_loop(cdr_spool, Arc::clone(&cdr_sinks));
 
     // 启动管理 API（活跃呼叫查询 / 强制拆线）
     let manage_addr = edge_config.manage_bind.clone();
@@ -748,6 +826,13 @@ async fn main() -> Result<(), AnyError> {
         }
     }
 
+    let _ = cdr_shutdown_tx.send(());
+    match tokio::time::timeout(Duration::from_secs(10), cdr_worker).await {
+        Ok(Ok(())) => info!("CDR writer drained during shutdown"),
+        Ok(Err(error)) => warn!(%error, "CDR writer task failed during shutdown"),
+        Err(_) => warn!("timed out waiting for CDR writer to drain; durable spool may replay overflow records on restart"),
+    }
+
     Ok(())
 }
 
@@ -777,8 +862,9 @@ mod tests {
     use super::auth::{digest_response, AuthConfig};
     use super::{
         handle_datagram, media, response, spawn_client_transaction_retransmission,
-        spawn_nat_keepalive_loop, spawn_session_timer_watchdog, CdrSinks, ClientTransactionKey,
-        EdgeConfig, EdgeState,
+        spawn_nat_keepalive_loop, spawn_session_timer_watchdog,
+        validate_runtime_security_for_environment, CdrSinks, ClientTransactionKey, EdgeConfig,
+        EdgeState,
     };
     use crate::cdr::flush_cdr_batch;
     use crate::edge_state::PendingDatagram;
@@ -794,6 +880,15 @@ mod tests {
         time::{Duration, SystemTime},
     };
     use tokio::net::UdpSocket;
+
+    #[test]
+    fn production_rejects_default_edge_secrets() {
+        let config = EdgeConfig::default();
+        let error = validate_runtime_security_for_environment(&config, true)
+            .expect_err("production defaults must be rejected");
+
+        assert!(error.to_string().contains("VOS_RS_INTERNAL_SECRET"));
+    }
 
     include!("tests/unified_tests.rs");
 }

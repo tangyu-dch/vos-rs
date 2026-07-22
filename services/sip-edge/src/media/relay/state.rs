@@ -21,7 +21,7 @@ impl MediaRelayState {
             codecs: Arc::new(DashMap::new()),
             metrics: Arc::new(DashMap::new()),
             recordings: Arc::new(DashMap::new()),
-            recording_pool: Arc::new(RecordingPool::new(
+            recording_pool: Arc::new(crate::media::recording::new_recording_pool(
                 recording_workers,
                 recording_queue_capacity,
                 storage.clone(),

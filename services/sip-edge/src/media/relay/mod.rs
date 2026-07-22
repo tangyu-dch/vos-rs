@@ -202,6 +202,19 @@ impl std::fmt::Debug for MediaRelayState {
 }
 
 impl MediaRelayState {
+    pub(crate) fn media_node_counts(&self) -> (usize, usize) {
+        match &self.mode {
+            MediaRelayMode::Pool { pool } => {
+                let nodes = pool.nodes();
+                (
+                    nodes.iter().filter(|node| node.is_healthy()).count(),
+                    nodes.len(),
+                )
+            }
+            MediaRelayMode::Local => (1, 1),
+        }
+    }
+
     pub(crate) fn remote_target_for_port(&self, port: u16) -> Option<RemoteControlTarget> {
         match &self.mode {
             MediaRelayMode::Pool { pool } => pool
