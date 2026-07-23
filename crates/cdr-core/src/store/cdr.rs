@@ -280,21 +280,27 @@ impl PostgresCdrStore {
         let today_start = time::OffsetDateTime::now_utc()
             .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC))
             .replace_time(time::Time::from_hms(0, 0, 0).unwrap_or(time::Time::MIDNIGHT));
-        let row = sqlx::query(
-            "SELECT \
-                COUNT(*) as total, \
-                COUNT(*) FILTER (WHERE status = 'answered') as answered, \
-                COUNT(*) FILTER (WHERE status = 'canceled') as canceled, \
-                COUNT(*) FILTER (WHERE status = 'failed') as failed, \
-                AVG(mos) as avg_mos, \
-                AVG(caller_rtcp_loss_rate) as avg_loss, \
-                AVG(caller_rtcp_jitter_ms) as avg_jitter \
-              FROM call_cdrs WHERE started_at >= $1",
-        )
-        .bind(today_start)
-        .fetch_one(&self.pool)
-        .await?;
+        let (row_res, reg_res, gw_res) = futures::join!(
+            sqlx::query(
+                "SELECT \
+                    COUNT(*) as total, \
+                    COUNT(*) FILTER (WHERE status = 'answered') as answered, \
+                    COUNT(*) FILTER (WHERE status = 'canceled') as canceled, \
+                    COUNT(*) FILTER (WHERE status = 'failed') as failed, \
+                    AVG(mos) as avg_mos, \
+                    AVG(caller_rtcp_loss_rate) as avg_loss, \
+                    AVG(caller_rtcp_jitter_ms) as avg_jitter \
+                  FROM call_cdrs WHERE started_at >= $1",
+            )
+            .bind(today_start)
+            .fetch_one(&self.pool),
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sip_registrations WHERE expires_at > now()")
+                .fetch_one(&self.pool),
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sip_gateways")
+                .fetch_one(&self.pool),
+        );
 
+        let row = row_res?;
         let total: i64 = row.get(0);
         let answered: i64 = row.get(1);
         let canceled: i64 = row.get(2);
@@ -303,14 +309,8 @@ impl PostgresCdrStore {
         let avg_loss: Option<f64> = row.get(5);
         let avg_jitter: Option<f64> = row.get(6);
 
-        let reg_row: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM sip_registrations WHERE expires_at > now()")
-                .fetch_one(&self.pool)
-                .await?;
-
-        let gw_row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sip_gateways")
-            .fetch_one(&self.pool)
-            .await?;
+        let reg_row = reg_res?;
+        let gw_row = gw_res?;
 
         let answer_rate = if total > 0 {
             answered as f64 / total as f64
@@ -328,8 +328,8 @@ impl PostgresCdrStore {
             avg_mos,
             avg_loss_rate: avg_loss,
             avg_jitter_ms: avg_jitter,
-            registered_users: reg_row.0,
-            active_gateways: gw_row.0,
+            registered_users: reg_row,
+            active_gateways: gw_row,
         })
     }
 
@@ -364,26 +364,27 @@ impl PostgresCdrStore {
     ) -> Result<(u64, u64, std::collections::HashMap<String, u64>), sqlx::Error> {
         let day_ago = time::OffsetDateTime::now_utc() - time::Duration::hours(24);
         
-        let blocked: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND (failure_reason LIKE '%Anti-Fraud%' OR failure_reason LIKE '%Limit%' OR failure_reason LIKE '%ACL%')"
-        )
-        .bind(day_ago)
-        .fetch_one(&self.pool)
-        .await?;
+        let (blocked_res, auth_res, rows_res) = futures::join!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND (failure_reason LIKE '%Anti-Fraud%' OR failure_reason LIKE '%Limit%' OR failure_reason LIKE '%ACL%')"
+            )
+            .bind(day_ago)
+            .fetch_one(&self.pool),
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND (failure_reason LIKE '%Auth%' OR failure_status_code = 401 OR failure_status_code = 403)"
+            )
+            .bind(day_ago)
+            .fetch_one(&self.pool),
+            sqlx::query(
+                "SELECT failure_status_code, COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND failure_status_code >= 400 GROUP BY failure_status_code"
+            )
+            .bind(day_ago)
+            .fetch_all(&self.pool),
+        );
 
-        let auth_failed: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND (failure_reason LIKE '%Auth%' OR failure_status_code = 401 OR failure_status_code = 403)"
-        )
-        .bind(day_ago)
-        .fetch_one(&self.pool)
-        .await?;
-
-        let rows = sqlx::query(
-            "SELECT failure_status_code, COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND failure_status_code >= 400 GROUP BY failure_status_code"
-        )
-        .bind(day_ago)
-        .fetch_all(&self.pool)
-        .await?;
+        let blocked = blocked_res?;
+        let auth_failed = auth_res?;
+        let rows = rows_res?;
 
         let mut breakdown = std::collections::HashMap::new();
         for r in rows {
@@ -394,7 +395,7 @@ impl PostgresCdrStore {
             }
         }
 
-        Ok((blocked.0 as u64, auth_failed.0 as u64, breakdown))
+        Ok((blocked as u64, auth_failed as u64, breakdown))
     }
 
     pub async fn get_dtmf_events(

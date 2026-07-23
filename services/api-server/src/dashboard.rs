@@ -63,34 +63,44 @@ pub struct SummaryResponse {
 
 /// 拉取活跃通话列表（全量 JSON），供需要逐条过滤的场景使用（monitoring-extras / telemetry）。
 async fn fetch_active_calls_full(state: &AppState) -> Vec<serde_json::Value> {
-    let url = format!("{}/manage/active-calls", state.sip_manage_base);
-    let token = &state.internal_secret;
-    let request = state.internal_client.get(&url);
-    let request = if !token.is_empty() {
-        request.header("X-VOS-Token", token)
-    } else {
-        request
+    let fut = async {
+        let url = format!("{}/manage/active-calls", state.sip_manage_base);
+        let token = &state.internal_secret;
+        let request = state.internal_client.get(&url);
+        let request = if !token.is_empty() {
+            request.header("X-VOS-Token", token)
+        } else {
+            request
+        };
+        match request.send().await {
+            Ok(resp) => resp.json::<Vec<serde_json::Value>>().await.unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
     };
-    match request.send().await {
-        Ok(resp) => resp.json::<Vec<serde_json::Value>>().await.unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+    tokio::time::timeout(Duration::from_millis(200), fut)
+        .await
+        .unwrap_or_default()
 }
 
 /// 轻量拉取活跃通话数量（仅返回一个 usize），summary 接口只需要计数。
 async fn fetch_active_calls_count(state: &AppState) -> i64 {
-    let url = format!("{}/manage/active-calls/count", state.sip_manage_base);
-    let token = &state.internal_secret;
-    let request = state.internal_client.get(&url);
-    let request = if !token.is_empty() {
-        request.header("X-VOS-Token", token)
-    } else {
-        request
+    let fut = async {
+        let url = format!("{}/manage/active-calls/count", state.sip_manage_base);
+        let token = &state.internal_secret;
+        let request = state.internal_client.get(&url);
+        let request = if !token.is_empty() {
+            request.header("X-VOS-Token", token)
+        } else {
+            request
+        };
+        match request.send().await {
+            Ok(resp) => resp.json::<usize>().await.map(|n| n as i64).unwrap_or(0),
+            Err(_) => 0,
+        }
     };
-    match request.send().await {
-        Ok(resp) => resp.json::<usize>().await.map(|n| n as i64).unwrap_or(0),
-        Err(_) => 0,
-    }
+    tokio::time::timeout(Duration::from_millis(200), fut)
+        .await
+        .unwrap_or(0)
 }
 
 pub async fn get_dashboard_stats(
@@ -330,9 +340,15 @@ pub struct MonitoringExtras {
 pub async fn get_monitoring_extras(
     State(state): State<AppState>,
 ) -> Result<Json<MonitoringExtras>, ApiError> {
-    let active_calls_list = state.active_calls_cache.get_or_fetch(&state).await;
+    let (active_calls_list, gateways_full_res, sec_res) = tokio::join!(
+        state.active_calls_cache.get_or_fetch(&state),
+        state.store.list_gateways_full(),
+        state.store.get_security_and_errors_24h(),
+    );
 
-    let gateways_full = state.store.list_gateways_full().await.unwrap_or_default();
+    let gateways_full = gateways_full_res.unwrap_or_default();
+    let (blocked_calls_24h, auth_failures_24h, error_codes_breakdown) =
+        sec_res.unwrap_or((0, 0, std::collections::HashMap::new()));
 
     let mut gateways = Vec::new();
     for gw in gateways_full {
@@ -353,13 +369,6 @@ pub async fn get_monitoring_extras(
             max_channels: gw.max_capacity.unwrap_or(0) as u64,
         });
     }
-
-    // 移除 mock 兜底：无网关数据时返回空列表，让前端展示"无数据"状态
-    let (blocked_calls_24h, auth_failures_24h, error_codes_breakdown) = state
-        .store
-        .get_security_and_errors_24h()
-        .await
-        .unwrap_or((0, 0, std::collections::HashMap::new()));
 
     let pool_size = state.store.pool().size();
     let pool_max = 50;
