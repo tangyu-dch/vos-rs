@@ -492,7 +492,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_get_dashboard_stats",
-                "description": "获取 VoIP 软交换平台整体运行概览指标（CPS、接通率 ASR、平均 MOS 评分、活跃通话数、注册分机数等）。",
+                "description": "获取 VoIP 软交换平台整体运行概览指标（实时 CPS 呼叫并发、接通率 ASR、平均 MOS 音质评分、活跃通话数、注册分机数等）。当用户询问系统状态、概况、集群健康度或大盘监控时调用。",
                 "parameters": { "type": "object", "properties": {}, "required": [] }
             }
         },
@@ -500,7 +500,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_list_cdrs",
-                "description": "查询通话详单 (CDR)。",
+                "description": "条件查询呼叫详单 (CDR)。支持按通话状态 (answered/failed/canceled)、主叫号码 (caller)、被叫号码 (callee) 筛选。当用户排查具体呼叫记录或失败原因时调用。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -516,7 +516,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_get_sip_flows",
-                "description": "获取指定通话的完整 SIP 信令交互抓包及 ASCII 梯形图 (SIP Ladder Diagram)。",
+                "description": "获取指定通话 (call_id) 的完整 SIP 信令抓包交互数据，并自动生成 ASCII 信令交互梯形图 (SIP Ladder Diagram)。当用户要求查看抓包、绘制信令图或排查挂断流程时调用。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -530,7 +530,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_list_active_calls",
-                "description": "获取当前软交换平台所有正在进行的并发通话列表。",
+                "description": "查询当前软交换平台正在进行的实时并发通话列表。当用户询问‘现在有哪些通话’、‘实时并发数’或排查通道挂起时调用。",
                 "parameters": { "type": "object", "properties": {}, "required": [] }
             }
         },
@@ -538,7 +538,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_terminate_call",
-                "description": "强制中断/拆线指定 Call-ID 的实时通话。",
+                "description": "强制拆线挂断指定 Call-ID 的实时并发通话。高危运维动作，仅在确定需要拆断某个活跃 call_id 时调用。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -552,7 +552,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_list_registrations",
-                "description": "查询分机终端当前的 SIP 注册绑定状态。",
+                "description": "查询 SIP 分机终端与外部中继的实时注册上线状态。可按 username 搜索，用于诊断分机掉线或未注册问题。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -565,7 +565,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_list_gateways",
-                "description": "查询软交换中继网关列表及链路健康状态与通道容量。",
+                "description": "查询软交换中继网关列表及链路健康状态与通道容量。用于网关巡检或检查落地中继。",
                 "parameters": { "type": "object", "properties": {}, "required": [] }
             }
         },
@@ -573,7 +573,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_preview_route",
-                "description": "模拟呼叫路由决策算力（主叫 + 被叫 -> 输出匹配中继与计费规则）。",
+                "description": "模拟呼叫选路决策测试（指定主叫 caller 与被叫 callee）。返回选路引擎算出的命中路由、出口网关及预期计费规则。用于路由试算与拨号测试。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -588,7 +588,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_list_anti_fraud_rules",
-                "description": "查询防刷量、频控与反欺诈风控规则。",
+                "description": "查询防刷量、频控与反欺诈风控规则列表。",
                 "parameters": { "type": "object", "properties": {}, "required": [] }
             }
         },
@@ -596,7 +596,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_list_extensions",
-                "description": "获取 SIP 分机账号列表或指定分机配置信息。",
+                "description": "获取系统 SIP 分机账号列表（支持按用户名 username 模糊检索）。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -609,7 +609,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_create_extension",
-                "description": "创建新的 SIP 分机账号（指定分机账号 username 与密码 password）。",
+                "description": "单个开户创建 SIP 分机账号（指定 username 与 password）。后端包含重复冲突检测。如用户输入的是多条分机或杂乱文本，请自动清洗并改用 vos_import_extensions。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -638,7 +638,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_list_ivr_menus",
-                "description": "获取系统的 IVR 语音导航菜单流程列表。",
+                "description": "获取系统的 IVR 语音导航菜单流程列表及按键节点关系。",
                 "parameters": { "type": "object", "properties": {}, "required": [] }
             }
         },
@@ -646,7 +646,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_create_ivr_menu",
-                "description": "创建或更新 IVR 语音导航菜单流程（指定菜单 ID id、名称 name、绑定的 DID 号码 did、欢迎语 welcome_prompt）。",
+                "description": "创建或更新 IVR 语音导航菜单流程（指定菜单 ID id、名称 name、绑定的 DID 号码 did、欢迎语 welcome_prompt）。后端包含 DID 重复绑定警告。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -663,7 +663,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_create_gateway",
-                "description": "创建对接网关/中继线路（指定网关 ID id、名称 name、目标 IP ip_address、端口 port）。",
+                "description": "创建或更新对接网关/中继线路（指定网关 ID id、名称 name、目标 IP ip_address、端口 port）。后端包含 IP 冲突与重复检测。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -694,15 +694,32 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_list_routes",
-                "description": "获取系统中的所有前缀呼叫路由规则。",
+                "description": "获取系统中的所有前缀呼叫路由规则列表。",
                 "parameters": { "type": "object", "properties": {}, "required": [] }
             }
         },
         {
             "type": "function",
             "function": {
+                "name": "vos_create_route",
+                "description": "创建或修改前缀选路路由规则（指定路由 ID id、号码前缀 prefix、目标网关 ID gateway_id、优先级 priority）。创建后自动触发 NATS 选路引擎实时重载，包含网关存在性与前缀覆盖检测。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "路由唯一 ID" },
+                        "prefix": { "type": "string", "description": "号码前缀" },
+                        "gateway_id": { "type": "string", "description": "目标落地网关 ID" },
+                        "priority": { "type": "integer", "description": "优先级 (数字越小优先级越高)", "default": 1 }
+                    },
+                    "required": ["id", "prefix", "gateway_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "vos_delete_route",
-                "description": "删除指定的前缀呼叫路由规则。",
+                "description": "删除指定的前缀呼叫路由规则并刷新选路引擎。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -724,7 +741,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_recharge_billing_account",
-                "description": "为计费账户充值或变动余额（指定账户账号 account_id、金额 amount、备注 description）。",
+                "description": "为计费账户资金进行充值或扣款变动（指定账户账号 account_id、变动金额 amount：正数为充值，负数为扣款、备注说明 description）。后端包含行级锁与幂等校验。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -778,7 +795,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_add_ivr_node",
-                "description": "向现有 IVR 菜单添加/配置按键转接节点（指定 IVR ID id、按键 dtmf_key 0-9/*/#、目标类型 action 例如 extension:8001 或 gateway:gw1）。",
+                "description": "向现有 IVR 菜单添加/配置按键转接节点（指定 IVR ID id、按键 dtmf_key 0-9/*/#、目标动作 action 例如 extension:8001 或 hangup）。支持自然语言指令如‘按 1 转分机 8001’。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -839,7 +856,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_export_cdrs",
-                "description": "根据多条件（主叫 caller、被叫 callee、状态 status：ANSWERED/FAILED/BUSY、时间范围）进行数据导出，生成包含筛选结果的 CSV 文件直接下载链接。",
+                "description": "根据多条件（主叫 caller、被叫 callee、状态 status：ANSWERED/FAILED/BUSY、时间范围）筛选并导出 CDR 详单数据，返回可直接用于前端自适应环境下载的相对 API 接口路径。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -856,7 +873,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_export_extensions",
-                "description": "导出所有 SIP 分机账号数据，并提供可下载的 CSV 文件链接。",
+                "description": "导出全量 SIP 分机账号数据，返回环境自适应的相对 API 下载路径。",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -864,7 +881,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_export_gateways",
-                "description": "导出所有中继网关节点数据，并提供可下载的 CSV 文件链接。",
+                "description": "导出全量中继网关节点数据，返回环境自适应的相对 API 下载路径。",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -872,7 +889,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_export_routes",
-                "description": "导出所有前缀选路路由规则，并提供可下载的 CSV 文件链接。",
+                "description": "导出全量前缀选路路由规则，返回环境自适应的相对 API 下载路径。",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -880,7 +897,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_export_rates",
-                "description": "导出全量资费费率表，并提供可下载的 CSV 文件链接。",
+                "description": "导出全量呼叫资费费率表，返回环境自适应的相对 API 下载路径。",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -888,7 +905,7 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_export_billing_accounts",
-                "description": "导出所有计费账户及余额摘要，并提供 CSV 文件下载链接。",
+                "description": "导出全量计费账户及余额摘要，返回环境自适应的相对 API 下载路径。",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
