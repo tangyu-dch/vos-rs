@@ -1390,55 +1390,52 @@ impl<'a> TelecomCopilotEngine<'a> {
                 if !start_time.is_empty() { download_url.push_str(&format!("&start_time={}", urlencoding_str(start_time))); }
                 if !end_time.is_empty() { download_url.push_str(&format!("&end_time={}", urlencoding_str(end_time))); }
 
-                let absolute_download_url = format!("http://localhost:8081{}", download_url);
-
                 json!({
                     "success": true,
                     "total_matched": total,
-                    "download_url": absolute_download_url,
-                    "relative_url": download_url,
+                    "download_endpoint": download_url,
                     "preview_sample": cdrs,
                     "message": format!("已根据筛选条件成功匹配出 {} 条 CDR 呼叫记录。", total),
-                    "download_markdown": format!("[📥 点击这里下载全量 CDR 呼叫详单数据报表 (CSV 文件)]({})", absolute_download_url)
+                    "download_markdown": format!("[📥 点击这里下载全量 CDR 呼叫详单数据报表 (CSV)]({})", download_url)
                 })
             }
             "vos_export_extensions" => {
-                let download_url = "http://localhost:8081/api/v1/users?export=true";
+                let download_url = "/api/v1/users?export=true";
                 json!({
                     "success": true,
-                    "download_url": download_url,
+                    "download_endpoint": download_url,
                     "download_markdown": format!("[📥 点击导出下载全量 SIP 分机账号数据报表 (CSV)]({})", download_url)
                 })
             }
             "vos_export_gateways" => {
-                let download_url = "http://localhost:8081/api/v1/gateways?export=true";
+                let download_url = "/api/v1/gateways?export=true";
                 json!({
                     "success": true,
-                    "download_url": download_url,
+                    "download_endpoint": download_url,
                     "download_markdown": format!("[📥 点击导出下载全量中继网关节点数据报表 (CSV)]({})", download_url)
                 })
             }
             "vos_export_routes" => {
-                let download_url = "http://localhost:8081/api/v1/routes?export=true";
+                let download_url = "/api/v1/routes?export=true";
                 json!({
                     "success": true,
-                    "download_url": download_url,
+                    "download_endpoint": download_url,
                     "download_markdown": format!("[📥 点击导出下载全量前缀选路路由规则 (CSV)]({})", download_url)
                 })
             }
             "vos_export_rates" => {
-                let download_url = "http://localhost:8081/api/v1/rates?export=true";
+                let download_url = "/api/v1/rates?export=true";
                 json!({
                     "success": true,
-                    "download_url": download_url,
+                    "download_endpoint": download_url,
                     "download_markdown": format!("[📥 点击导出下载全量呼叫资费表 (CSV)]({})", download_url)
                 })
             }
             "vos_export_billing_accounts" => {
-                let download_url = "http://localhost:8081/api/v1/billing/accounts?export=true";
+                let download_url = "/api/v1/billing/accounts?export=true";
                 json!({
                     "success": true,
-                    "download_url": download_url,
+                    "download_endpoint": download_url,
                     "download_markdown": format!("[📥 点击导出下载全量计费账户数据报表 (CSV)]({})", download_url)
                 })
             }

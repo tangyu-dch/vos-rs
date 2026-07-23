@@ -200,8 +200,24 @@ export function MarkdownReport({ content }: { content: string }) {
           hr: () => <hr className="my-2 border-default-200" />,
           table: ({ children }) => <table className="my-2 w-full text-[11px] border-collapse">{children}</table>,
           th: ({ children }) => <th className="border border-default-200 px-2 py-1 bg-content2 text-left font-semibold">{children}</th>,
-          td: ({ children }) => <td className="border border-default-200 px-2 py-1">{children}</td>,
-          a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" className="text-primary underline hover:opacity-80">{children}</a>,
+          a: ({ children, href }) => {
+            const isApi = href?.startsWith('/api/');
+            const apiOrigin = window.location.port === '3001'
+              ? `${window.location.protocol}//${window.location.hostname}:8081`
+              : window.location.origin;
+            const fullUrl = isApi ? `${apiOrigin}${href}` : (href ?? '');
+            return (
+              <a
+                href={fullUrl}
+                download
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline font-medium hover:opacity-80 transition-opacity inline-flex items-center gap-1"
+              >
+                {children}
+              </a>
+            );
+          },
         }}
       >
         {content}
