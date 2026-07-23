@@ -263,6 +263,8 @@ export interface StreamCallbacks {
   onUserMessage: (msg: CopilotMessageDTO) => void;
   onContext: (ctx: StreamContext) => void;
   onDelta: (text: string) => void;
+  onToolStart?: (tool: { name: string; args: any }) => void;
+  onToolResult?: (tool: { name: string; result: any }) => void;
   onDone: (data: StreamDone) => void;
   onError: (error: string) => void;
 }
@@ -271,7 +273,7 @@ export interface StreamCallbacks {
  * 调用 SSE 流式端点，逐事件回调。
  *
  * SSE 事件格式：`event: <name>\ndata: <json>\n\n`
- * 事件类型：user_message / context / delta / done / error
+ * 事件类型：user_message / context / delta / tool_start / tool_result / done / error
  */
 export async function streamChat(
   url: string,
@@ -329,6 +331,8 @@ export async function streamChat(
             case 'user_message': callbacks.onUserMessage(data); break;
             case 'context': callbacks.onContext(data); break;
             case 'delta': callbacks.onDelta(data.text ?? ''); break;
+            case 'tool_start': callbacks.onToolStart?.(data); break;
+            case 'tool_result': callbacks.onToolResult?.(data); break;
             case 'done': callbacks.onDone(data); streamFinished = true; break;
             case 'error': callbacks.onError(data.error ?? '未知错误'); streamFinished = true; break;
           }

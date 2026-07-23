@@ -14,19 +14,19 @@ import {
   parseLlmError, parseLlmState, streamChat, toMessageItem,
 } from './copilot-shared';
 
-// 预设查询：对齐后端真实能力（分析/建议/可视化），不夸大为"下发/执行"
+// 预设查询：对齐后端真实工具执行能力（开户/路由/网关/IVR/计费/风控/抓包）
 const PRESETS = [
-  { title: '排查 13800138000 挂断原因', desc: '排查 13800138000 为什么在 10:15 被挂断' },
-  { title: '生成最新呼叫 SIP 梯形图', desc: '生成最新呼叫的完整 SIP Ladder Diagram 梯形图' },
-  { title: '查询 AI 伪造声音拦截记录', desc: '查询近期 AI 伪造声音拦截日志与拦截记录' },
-  { title: '评估当前 CPS 与丢包率', desc: '评估当前 CPS、RTP 丢包率与集群节点探活状态' },
-  { title: '分析网关路由配置', desc: '分析当前网关路由配置并给出高可用建议' },
-  { title: '分析 DID 号码的日常使用成本', desc: '分析当前系统中 DID 号码的日常租用与呼出成本' },
-  { title: '检查计费余额预警限额', desc: '查询计费账户余额与防欠费熔断配置' },
-  { title: '审计 SIP 注册异常', desc: '审计并分析近期分机与外部中继注册失败的原因' },
+  { title: '🔍 诊断最近通话失败', desc: '帮我分析最新的呼叫失败记录并绘制 SIP 信令交互梯形图' },
+  { title: '📱 创建分机 8001 账号', desc: '帮我创建一个分机账号 8001，密码设为 Pass123456' },
+  { title: '🚦 前缀路由选路配置', desc: '添加一条号段路由，将前缀 010 开头的呼叫全部路由到网关 gw_main' },
+  { title: '🌐 新增中继网关节点', desc: '新建一个名称为北京中继 (gw_beijing) 的网关，目标 IP 192.168.1.100' },
+  { title: '🌳 客服 IVR 菜单转接', desc: '创建一个客服 IVR 菜单，按键 1 转接分机 8001，按键 2 转接分机 8002' },
+  { title: '💰 计费账户余额充值', desc: '查询当前所有计费账户余额，并给账户 acc_01 充值 1000 元' },
+  { title: '🛡️ 拦截风控规则配置', desc: '针对主叫前缀 9527 创建一条限频风控规则，上限 30 次' },
+  { title: '📞 实时并发通话拆线', desc: '查询当前正在进行的并发通话列表，并定位异常通道' },
 ];
 
-const WELCOME_TEXT = '您好！我是 vos-rs 电信级 LLM 智能运维 Copilot。我可以基于**真实业务数据**为您：分析 SIP 抓包、绘制信令交互梯形图 (Call Ladder Diagram)、识别 QoS 异常并提供运维建议。\n\n下方是常用场景，也可直接在输入框描述您的问题。';
+const WELCOME_TEXT = '您好！我是 vos-rs 电信级 LLM 智能 Copilot。我拥有**全量软交换系统操控、选路冲突校验与智能排障能力**。您可以让我：分析 SIP 抓包并绘制梯形图、自动开户分机、配置前缀路由、创建 IVR 流程树、充值计费账户及挂断异常通道。\n\n点击下方快捷预设，或直接在输入框描述您的需求。';
 
 interface SessionListResponse { sessions: CopilotSession[]; }
 interface SessionDetailResponse { session: CopilotSession; messages: CopilotMessageDTO[]; }
@@ -444,7 +444,21 @@ export function CopilotPage() {
                         ) : isStreaming ? (
                           <StreamingIndicator />
                         ) : (
-                          <MarkdownReport content={m.text} />
+                          <>
+                            <MarkdownReport content={m.text} />
+                            <div className="flex items-center justify-end gap-2 mt-2 pt-1 border-t border-default-100/50 text-[10px] text-default-400">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(m.text);
+                                  message.success('已复制分析报告至剪贴板');
+                                }}
+                                className="hover:text-primary transition-colors flex items-center gap-1 cursor-pointer"
+                              >
+                                <Download className="w-3 h-3" /> 复制报告
+                              </button>
+                            </div>
+                          </>
                         )}
                         {llmState === 'degraded' && <DegradedBanner error={llmError} />}
                       </div>
