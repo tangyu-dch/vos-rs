@@ -585,44 +585,47 @@ function MonitoringExtrasSection() {
             <Chip size="sm" variant="flat" color="primary">实时水位</Chip>
           </div>
 
-          <div className="flex flex-col gap-3">
-            {gateways.map((gw) => {
-              const hasLimit = gw.max_channels > 0;
-              const percent = hasLimit ? Math.round((gw.active_calls / gw.max_channels) * 100) : 0;
-              return (
-                <div key={gw.name} className="p-3 bg-content2 rounded-xl flex flex-col gap-2">
-                  <div className="flex justify-between items-center text-tiny">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`w-2 h-2 rounded-full ${gw.direction === 'access' ? 'bg-primary' : 'bg-success'}`} />
-                      <span className="font-mono font-bold text-foreground">{gw.name}</span>
-                      <span className="text-default-400 font-mono text-[9px]">
-                        ({gw.direction === 'access' ? '接入' : '落地'})
+          <div className="flex flex-col gap-3 max-h-[300px] overflow-y-auto pr-1">
+            {[...gateways]
+              .sort((a, b) => b.active_calls - a.active_calls)
+              .slice(0, 10)
+              .map((gw) => {
+                const hasLimit = gw.max_channels > 0;
+                const percent = hasLimit ? Math.round((gw.active_calls / gw.max_channels) * 100) : 0;
+                return (
+                  <div key={gw.name} className="p-3 bg-content2 rounded-xl flex flex-col gap-2">
+                    <div className="flex justify-between items-center text-tiny">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full ${gw.direction === 'access' ? 'bg-primary' : 'bg-success'}`} />
+                        <span className="font-mono font-bold text-foreground">{gw.name}</span>
+                        <span className="text-default-400 font-mono text-[9px]">
+                          ({gw.direction === 'access' ? '接入' : '落地'})
+                        </span>
+                      </div>
+                      <span className="font-mono font-semibold text-foreground">
+                        {gw.active_calls} / {hasLimit ? gw.max_channels : '∞'} Ch
                       </span>
                     </div>
-                    <span className="font-mono font-semibold text-foreground">
-                      {gw.active_calls} / {hasLimit ? gw.max_channels : '∞'} Ch
-                    </span>
-                  </div>
-                  {hasLimit ? (
-                    <div className="flex flex-col gap-1">
-                      <Progress 
-                        size="sm" 
-                        value={percent} 
-                        color={percent >= 85 ? 'danger' : percent >= 60 ? 'warning' : 'success'} 
-                        aria-label={`${gw.name} 水位`}
-                      />
-                      <div className="flex justify-end text-[9px] text-default-400 font-mono">
-                        使用率: {percent}%
+                    {hasLimit ? (
+                      <div className="flex flex-col gap-1">
+                        <Progress 
+                          size="sm" 
+                          value={percent} 
+                          color={percent >= 85 ? 'danger' : percent >= 60 ? 'warning' : 'success'} 
+                          aria-label={`${gw.name} 水位`}
+                        />
+                        <div className="flex justify-end text-[9px] text-default-400 font-mono">
+                          使用率: {percent}%
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="text-[9px] text-default-400 font-medium">
-                      无最大并发容量限制 (非受限通道)
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                    ) : (
+                      <div className="text-[9px] text-default-400 font-medium">
+                        无最大并发容量限制 (非受限通道)
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         </CardBody>
       </Card>
@@ -723,19 +726,23 @@ export function DashboardPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError('');
     try {
       setData(await api.get<Summary>('/overview/summary'));
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    const timer = setInterval(() => { void load(true); }, 5000);
+    return () => clearInterval(timer);
+  }, [load]);
 
   const metrics: Array<{ label: string; value: string; valueClassName: string; icon: ReactNode }> = [
     { label: '活跃通话', value: valueText(data.active_calls), valueClassName: 'text-success', icon: <Activity className="w-4 h-4 text-success" /> },
@@ -765,7 +772,7 @@ export function DashboardPage() {
               variant="flat"
               size="sm"
               isLoading={loading}
-              onPress={load}
+              onPress={() => { void load(); }}
               startContent={<RefreshCw className="w-4 h-4" />}
             >
               刷新数据
@@ -773,7 +780,7 @@ export function DashboardPage() {
           </div>
 
           {error ? (
-            <ErrorState error={error} retry={load} />
+            <ErrorState error={error} retry={() => { void load(); }} />
           ) : loading ? (
             <div className="py-12 flex justify-center">
               <Spinner color="primary" label="正在拉取实时节点指标与 QoS 采样..." />

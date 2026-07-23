@@ -87,7 +87,7 @@ sip_edge:
     node_id: "sip-edge-1"
     router_mode: "direct" # direct | external | native
     advertised_addr: "127.0.0.1:5060"
-    management_url: "http://127.0.0.1:8082"
+    management_url: "http://127.0.0.1:5182"
     node_key_prefix: "vos_rs:cluster:sip_nodes"
     heartbeat_interval_secs: 3
     node_timeout_secs: 10
@@ -186,7 +186,7 @@ api_server:
     allowed_origins: ""
   security:
     jwt_secret: "secret"
-    internal_secret: "internal-dev-secret"
+    internal_secret: "compose-internal-secret"
   admin_credentials:
     admin_password: "admin"
     operator_password: "operator"
