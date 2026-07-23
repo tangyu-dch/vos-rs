@@ -18,8 +18,9 @@ tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "time"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "time", "rust_decimal"] }
 cdr-core = { path = "../../crates/cdr-core" }
+rust_decimal = { version = "1.36", features = ["serde-float"] }
 anyhow = "1"
 time = { version = "0.3", features = ["parsing"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

@@ -93,6 +93,8 @@ pub(crate) async fn create_queue(
     let moh_file = payload.moh_file.as_deref().unwrap_or("moh.wav");
     let max_wait_secs = payload.max_wait_secs.unwrap_or(300);
 
+    let mut tx = pool.begin().await.map_err(|e| ApiError::internal(format!("开启队列事务失败: {e}")))?;
+
     sqlx::query(
         "INSERT INTO call_queues (id, name, strategy, moh_file, max_wait_secs) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name = $2, strategy = $3, moh_file = $4, max_wait_secs = $5"
     )
@@ -101,26 +103,28 @@ pub(crate) async fn create_queue(
     .bind(strategy)
     .bind(moh_file)
     .bind(max_wait_secs)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| ApiError::internal(format!("保存呼叫队列失败: {e}")))?;
 
     sqlx::query("DELETE FROM queue_agents WHERE queue_id = $1")
         .bind(&payload.id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
-        .ok();
+        .map_err(|e| ApiError::internal(format!("清理队列座席失败: {e}")))?;
 
     if let Some(agents) = &payload.agents {
         for agent_id in agents {
             sqlx::query("INSERT INTO queue_agents (queue_id, agent_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
                 .bind(&payload.id)
                 .bind(agent_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await
-                .ok();
+                .map_err(|e| ApiError::internal(format!("关联队列座席失败: {e}")))?;
         }
     }
+
+    tx.commit().await.map_err(|e| ApiError::internal(format!("提交队列事务失败: {e}")))?;
 
     Ok((StatusCode::CREATED, Json(payload)))
 }

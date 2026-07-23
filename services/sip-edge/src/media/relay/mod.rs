@@ -224,6 +224,28 @@ impl MediaRelayState {
         }
     }
 
+    pub(crate) fn remote_target_for_call(&self, call_id: &str) -> Option<RemoteControlTarget> {
+        match &self.mode {
+            MediaRelayMode::Pool { pool } => {
+                let (_, node) = pool.node_for_call(call_id)?;
+                remote_target_for_node(&node)
+            }
+            MediaRelayMode::Local => None,
+        }
+    }
+
+    pub(crate) fn call_is_local(&self, call_id: &str) -> bool {
+        match &self.mode {
+            MediaRelayMode::Pool { pool } => {
+                if let Some((_, node)) = pool.node_for_call(call_id) {
+                    return node.is_local();
+                }
+                true
+            }
+            MediaRelayMode::Local => true,
+        }
+    }
+
     pub(crate) fn port_is_local(&self, port: u16) -> bool {
         match &self.mode {
             MediaRelayMode::Pool { pool } => {

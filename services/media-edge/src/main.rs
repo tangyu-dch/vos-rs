@@ -58,6 +58,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/clear_monitors", post(clear_monitors))
         .route("/metrics_for_port", post(metrics_for_port))
         .route("/metrics_totals", post(metrics_totals))
+        .route("/register_port_dtmf_tracking", post(register_port_dtmf_tracking))
+        .route("/get_dtmf_digits", post(get_dtmf_digits))
+        .route("/clear_dtmf_digits", post(clear_dtmf_digits))
+        .route("/take_dtmf_events", post(take_dtmf_events))
+        .route("/clear_dtmf_events", post(clear_dtmf_events))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             authorize_control,
@@ -547,6 +552,75 @@ async fn handle_uds_client(
                     error: Some(e.to_string()),
                 },
             },
+            "register_port_dtmf_tracking" => {
+                match serde_json::from_value::<RegisterPortDtmfTrackingReq>(req.params) {
+                    Ok(payload) => {
+                        state.media_relay.register_port_dtmf_tracking(&payload.call_id, payload.port, payload.payload_type);
+                        UdsResponse {
+                            result: Some(serde_json::json!(true)),
+                            error: None,
+                        }
+                    }
+                    Err(e) => UdsResponse {
+                        result: None,
+                        error: Some(e.to_string()),
+                    },
+                }
+            }
+            "get_dtmf_digits" => {
+                match serde_json::from_value::<CallIdReq>(req.params) {
+                    Ok(payload) => UdsResponse {
+                        result: Some(serde_json::to_value(state.media_relay.get_dtmf_digits(&payload.call_id))?),
+                        error: None,
+                    },
+                    Err(e) => UdsResponse {
+                        result: None,
+                        error: Some(e.to_string()),
+                    },
+                }
+            }
+            "clear_dtmf_digits" => {
+                match serde_json::from_value::<CallIdReq>(req.params) {
+                    Ok(payload) => {
+                        state.media_relay.clear_dtmf_digits(&payload.call_id);
+                        UdsResponse {
+                            result: Some(serde_json::json!(true)),
+                            error: None,
+                        }
+                    }
+                    Err(e) => UdsResponse {
+                        result: None,
+                        error: Some(e.to_string()),
+                    },
+                }
+            }
+            "take_dtmf_events" => {
+                match serde_json::from_value::<CallIdReq>(req.params) {
+                    Ok(payload) => UdsResponse {
+                        result: Some(serde_json::to_value(state.media_relay.take_dtmf_events(&payload.call_id))?),
+                        error: None,
+                    },
+                    Err(e) => UdsResponse {
+                        result: None,
+                        error: Some(e.to_string()),
+                    },
+                }
+            }
+            "clear_dtmf_events" => {
+                match serde_json::from_value::<CallIdReq>(req.params) {
+                    Ok(payload) => {
+                        state.media_relay.clear_dtmf_events(&payload.call_id);
+                        UdsResponse {
+                            result: Some(serde_json::json!(true)),
+                            error: None,
+                        }
+                    }
+                    Err(e) => UdsResponse {
+                        result: None,
+                        error: Some(e.to_string()),
+                    },
+                }
+            }
             _ => UdsResponse {
                 result: None,
                 error: Some(format!("Unknown method: {}", req.method)),
@@ -558,4 +632,54 @@ async fn handle_uds_client(
         line.clear();
     }
     Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct RegisterPortDtmfTrackingReq {
+    call_id: String,
+    port: u16,
+    payload_type: u8,
+}
+
+#[derive(serde::Deserialize)]
+struct CallIdReq {
+    call_id: String,
+}
+
+async fn register_port_dtmf_tracking(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<RegisterPortDtmfTrackingReq>,
+) -> Json<bool> {
+    state.media_relay.register_port_dtmf_tracking(&payload.call_id, payload.port, payload.payload_type);
+    Json(true)
+}
+
+async fn get_dtmf_digits(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<CallIdReq>,
+) -> Json<Option<String>> {
+    Json(state.media_relay.get_dtmf_digits(&payload.call_id))
+}
+
+async fn clear_dtmf_digits(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<CallIdReq>,
+) -> Json<bool> {
+    state.media_relay.clear_dtmf_digits(&payload.call_id);
+    Json(true)
+}
+
+async fn take_dtmf_events(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<CallIdReq>,
+) -> Json<Vec<cdr_core::DtmfEventRecord>> {
+    Json(state.media_relay.take_dtmf_events(&payload.call_id))
+}
+
+async fn clear_dtmf_events(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<CallIdReq>,
+) -> Json<bool> {
+    state.media_relay.clear_dtmf_events(&payload.call_id);
+    Json(true)
 }

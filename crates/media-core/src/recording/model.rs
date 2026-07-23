@@ -59,6 +59,7 @@ impl RecordingSession {
                 header_bytes: pool.header_bytes(),
                 last_disk_check_ms: AtomicU64::new(0),
                 format_str,
+                has_error: std::sync::atomic::AtomicBool::new(false),
             }),
             pool,
         }
@@ -69,6 +70,10 @@ impl RecordingSession {
         channel: RecordingChannel,
         packet: RtpPacketView<'_>,
     ) -> io::Result<bool> {
+        if self.info.has_error.load(Ordering::Acquire) {
+            return Err(io::Error::other("recording session has encountered error"));
+        }
+
         if AudioCodec::from_static_payload_type(packet.payload_type).is_none()
             || packet.payload.is_empty()
         {
@@ -109,6 +114,7 @@ pub struct RecordingSessionInfo {
     pub header_bytes: u64,
     pub last_disk_check_ms: AtomicU64,
     pub format_str: String,
+    pub has_error: std::sync::atomic::AtomicBool,
 }
 
 impl RecordingSessionInfo {

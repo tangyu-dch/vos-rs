@@ -217,6 +217,8 @@ async fn save_menu(pool: &sqlx::PgPool, payload: &IvrMenu) -> Result<(), ApiErro
     let nodes_json = serde_json::to_value(&payload.nodes).unwrap_or(JsonValue::Array(vec![]));
     let edges_json = serde_json::to_value(&payload.edges).unwrap_or(JsonValue::Array(vec![]));
 
+    let mut tx = pool.begin().await.map_err(|e| ApiError::internal(format!("开启事务失败: {e}")))?;
+
     sqlx::query(
         "INSERT INTO ivr_menus (id, name, description, did, welcome_prompt, timeout_secs, enabled, nodes, edges) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
@@ -239,16 +241,16 @@ async fn save_menu(pool: &sqlx::PgPool, payload: &IvrMenu) -> Result<(), ApiErro
     .bind(payload.enabled)
     .bind(&nodes_json)
     .bind(&edges_json)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| ApiError::internal(format!("保存 IVR 菜单失败: {e}")))?;
 
     // 按键映射 (兼容旧模式) - 全量替换
     sqlx::query("DELETE FROM ivr_actions WHERE ivr_id = $1")
         .bind(&payload.id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
-        .ok();
+        .map_err(|e| ApiError::internal(format!("清理 IVR 映射失败: {e}")))?;
 
     for m in &payload.mappings {
         sqlx::query(
@@ -266,11 +268,12 @@ async fn save_menu(pool: &sqlx::PgPool, payload: &IvrMenu) -> Result<(), ApiErro
         .bind(&m.action_target)
         .bind(&m.waiting_prompt)
         .bind(&m.webhook_method)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
-        .ok();
+        .map_err(|e| ApiError::internal(format!("保存 IVR 映射失败: {e}")))?;
     }
 
+    tx.commit().await.map_err(|e| ApiError::internal(format!("提交 IVR 事务失败: {e}")))?;
     Ok(())
 }
 

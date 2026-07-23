@@ -80,6 +80,42 @@ pub fn build_success_response_ack(
     ack.into_bytes()
 }
 
+/// Builds the ACK owned by the outbound B2BUA leg for an INVITE non-2xx response.
+/// As per RFC 3261 section 17.1.1.3, this ACK matches the branch parameter of the
+/// top Via header field of the response, and is sent to the previous gateway.
+pub fn build_non_2xx_response_ack(
+    response: &SipResponse,
+    request_uri: &SipUri,
+    call_id: &str,
+) -> Vec<u8> {
+    let cseq = response
+        .headers
+        .get("cseq")
+        .and_then(|value| value.as_str().split_whitespace().next())
+        .unwrap_or("1");
+    
+    // Extract the top Via header to copy it, keeping the original branch parameter
+    let via = response
+        .headers
+        .get("via")
+        .map(|v| v.as_str())
+        .unwrap_or("");
+
+    let mut ack = format!(
+        "ACK {request_uri} SIP/2.0\r\n\
+         Via: {via}\r\n\
+         Max-Forwards: 70\r\n",
+    );
+    append_single_header(&mut ack, &response.headers, "from", "From");
+    append_single_header(&mut ack, &response.headers, "to", "To");
+    ack.push_str("Call-ID: ");
+    ack.push_str(call_id);
+    ack.push_str("\r\nCSeq: ");
+    ack.push_str(cseq);
+    ack.push_str(" ACK\r\nContent-Length: 0\r\n\r\n");
+    ack.into_bytes()
+}
+
 /// Builds an out-of-dialog OPTIONS request used for gateway health probing.
 pub fn build_gateway_options(
     target_uri: &SipUri,

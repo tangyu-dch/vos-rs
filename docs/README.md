@@ -19,6 +19,7 @@ docs/
 │
 ├── development/           # 开发与集成接入指南
 │   ├── ENV_VARS.md                            # 环境变量配置参考
+│   ├── P1_AUDIT_FIXES.md                      # P1 级系统安全与可靠性漏洞修复指南
 │   └── AI_PLUGIN_INTEGRATION_GUIDE.md         # AI 语音插件标准接入协议对接指南
 │
 ├── deployment/            # 部署与运维
@@ -47,6 +48,7 @@ docs/
  
  | 文档 | 说明 |
  |:---|:---|
+ | [P1_AUDIT_FIXES.md](./development/P1_AUDIT_FIXES.md) | P1 级系统安全与可靠性漏洞修复实现指南 |
  | [AI_PLUGIN_INTEGRATION_GUIDE.md](./development/AI_PLUGIN_INTEGRATION_GUIDE.md) | AI 语音插件二进制流协议标准（16字节头 + 320字节PCM16），含 Python/Go 完整示例 |
  | [ENV_VARS.md](./development/ENV_VARS.md) | 所有 `VOS_RS_*` 环境变量的说明与默认值 |
  

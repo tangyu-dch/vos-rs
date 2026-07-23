@@ -56,7 +56,7 @@ pub(crate) async fn rebuild_billing_rates(state: &AppState) -> Result<(), ApiErr
         .ignore();
     for rate in rates {
         pipeline
-            .hset(BILLING_RATES_KEY, &rate.prefix, rate.rate_per_minute)
+            .hset(BILLING_RATES_KEY, &rate.prefix, rate.rate_per_minute.to_string())
             .ignore()
             .hset(
                 BILLING_INTERVALS_KEY,
@@ -64,7 +64,7 @@ pub(crate) async fn rebuild_billing_rates(state: &AppState) -> Result<(), ApiErr
                 rate.billing_interval_secs,
             )
             .ignore()
-            .hset(BILLING_PRICES_KEY, rate.prefix, rate.price_per_interval)
+            .hset(BILLING_PRICES_KEY, &rate.prefix, rate.price_per_interval.to_string())
             .ignore();
     }
     pipeline
@@ -73,17 +73,19 @@ pub(crate) async fn rebuild_billing_rates(state: &AppState) -> Result<(), ApiErr
         .map_err(|error| ApiError::internal(format!("Redis 费率缓存重建失败: {error}")))
 }
 
+use rust_decimal::Decimal;
+
 /// 更新账户余额热路径缓存。
 pub(crate) async fn set_billing_balance(
     state: &AppState,
     username: &str,
-    balance: f64,
+    balance: Decimal,
 ) -> Result<(), ApiError> {
     let mut connection = connection(state);
     redis::cmd("HSET")
         .arg(BILLING_BALANCES_KEY)
         .arg(username)
-        .arg(balance)
+        .arg(balance.to_string())
         .query_async(&mut connection)
         .await
         .map_err(|error| ApiError::internal(format!("Redis 余额缓存更新失败: {error}")))

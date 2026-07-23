@@ -3,6 +3,7 @@ use crate::models::{
 };
 use crate::utils;
 use crate::PostgresCdrStore;
+use rust_decimal::Decimal;
 use sqlx::Row;
 use time::OffsetDateTime;
 use tracing::warn;
@@ -10,7 +11,7 @@ use tracing::warn;
 impl PostgresCdrStore {
     pub async fn list_rates(&self) -> Result<Vec<BillingRate>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, description, created_at FROM billing_rates \
+            "SELECT id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description, created_at FROM billing_rates \
              ORDER BY length(prefix) DESC, prefix",
         )
         .fetch_all(&self.pool)
@@ -37,7 +38,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<BillingRate>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, description, created_at \
+            "SELECT id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description, created_at \
               FROM billing_rates ORDER BY length(prefix) DESC, prefix LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -70,9 +71,9 @@ impl PostgresCdrStore {
         &self,
         id: &str,
         prefix: &str,
-        rate_per_minute: f64,
+        rate_per_minute: Decimal,
         billing_interval_secs: i32,
-        price_per_interval: f64,
+        price_per_interval: Decimal,
         description: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
@@ -101,7 +102,7 @@ impl PostgresCdrStore {
     // ===== 计费：账户 =====
     pub async fn list_accounts(&self) -> Result<Vec<BillingAccount>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT username, balance::DOUBLE PRECISION, credit_limit::DOUBLE PRECISION, currency, created_at FROM billing_accounts ORDER BY username",
+            "SELECT username, balance, credit_limit, currency, created_at FROM billing_accounts ORDER BY username",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -125,7 +126,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<BillingAccount>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT username, balance::DOUBLE PRECISION, credit_limit::DOUBLE PRECISION, currency, created_at FROM billing_accounts \
+            "SELECT username, balance, credit_limit, currency, created_at FROM billing_accounts \
              ORDER BY username LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -155,7 +156,7 @@ impl PostgresCdrStore {
     pub async fn credit_account(
         &self,
         username: &str,
-        amount: f64,
+        amount: Decimal,
         idempotency_key: &str,
     ) -> Result<CreditAccountOutcome, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
@@ -164,8 +165,8 @@ impl PostgresCdrStore {
             .execute(&mut *tx)
             .await?;
 
-        let existing: Option<(String, f64, f64)> = sqlx::query_as(
-            "SELECT username, amount::DOUBLE PRECISION, balance_after::DOUBLE PRECISION \
+        let existing: Option<(String, Decimal, Decimal)> = sqlx::query_as(
+            "SELECT username, amount, balance_after \
              FROM billing_credits WHERE idempotency_key = $1",
         )
         .bind(idempotency_key)
@@ -173,16 +174,16 @@ impl PostgresCdrStore {
         .await?;
         if let Some((existing_username, existing_amount, balance_after)) = existing {
             tx.commit().await?;
-            if existing_username == username && (existing_amount - amount).abs() < 1e-9 {
+            if existing_username == username && existing_amount == amount {
                 return Ok(CreditAccountOutcome::Replayed(balance_after));
             }
             return Ok(CreditAccountOutcome::Conflict);
         }
 
-        let balance: f64 = sqlx::query_scalar(
+        let balance: Decimal = sqlx::query_scalar(
             "INSERT INTO billing_accounts (username, balance) VALUES ($1, $2) \
              ON CONFLICT (username) DO UPDATE SET balance = billing_accounts.balance + $2 \
-             RETURNING balance::DOUBLE PRECISION",
+             RETURNING balance",
         )
         .bind(username)
         .bind(amount)
@@ -208,26 +209,26 @@ impl PostgresCdrStore {
         &self,
         username: &str,
         callee: &str,
-    ) -> Result<(bool, f64, f64), sqlx::Error> {
-        let balance: f64 = sqlx::query_scalar(
-            "SELECT COALESCE(balance, 0.0)::DOUBLE PRECISION FROM billing_accounts WHERE username=$1",
+    ) -> Result<(bool, Decimal, Decimal), sqlx::Error> {
+        let balance: Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(balance, 0.0) FROM billing_accounts WHERE username=$1",
         )
         .bind(username)
         .fetch_optional(&self.pool)
         .await?
-        .unwrap_or(0.0);
+        .unwrap_or(Decimal::ZERO);
 
-        let rate: f64 = sqlx::query_scalar(
-            "SELECT COALESCE(rate_per_minute, 0.0)::DOUBLE PRECISION FROM billing_rates \
+        let rate: Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(rate_per_minute, 0.0) FROM billing_rates \
               WHERE $2 LIKE prefix || '%' ORDER BY length(prefix) DESC LIMIT 1",
         )
         .bind(username)
         .bind(callee)
         .fetch_optional(&self.pool)
         .await?
-        .unwrap_or(0.0);
+        .unwrap_or(Decimal::ZERO);
 
-        let has_balance = balance > 0.0 || rate == 0.0;
+        let has_balance = balance > Decimal::ZERO || rate.is_zero();
         Ok((has_balance, balance, rate))
     }
 
@@ -237,7 +238,7 @@ impl PostgresCdrStore {
         username: &str,
         callee: &str,
         duration_ms: i64,
-    ) -> Result<Option<f64>, sqlx::Error> {
+    ) -> Result<Option<Decimal>, sqlx::Error> {
         if username.is_empty() || duration_ms <= 0 {
             return Ok(None);
         }
@@ -251,8 +252,8 @@ impl PostgresCdrStore {
             return Ok(None);
         }
 
-        let rate: Option<(i32, f64)> = sqlx::query_as(
-            "SELECT billing_interval_secs, price_per_interval::DOUBLE PRECISION FROM billing_rates \
+        let rate: Option<(i32, Decimal)> = sqlx::query_as(
+            "SELECT billing_interval_secs, price_per_interval FROM billing_rates \
               WHERE $1 LIKE prefix || '%' ORDER BY length(prefix) DESC LIMIT 1",
         )
         .bind(callee)
@@ -264,7 +265,7 @@ impl PostgresCdrStore {
         };
 
         let amount = pulse_amount(duration_ms, interval_secs, price);
-        if amount <= 0.0 {
+        if amount.is_zero() {
             return Ok(None);
         }
 
@@ -273,7 +274,7 @@ impl PostgresCdrStore {
             "UPDATE billing_accounts \
               SET balance = balance - $1 \
               WHERE username = $2 AND balance - $1 >= -credit_limit \
-              RETURNING balance::DOUBLE PRECISION",
+              RETURNING balance",
         )
         .bind(amount)
         .bind(username)
@@ -281,9 +282,9 @@ impl PostgresCdrStore {
         .await?;
 
         let new_bal = match updated {
-            Some(row) => row.get::<f64, _>(0),
+            Some(row) => row.get::<Decimal, _>(0),
             None => {
-                warn!(%username, amount, call_id, "实时扣费失败：余额不足或账户未配置");
+                warn!(%username, %amount, call_id, "实时扣费失败：余额不足或账户未配置");
                 tx.rollback().await?;
                 return Ok(None);
             }
@@ -296,7 +297,7 @@ impl PostgresCdrStore {
         .bind(call_id)
         .bind(username)
         .bind(duration_ms)
-        .bind(price * 60.0 / interval_secs as f64)
+        .bind(price * Decimal::from(60) / Decimal::from(interval_secs))
         .bind(interval_secs)
         .bind(price)
         .bind(amount)
@@ -315,7 +316,7 @@ impl PostgresCdrStore {
     ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
         let rows = if let Some(u) = username {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after, created_at \
                   FROM billing_ledger WHERE username=$1 ORDER BY created_at DESC LIMIT 500",
             )
             .bind(u)
@@ -323,7 +324,7 @@ impl PostgresCdrStore {
             .await?
         } else {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after, created_at \
                   FROM billing_ledger ORDER BY created_at DESC LIMIT 500",
             )
             .fetch_all(&self.pool)
@@ -356,7 +357,7 @@ impl PostgresCdrStore {
     ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
         let rows = if let Some(username) = username {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after, created_at \
                   FROM billing_ledger WHERE username = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
             )
             .bind(username)
@@ -366,7 +367,7 @@ impl PostgresCdrStore {
             .await?
         } else {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval::DOUBLE PRECISION, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after, created_at \
                   FROM billing_ledger ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
             )
             .bind(limit)
@@ -406,25 +407,24 @@ impl PostgresCdrStore {
         Ok(row.0)
     }
 
-    // ===== 计费：离线对账 =====
     pub async fn reconcile_billing(
         &self,
         start: OffsetDateTime,
         end: OffsetDateTime,
     ) -> Result<ReconcileResult, sqlx::Error> {
         let rate_rows = sqlx::query(
-            "SELECT prefix, billing_interval_secs, price_per_interval::DOUBLE PRECISION FROM billing_rates ORDER BY length(prefix) DESC",
+            "SELECT prefix, billing_interval_secs, price_per_interval FROM billing_rates ORDER BY length(prefix) DESC",
         )
         .fetch_all(&self.pool)
         .await?;
-        let rates: Vec<(String, i32, f64)> = rate_rows
+        let rates: Vec<(String, i32, Decimal)> = rate_rows
             .into_iter()
             .map(|r| (r.get(0), r.get(1), r.get(2)))
             .collect();
 
         let cdr_rows = sqlx::query(
             "SELECT call_id, caller, callee, billable_duration_ms FROM call_cdrs \
-              WHERE status='answered' AND started_at >= $1 AND started_at <= $2",
+               WHERE status='answered' AND started_at >= $1 AND started_at <= $2",
         )
         .bind(start)
         .bind(end)
@@ -434,7 +434,7 @@ impl PostgresCdrStore {
         let mut tx = self.pool.begin().await?;
         let mut processed: i64 = 0;
         let mut skipped: i64 = 0;
-        let mut total_amount: f64 = 0.0;
+        let mut total_amount = Decimal::ZERO;
 
         for row in cdr_rows {
             let call_id: String = row.get(0);
@@ -471,7 +471,7 @@ impl PostgresCdrStore {
                 "UPDATE billing_accounts \
                   SET balance = balance - $1 \
                   WHERE username = $2 AND balance - $1 >= -credit_limit \
-                  RETURNING (balance)::DOUBLE PRECISION",
+                  RETURNING balance",
             )
             .bind(amount)
             .bind(user)
@@ -479,9 +479,9 @@ impl PostgresCdrStore {
             .await?;
 
             let new_bal = match updated_row {
-                Some(row) => row.get::<f64, _>(0),
+                Some(row) => row.get::<Decimal, _>(0),
                 None => {
-                    warn!(%user, amount, "扣除余额失败：余额不足以支付当前呼叫费用或账户未配置");
+                    warn!(%user, %amount, "扣除余额失败：余额不足以支付当前呼叫费用或账户未配置");
                     skipped += 1;
                     continue;
                 }
@@ -494,7 +494,7 @@ impl PostgresCdrStore {
             .bind(&call_id)
             .bind(user)
             .bind(billable_ms)
-            .bind(price * 60.0 / interval_secs as f64)
+            .bind(price * Decimal::from(60) / Decimal::from(interval_secs))
             .bind(interval_secs)
             .bind(price)
             .bind(amount)
@@ -514,16 +514,16 @@ impl PostgresCdrStore {
 }
 
 /// Calculates pulse billing by rounding any partial interval upward.
-pub fn pulse_amount(duration_ms: i64, interval_secs: i32, price: f64) -> f64 {
-    if duration_ms <= 0 || interval_secs <= 0 || price <= 0.0 {
-        return 0.0;
+pub fn pulse_amount(duration_ms: i64, interval_secs: i32, price: Decimal) -> Decimal {
+    if duration_ms <= 0 || interval_secs <= 0 || price.is_zero() {
+        return Decimal::ZERO;
     }
     let interval_ms = i64::from(interval_secs) * 1_000;
     let pulses = duration_ms.saturating_add(interval_ms - 1) / interval_ms;
-    pulses as f64 * price
+    Decimal::from(pulses) * price
 }
 
-fn match_pulse_rate(callee: &str, rates: &[(String, i32, f64)]) -> Option<(i32, f64)> {
+fn match_pulse_rate(callee: &str, rates: &[(String, i32, Decimal)]) -> Option<(i32, Decimal)> {
     rates
         .iter()
         .find(|(prefix, _, _)| callee.starts_with(prefix))
@@ -533,12 +533,14 @@ fn match_pulse_rate(callee: &str, rates: &[(String, i32, f64)]) -> Option<(i32, 
 #[cfg(test)]
 mod tests {
     use super::pulse_amount;
+    use rust_decimal::Decimal;
 
     #[test]
     fn pulse_billing_rounds_partial_intervals_up() {
-        assert_eq!(pulse_amount(45_000, 60, 1.0), 1.0);
-        assert_eq!(pulse_amount(60_000, 60, 1.0), 1.0);
-        assert_eq!(pulse_amount(61_000, 60, 1.0), 2.0);
-        assert!((pulse_amount(45_000, 6, 0.05) - 0.40).abs() < f64::EPSILON);
+        assert_eq!(pulse_amount(45_000, 60, Decimal::from(1)), Decimal::from(1));
+        assert_eq!(pulse_amount(60_000, 60, Decimal::from(1)), Decimal::from(1));
+        assert_eq!(pulse_amount(61_000, 60, Decimal::from(1)), Decimal::from(2));
+        let price = Decimal::new(5, 2); // 0.05
+        assert_eq!(pulse_amount(45_000, 6, price), Decimal::new(40, 2)); // 0.40
     }
 }

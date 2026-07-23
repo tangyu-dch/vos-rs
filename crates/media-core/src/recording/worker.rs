@@ -101,6 +101,9 @@ fn handle_recording_command(
         RecordingCommand::Flush { session, reply } => {
             let result = recorder_for_session(recorders, &session, writer_factory)
                 .and_then(|recording_file| recording_file.recorder.flush_recording());
+            if result.is_err() {
+                session.has_error.store(true, std::sync::atomic::Ordering::Release);
+            }
             let _ = reply.send(result);
         }
         RecordingCommand::Finish { session_id } => {
@@ -123,6 +126,7 @@ fn handle_packet(
 ) {
     if let Err(error) = session.ensure_disk_space() {
         warn!(%error, session_id = session.id, "recording disk protection stopped packet write");
+        session.has_error.store(true, std::sync::atomic::Ordering::Release);
         return;
     }
     let should_rotate = recorders.get(&session.id).is_some_and(|recording_file| {
@@ -136,6 +140,7 @@ fn handle_packet(
     if should_rotate {
         if let Err(error) = rotate_recording(recorders, &session, finalizer, writer_factory) {
             warn!(%error, session_id = session.id, "failed to rotate call recording");
+            session.has_error.store(true, std::sync::atomic::Ordering::Release);
             return;
         }
     }
@@ -143,6 +148,7 @@ fn handle_packet(
         Ok(recording_file) => recording_file,
         Err(error) => {
             warn!(%error, session_id = session.id, "failed to open call recording");
+            session.has_error.store(true, std::sync::atomic::Ordering::Release);
             return;
         }
     };
@@ -153,6 +159,7 @@ fn handle_packet(
         packet.payload.as_slice(),
     ) {
         warn!(%error, session_id = session.id, "failed to write RTP packet to recording");
+        session.has_error.store(true, std::sync::atomic::Ordering::Release);
     }
 }
 

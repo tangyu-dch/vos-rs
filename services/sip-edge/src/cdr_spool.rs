@@ -278,14 +278,49 @@ fn open_append_file(path: &Path) -> std::io::Result<File> {
 }
 
 fn read_spool_file(path: &Path) -> std::io::Result<Vec<CallCdr>> {
-    BufReader::new(File::open(path)?)
-        .lines()
-        .filter(|line| line.as_ref().map_or(true, |value| !value.trim().is_empty()))
-        .map(|line| {
-            let line = line?;
-            serde_json::from_str(&line).map_err(std::io::Error::other)
-        })
-        .collect()
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut cdrs = Vec::new();
+    let mut corrupt_file: Option<File> = None;
+
+    for line_result in reader.lines() {
+        let line = match line_result {
+            Ok(line) => line,
+            Err(e) => {
+                tracing::error!("读取 spool 文件行失败: {}", e);
+                break;
+            }
+        };
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match serde_json::from_str::<CallCdr>(trimmed) {
+            Ok(cdr) => {
+                cdrs.push(cdr);
+            }
+            Err(e) => {
+                tracing::warn!("解析 spool CDR 行失败，移入 .corrupt 文件: {}, 错误: {}", trimmed, e);
+                let corrupt_path = path.with_extension("jsonl.corrupt");
+                let c_file = match &mut corrupt_file {
+                    Some(f) => f,
+                    None => {
+                        let f = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&corrupt_path)?;
+                        corrupt_file = Some(f);
+                        corrupt_file.as_mut().unwrap()
+                    }
+                };
+                writeln!(c_file, "{}", trimmed)?;
+            }
+        }
+    }
+
+    Ok(cdrs)
 }
 
 fn count_pending_records(directory: &Path) -> std::io::Result<u64> {
@@ -453,18 +488,41 @@ mod tests {
         std::fs::create_dir_all(&directory).expect("create spool directory");
         let replay_path = directory.join("replay-corrupt.jsonl");
         std::fs::write(&replay_path, b"not-json\n").expect("write corrupt segment");
-        let spool = CdrSpool::open(directory.clone()).expect("open spool");
-        let error = read_spool_file(&replay_path).expect_err("invalid JSON must fail decoding");
+        
+        let cdrs = read_spool_file(&replay_path).expect("read spool file");
+        assert!(cdrs.is_empty());
+        assert!(replay_path.with_extension("jsonl.corrupt").exists());
 
-        spool.archive_corrupt_file(&replay_path, error);
+        let corrupt_content = std::fs::read_to_string(replay_path.with_extension("jsonl.corrupt")).unwrap();
+        assert_eq!(corrupt_content, "not-json\n");
 
-        assert!(replay_path.with_extension("corrupt").exists());
-        let snapshot = spool.metrics().snapshot();
-        assert_eq!(snapshot.spool_failures_total, 1);
-        assert_eq!(snapshot.pending_spool_records, 0);
-        spool
-            .append(&test_cdr("still-writable"))
-            .expect("append CDR");
+        std::fs::remove_dir_all(directory).expect("remove temp spool");
+    }
+
+    #[test]
+    fn mixed_segment_keeps_valid_cdrs_and_isolates_corrupt_lines() {
+        let directory = temp_spool_dir();
+        std::fs::create_dir_all(&directory).expect("create spool directory");
+        let replay_path = directory.join("replay-mixed.jsonl");
+        
+        let valid_cdr_1 = test_cdr("valid-1");
+        let valid_json_1 = serde_json::to_string(&valid_cdr_1).unwrap();
+        let valid_cdr_2 = test_cdr("valid-2");
+        let valid_json_2 = serde_json::to_string(&valid_cdr_2).unwrap();
+        
+        let file_content = format!("{}\nnot-json-line\n{}\n", valid_json_1, valid_json_2);
+        std::fs::write(&replay_path, file_content.as_bytes()).expect("write mixed segment");
+
+        let cdrs = read_spool_file(&replay_path).expect("read spool file");
+        assert_eq!(cdrs.len(), 2);
+        assert_eq!(cdrs[0].call_id.as_str(), "valid-1");
+        assert_eq!(cdrs[1].call_id.as_str(), "valid-2");
+
+        let corrupt_path = replay_path.with_extension("jsonl.corrupt");
+        assert!(corrupt_path.exists());
+        let corrupt_content = std::fs::read_to_string(corrupt_path).unwrap();
+        assert_eq!(corrupt_content, "not-json-line\n");
+
         std::fs::remove_dir_all(directory).expect("remove temp spool");
     }
 }

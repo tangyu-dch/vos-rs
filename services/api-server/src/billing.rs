@@ -8,29 +8,30 @@ use time::{Duration, OffsetDateTime};
 
 use crate::{normalize_page, parse_dt, AppState, PageQuery, PaginatedResponse};
 use cdr_core::{BillingAccount, BillingRate, CreditAccountOutcome, LedgerEntry, ReconcileResult};
+use rust_decimal::Decimal;
 
 #[derive(Debug, Deserialize)]
 pub struct RateBody {
     pub id: String,
     pub prefix: String,
-    pub rate_per_minute: Option<f64>,
+    pub rate_per_minute: Option<Decimal>,
     pub billing_interval_secs: Option<i32>,
-    pub price_per_interval: Option<f64>,
+    pub price_per_interval: Option<Decimal>,
     pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RateUpdate {
     pub prefix: String,
-    pub rate_per_minute: Option<f64>,
+    pub rate_per_minute: Option<Decimal>,
     pub billing_interval_secs: Option<i32>,
-    pub price_per_interval: Option<f64>,
+    pub price_per_interval: Option<Decimal>,
     pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreditBody {
-    pub amount: f64,
+    pub amount: Decimal,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,7 +50,7 @@ pub struct ReconcileQuery {
 #[derive(Serialize)]
 pub struct CreditResult {
     pub username: String,
-    pub balance: f64,
+    pub balance: Decimal,
 }
 
 type E = (StatusCode, String);
@@ -61,9 +62,8 @@ fn invalid(message: impl Into<String>) -> E {
     (StatusCode::BAD_REQUEST, message.into())
 }
 
-fn has_max_three_decimals(value: f64) -> bool {
-    let scaled = value * 1_000.0;
-    (scaled - scaled.round()).abs() < 1e-7
+fn has_max_three_decimals(value: Decimal) -> bool {
+    value.scale() <= 3
 }
 
 fn idempotency_key(headers: &HeaderMap) -> Result<&str, E> {
@@ -80,7 +80,7 @@ fn idempotency_key(headers: &HeaderMap) -> Result<&str, E> {
 }
 
 #[cfg(test)]
-fn validate_rate(prefix: &str, rate_per_minute: f64) -> Result<(), E> {
+fn validate_rate(prefix: &str, rate_per_minute: Decimal) -> Result<(), E> {
     validate_prefix(prefix)?;
     validate_price(rate_per_minute, "费率")
 }
@@ -92,8 +92,8 @@ fn validate_prefix(prefix: &str) -> Result<(), E> {
     Ok(())
 }
 
-fn validate_price(price: f64, label: &str) -> Result<(), E> {
-    if !price.is_finite() || !(0.0..=1_000_000.0).contains(&price) {
+fn validate_price(price: Decimal, label: &str) -> Result<(), E> {
+    if price < Decimal::ZERO || price > Decimal::from(1_000_000) {
         return Err(invalid(format!(
             "{label}必须是 0 到 1000000 之间的有效数字"
         )));
@@ -105,10 +105,10 @@ fn validate_price(price: f64, label: &str) -> Result<(), E> {
 }
 
 fn resolve_rate(
-    legacy_rate: Option<f64>,
+    legacy_rate: Option<Decimal>,
     interval_secs: Option<i32>,
-    price: Option<f64>,
-) -> Result<(i32, f64, f64), E> {
+    price: Option<Decimal>,
+) -> Result<(i32, Decimal, Decimal), E> {
     let (interval_secs, price) = match (interval_secs, price) {
         (Some(interval), Some(price)) => (interval, price),
         (None, None) => (60, legacy_rate.ok_or_else(|| invalid("缺少费率价格"))?),
@@ -118,7 +118,7 @@ fn resolve_rate(
         return Err(invalid("计费周期必须是 1 到 86400 秒之间的整数"));
     }
     validate_price(price, "周期价格")?;
-    let equivalent_per_minute = price * 60.0 / f64::from(interval_secs);
+    let equivalent_per_minute = price * Decimal::from(60) / Decimal::from(interval_secs);
     Ok((interval_secs, price, equivalent_per_minute))
 }
 
@@ -238,7 +238,7 @@ pub async fn credit_account(
     headers: HeaderMap,
     Json(b): Json<CreditBody>,
 ) -> Result<Json<CreditResult>, E> {
-    if !b.amount.is_finite() || !(0.001..=100_000_000.0).contains(&b.amount) {
+    if b.amount < Decimal::new(1, 3) || b.amount > Decimal::from(100_000_000) {
         return Err(invalid("充值金额必须是 0.001 到 100000000 之间的有效数字"));
     }
     if !has_max_three_decimals(b.amount) {
@@ -268,7 +268,7 @@ pub async fn credit_account(
         {
             tracing::warn!(
                 %username,
-                balance,
+                %balance,
                 error = %error.error,
                 "充值已提交到数据库，但 Redis 余额缓存同步失败；返回成功以避免客户端重复充值"
             );
@@ -333,26 +333,25 @@ mod tests {
     use super::{
         has_max_three_decimals, idempotency_key, resolve_rate, validate_rate, HeaderMap, StatusCode,
     };
+    use rust_decimal::Decimal;
 
     #[test]
     fn rejects_negative_or_non_finite_rates() {
-        assert!(validate_rate("86", -0.01).is_err());
-        assert!(validate_rate("86", f64::NAN).is_err());
-        assert!(validate_rate("86", f64::INFINITY).is_err());
+        assert!(validate_rate("86", Decimal::new(-1, 2)).is_err());
     }
 
     #[test]
     fn accepts_numeric_rate_prefixes() {
-        assert!(validate_rate("8613", 0.35).is_ok());
-        assert!(validate_rate("8613", 0.351).is_ok());
-        assert!(validate_rate("", 0.0).is_ok());
+        assert!(validate_rate("8613", Decimal::new(35, 2)).is_ok());
+        assert!(validate_rate("8613", Decimal::new(351, 3)).is_ok());
+        assert!(validate_rate("", Decimal::ZERO).is_ok());
     }
 
     #[test]
     fn rejects_billing_values_with_more_than_three_decimals() {
-        assert!(validate_rate("86", 0.3519).is_err());
-        assert!(has_max_three_decimals(100.123));
-        assert!(!has_max_three_decimals(100.1234));
+        assert!(validate_rate("86", Decimal::new(3519, 4)).is_err());
+        assert!(has_max_three_decimals(Decimal::new(100123, 3)));
+        assert!(!has_max_three_decimals(Decimal::new(1001234, 4)));
     }
 
     #[test]
@@ -364,14 +363,14 @@ mod tests {
     #[test]
     fn accepts_pulse_rate_and_maps_legacy_minute_rate() {
         assert_eq!(
-            resolve_rate(Some(0.25), None, None).unwrap(),
-            (60, 0.25, 0.25)
+            resolve_rate(Some(Decimal::new(25, 2)), None, None).unwrap(),
+            (60, Decimal::new(25, 2), Decimal::new(25, 2))
         );
-        let (interval, price, equivalent) = resolve_rate(None, Some(6), Some(0.05)).unwrap();
-        assert_eq!((interval, price), (6, 0.05));
-        assert!((equivalent - 0.5).abs() < f64::EPSILON);
-        assert!(resolve_rate(None, Some(6), Some(0.0501)).is_err());
-        assert!(resolve_rate(None, Some(7), Some(0.05)).is_ok());
+        let (interval, price, equivalent) = resolve_rate(None, Some(6), Some(Decimal::new(5, 2))).unwrap();
+        assert_eq!((interval, price), (6, Decimal::new(5, 2)));
+        assert_eq!(equivalent, Decimal::new(5, 1)); // 0.5
+        assert!(resolve_rate(None, Some(6), Some(Decimal::new(501, 4))).is_err());
+        assert!(resolve_rate(None, Some(7), Some(Decimal::new(5, 2))).is_ok());
     }
 
     #[test]

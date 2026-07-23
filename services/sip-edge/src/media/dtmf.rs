@@ -9,12 +9,40 @@ pub use media_core::dtmf::DtmfTracker as DtmfState;
 
 impl MediaRelayState {
     pub fn register_port_dtmf_tracking(&self, call_id: &str, port: u16, payload_type: u8) {
+        if !self.port_is_local(port) {
+            if let Some(target) = self.remote_target_for_port(port) {
+                let _ = self.call_remote_target(
+                    target,
+                    "register_port_dtmf_tracking",
+                    serde_json::json!({
+                        "call_id": call_id,
+                        "port": port,
+                        "payload_type": payload_type,
+                    }),
+                );
+            }
+            return;
+        }
+
         self.dtmf_states
             .insert(port, DtmfState::new(call_id, payload_type));
         self.mark_relay_features_changed(port);
     }
 
     pub fn get_dtmf_digits(&self, call_id: &str) -> Option<String> {
+        if !self.call_is_local(call_id) {
+            if let Some(target) = self.remote_target_for_call(call_id) {
+                if let Ok(res) = self.call_remote_target(
+                    target,
+                    "get_dtmf_digits",
+                    serde_json::json!({ "call_id": call_id }),
+                ) {
+                    return res.as_str().map(|s| s.to_string());
+                }
+            }
+            return None;
+        }
+
         let inner = match self.state.lock() {
             Ok(inner) => inner,
             Err(_) => {
@@ -26,6 +54,17 @@ impl MediaRelayState {
     }
 
     pub fn clear_dtmf_digits(&self, call_id: &str) {
+        if !self.call_is_local(call_id) {
+            if let Some(target) = self.remote_target_for_call(call_id) {
+                let _ = self.call_remote_target(
+                    target,
+                    "clear_dtmf_digits",
+                    serde_json::json!({ "call_id": call_id }),
+                );
+            }
+            return;
+        }
+
         let Ok(mut inner) = self.state.lock() else {
             warn!(call_id, "DTMF 状态锁已中毒，跳过清理");
             return;
@@ -52,6 +91,21 @@ impl MediaRelayState {
     }
 
     pub fn take_dtmf_events(&self, call_id: &str) -> Vec<DtmfEventRecord> {
+        if !self.call_is_local(call_id) {
+            if let Some(target) = self.remote_target_for_call(call_id) {
+                if let Ok(res) = self.call_remote_target(
+                    target,
+                    "take_dtmf_events",
+                    serde_json::json!({ "call_id": call_id }),
+                ) {
+                    if let Ok(events) = serde_json::from_value::<Vec<DtmfEventRecord>>(res) {
+                        return events;
+                    }
+                }
+            }
+            return Vec::new();
+        }
+
         let Ok(mut inner) = self.state.lock() else {
             warn!(call_id, "DTMF 状态锁已中毒，无法读取事件");
             return Vec::new();
@@ -60,6 +114,17 @@ impl MediaRelayState {
     }
 
     pub fn clear_dtmf_events(&self, call_id: &str) {
+        if !self.call_is_local(call_id) {
+            if let Some(target) = self.remote_target_for_call(call_id) {
+                let _ = self.call_remote_target(
+                    target,
+                    "clear_dtmf_events",
+                    serde_json::json!({ "call_id": call_id }),
+                );
+            }
+            return;
+        }
+
         let Ok(mut inner) = self.state.lock() else {
             warn!(call_id, "DTMF 状态锁已中毒，跳过事件清理");
             return;

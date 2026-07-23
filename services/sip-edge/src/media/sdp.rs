@@ -196,7 +196,7 @@ fn map_sdp_error(error: MediaSdpError) -> MediaError {
 }
 
 pub fn validate_media_negotiation(body: &[u8]) -> Result<(), MediaError> {
-    shared_sdp::validate_media_negotiation(body, MediaNegotiationPolicy::AUDIO_OR_T38)
+    shared_sdp::validate_media_negotiation(body, MediaNegotiationPolicy::AUDIO_ONLY)
         .map_err(map_sdp_error)
 }
 

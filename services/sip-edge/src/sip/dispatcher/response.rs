@@ -720,7 +720,7 @@ pub(crate) async fn dispatch_response(
         if !gateway_id.is_empty() {
             if sip_response.status_code >= 200 && sip_response.status_code <= 299 {
                 edge_state.gateway_health.record_success(&gateway_id);
-            } else if sip_response.status_code >= 400 {
+            } else if sip_response.status_code == 408 || (sip_response.status_code >= 500 && sip_response.status_code <= 599) {
                 edge_state.gateway_health.record_failure(&gateway_id);
             }
 
@@ -854,6 +854,18 @@ pub(crate) async fn dispatch_response(
             }
         }
 
+        let mut datagrams = Vec::new();
+
+        // 构造针对上一个网关的非 2xx 响应的 ACK 并发送
+        if let Some(ref t) = transaction {
+            let ack_bytes = outbound::build_non_2xx_response_ack(
+                &sip_response,
+                &t.outbound_uri,
+                &raw_external_call_id,
+            );
+            datagrams.push(PendingDatagram::new(peer.to_string(), ack_bytes));
+        }
+
         if let (Some(req), Some(sdp)) = (original_request, rewritten_sdp) {
             let target = outbound::target_addr_for(&next_uri);
             let failover_internal_cid = req
@@ -872,13 +884,13 @@ pub(crate) async fn dispatch_response(
                 &failover_external_cid,
                 outbound_response_outcome.caller_identity.as_ref(),
             );
-            return vec![PendingDatagram::new(target, bytes)];
+            datagrams.push(PendingDatagram::new(target, bytes));
         } else {
             warn!(
                 "could not perform failover because original request or rewritten sdp is missing"
             );
-            return Vec::new();
         }
+        return datagrams;
     }
 
     if matches!(

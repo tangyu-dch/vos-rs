@@ -480,7 +480,7 @@ pub(crate) async fn warm_hot_path_redis_cache(
     }
     for rate in rates {
         pipeline
-            .hset("vos_rs:billing:rates", &rate.prefix, rate.rate_per_minute)
+            .hset("vos_rs:billing:rates", &rate.prefix, rate.rate_per_minute.to_string())
             .ignore()
             .hset(
                 "vos_rs:billing:intervals",
@@ -490,8 +490,8 @@ pub(crate) async fn warm_hot_path_redis_cache(
             .ignore()
             .hset(
                 "vos_rs:billing:prices",
-                rate.prefix,
-                rate.price_per_interval,
+                &rate.prefix,
+                rate.price_per_interval.to_string(),
             )
             .ignore();
     }
@@ -500,13 +500,13 @@ pub(crate) async fn warm_hot_path_redis_cache(
             .hset(
                 "vos_rs:billing:balances",
                 &account.username,
-                account.balance,
+                account.balance.to_string(),
             )
             .ignore()
             .hset(
                 "vos_rs:billing:credit_limits",
-                account.username,
-                account.credit_limit,
+                &account.username,
+                account.credit_limit.to_string(),
             )
             .ignore();
     }

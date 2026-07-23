@@ -40,19 +40,21 @@ impl Conference {
     }
 
     /// 执行混音并向所有参会成员发送混合后的音频
-    pub async fn mix_and_send(&mut self) {
+    pub fn mix_and_prepare(&mut self) -> Vec<(Arc<UdpSocket>, SocketAddr, Vec<u8>)> {
         if self.participants.len() < 2 {
             // 参会人数少于 2 人，清空现有缓存并返回
             for p in self.participants.values_mut() {
                 p.pcm_buffer.clear();
             }
-            return;
+            return Vec::new();
         }
 
         let mut participant_frames = HashMap::with_capacity(self.participants.len());
         for (&port, p) in &mut self.participants {
             participant_frames.insert(port, take_conference_frame(&mut p.pcm_buffer, p.muted));
         }
+
+        let mut packets_to_send = Vec::with_capacity(self.participants.len());
 
         for (&port, p) in &mut self.participants {
             let output_frame = mix_conference_frames(
@@ -69,19 +71,14 @@ impl Conference {
             let pt = p.codec.static_payload_type().unwrap_or(8);
             let rtp_packet = build_rtp_packet(pt, p.sequence, p.timestamp, p.ssrc, &payload);
 
-            if let Err(e) = p.socket.send_to(&rtp_packet, p.target_addr).await {
-                debug!(
-                    conference_id = %self.id,
-                    port = p.port,
-                    error = %e,
-                    "failed to send mixed RTP packet to conference participant"
-                );
-            }
+            packets_to_send.push((Arc::clone(&p.socket), p.target_addr, rtp_packet));
 
-            // 6. 更新 RTP 序号与时间戳
+            // 更新 RTP 序号与时间戳
             p.sequence = p.sequence.wrapping_add(1);
             p.timestamp = p.timestamp.wrapping_add(CONFERENCE_FRAME_SAMPLES as u32);
         }
+
+        packets_to_send
     }
 }
 
@@ -223,8 +220,18 @@ pub fn start_mixer_loop(manager: Arc<ConferenceManager>) {
 
                 // 2. 在没有持有 DashMap 锁的情况下，安全地逐个混音与发送
                 for conf_arc in active_conferences {
-                    let mut conf = conf_arc.lock().await;
-                    let _ = conf.mix_and_send().await;
+                    let packets = {
+                        let mut conf = conf_arc.lock().await;
+                        conf.mix_and_prepare()
+                    };
+                    for (socket, target_addr, rtp_packet) in packets {
+                        if let Err(e) = socket.send_to(&rtp_packet, target_addr).await {
+                            debug!(
+                                error = %e,
+                                "failed to send mixed RTP packet to conference participant"
+                            );
+                        }
+                    }
                 }
             }
         });

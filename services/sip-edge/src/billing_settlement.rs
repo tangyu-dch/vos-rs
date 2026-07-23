@@ -68,11 +68,11 @@ pub(crate) fn settle_completed_call(edge_state: &EdgeState, call_id: &CallId) {
                     let _: Result<(), redis::RedisError> = redis::cmd("HSET")
                         .arg("vos_rs:billing:balances")
                         .arg(&account)
-                        .arg(balance)
+                        .arg(balance.to_string())
                         .query_async(&mut connection)
                         .await;
                 }
-                tracing::info!(%call_id, %account, balance, "实时计费结算完成");
+                tracing::info!(%call_id, %account, %balance, "实时计费结算完成");
             }
             Ok(None) => {}
             Err(error) => {

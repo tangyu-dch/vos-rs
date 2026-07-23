@@ -364,14 +364,13 @@ async fn audit_log(
 }
 
 fn validate_runtime_secrets(
+    production: bool,
     jwt_secret: &str,
     internal_secret: &str,
     admin_password: &str,
     operator_password: &str,
     financier_password: &str,
 ) -> anyhow::Result<()> {
-    let production =
-        env::var("VOS_RS_ENV").is_ok_and(|value| value.eq_ignore_ascii_case("production"));
     validate_runtime_secrets_for_environment(
         production,
         jwt_secret,
@@ -475,6 +474,7 @@ async fn main() -> anyhow::Result<()> {
 
     #[derive(serde::Deserialize, Debug, Default)]
     struct ApiNetworkSection {
+        host: Option<String>,
         port: Option<u16>,
         allowed_origins: Option<String>,
     }
@@ -664,7 +664,29 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .or(api_security.internal_secret)
         .unwrap_or_else(|| "internal-dev-secret".to_string());
+    let host = env::var("VOS_RS_API_HOST")
+        .ok()
+        .or_else(|| api_network.host.clone())
+        .filter(|h| !h.trim().is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let port: u16 = api_network.port.unwrap_or(8080);
+    let addr_str = format!("{}:{}", host, port);
+    let addr: std::net::SocketAddr = addr_str
+        .parse()
+        .or_else(|_| {
+            use std::net::ToSocketAddrs;
+            addr_str.to_socket_addrs()
+                .ok()
+                .and_then(|mut addrs| addrs.next())
+                .ok_or_else(|| anyhow::anyhow!("无法解析 API 服务器绑定地址: {}", addr_str))
+        })?;
+
+    let is_public = !addr.ip().is_loopback();
+    let production = env::var("VOS_RS_ENV").is_ok_and(|value| value.eq_ignore_ascii_case("production"))
+        || is_public;
+
     validate_runtime_secrets(
+        production,
         &jwt_secret,
         &internal_secret,
         &admin_password,
@@ -815,8 +837,6 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
-    let port: u16 = api_network.port.unwrap_or(8080);
-    let addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
     tracing::info!("API server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -911,5 +931,23 @@ mod tests {
             "financier",
         )
         .is_ok());
+    }
+
+    #[test]
+    fn public_bind_rejects_default_runtime_secrets() {
+        let addr: std::net::SocketAddr = "0.0.0.0:8080".parse().unwrap();
+        let is_public = !addr.ip().is_loopback();
+        assert!(is_public);
+        let production = is_public;
+        
+        let error = super::validate_runtime_secrets(
+            production,
+            "vos-rs-secret-key-change-in-production",
+            "internal-dev-secret",
+            "admin",
+            "operator",
+            "financier",
+        );
+        assert!(error.is_err());
     }
 }

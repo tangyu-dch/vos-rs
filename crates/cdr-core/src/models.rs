@@ -26,6 +26,7 @@ use std::time::SystemTime;
 use time::OffsetDateTime;
 
 use crate::utils::{duration_millis, system_time_millis};
+use rust_decimal::Decimal;
 
 pub const DEFAULT_CDR_SUBJECT: &str = "vos-rs.cdrs";
 pub const DEFAULT_CDR_STREAM: &str = "VOS_RS_CDRS";
@@ -339,9 +340,9 @@ pub struct SipRegistration {
 pub struct BillingRate {
     pub id: String,
     pub prefix: String,
-    pub rate_per_minute: f64,
+    pub rate_per_minute: Decimal,
     pub billing_interval_secs: i32,
-    pub price_per_interval: f64,
+    pub price_per_interval: Decimal,
     pub description: Option<String>,
     #[serde(
         with = "time::serde::rfc3339::option",
@@ -354,8 +355,8 @@ pub struct BillingRate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BillingAccount {
     pub username: String,
-    pub balance: f64,
-    pub credit_limit: f64,
+    pub balance: Decimal,
+    pub credit_limit: Decimal,
     pub currency: String,
     #[serde(
         with = "time::serde::rfc3339::option",
@@ -368,8 +369,8 @@ pub struct BillingAccount {
 /// Result of applying a credit operation through its idempotency boundary.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CreditAccountOutcome {
-    Applied(f64),
-    Replayed(f64),
+    Applied(Decimal),
+    Replayed(Decimal),
     Conflict,
 }
 
@@ -379,11 +380,11 @@ pub struct LedgerEntry {
     pub call_id: String,
     pub username: String,
     pub duration_ms: i64,
-    pub rate_per_minute: f64,
+    pub rate_per_minute: Decimal,
     pub billing_interval_secs: i32,
-    pub price_per_interval: f64,
-    pub amount: f64,
-    pub balance_after: f64,
+    pub price_per_interval: Decimal,
+    pub amount: Decimal,
+    pub balance_after: Decimal,
     #[serde(
         with = "time::serde::rfc3339::option",
         default,
@@ -396,7 +397,7 @@ pub struct LedgerEntry {
 pub struct ReconcileResult {
     pub processed: i64,
     pub skipped: i64,
-    pub total_amount: f64,
+    pub total_amount: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

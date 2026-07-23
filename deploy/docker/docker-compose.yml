@@ -55,7 +55,7 @@ services:
     volumes:
       - vos_rs_nats:/data
     healthcheck:
-      test: ["CMD-SHELL", "nats-server --help > /dev/null 2>&1 || wget -qO- http://localhost:8222/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
       interval: 5s
       timeout: 3s
       retries: 5

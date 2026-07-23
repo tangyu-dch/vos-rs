@@ -2036,9 +2036,11 @@ async fn test_gateway_failover_on_503() {
     )
     .await;
 
-    assert_eq!(failover_datagrams.len(), 1);
-    assert_eq!(failover_datagrams[0].target, "gw2.example.com:5060");
-    assert!(datagram_text(&failover_datagrams[0])
+    assert_eq!(failover_datagrams.len(), 2);
+    assert_eq!(failover_datagrams[0].target, "198.51.100.20:5060");
+    assert!(datagram_text(&failover_datagrams[0]).starts_with("ACK "));
+    assert_eq!(failover_datagrams[1].target, "gw2.example.com:5060");
+    assert!(datagram_text(&failover_datagrams[1])
         .starts_with("INVITE sip:13800138000@gw2.example.com:5060;transport=udp SIP/2.0\r\n"));
 
     let call_guard = &edge_state.call_manager;
@@ -2125,12 +2127,14 @@ async fn test_gateway_302_redirect_recursion() {
     .await;
 
     // Verify that 302 response was intercepted and resulted in redirect INVITE to redirect-target.example.com:5060
-    assert_eq!(redirect_datagrams.len(), 1);
+    assert_eq!(redirect_datagrams.len(), 2);
+    assert_eq!(redirect_datagrams[0].target, "198.51.100.20:5060");
+    assert!(datagram_text(&redirect_datagrams[0]).starts_with("ACK "));
     assert_eq!(
-        redirect_datagrams[0].target,
+        redirect_datagrams[1].target,
         "redirect-target.example.com:5060"
     );
-    assert!(datagram_text(&redirect_datagrams[0])
+    assert!(datagram_text(&redirect_datagrams[1])
         .starts_with("INVITE sip:13800138000@redirect-target.example.com:5060 SIP/2.0\r\n"));
 
     let call_guard = &edge_state.call_manager;
