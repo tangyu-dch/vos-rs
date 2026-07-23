@@ -481,8 +481,200 @@ impl<'a> TelecomCopilotEngine<'a> {
             .and_then(|c| c.get("message"))
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_str())
-            .map(str::to_owned)
-            .ok_or_else(|| "LLM 响应缺少 choices[0].message.content".into())
+            .map(|s| s.to_string())
+            .ok_or_else(|| "LLM 未返回有效内容".into())
+    }
+}
+
+pub fn get_copilot_tools_schema() -> serde_json::Value {
+    json!([
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_get_dashboard_stats",
+                "description": "获取 VoIP 软交换平台整体运行概览指标（CPS、接通率 ASR、平均 MOS 评分、活跃通话数、注册分机数等）。",
+                "parameters": { "type": "object", "properties": {}, "required": [] }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_cdrs",
+                "description": "查询通话详单 (CDR)。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "status": { "type": "string", "description": "筛选通话状态: answered / failed / canceled", "enum": ["answered", "failed", "canceled"] },
+                        "caller": { "type": "string", "description": "主叫号码过滤" },
+                        "callee": { "type": "string", "description": "被叫号码过滤" },
+                        "limit": { "type": "integer", "description": "返回条数上限，默认 10", "default": 10 }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_get_sip_flows",
+                "description": "获取指定通话的完整 SIP 信令交互抓包及 ASCII 梯形图 (SIP Ladder Diagram)。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "call_id": { "type": "string", "description": "通话唯一的 Call-ID 字符串" }
+                    },
+                    "required": ["call_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_active_calls",
+                "description": "获取当前软交换平台所有正在进行的并发通话列表。",
+                "parameters": { "type": "object", "properties": {}, "required": [] }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_terminate_call",
+                "description": "强制中断/拆线指定 Call-ID 的实时通话。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "call_id": { "type": "string", "description": "需要断开的 Call-ID" }
+                    },
+                    "required": ["call_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_registrations",
+                "description": "查询分机终端当前的 SIP 注册绑定状态。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "username": { "type": "string", "description": "分机账号/用户名过滤" }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_gateways",
+                "description": "查询软交换中继网关列表及链路健康状态与通道容量。",
+                "parameters": { "type": "object", "properties": {}, "required": [] }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_preview_route",
+                "description": "模拟呼叫路由决策算力（主叫 + 被叫 -> 输出匹配中继与计费规则）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "caller": { "type": "string", "description": "主叫号码" },
+                        "callee": { "type": "string", "description": "被叫号码" }
+                    },
+                    "required": ["caller", "callee"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_anti_fraud_rules",
+                "description": "查询防刷量、频控与反欺诈风控规则。",
+                "parameters": { "type": "object", "properties": {}, "required": [] }
+            }
+        }
+    ])
+}
+
+#[allow(dead_code)]
+fn urlencoding_str(s: &str) -> String {
+    s.as_bytes()
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                (*byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+impl<'a> TelecomCopilotEngine<'a> {
+    #[allow(dead_code)]
+    pub async fn execute_tool(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
+        match name {
+            "vos_get_dashboard_stats" => {
+                let stats = self.state.store.get_dashboard_stats(0).await.ok();
+                json!(stats)
+            }
+            "vos_list_cdrs" => {
+                let status = args.get("status").and_then(|v| v.as_str());
+                let caller = args.get("caller").and_then(|v| v.as_str());
+                let callee = args.get("callee").and_then(|v| v.as_str());
+                let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(10).clamp(1, 50);
+                match self.state.store.list_cdrs(1, limit, status, None, caller, callee, None, None, None).await {
+                    Ok((cdrs, total)) => json!({ "total": total, "cdrs": cdrs }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "vos_get_sip_flows" => {
+                let call_id = args.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                let flows = self.state.store.get_sip_flows(call_id).await.unwrap_or_default();
+                let steps = Self::ladder_from_flows(&flows, 0);
+                let ascii = Self::generate_ascii_ladder(&steps);
+                json!({ "call_id": call_id, "flows": flows, "ladder_diagram": ascii })
+            }
+            "vos_list_active_calls" => {
+                let calls = self.state.active_calls_cache.get_or_fetch(self.state).await;
+                json!({ "active_calls": calls, "count": calls.len() })
+            }
+            "vos_terminate_call" => {
+                let call_id = args.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                let url = format!("{}/manage/calls/{}/terminate", self.state.sip_manage_base, call_id);
+                let req = self.state.internal_client.post(&url);
+                let req = if !self.state.internal_secret.is_empty() { req.header("X-VOS-Token", &self.state.internal_secret) } else { req };
+                match req.send().await {
+                    Ok(r) if r.status().is_success() => json!({ "success": true, "message": format!("通话 {} 已成功拆线挂断", call_id) }),
+                    Ok(r) => json!({ "success": false, "error": format!("HTTP {}", r.status()) }),
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_list_registrations" => {
+                let regs = self.state.store.list_registrations().await.unwrap_or_default();
+                let username = args.get("username").and_then(|v| v.as_str());
+                let filtered: Vec<_> = if let Some(u) = username {
+                    regs.into_iter().filter(|r| r.aor.contains(u)).collect()
+                } else {
+                    regs
+                };
+                json!({ "registrations": filtered })
+            }
+            "vos_list_gateways" => {
+                let gws = self.state.store.list_gateways_full().await.unwrap_or_default();
+                json!({ "gateways": gws })
+            }
+            "vos_preview_route" => {
+                let destination = args.get("callee").or_else(|| args.get("destination")).and_then(|v| v.as_str()).unwrap_or("");
+                let url = format!("{}/manage/route-preview?destination={}", self.state.sip_manage_base, urlencoding_str(destination));
+                let req = self.state.internal_client.get(&url);
+                let req = if !self.state.internal_secret.is_empty() { req.header("X-VOS-Token", &self.state.internal_secret) } else { req };
+                match req.send().await {
+                    Ok(r) => r.json::<serde_json::Value>().await.unwrap_or_else(|_| json!({})),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            _ => json!({ "error": format!("未知工具: {name}") }),
+        }
     }
 
     /// 未配置 LLM 或 LLM 调用失败时的结构化 Markdown 报告

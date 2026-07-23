@@ -315,6 +315,7 @@ async fn stream_llm_response(
         "model": llm.model,
         "temperature": llm.temperature,
         "stream": true,
+        "tools": crate::copilot::get_copilot_tools_schema(),
         "messages": messages
     });
 
