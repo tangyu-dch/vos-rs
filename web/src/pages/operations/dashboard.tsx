@@ -509,6 +509,215 @@ function NodeTrafficSection() {
   );
 }
 
+export interface GatewayConcurrency {
+  name: string;
+  direction: string; // "access" or "egress"
+  active_calls: number;
+  max_channels: number;
+}
+
+export interface SbcSecurityStats {
+  blocked_calls_24h: number;
+  auth_failures_24h: number;
+  error_codes_breakdown: Record<string, number>;
+}
+
+export interface SystemResourceStats {
+  cpu_percent: number;
+  memory_percent: number;
+  disk_percent: number;
+  db_pool_active: number;
+  db_pool_max: number;
+}
+
+export interface MonitoringExtras {
+  gateways: GatewayConcurrency[];
+  security: SbcSecurityStats;
+  resources: SystemResourceStats;
+}
+
+function MonitoringExtrasSection() {
+  const [extras, setExtras] = useState<MonitoringExtras | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadExtras = useCallback(async () => {
+    try {
+      const res = await api.get<MonitoringExtras>('/overview/monitoring-extras');
+      setExtras(res);
+    } catch (e) {
+      console.error('加载扩展监控数据失败:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadExtras();
+    const timer = setInterval(() => { void loadExtras(); }, 15000);
+    return () => clearInterval(timer);
+  }, [loadExtras]);
+
+  if (loading || !extras) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {Array.from({ length: 3 }).map((_, idx) => (
+          <Card key={idx} shadow="sm" className="w-full h-48 animate-pulse">
+            <CardBody className="flex items-center justify-center">
+              <Spinner size="sm" />
+            </CardBody>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
+  const { gateways, security, resources } = extras;
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <Card shadow="sm">
+        <CardBody className="p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between border-b border-divider pb-3">
+            <div className="flex items-center gap-2">
+              <Server className="w-4 h-4 text-primary" />
+              <h3 className="text-small font-bold text-foreground">中继通道并发与使用率</h3>
+            </div>
+            <Chip size="sm" variant="flat" color="primary">实时水位</Chip>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            {gateways.map((gw) => {
+              const hasLimit = gw.max_channels > 0;
+              const percent = hasLimit ? Math.round((gw.active_calls / gw.max_channels) * 100) : 0;
+              return (
+                <div key={gw.name} className="p-3 bg-content2 rounded-xl flex flex-col gap-2">
+                  <div className="flex justify-between items-center text-tiny">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${gw.direction === 'access' ? 'bg-primary' : 'bg-success'}`} />
+                      <span className="font-mono font-bold text-foreground">{gw.name}</span>
+                      <span className="text-default-400 font-mono text-[9px]">
+                        ({gw.direction === 'access' ? '接入' : '落地'})
+                      </span>
+                    </div>
+                    <span className="font-mono font-semibold text-foreground">
+                      {gw.active_calls} / {hasLimit ? gw.max_channels : '∞'} Ch
+                    </span>
+                  </div>
+                  {hasLimit ? (
+                    <div className="flex flex-col gap-1">
+                      <Progress 
+                        size="sm" 
+                        value={percent} 
+                        color={percent >= 85 ? 'danger' : percent >= 60 ? 'warning' : 'success'} 
+                        aria-label={`${gw.name} 水位`}
+                      />
+                      <div className="flex justify-end text-[9px] text-default-400 font-mono">
+                        使用率: {percent}%
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[9px] text-default-400 font-medium">
+                      无最大并发容量限制 (非受限通道)
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card shadow="sm">
+        <CardBody className="p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between border-b border-divider pb-3">
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-warning" />
+              <h3 className="text-small font-bold text-foreground">SBC 安全防御 & 错误分布</h3>
+            </div>
+            <Chip size="sm" variant="flat" color="warning">近 24 小时</Chip>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="p-2.5 rounded-lg bg-danger/10 flex flex-col gap-0.5">
+              <span className="text-[10px] text-danger-600 font-medium">防欺诈防扫描拦截</span>
+              <span className="text-lg font-bold text-danger font-mono">{security.blocked_calls_24h} 次</span>
+            </div>
+            <div className="p-2.5 rounded-lg bg-warning/10 flex flex-col gap-0.5">
+              <span className="text-[10px] text-warning-700 font-medium">鉴权认证失败</span>
+              <span className="text-lg font-bold text-warning-600 font-mono">{security.auth_failures_24h} 次</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5 mt-1">
+            <span className="text-[10px] text-default-400 font-medium">呼叫失败 SIP 响应码分布 (4xx/5xx):</span>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(security.error_codes_breakdown).map(([code, count]) => {
+                let color: 'default' | 'primary' | 'warning' | 'danger' = 'default';
+                if (code.startsWith('5')) color = 'danger';
+                else if (code === '401' || code === '403') color = 'warning';
+                else if (code === '404') color = 'primary';
+                
+                return (
+                  <div key={code} className="flex items-center gap-1.5 bg-content2 px-2.5 py-1 rounded-medium text-tiny font-mono">
+                    <Chip size="sm" color={color} variant="flat" className="h-4 px-1 text-[10px]">{code}</Chip>
+                    <span className="font-bold text-foreground">{count}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card shadow="sm">
+        <CardBody className="p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between border-b border-divider pb-3">
+            <div className="flex items-center gap-2">
+              <Gauge className="w-4 h-4 text-success" />
+              <h3 className="text-small font-bold text-foreground">宿主机硬件与数据库监控</h3>
+            </div>
+            <Chip size="sm" variant="dot" color="success">系统就绪</Chip>
+          </div>
+
+          <div className="flex flex-col gap-2.5">
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-tiny">
+                <span className="text-default-500 font-medium">CPU 使用率</span>
+                <span className="font-mono font-bold text-foreground">{resources.cpu_percent.toFixed(1)}%</span>
+              </div>
+              <Progress size="sm" value={resources.cpu_percent} color={resources.cpu_percent >= 80 ? 'danger' : 'success'} aria-label="CPU" />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-tiny">
+                <span className="text-default-500 font-medium">内存占用</span>
+                <span className="font-mono font-bold text-foreground">{resources.memory_percent.toFixed(1)}%</span>
+              </div>
+              <Progress size="sm" value={resources.memory_percent} color={resources.memory_percent >= 85 ? 'danger' : 'success'} aria-label="内存" />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-tiny">
+                <span className="text-default-500 font-medium">录音存储可用容量</span>
+                <span className="font-mono font-bold text-foreground">{(100 - resources.disk_percent).toFixed(1)}%</span>
+              </div>
+              <Progress size="sm" value={resources.disk_percent} color={resources.disk_percent >= 90 ? 'danger' : 'primary'} aria-label="存储" />
+            </div>
+
+            <div className="text-[10px] text-default-400 border-t border-divider pt-2 mt-1 flex items-center justify-between">
+              <span className="flex items-center gap-1 font-medium">
+                <Server className="w-3.5 h-3.5 text-default-400" />
+                Postgres 连接池 (sqlx Pool)
+              </span>
+              <span className="font-mono text-primary font-bold">{resources.db_pool_active} / {resources.db_pool_max} Active</span>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
 export function DashboardPage() {
   const [data, setData] = useState<Summary>({});
   const [error, setError] = useState('');
@@ -642,6 +851,9 @@ export function DashboardPage() {
                   </CardBody>
                 </Card>
               </div>
+
+              {/* 扩展监控面板：中继并发、SBC 安全及宿主机资源 */}
+              <MonitoringExtrasSection />
             </div>
           )}
         </CardBody>

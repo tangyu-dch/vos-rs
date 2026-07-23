@@ -65,6 +65,10 @@ fn overview_routes() -> Router<AppState> {
             "/api/v1/overview/node-traffic",
             get(dashboard::get_node_traffic),
         )
+        .route(
+            "/api/v1/overview/monitoring-extras",
+            get(dashboard::get_monitoring_extras),
+        )
         .route("/api/v1/overview/events", get(dashboard::dashboard_events))
 }
 

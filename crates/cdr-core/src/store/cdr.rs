@@ -357,6 +357,44 @@ impl PostgresCdrStore {
         Ok(trends)
     }
 
+    pub async fn get_security_and_errors_24h(
+        &self,
+    ) -> Result<(u64, u64, std::collections::HashMap<String, u64>), sqlx::Error> {
+        let day_ago = time::OffsetDateTime::now_utc() - time::Duration::hours(24);
+        
+        let blocked: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND (failure_reason LIKE '%Anti-Fraud%' OR failure_reason LIKE '%Limit%' OR failure_reason LIKE '%ACL%')"
+        )
+        .bind(day_ago)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let auth_failed: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND (failure_reason LIKE '%Auth%' OR failure_status_code = 401 OR failure_status_code = 403)"
+        )
+        .bind(day_ago)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let rows = sqlx::query(
+            "SELECT failure_status_code, COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND failure_status_code >= 400 GROUP BY failure_status_code"
+        )
+        .bind(day_ago)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut breakdown = std::collections::HashMap::new();
+        for r in rows {
+            let code: Option<i32> = r.get(0);
+            let count: i64 = r.get(1);
+            if let Some(c) = code {
+                breakdown.insert(c.to_string(), count as u64);
+            }
+        }
+
+        Ok((blocked.0 as u64, auth_failed.0 as u64, breakdown))
+    }
+
     pub async fn get_dtmf_events(
         &self,
         call_id: &str,
