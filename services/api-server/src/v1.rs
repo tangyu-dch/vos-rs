@@ -402,7 +402,7 @@ fn request_id(request: &Request) -> String {
 
 async fn envelope_response(response: Response, request_id: &str, path: &str) -> Response {
     let status = response.status();
-    if !is_json_response(&response) && status.is_success() && is_raw_response(path) {
+    if (!is_json_response(&response) && status.is_success() && is_raw_response(path)) || is_csv_response(&response) {
         return with_request_id(response, request_id);
     }
     let (mut parts, body) = response.into_parts();
@@ -452,6 +452,14 @@ fn is_json_response(response: &Response) -> bool {
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("application/json"))
+}
+
+fn is_csv_response(response: &Response) -> bool {
+    response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/csv"))
 }
 
 fn contract_payload(status: StatusCode, value: Value, request_id: &str, path: &str) -> Value {
