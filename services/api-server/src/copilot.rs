@@ -679,17 +679,159 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
         {
             "type": "function",
             "function": {
-                "name": "vos_create_route",
-                "description": "创建前缀号段呼叫路由规则（指定路由 ID id、被叫前缀 prefix、出局网关 ID gateway_id、优先级 priority）。",
+                "name": "vos_delete_gateway",
+                "description": "删除指定的软交换中继网关。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "id": { "type": "string", "description": "路由唯一 ID" },
-                        "prefix": { "type": "string", "description": "被叫前缀号码 (如 86, 010)" },
-                        "gateway_id": { "type": "string", "description": "绑定的出口网关 ID" },
-                        "priority": { "type": "integer", "description": "优先级 (越小越优先)", "default": 1 }
+                        "id": { "type": "string", "description": "待删除的网关 ID" }
                     },
-                    "required": ["id", "prefix", "gateway_id"]
+                    "required": ["id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_routes",
+                "description": "获取系统中的所有前缀呼叫路由规则。",
+                "parameters": { "type": "object", "properties": {}, "required": [] }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_delete_route",
+                "description": "删除指定的前缀呼叫路由规则。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "待删除的路由 ID" }
+                    },
+                    "required": ["id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_billing_accounts",
+                "description": "获取所有计费账户及当前余额信息。",
+                "parameters": { "type": "object", "properties": {}, "required": [] }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_recharge_billing_account",
+                "description": "为计费账户充值或变动余额（指定账户账号 account_id、金额 amount、备注 description）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "account_id": { "type": "string", "description": "计费账户账号或唯一标识" },
+                        "amount": { "type": "number", "description": "充值金额（正数为充值，负数为扣款）" },
+                        "description": { "type": "string", "description": "充值/扣款备注" }
+                    },
+                    "required": ["account_id", "amount"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_rates",
+                "description": "获取系统呼叫资费费率表。",
+                "parameters": { "type": "object", "properties": {}, "required": [] }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_upsert_rate",
+                "description": "创建或修改呼叫资费费率（指定费率 ID id、号码前缀 prefix、每分钟费率 rate_per_minute）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "费率唯一 ID" },
+                        "prefix": { "type": "string", "description": "号码前缀" },
+                        "rate_per_minute": { "type": "number", "description": "每分钟费率金额" }
+                    },
+                    "required": ["id", "prefix", "rate_per_minute"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_delete_rate",
+                "description": "删除指定的呼叫资费费率。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "待删除的费率 ID" }
+                    },
+                    "required": ["id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_add_ivr_node",
+                "description": "向现有 IVR 菜单添加/配置按键转接节点（指定 IVR ID id、按键 dtmf_key 0-9/*/#、目标类型 action 例如 extension:8001 或 gateway:gw1）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "IVR 菜单 ID" },
+                        "dtmf_key": { "type": "string", "description": "按键 (0-9, *, #, timeout)" },
+                        "action": { "type": "string", "description": "转接动作或目标，例如 extension:8001" }
+                    },
+                    "required": ["id", "dtmf_key", "action"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_delete_ivr_menu",
+                "description": "删除指定的 IVR 语音导航菜单。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "待删除的 IVR 菜单 ID" }
+                    },
+                    "required": ["id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_create_anti_fraud_rule",
+                "description": "创建防刷量/高危频控风控规则（指定规则 ID id、规则名称 name、匹配模式 pattern、频控上限 limit_count）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "规则 ID" },
+                        "name": { "type": "string", "description": "规则名称" },
+                        "pattern": { "type": "string", "description": "匹配模式 (如 IP 网段或主叫前缀)" },
+                        "limit_count": { "type": "integer", "description": "允许最大并发或频控值", "default": 60 }
+                    },
+                    "required": ["id", "name", "pattern"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_delete_anti_fraud_rule",
+                "description": "删除防刷量/频控风控规则。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "待删除的规则 ID" }
+                    },
+                    "required": ["id"]
                 }
             }
         }
@@ -869,6 +1011,14 @@ impl<'a> TelecomCopilotEngine<'a> {
                     Err(e) => json!({ "success": false, "error": e.to_string() }),
                 }
             }
+            "vos_delete_gateway" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                match self.state.store.delete_gateway(id).await {
+                    Ok(true) => json!({ "success": true, "message": format!("网关 {} 已成功删除", id) }),
+                    Ok(false) => json!({ "success": false, "error": format!("网关 {} 不存在", id) }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
             "vos_create_route" => {
                 let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
@@ -893,6 +1043,136 @@ impl<'a> TelecomCopilotEngine<'a> {
                         json!({ "success": true, "message": format!("前缀路由 {} (前缀: {}, 网关: {}) 创建成功", id, prefix, gw_id) })
                     }
                     Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_list_routes" => {
+                match self.state.store.list_routes_full().await {
+                    Ok(routes) => json!({ "routes": routes }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "vos_delete_route" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                match self.state.store.delete_route(id).await {
+                    Ok(true) => {
+                        let _ = crate::routes::publish_route_reload(&self.state.nats_client).await;
+                        json!({ "success": true, "message": format!("路由 {} 已成功删除", id) })
+                    }
+                    Ok(false) => json!({ "success": false, "error": format!("路由 {} 不存在", id) }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "vos_list_billing_accounts" => {
+                match self.state.store.list_accounts().await {
+                    Ok(accs) => json!({ "accounts": accs }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "vos_recharge_billing_account" => {
+                let acc_id = args.get("account_id").and_then(|v| v.as_str()).unwrap_or("");
+                let amount = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let desc = args.get("description").and_then(|v| v.as_str()).unwrap_or("Copilot 充值操作");
+                if acc_id.is_empty() || amount == 0.0 {
+                    return json!({ "success": false, "error": "账户 ID 与变动金额不能为空或 0" });
+                }
+                let amount_dec = rust_decimal::Decimal::from_f64_retain(amount).unwrap_or_default();
+                match self.state.store.credit_account(acc_id, amount_dec, desc).await {
+                    Ok(cdr_core::CreditAccountOutcome::Applied(new_bal)) | Ok(cdr_core::CreditAccountOutcome::Replayed(new_bal)) => {
+                        json!({ "success": true, "message": format!("账户 {} 成功变动金额 {}, 当前新余额: {}", acc_id, amount, new_bal) })
+                    }
+                    Ok(cdr_core::CreditAccountOutcome::Conflict) => {
+                        json!({ "success": false, "error": "重复的充值幂等请求" })
+                    }
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_list_rates" => {
+                match self.state.store.list_rates().await {
+                    Ok(rates) => json!({ "rates": rates }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "vos_upsert_rate" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
+                let rate = args.get("rate_per_minute").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                if id.is_empty() || prefix.is_empty() {
+                    return json!({ "success": false, "error": "费率 ID 与前缀不能为空" });
+                }
+                let rate_dec = rust_decimal::Decimal::from_f64_retain(rate).unwrap_or_default();
+                match self.state.store.upsert_rate(id, prefix, rate_dec, 60, rate_dec, None).await {
+                    Ok(_) => json!({ "success": true, "message": format!("费率规则 {} (前缀: {}, 费率: {}/分) 设置成功", id, prefix, rate) }),
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_delete_rate" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                match self.state.store.delete_rate(id).await {
+                    Ok(true) => json!({ "success": true, "message": format!("费率 {} 已成功删除", id) }),
+                    Ok(false) => json!({ "success": false, "error": format!("费率 {} 不存在", id) }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "vos_add_ivr_node" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let key = args.get("dtmf_key").and_then(|v| v.as_str()).unwrap_or("");
+                let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                if id.is_empty() || key.is_empty() || action.is_empty() {
+                    return json!({ "success": false, "error": "IVR ID、按键 key 与动作 action 不能为空" });
+                }
+                let node_id = format!("node_{key}");
+                let new_node = json!({ "id": node_id, "dtmf": key, "action": action });
+                let res = sqlx::query(
+                    "UPDATE ivr_menus SET nodes = nodes || $1::jsonb WHERE id = $2"
+                )
+                .bind(json!([new_node]))
+                .bind(id)
+                .execute(self.state.store.pool())
+                .await;
+                match res {
+                    Ok(r) if r.rows_affected() > 0 => json!({ "success": true, "message": format!("IVR {} 成功新增按键 [{}] -> 动作 [{}]", id, key, action) }),
+                    Ok(_) => json!({ "success": false, "error": format!("IVR 菜单 {} 不存在", id) }),
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_delete_ivr_menu" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let res = sqlx::query("DELETE FROM ivr_menus WHERE id = $1").bind(id).execute(self.state.store.pool()).await;
+                match res {
+                    Ok(r) if r.rows_affected() > 0 => json!({ "success": true, "message": format!("IVR 菜单 {} 已成功删除", id) }),
+                    Ok(_) => json!({ "success": false, "error": format!("IVR 菜单 {} 不存在", id) }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "vos_create_anti_fraud_rule" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args.get("name").or_else(|| args.get("pattern")).and_then(|v| v.as_str()).unwrap_or("");
+                let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+                let limit = args.get("limit_count").and_then(|v| v.as_i64()).unwrap_or(60) as i32;
+                if id.is_empty() || pattern.is_empty() {
+                    return json!({ "success": false, "error": "风控规则 ID 与 Pattern 模式不能为空" });
+                }
+                let res = sqlx::query(
+                    "INSERT INTO anti_fraud_rules (id, rule_type, target_value, limit_number, enabled) VALUES ($1, $2, $3, $4, true) \
+                     ON CONFLICT (id) DO UPDATE SET target_value = EXCLUDED.target_value, limit_number = EXCLUDED.limit_number"
+                )
+                .bind(id)
+                .bind("rate_limit")
+                .bind(pattern)
+                .bind(limit)
+                .execute(self.state.store.pool())
+                .await;
+                match res {
+                    Ok(_) => json!({ "success": true, "message": format!("防刷风控规则 {} (模式: {}, 上限: {}) 创建成功", name, pattern, limit) }),
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_delete_anti_fraud_rule" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                match self.state.store.delete_anti_fraud_rule(id).await {
+                    Ok(true) => json!({ "success": true, "message": format!("风控规则 {} 已成功删除", id) }),
+                    Ok(false) => json!({ "success": false, "error": format!("风控规则 {} 不存在", id) }),
+                    Err(e) => json!({ "error": e.to_string() }),
                 }
             }
             _ => json!({ "error": format!("未知工具: {name}") }),
