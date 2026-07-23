@@ -3,7 +3,6 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use cdr_core::SipUser;
 use serde::Deserialize;
 
 use crate::{normalize_page, ApiError, AppState, PageQuery, PaginatedResponse};
@@ -22,7 +21,7 @@ pub struct UpdateUserRequest {
 pub async fn list_users(
     State(state): State<AppState>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<PaginatedResponse<SipUser>>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let (page, page_size, offset) = normalize_page(&query);
     let (items, total) = tokio::try_join!(
         state.store.list_users_page(page_size, offset),
@@ -31,12 +30,26 @@ pub async fn list_users(
     .map_err(|e| ApiError {
         error: e.to_string(),
     })?;
+
+    if query.export.unwrap_or(false) {
+        let headers = vec!["SIP分机号", "创建时间"];
+        let mut rows = Vec::new();
+        for item in items {
+            rows.push(vec![
+                item.username.clone(),
+                item.created_at.map(|t| t.to_string()).unwrap_or_default(),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("sip_users.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }
 
 pub async fn create_user(

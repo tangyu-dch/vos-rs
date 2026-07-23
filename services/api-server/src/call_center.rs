@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use crate::{ApiError, AppState, PaginatedResponse};
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ExportQuery {
+    pub export: Option<bool>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct CallQueue {
@@ -39,7 +44,8 @@ pub(crate) struct AgentStatus {
 
 pub(crate) async fn list_queues(
     State(state): State<AppState>,
-) -> Result<Json<PaginatedResponse<CallQueue>>, ApiError> {
+    Query(q): Query<ExportQuery>,
+) -> Result<axum::response::Response, ApiError> {
     let pool = state.store.pool();
     let rows = sqlx::query("SELECT id, name, strategy, moh_file, max_wait_secs FROM call_queues ORDER BY created_at DESC")
         .fetch_all(pool)
@@ -75,13 +81,39 @@ pub(crate) async fn list_queues(
         });
     }
 
+    if q.export.unwrap_or(false) {
+        let headers = vec!["队列 ID", "队列名称", "分配策略", "MOH 背景音乐文件", "最大排队等待超时(秒)", "绑定座席数"];
+        let mut rows = Vec::new();
+        for item in items {
+            let strat = match item.strategy.as_deref().unwrap_or("longest_idle") {
+                "round_robin" => "轮询分发 (Round Robin)",
+                "ring_all" => "群响 (Ring All)",
+                "random" => "随机 (Random)",
+                _ => "最长空闲优先 (Longest Idle)",
+            };
+            let moh = item.moh_file.clone().unwrap_or_else(|| "moh.wav".to_string());
+            let max_wait = item.max_wait_secs.map(|s| format!("{s}s")).unwrap_or_else(|| "300s".to_string());
+            let agent_count = item.agents.as_ref().map(|a| format!("{} 个座席", a.len())).unwrap_or_else(|| "0 个座席".to_string());
+            rows.push(vec![
+                item.id.clone(),
+                item.name.clone(),
+                strat.to_string(),
+                moh,
+                max_wait,
+                agent_count,
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("queues.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     let total = items.len() as i64;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page: 1,
         page_size: 20,
-    }))
+    }).into_response())
 }
 
 pub(crate) async fn create_queue(
@@ -153,7 +185,8 @@ pub(crate) async fn delete_queue(
 
 pub(crate) async fn list_agents(
     State(state): State<AppState>,
-) -> Result<Json<PaginatedResponse<AgentStatus>>, ApiError> {
+    Query(q): Query<ExportQuery>,
+) -> Result<axum::response::Response, ApiError> {
     let pool = state.store.pool();
     let rows = sqlx::query(
         "SELECT agent_id, name, extension, status FROM call_agents ORDER BY created_at DESC",
@@ -180,13 +213,35 @@ pub(crate) async fn list_agents(
         });
     }
 
+    if q.export.unwrap_or(false) {
+        let headers = vec!["座席姓名", "座席工号", "SIP分机号", "当前状态", "当前通话"];
+        let mut rows = Vec::new();
+        for item in items {
+            let status_str = match item.status.as_deref().unwrap_or("offline") {
+                "idle" => "空闲 (Ready)",
+                "in_call" => "通话中 (In Call)",
+                "busy" => "示忙 (Busy)",
+                _ => "离线 (Offline)",
+            };
+            rows.push(vec![
+                item.name.clone(),
+                item.agent_id.clone(),
+                format!("sip:{}", item.extension),
+                status_str.to_string(),
+                item.current_call.clone().unwrap_or_else(|| "无通话".to_string()),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("agents.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     let total = items.len() as i64;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page: 1,
         page_size: 20,
-    }))
+    }).into_response())
 }
 
 pub(crate) async fn create_agent(

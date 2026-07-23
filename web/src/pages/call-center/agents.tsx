@@ -116,34 +116,31 @@ export default function AgentsPage() {
       (a.extension || '').includes(searchKey)
   );
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!filteredData.length) {
       message.warning('当前列表无数据可导出');
       return;
     }
-    const headers = '"座席姓名","座席工号","SIP分机号","当前状态","当前通话"';
-    const lines = filteredData.map((a) => {
-      const name = a.name ? String(a.name) : '';
-      const id = a.agent_id ? String(a.agent_id) : '';
-      const ext = a.extension ? `sip:${a.extension}` : '';
-      let status = '离线 (Offline)';
-      if (a.status === 'idle') status = '空闲 (Ready)';
-      else if (a.status === 'in_call') status = '通话中 (In Call)';
-      else if (a.status === 'busy') status = '示忙 (Busy)';
-      const call = a.current_call ? String(a.current_call) : '无通话';
-      return `"${name.replace(/"/g, '""')}","${id.replace(/"/g, '""')}","${ext}","${status}","${call.replace(/"/g, '""')}"`;
-    });
-    const csvContent = [headers, ...lines].join('\n');
-    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Agents_List_${new Date().toISOString().slice(0, 10)}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    message.success('已自动生成并下载座席列表 (CSV 格式)');
+    try {
+      setLoading(true);
+      const response = (await api.get('/call-center/agents?export=true', {
+        responseType: 'blob',
+      })) as any;
+      const blob = response.data;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `Agents_List_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      message.success('已从后端成功生成并下载座席列表 (CSV 格式)');
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '从后端导出座席数据失败');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getStatusChip = (status: string) => {

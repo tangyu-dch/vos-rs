@@ -2,7 +2,6 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use cdr_core::AuditLog;
 use serde::Deserialize;
 
 use crate::{ApiError, AppState, PaginatedResponse};
@@ -18,7 +17,7 @@ pub struct AuditLogQuery {
 pub async fn list_audit_logs(
     State(state): State<AppState>,
     Query(query): Query<AuditLogQuery>,
-) -> Result<Json<PaginatedResponse<AuditLog>>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let (page, page_size, offset) = if query.export.unwrap_or(false) {
         (1, 100000, 0)
     } else {
@@ -34,10 +33,35 @@ pub async fn list_audit_logs(
     .map_err(|e| ApiError {
         error: e.to_string(),
     })?;
+
+    if query.export.unwrap_or(false) {
+        let headers = vec![
+            "ID", "请求 ID", "操作员", "角色", "请求方法", "路径", 
+            "请求参数", "状态码", "源 IP", "操作时间"
+        ];
+        let mut rows = Vec::new();
+        for item in items {
+            rows.push(vec![
+                item.id.to_string(),
+                item.request_id.clone(),
+                item.username.clone(),
+                item.role.clone(),
+                item.method.clone(),
+                item.path.clone(),
+                item.query_params.clone().unwrap_or_default(),
+                item.status_code.to_string(),
+                item.source_ip.clone().unwrap_or_default(),
+                item.created_at.map(|t| t.to_string()).unwrap_or_default(),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("audit_logs.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }

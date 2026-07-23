@@ -24,7 +24,7 @@ pub struct ListCdrsQuery {
 pub async fn list_cdrs(
     State(state): State<AppState>,
     Query(query): Query<ListCdrsQuery>,
-) -> Result<Json<PaginatedResponse<CdrEvent>>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let (page, page_size) = if query.export.unwrap_or(false) {
         (1, 100000)
     } else {
@@ -52,12 +52,37 @@ pub async fn list_cdrs(
             error: e.to_string(),
         })?;
 
+    if query.export.unwrap_or(false) {
+        let headers = vec![
+            "通话 ID", "主叫号码", "被叫号码", "状态", "呼叫开始时间", "应答时间", 
+            "结束时间", "通话时长(毫秒)", "计费时长(毫秒)", "失败代码", "失败原因"
+        ];
+        let mut rows = Vec::new();
+        for item in items {
+            rows.push(vec![
+                item.call_id.clone(),
+                item.caller.clone().unwrap_or_default(),
+                item.callee.clone().unwrap_or_default(),
+                item.status.clone(),
+                item.started_at_ms.to_string(),
+                item.answered_at_ms.map(|t| t.to_string()).unwrap_or_default(),
+                item.ended_at_ms.to_string(),
+                item.duration_ms.to_string(),
+                item.billable_duration_ms.to_string(),
+                item.failure_status_code.map(|c| c.to_string()).unwrap_or_default(),
+                item.failure_reason.clone().unwrap_or_default(),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("cdrs.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }
 
 pub async fn get_cdr(

@@ -3,7 +3,6 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use cdr_core::SipRoute;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
@@ -122,7 +121,7 @@ pub async fn publish_route_reload(nats: &Option<async_nats::Client>) -> bool {
 pub async fn list_routes(
     State(state): State<AppState>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<PaginatedResponse<SipRoute>>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let (page, page_size, offset) = normalize_page(&query);
     let (items, total) = tokio::try_join!(
         state.store.list_routes_page(page_size, offset),
@@ -131,12 +130,32 @@ pub async fn list_routes(
     .map_err(|e| ApiError {
         error: e.to_string(),
     })?;
+
+    if query.export.unwrap_or(false) {
+        let headers = vec!["路由标识", "号码前缀", "优先级", "目标网关", "呼叫成本", "随机权重", "开始时间", "结束时间"];
+        let mut rows = Vec::new();
+        for item in items {
+            rows.push(vec![
+                item.id.clone(),
+                item.prefix.clone(),
+                item.priority.to_string(),
+                item.gateway_id.clone(),
+                item.cost.to_string(),
+                item.weight.to_string(),
+                item.time_start.clone().unwrap_or_else(|| "00:00".to_string()),
+                item.time_end.clone().unwrap_or_else(|| "23:59".to_string()),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("routes.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }
 
 pub async fn create_route(

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
 use crate::{normalize_page, parse_dt, AppState, PageQuery, PaginatedResponse};
-use cdr_core::{BillingAccount, BillingRate, CreditAccountOutcome, LedgerEntry, ReconcileResult};
+use cdr_core::{CreditAccountOutcome, ReconcileResult};
 use rust_decimal::Decimal;
 
 #[derive(Debug, Deserialize)]
@@ -126,19 +126,36 @@ fn resolve_rate(
 pub async fn list_rates(
     State(state): State<AppState>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<PaginatedResponse<BillingRate>>, E> {
+) -> Result<axum::response::Response, E> {
     let (page, page_size, offset) = normalize_page(&query);
     let (items, total) = tokio::try_join!(
         state.store.list_rates_page(page_size, offset),
         state.store.count_rates(),
     )
     .map_err(err)?;
+
+    if query.export.unwrap_or(false) {
+        let headers = vec!["费率标识", "前缀号码", "每分钟费率", "计费周期(秒)", "单周期价格"];
+        let mut rows = Vec::new();
+        for item in items {
+            rows.push(vec![
+                item.id.clone(),
+                item.prefix.clone(),
+                item.rate_per_minute.to_string(),
+                item.billing_interval_secs.to_string(),
+                item.price_per_interval.to_string(),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("rates.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }
 
 pub async fn create_rate(
@@ -218,19 +235,36 @@ pub async fn delete_rate(
 pub async fn list_accounts(
     State(state): State<AppState>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<PaginatedResponse<BillingAccount>>, E> {
+) -> Result<axum::response::Response, E> {
     let (page, page_size, offset) = normalize_page(&query);
     let (items, total) = tokio::try_join!(
         state.store.list_accounts_page(page_size, offset),
         state.store.count_accounts(),
     )
     .map_err(err)?;
+
+    if query.export.unwrap_or(false) {
+        let headers = vec!["账户用户名", "当前余额", "信用额度", "货币单位", "创建时间"];
+        let mut rows = Vec::new();
+        for item in items {
+            rows.push(vec![
+                item.username.clone(),
+                item.balance.to_string(),
+                item.credit_limit.to_string(),
+                item.currency.clone(),
+                item.created_at.map(|t| t.to_string()).unwrap_or_default(),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("accounts.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }
 
 pub async fn credit_account(
@@ -281,7 +315,7 @@ pub async fn credit_account(
 pub async fn list_ledger(
     State(state): State<AppState>,
     Query(q): Query<LedgerQuery>,
-) -> Result<Json<PaginatedResponse<LedgerEntry>>, E> {
+) -> Result<axum::response::Response, E> {
     let page_query = PageQuery {
         page: q.page,
         page_size: q.page_size,
@@ -297,12 +331,37 @@ pub async fn list_ledger(
         state.store.count_ledger(q.username.as_deref()),
     )
     .map_err(err)?;
+
+    if q.export.unwrap_or(false) {
+        let headers = vec![
+            "流水号", "呼叫 ID", "账户名", "通话时长(ms)", "费率/分钟", 
+            "计费周期(秒)", "周期单价", "扣费金额", "期后余额", "创建时间"
+        ];
+        let mut rows = Vec::new();
+        for item in items {
+            rows.push(vec![
+                item.id.to_string(),
+                item.call_id.clone(),
+                item.username.clone(),
+                item.duration_ms.to_string(),
+                item.rate_per_minute.to_string(),
+                item.billing_interval_secs.to_string(),
+                item.price_per_interval.to_string(),
+                item.amount.to_string(),
+                item.balance_after.to_string(),
+                item.created_at.map(|t| t.to_string()).unwrap_or_default(),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("ledger.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }
 
 pub async fn reconcile(

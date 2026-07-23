@@ -152,7 +152,7 @@ fn reject_unsupported_egress_secret(_role: &str, _password: Option<&str>) -> Res
 pub async fn list_gateways(
     State(state): State<AppState>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<PaginatedResponse<SipGateway>>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let (page, page_size, offset) = normalize_page(&query);
     let (items, total) = tokio::try_join!(
         state.store.list_gateways_page(
@@ -168,12 +168,47 @@ pub async fn list_gateways(
     .map_err(|e| ApiError {
         error: e.to_string(),
     })?;
+
+    if query.export.unwrap_or(false) {
+        let headers = vec![
+            "中继标识", "中继类型", "认证方式/对端地址", "注册用户", "最大并发", 
+            "启用状态", "传输协议", "内部端口"
+        ];
+        let mut rows = Vec::new();
+        for item in items {
+            let role = item.role.as_deref().unwrap_or("egress");
+            let role_name = if role == "access" { "接入中继" } else { "落地中继" };
+            let auth_or_host = if role == "access" {
+                match item.access_auth_mode.as_deref().unwrap_or("ip_allowlist") {
+                    "digest_register" => "注册认证",
+                    "ip_and_digest" => "IP加认证",
+                    _ => "IP白名单",
+                }
+            } else {
+                &item.host
+            };
+            let enabled_str = if item.enabled.unwrap_or(true) { "启用" } else { "停用" };
+            rows.push(vec![
+                item.id.clone(),
+                role_name.to_string(),
+                auth_or_host.to_string(),
+                item.access_username.clone().unwrap_or_default(),
+                item.max_capacity.map(|c| c.to_string()).unwrap_or_default(),
+                enabled_str.to_string(),
+                item.transport.clone(),
+                item.port.map(|p| p.to_string()).unwrap_or_default(),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("gateways.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }
 
 pub async fn create_gateway(

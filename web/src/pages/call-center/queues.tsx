@@ -138,35 +138,31 @@ export default function QueuesPage() {
       (q.id || '').toLowerCase().includes(searchKey.toLowerCase())
   );
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!filteredData.length) {
       message.warning('当前列表无数据可导出');
       return;
     }
-    const headers = '"队列 ID","队列名称","分配策略","MOH 背景音乐文件","最大等待时间(秒)","绑定座席数"';
-    const lines = filteredData.map((q) => {
-      const qId = q.id ? String(q.id) : '';
-      const qName = q.name ? String(q.name) : '';
-      let strat = '最长空闲优先 (Longest Idle)';
-      if (q.strategy === 'round_robin') strat = '轮询分发 (Round Robin)';
-      else if (q.strategy === 'ring_all') strat = '群响 (Ring All)';
-      else if (q.strategy === 'random') strat = '随机 (Random)';
-      const moh = q.moh_file || 'moh.wav';
-      const waitSecs = `${q.max_wait_secs || 300}s`;
-      const agentCount = Array.isArray(q.agents) ? `${q.agents.length} 个座席` : '0 个座席';
-      return `"${qId.replace(/"/g, '""')}","${qName.replace(/"/g, '""')}","${strat}","${moh.replace(/"/g, '""')}","${waitSecs}","${agentCount}"`;
-    });
-    const csvContent = [headers, ...lines].join('\n');
-    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Queues_List_${new Date().toISOString().slice(0, 10)}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    message.success('已自动生成并下载呼叫队列列表 (CSV 格式)');
+    try {
+      setLoading(true);
+      const response = (await api.get('/call-center/queues?export=true', {
+        responseType: 'blob',
+      })) as any;
+      const blob = response.data;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `Queues_List_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      message.success('已从后端成功生成并下载呼叫队列列表 (CSV 格式)');
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '从后端导出队列数据失败');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getStrategyChip = (strategy: string) => {

@@ -62,32 +62,31 @@ export function ActiveCallsPage() {
     }
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!rows.length) {
       message.warning('当前无活跃通话可导出');
       return;
     }
-    const headers = '"通话 ID","主叫号码","被叫号码","状态","开始时间","中继网关"';
-    const lines = rows.map((row) => {
-      const callId = String(entityId(row, 'call_id'));
-      const caller = String(row.caller ?? '');
-      const callee = String(row.callee ?? '');
-      const state = String(row.state ?? '');
-      const started = String(callDetailText(row.started_at_ms, 'started_at_ms'));
-      const gateway = String(row.gateway ?? '');
-      return `"${callId}","${caller}","${callee}","${state}","${started}","${gateway.replace(/"/g, '""')}"`;
-    });
-    const csvContent = [headers, ...lines].join('\n');
-    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Active_Calls_List_${new Date().toISOString().slice(0, 10)}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    message.success('已自动生成并下载活跃通话列表 (CSV 格式)');
+    try {
+      setLoading(true);
+      const response = (await api.get('/calls/active?export=true', {
+        responseType: 'blob',
+      })) as any;
+      const blob = response.data;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `Active_Calls_List_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      message.success('已从后端成功生成并下载活跃通话列表 (CSV 格式)');
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '从后端导出活跃通话数据失败');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

@@ -6,7 +6,6 @@ use axum::{
 use serde::Deserialize;
 
 use crate::{normalize_page, AppState, PageQuery, PaginatedResponse};
-use cdr_core::NumberInventory;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateNumberBody {
@@ -37,19 +36,39 @@ fn err(e: impl std::fmt::Display) -> E {
 pub async fn list_numbers(
     State(state): State<AppState>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<PaginatedResponse<NumberInventory>>, E> {
+) -> Result<axum::response::Response, E> {
     let (page, page_size, offset) = normalize_page(&query);
     let (items, total) = tokio::try_join!(
         state.store.list_numbers_page(page_size, offset),
         state.store.count_numbers(),
     )
     .map_err(err)?;
+
+    if query.export.unwrap_or(false) {
+        let headers = vec!["号码", "关联分机", "落地中继", "呼叫方向", "最大并发", "当前并发", "状态", "创建时间"];
+        let mut rows = Vec::new();
+        for item in items {
+            rows.push(vec![
+                item.number.clone(),
+                item.username.clone().unwrap_or_default(),
+                item.owner_egress_trunk_id.clone().unwrap_or_default(),
+                item.direction.clone().unwrap_or_else(|| "both".to_string()),
+                item.max_concurrent.map(|c| c.to_string()).unwrap_or_default(),
+                item.current_concurrent.map(|c| c.to_string()).unwrap_or_default(),
+                item.status.clone(),
+                item.created_at.map(|t| t.to_string()).unwrap_or_default(),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("numbers.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }
 
 pub async fn create_number(

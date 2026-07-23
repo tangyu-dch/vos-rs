@@ -2,7 +2,6 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use cdr_core::SipRegistration;
 use serde::Deserialize;
 
 use crate::{normalize_page, ApiError, AppState, PageQuery, PaginatedResponse};
@@ -18,7 +17,7 @@ pub struct RegistrationQuery {
 pub async fn list_registrations(
     State(state): State<AppState>,
     Query(query): Query<RegistrationQuery>,
-) -> Result<Json<PaginatedResponse<SipRegistration>>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let page_query = PageQuery {
         page: query.page,
         page_size: query.page_size,
@@ -36,10 +35,27 @@ pub async fn list_registrations(
     .map_err(|e| ApiError {
         error: e.to_string(),
     })?;
+
+    if query.export.unwrap_or(false) {
+        let headers = vec!["AOR(用户标识)", "联系地址", "接收地址", "过期时间", "更新时间"];
+        let mut rows = Vec::new();
+        for item in items {
+            rows.push(vec![
+                item.aor.clone(),
+                item.contact_uri.clone(),
+                item.received_from.clone(),
+                item.expires_at.to_string(),
+                item.updated_at.map(|t| t.to_string()).unwrap_or_default(),
+            ]);
+        }
+        return Ok(crate::utils::to_csv_response("registrations.csv", &headers, &rows));
+    }
+
+    use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
         items,
         total,
         page,
         page_size,
-    }))
+    }).into_response())
 }
