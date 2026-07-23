@@ -18,14 +18,18 @@ pub struct ListCdrsQuery {
     pub start_time: Option<String>,
     pub end_time: Option<String>,
     pub before_id: Option<i64>,
+    pub export: Option<bool>,
 }
 
 pub async fn list_cdrs(
     State(state): State<AppState>,
     Query(query): Query<ListCdrsQuery>,
 ) -> Result<Json<PaginatedResponse<CdrEvent>>, ApiError> {
-    let page = query.page.unwrap_or(1);
-    let page_size = query.page_size.unwrap_or(20).min(100);
+    let (page, page_size) = if query.export.unwrap_or(false) {
+        (1, 100000)
+    } else {
+        (query.page.unwrap_or(1), query.page_size.unwrap_or(20).min(100))
+    };
 
     let start = query.start_time.as_deref().and_then(parse_dt);
     let end = query.end_time.as_deref().and_then(parse_dt);

@@ -39,6 +39,7 @@ pub struct LedgerQuery {
     pub username: Option<String>,
     pub page: Option<i64>,
     pub page_size: Option<i64>,
+    pub export: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -286,6 +287,7 @@ pub async fn list_ledger(
         page_size: q.page_size,
         gateway_type: None,
         role: None,
+        export: q.export,
     };
     let (page, page_size, offset) = normalize_page(&page_query);
     let (items, total) = tokio::try_join!(

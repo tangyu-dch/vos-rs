@@ -101,9 +101,13 @@ pub(crate) struct PageQuery {
     pub page_size: Option<i64>,
     pub gateway_type: Option<String>,
     pub role: Option<String>,
+    pub export: Option<bool>,
 }
 
 pub(crate) fn normalize_page(query: &PageQuery) -> (i64, i64, i64) {
+    if query.export.unwrap_or(false) {
+        return (1, 100000, 0);
+    }
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
     let offset = (page - 1).saturating_mul(page_size);

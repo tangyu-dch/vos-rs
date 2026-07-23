@@ -12,6 +12,7 @@ pub struct RegistrationQuery {
     pub page: Option<i64>,
     pub page_size: Option<i64>,
     pub keyword: Option<String>,
+    pub export: Option<bool>,
 }
 
 pub async fn list_registrations(
@@ -23,6 +24,7 @@ pub async fn list_registrations(
         page_size: query.page_size,
         gateway_type: None,
         role: None,
+        export: query.export,
     };
     let (page, page_size, offset) = normalize_page(&page_query);
     let (items, total) = tokio::try_join!(

@@ -215,52 +215,68 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     }
   }, [pagination.page, pagination.page_size, spec.path, spec.params]);
 
-  const exportData = () => {
+  const exportData = async () => {
     if (!rows.length) {
       message.warning('当前列表无数据可导出');
       return;
     }
-    const fieldsToExport = spec.fields.filter((field) => field.kind !== 'secret');
-    const headers = fieldsToExport.map((f) => `"${f.label.replace(/"/g, '""')}"`).join(',');
-    const lines = rows.map((row) => {
-      return fieldsToExport.map((field) => {
-        let value = row[field.key];
-        if (field.key === 'node_count') {
-          value = Array.isArray(row.nodes) ? row.nodes.length : (row.node_count ?? 0);
-        }
-        let text = '';
-        const callText = spec.path === '/calls' ? callDetailText(value, field.key) : undefined;
-        if (callText) {
-          text = callText;
-        } else if (field.kind === 'duration') {
-          text = durationSecondsText(value);
-        } else if (moneyFields.has(field.key)) {
-          text = moneyText(value);
-        } else if (field.kind === 'select') {
-          const options = (field.options || fieldOptions[field.key] || []).map((option) =>
-            typeof option === 'string' ? { label: option, value: option } : option
-          );
-          const actual = field.key === 'role' ? trunkRole(row) : value;
-          text = String(options.find((option) => option.value === String(actual))?.label ?? (field.key === 'role' ? (trunkRole(row) === 'access' ? '接入中继' : '落地中继') : value));
-        } else if (typeof value === 'boolean') {
-          text = value ? '启用' : '停用';
-        } else {
-          text = value !== undefined && value !== null ? String(value) : '';
-        }
-        return `"${text.replace(/"/g, '""')}"`;
-      }).join(',');
-    });
-    const csvContent = [headers, ...lines].join('\n');
-    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `${spec.title}_${new Date().toISOString().slice(0, 10)}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    message.success('已自动生成并下载数据列表 (CSV 格式)');
+    try {
+      setLoading(true);
+      const result = await listResource(spec.path, {
+        export: true,
+        ...spec.params,
+      });
+      const exportRows = result.items || [];
+      if (!exportRows.length) {
+        message.warning('无可导出的数据');
+        return;
+      }
+      const fieldsToExport = spec.fields.filter((field) => field.kind !== 'secret');
+      const headers = fieldsToExport.map((f) => `"${f.label.replace(/"/g, '""')}"`).join(',');
+      const lines = exportRows.map((row) => {
+        return fieldsToExport.map((field) => {
+          let value = row[field.key];
+          if (field.key === 'node_count') {
+            value = Array.isArray(row.nodes) ? row.nodes.length : (row.node_count ?? 0);
+          }
+          let text = '';
+          const callText = spec.path === '/calls' ? callDetailText(value, field.key) : undefined;
+          if (callText) {
+            text = callText;
+          } else if (field.kind === 'duration') {
+            text = durationSecondsText(value);
+          } else if (moneyFields.has(field.key)) {
+            text = moneyText(value);
+          } else if (field.kind === 'select') {
+            const options = (field.options || fieldOptions[field.key] || []).map((option) =>
+              typeof option === 'string' ? { label: option, value: option } : option
+            );
+            const actual = field.key === 'role' ? trunkRole(row) : value;
+            text = String(options.find((option) => option.value === String(actual))?.label ?? (field.key === 'role' ? (trunkRole(row) === 'access' ? '接入中继' : '落地中继') : value));
+          } else if (typeof value === 'boolean') {
+            text = value ? '启用' : '停用';
+          } else {
+            text = value !== undefined && value !== null ? String(value) : '';
+          }
+          return `"${text.replace(/"/g, '""')}"`;
+        }).join(',');
+      });
+      const csvContent = [headers, ...lines].join('\n');
+      const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `${spec.title}_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      message.success(`已从后端成功导出全部 ${exportRows.length} 条数据 (CSV 格式)`);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '请求后端导出数据失败');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { void load(1); }, [spec.path]);
