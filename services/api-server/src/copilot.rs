@@ -432,7 +432,7 @@ impl<'a> TelecomCopilotEngine<'a> {
         let mut messages = vec![
             json!({
                 "role": "system",
-                "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答要求：\n1. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析报告 (Analysis Report)：结合数据对当前系统状态或呼叫流程进行专业、生动的解读，避免冰冷的格式化叙述。\n   - ## 🔍 根因分析 (Root Cause)：深入剖析导致问题的底层原因（如网络延迟、信令超时、鉴权失败等），若无异常则明确告知。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引（如修改路由规则、更新分机配置、核对运营商中继配置等）。\n2. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流，不要让人觉得机械呆板。\n3. **数据校验**：如果提供的业务数据为空，请礼貌地予以说明，并提示用户如何开启相应模块的持久化。"
+                "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）以及可调用的工具（Tools），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答与工具调用要求：\n1. **智能冲突与重复检测**：在进行路由创建、分机开户、网关绑定或 IVR 配置时，如工具返回了 `conflict: true` 冲突警告或目标关联不存在（如路由的目标网关不存在、DID 重复绑定、分机号重复等），必须在回复中明确指出具体的冲突点与原因，并主动给出可替代的解决建议方案（例如建议更换 ID、先创建网关、或使用不同的前缀）。\n2. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析报告 (Analysis Report)：结合数据对当前系统状态、业务配置或呼叫流程进行专业解读。\n   - ## 🔍 根因与冲突诊断 (Diagnostics)：深入剖析原因、冲突点或可能的影响。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引。\n3. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流。"
             })
         ];
 
@@ -940,12 +940,24 @@ impl<'a> TelecomCopilotEngine<'a> {
                 if username.is_empty() || password.is_empty() {
                     return json!({ "success": false, "error": "分机账号 username 和密码 password 不能为空" });
                 }
+                let ext_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_users WHERE username = $1)")
+                    .bind(username)
+                    .fetch_one(self.state.store.pool())
+                    .await
+                    .unwrap_or(false);
+                if ext_exists {
+                    return json!({
+                        "success": false,
+                        "conflict": true,
+                        "error": format!("分机账号 `{}` 已存在，不能重复创建。", username)
+                    });
+                }
                 let realm = self.state.store.get_system_config("auth_realm").await.ok().flatten().unwrap_or_else(|| "vos-rs".into());
                 let ha1 = format!("{:x}", md5::compute(format!("{username}:{realm}:{password}").as_bytes()));
                 match self.state.store.insert_user(username, &ha1).await {
                     Ok(_) => {
                         let _ = crate::hot_cache::set_auth_user(self.state, username, &ha1).await;
-                        json!({ "success": true, "message": format!("分机账号 {} 创建成功", username) })
+                        json!({ "success": true, "message": format!("分机账号 `{}` 创建成功", username) })
                     }
                     Err(e) => json!({ "success": false, "error": e.to_string() }),
                 }
@@ -971,6 +983,24 @@ impl<'a> TelecomCopilotEngine<'a> {
                 if id.is_empty() || name.is_empty() {
                     return json!({ "success": false, "error": "IVR 菜单 ID 和名称不能为空" });
                 }
+                if !did.is_empty() {
+                    let dup_did: Option<(String, String)> = sqlx::query_as(
+                        "SELECT id, name FROM ivr_menus WHERE did = $1 AND id != $2"
+                    )
+                    .bind(did)
+                    .bind(id)
+                    .fetch_optional(self.state.store.pool())
+                    .await
+                    .unwrap_or(None);
+
+                    if let Some((dup_id, dup_name)) = dup_did {
+                        return json!({
+                            "success": false,
+                            "conflict": true,
+                            "warning": format!("DID 号码 `{}` 已被另一 IVR 菜单 `{}` ({}) 绑定。请换用其他 DID 号码。", did, dup_name, dup_id)
+                        });
+                    }
+                }
                 let res = sqlx::query(
                     "INSERT INTO ivr_menus (id, name, description, did, welcome_prompt, timeout_secs, enabled, nodes, edges) \
                      VALUES ($1, $2, $3, $4, $5, 10, true, '[]'::jsonb, '[]'::jsonb) \
@@ -984,7 +1014,7 @@ impl<'a> TelecomCopilotEngine<'a> {
                 .execute(self.state.store.pool())
                 .await;
                 match res {
-                    Ok(_) => json!({ "success": true, "message": format!("IVR 菜单 {} ({}) 创建成功", name, id) }),
+                    Ok(_) => json!({ "success": true, "message": format!("IVR 菜单 `{}` ({}) 创建成功", name, id) }),
                     Err(e) => json!({ "success": false, "error": e.to_string() }),
                 }
             }
@@ -996,6 +1026,23 @@ impl<'a> TelecomCopilotEngine<'a> {
                 if id.is_empty() || name.is_empty() || ip.is_empty() {
                     return json!({ "success": false, "error": "网关 ID、名称与 IP 地址不能为空" });
                 }
+                let existing_gw: Option<(String, String)> = sqlx::query_as(
+                    "SELECT id, name FROM sip_gateways WHERE ip_address = $1 AND id != $2"
+                )
+                .bind(ip)
+                .bind(id)
+                .fetch_optional(self.state.store.pool())
+                .await
+                .unwrap_or(None);
+
+                if let Some((dup_id, dup_name)) = existing_gw {
+                    return json!({
+                        "success": false,
+                        "conflict": true,
+                        "warning": format!("目标 IP 地址 `{}` 已被已有网关 `{}` ({}) 使用。请确认 IP 是否重复。", ip, dup_name, dup_id)
+                    });
+                }
+
                 let res = sqlx::query(
                     "INSERT INTO sip_gateways (id, name, ip_address, port, enabled) VALUES ($1, $2, $3, $4, true) \
                      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, ip_address = EXCLUDED.ip_address, port = EXCLUDED.port"
@@ -1007,7 +1054,7 @@ impl<'a> TelecomCopilotEngine<'a> {
                 .execute(self.state.store.pool())
                 .await;
                 match res {
-                    Ok(_) => json!({ "success": true, "message": format!("中继网关 {} ({}:{}) 创建成功", name, ip, port) }),
+                    Ok(_) => json!({ "success": true, "message": format!("中继网关 `{}` ({}:{}) 创建成功", name, ip, port) }),
                     Err(e) => json!({ "success": false, "error": e.to_string() }),
                 }
             }
@@ -1027,6 +1074,38 @@ impl<'a> TelecomCopilotEngine<'a> {
                 if id.is_empty() || prefix.is_empty() || gw_id.is_empty() {
                     return json!({ "success": false, "error": "路由 ID、号码前缀与网关 ID 不能为空" });
                 }
+                // 1. 校验目标中继网关是否存在
+                let gw_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_gateways WHERE id = $1)")
+                    .bind(gw_id)
+                    .fetch_one(self.state.store.pool())
+                    .await
+                    .unwrap_or(false);
+                if !gw_exists {
+                    return json!({
+                        "success": false,
+                        "conflict": true,
+                        "error": format!("目标中继网关 `{}` 不存在，无法创建路由。请先创建该网关或指定已有的网关 ID。", gw_id)
+                    });
+                }
+                // 2. 校验前缀重复或覆盖冲突
+                let existing_route: Option<(String, String)> = sqlx::query_as(
+                    "SELECT id, gateway_id FROM sip_routes WHERE prefix = $1 AND id != $2"
+                )
+                .bind(prefix)
+                .bind(id)
+                .fetch_optional(self.state.store.pool())
+                .await
+                .unwrap_or(None);
+
+                if let Some((ext_id, ext_gw)) = existing_route {
+                    return json!({
+                        "success": false,
+                        "conflict": true,
+                        "warning": format!("前缀号码 `{}` 已被路由 `{}` 使用（指向网关 `{}`）。如需覆盖请明确指定路由 ID。", prefix, ext_id, ext_gw),
+                        "existing_route_id": ext_id
+                    });
+                }
+
                 let res = sqlx::query(
                     "INSERT INTO sip_routes (id, prefix, priority, gateway_id) VALUES ($1, $2, $3, $4) \
                      ON CONFLICT (id) DO UPDATE SET prefix = EXCLUDED.prefix, priority = EXCLUDED.priority, gateway_id = EXCLUDED.gateway_id"
@@ -1040,7 +1119,7 @@ impl<'a> TelecomCopilotEngine<'a> {
                 match res {
                     Ok(_) => {
                         let _ = crate::routes::publish_route_reload(&self.state.nats_client).await;
-                        json!({ "success": true, "message": format!("前缀路由 {} (前缀: {}, 网关: {}) 创建成功", id, prefix, gw_id) })
+                        json!({ "success": true, "message": format!("前缀路由 `{}` (前缀: {}, 网关: {}) 创建成功并实时重载选路引擎", id, prefix, gw_id) })
                     }
                     Err(e) => json!({ "success": false, "error": e.to_string() }),
                 }
