@@ -12,6 +12,10 @@ connections:
     password: ""
     database: 0
     max_connections: 20
+  nats:
+    url: "nats://127.0.0.1:4222"
+    cdr_stream: "VOS_RS_CDR"
+    cdr_subject: "vos_rs.cdr"
 
 sip_edge:
   dynamic_config:
@@ -50,7 +54,7 @@ sip_edge:
     queue_capacity: 4096
   performance:
     cdr_queue_capacity: 100000
-    cdr_persistence_enabled: false
+    cdr_persistence_enabled: true
     udp_workers: 4
     udp_workers_auto: true
     udp_receive_buffer_bytes: 4194304
