@@ -851,6 +851,102 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
                     }
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_export_extensions",
+                "description": "导出所有 SIP 分机账号数据，并提供可下载的 CSV 文件链接。",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_export_gateways",
+                "description": "导出所有中继网关节点数据，并提供可下载的 CSV 文件链接。",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_export_routes",
+                "description": "导出所有前缀选路路由规则，并提供可下载的 CSV 文件链接。",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_export_rates",
+                "description": "导出全量资费费率表，并提供可下载的 CSV 文件链接。",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_export_billing_accounts",
+                "description": "导出所有计费账户及余额摘要，并提供 CSV 文件下载链接。",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_import_extensions",
+                "description": "批量导入 SIP 分机账号（支持传入 CSV 格式文本: username,password）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": { "type": "string", "description": "包含分机账号和密码的 CSV 文本或明细串" }
+                    },
+                    "required": ["content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_import_gateways",
+                "description": "批量导入/更新中继网关节点（支持 CSV 文本: id,name,ip_address,port）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": { "type": "string", "description": "包含网关 ID、名称、IP 和端口的 CSV 文本" }
+                    },
+                    "required": ["content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_import_routes",
+                "description": "批量导入前缀路由规则并自动重载选路引擎（支持 CSV 文本: id,prefix,gateway_id,priority）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": { "type": "string", "description": "包含路由 ID、前缀、网关 ID 和优先级的 CSV 文本" }
+                    },
+                    "required": ["content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_import_rates",
+                "description": "批量导入/更新资费费率表（支持 CSV 文本: prefix,rate_per_minute）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": { "type": "string", "description": "包含号码前缀和每分钟费率的 CSV 文本" }
+                    },
+                    "required": ["content"]
+                }
+            }
         }
     ])
 }
@@ -1304,6 +1400,236 @@ impl<'a> TelecomCopilotEngine<'a> {
                     "preview_sample": cdrs,
                     "message": format!("已根据筛选条件成功匹配出 {} 条 CDR 呼叫记录。", total),
                     "download_markdown": format!("[📥 点击这里下载全量 CDR 呼叫详单数据报表 (CSV 文件)]({})", absolute_download_url)
+                })
+            }
+            "vos_export_extensions" => {
+                let download_url = "http://localhost:8081/api/v1/users?export=true";
+                json!({
+                    "success": true,
+                    "download_url": download_url,
+                    "download_markdown": format!("[📥 点击导出下载全量 SIP 分机账号数据报表 (CSV)]({})", download_url)
+                })
+            }
+            "vos_export_gateways" => {
+                let download_url = "http://localhost:8081/api/v1/gateways?export=true";
+                json!({
+                    "success": true,
+                    "download_url": download_url,
+                    "download_markdown": format!("[📥 点击导出下载全量中继网关节点数据报表 (CSV)]({})", download_url)
+                })
+            }
+            "vos_export_routes" => {
+                let download_url = "http://localhost:8081/api/v1/routes?export=true";
+                json!({
+                    "success": true,
+                    "download_url": download_url,
+                    "download_markdown": format!("[📥 点击导出下载全量前缀选路路由规则 (CSV)]({})", download_url)
+                })
+            }
+            "vos_export_rates" => {
+                let download_url = "http://localhost:8081/api/v1/rates?export=true";
+                json!({
+                    "success": true,
+                    "download_url": download_url,
+                    "download_markdown": format!("[📥 点击导出下载全量呼叫资费表 (CSV)]({})", download_url)
+                })
+            }
+            "vos_export_billing_accounts" => {
+                let download_url = "http://localhost:8081/api/v1/billing/accounts?export=true";
+                json!({
+                    "success": true,
+                    "download_url": download_url,
+                    "download_markdown": format!("[📥 点击导出下载全量计费账户数据报表 (CSV)]({})", download_url)
+                })
+            }
+            "vos_import_extensions" => {
+                let content = args.get("content").or_else(|| args.get("csv_content")).and_then(|v| v.as_str()).unwrap_or("");
+                if content.is_empty() {
+                    return json!({ "success": false, "error": "导入内容不能为空" });
+                }
+                let rows = crate::utils::parse_csv(content);
+                let realm = self.state.store.get_system_config("auth_realm").await.ok().flatten().unwrap_or_else(|| "vos-rs".into());
+                let mut imported = 0;
+                let mut skipped = 0;
+                let mut errors = vec![];
+
+                for row in rows {
+                    if row.len() < 2 || row[0].eq_ignore_ascii_case("username") || row[0].contains("分机") {
+                        continue;
+                    }
+                    let username = row[0].trim();
+                    let password = row[1].trim();
+                    if username.is_empty() || password.is_empty() { continue; }
+
+                    let ext_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_users WHERE username = $1)")
+                        .bind(username)
+                        .fetch_one(self.state.store.pool())
+                        .await
+                        .unwrap_or(false);
+
+                    if ext_exists {
+                        skipped += 1;
+                        errors.push(format!("分机 `{}` 已存在 (已跳过)", username));
+                        continue;
+                    }
+
+                    let ha1 = format!("{:x}", md5::compute(format!("{username}:{realm}:{password}").as_bytes()));
+                    match self.state.store.insert_user(username, &ha1).await {
+                        Ok(_) => {
+                            let _ = crate::hot_cache::set_auth_user(self.state, username, &ha1).await;
+                            imported += 1;
+                        }
+                        Err(e) => {
+                            skipped += 1;
+                            errors.push(format!("分机 `{}` 失败: {}", username, e));
+                        }
+                    }
+                }
+                json!({
+                    "success": true,
+                    "imported_count": imported,
+                    "skipped_count": skipped,
+                    "errors": errors,
+                    "message": format!("批量分机开户完成：成功导入 {} 条，跳过/失败 {} 条。", imported, skipped)
+                })
+            }
+            "vos_import_gateways" => {
+                let content = args.get("content").or_else(|| args.get("csv_content")).and_then(|v| v.as_str()).unwrap_or("");
+                if content.is_empty() {
+                    return json!({ "success": false, "error": "导入内容不能为空" });
+                }
+                let rows = crate::utils::parse_csv(content);
+                let mut imported = 0;
+                let mut skipped = 0;
+                let mut errors = vec![];
+
+                for row in rows {
+                    if row.len() < 3 || row[0].eq_ignore_ascii_case("id") || row[0].contains("网关") {
+                        continue;
+                    }
+                    let id = row[0].trim();
+                    let name = row[1].trim();
+                    let ip = row[2].trim();
+                    let port: i32 = row.get(3).and_then(|p| p.trim().parse().ok()).unwrap_or(5060);
+
+                    if id.is_empty() || name.is_empty() || ip.is_empty() { continue; }
+
+                    let res = sqlx::query(
+                        "INSERT INTO sip_gateways (id, name, ip_address, port, enabled) VALUES ($1, $2, $3, $4, true) \
+                         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, ip_address = EXCLUDED.ip_address, port = EXCLUDED.port"
+                    )
+                    .bind(id)
+                    .bind(name)
+                    .bind(ip)
+                    .bind(port)
+                    .execute(self.state.store.pool())
+                    .await;
+
+                    match res {
+                        Ok(_) => imported += 1,
+                        Err(e) => {
+                            skipped += 1;
+                            errors.push(format!("网关 `{}` 错误: {}", id, e));
+                        }
+                    }
+                }
+                json!({
+                    "success": true,
+                    "imported_count": imported,
+                    "skipped_count": skipped,
+                    "errors": errors,
+                    "message": format!("批量网关导入完成：成功导入/更新 {} 条，失败 {} 条。", imported, skipped)
+                })
+            }
+            "vos_import_routes" => {
+                let content = args.get("content").or_else(|| args.get("csv_content")).and_then(|v| v.as_str()).unwrap_or("");
+                if content.is_empty() {
+                    return json!({ "success": false, "error": "导入内容不能为空" });
+                }
+                let rows = crate::utils::parse_csv(content);
+                let mut imported = 0;
+                let mut skipped = 0;
+                let mut errors = vec![];
+
+                for row in rows {
+                    if row.len() < 3 || row[0].eq_ignore_ascii_case("id") || row[0].contains("路由") {
+                        continue;
+                    }
+                    let id = row[0].trim();
+                    let prefix = row[1].trim();
+                    let gw_id = row[2].trim();
+                    let priority: i32 = row.get(3).and_then(|p| p.trim().parse().ok()).unwrap_or(1);
+
+                    if id.is_empty() || prefix.is_empty() || gw_id.is_empty() { continue; }
+
+                    let gw_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_gateways WHERE id = $1)")
+                        .bind(gw_id)
+                        .fetch_one(self.state.store.pool())
+                        .await
+                        .unwrap_or(false);
+
+                    if !gw_exists {
+                        skipped += 1;
+                        errors.push(format!("路由 `{}` 跳过：关联网关 `{}` 不存在", id, gw_id));
+                        continue;
+                    }
+
+                    let res = sqlx::query(
+                        "INSERT INTO sip_routes (id, prefix, priority, gateway_id) VALUES ($1, $2, $3, $4) \
+                         ON CONFLICT (id) DO UPDATE SET prefix = EXCLUDED.prefix, priority = EXCLUDED.priority, gateway_id = EXCLUDED.gateway_id"
+                    )
+                    .bind(id)
+                    .bind(prefix)
+                    .bind(priority)
+                    .bind(gw_id)
+                    .execute(self.state.store.pool())
+                    .await;
+
+                    match res {
+                        Ok(_) => imported += 1,
+                        Err(e) => {
+                            skipped += 1;
+                            errors.push(format!("路由 `{}` 错误: {}", id, e));
+                        }
+                    }
+                }
+                let _ = crate::routes::publish_route_reload(&self.state.nats_client).await;
+                json!({
+                    "success": true,
+                    "imported_count": imported,
+                    "skipped_count": skipped,
+                    "errors": errors,
+                    "message": format!("批量路由导入完成并已重载选路引擎：成功 {} 条，失败/跳过 {} 条。", imported, skipped)
+                })
+            }
+            "vos_import_rates" => {
+                let content = args.get("content").or_else(|| args.get("csv_content")).and_then(|v| v.as_str()).unwrap_or("");
+                if content.is_empty() {
+                    return json!({ "success": false, "error": "导入内容不能为空" });
+                }
+                let rows = crate::utils::parse_csv(content);
+                let mut imported = 0;
+                let mut skipped = 0;
+
+                for row in rows {
+                    if row.len() < 2 || row[0].eq_ignore_ascii_case("prefix") || row[0].contains("前缀") {
+                        continue;
+                    }
+                    let prefix = row[0].trim();
+                    let rate_val: f64 = row[1].trim().parse().unwrap_or(0.0);
+                    let id = format!("rate_{}", prefix);
+
+                    let dec = rust_decimal::Decimal::from_f64_retain(rate_val).unwrap_or_default();
+                    match self.state.store.upsert_rate(&id, prefix, dec, 60, dec, Some("由 Copilot 批量导入")).await {
+                        Ok(_) => imported += 1,
+                        Err(_) => skipped += 1,
+                    }
+                }
+                json!({
+                    "success": true,
+                    "imported_count": imported,
+                    "skipped_count": skipped,
+                    "message": format!("资费表批量导入完成：成功 {} 条，失败 {} 条。", imported, skipped)
                 })
             }
             _ => json!({ "error": format!("未知工具: {name}") }),
