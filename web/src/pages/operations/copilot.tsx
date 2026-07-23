@@ -336,7 +336,7 @@ export function CopilotPage() {
         {/* 主沉浸聊天区 */}
         <div className="flex-1 flex flex-col min-h-0 justify-between items-center w-full">
           <ScrollShadow ref={scrollRef} onScroll={handleScroll} className="w-full flex-1 px-4 py-6 space-y-6 overflow-y-auto min-h-0">
-            <div className="max-w-3xl mx-auto w-full space-y-6">
+            <div className="max-w-5xl mx-auto w-full space-y-6">
               {/* 欢迎页（无消息时显示，包括新建会话后）*/}
               {showWelcome && (
                 <div className="flex flex-col items-center justify-center py-12 w-full">
@@ -378,7 +378,7 @@ export function CopilotPage() {
                 return (
                   <div
                     key={m.id}
-                    className={`flex gap-4 max-w-3xl ${m.sender === 'user' ? 'ml-auto flex-row-reverse' : ''}`}
+                    className={`flex gap-4 w-full ${m.sender === 'user' ? 'ml-auto flex-row-reverse max-w-2xl' : 'max-w-4xl'}`}
                   >
                     {/* 头像 */}
                     <div
@@ -390,7 +390,7 @@ export function CopilotPage() {
                     >
                       {m.sender === 'user' ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
                     </div>
-                    <div className="flex flex-col gap-2.5 max-w-2xl">
+                    <div className="flex flex-col gap-2.5 flex-1 min-w-0">
                       {/* 消息气泡 */}
                       <div
                         className={`p-4 rounded-2xl text-xs leading-relaxed shadow-sm ${
@@ -452,7 +452,7 @@ export function CopilotPage() {
 
           {/* 底部浮动输入框胶囊（焦点态增强）*/}
           <div className="w-full px-4 py-4 shrink-0 bg-transparent">
-            <div className="w-full max-w-3xl mx-auto rounded-3xl border-2 border-default-200 hover:border-primary/40 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 bg-content1 shadow-lg p-2 flex items-center gap-2 transition-all duration-200">
+            <div className="w-full max-w-5xl mx-auto rounded-3xl border-2 border-default-200 hover:border-primary/40 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 bg-content1 shadow-lg p-2 flex items-center gap-2 transition-all duration-200">
               <Input
                 variant="flat"
                 classNames={{
