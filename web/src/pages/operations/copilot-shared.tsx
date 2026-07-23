@@ -12,6 +12,7 @@ import { Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '@/services/client';
+import { findPreset } from '../settings/llm-presets';
 
 // ============ 类型定义 ============
 
@@ -386,7 +387,10 @@ export function ActiveModelBadge() {
     let cancelled = false;
     api.get<{ provider: string; model: string } | null>('/llm-configs/active')
       .then((rec) => {
-        if (!cancelled && rec) setModel(`${rec.provider} · ${rec.model}`);
+        if (!cancelled && rec) {
+          const providerLabel = findPreset(rec.provider)?.label || rec.provider;
+          setModel(`${providerLabel} · ${rec.model}`);
+        }
       })
       .catch(() => { if (!cancelled) setModel(''); });
     return () => { cancelled = true; };

@@ -294,43 +294,48 @@ export function CopilotPage() {
       />
 
       {/* 右侧：主聊天区 */}
-      <div className="flex-1 flex flex-col min-w-0 relative">
-        {/* 顶部悬浮操作按钮 */}
-        <div className="absolute top-0 right-4 z-10 flex gap-2 items-center">
-          <ActiveModelBadge />
-          {(hasMessages || sending) && (
-            <>
-              {sending && (
+      <div className="flex-1 flex flex-col min-w-0 bg-background">
+        {/* 顶部固定标题与操作栏 */}
+        <div className="h-14 px-6 border-b border-default-200 flex items-center justify-between shrink-0 bg-content1/50 backdrop-blur-md z-10">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-bold text-foreground">Copilot 智能运维助手</span>
+            <ActiveModelBadge />
+          </div>
+          <div className="flex gap-2 items-center">
+            {(hasMessages || sending) && (
+              <>
+                {sending && (
+                  <Button
+                    size="sm"
+                    color="danger"
+                    variant="flat"
+                    onPress={abortStream}
+                    startContent={<Square className="w-3 h-3" />}
+                  >
+                    停止生成
+                  </Button>
+                )}
                 <Button
                   size="sm"
-                  color="danger"
                   variant="flat"
-                  onPress={abortStream}
-                  startContent={<Square className="w-3 h-3" />}
+                  onPress={handleExport}
+                  isDisabled={sending}
+                  startContent={<Download className="w-3.5 h-3.5" />}
                 >
-                  停止生成
+                  导出报告
                 </Button>
-              )}
-              <Button
-                size="sm"
-                variant="flat"
-                onPress={handleExport}
-                isDisabled={sending}
-                startContent={<Download className="w-3.5 h-3.5" />}
-              >
-                导出报告
-              </Button>
-              <Button
-                size="sm"
-                variant="flat"
-                color="primary"
-                startContent={<RefreshCw className="w-3.5 h-3.5" />}
-                onPress={handleCreate}
-              >
-                新对话
-              </Button>
-            </>
-          )}
+                <Button
+                  size="sm"
+                  variant="flat"
+                  color="primary"
+                  startContent={<RefreshCw className="w-3.5 h-3.5" />}
+                  onPress={handleCreate}
+                >
+                  新对话
+                </Button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* 主沉浸聊天区 */}
