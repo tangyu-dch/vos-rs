@@ -11,7 +11,6 @@ import {
 import { Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { api } from '@/services/client';
 import { findPreset } from '../settings/llm-presets';
 
 // ============ 类型定义 ============
@@ -279,6 +278,7 @@ export async function streamChat(
   token: string,
   query: string,
   callbacks: StreamCallbacks,
+  modelId?: number,
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(url, {
@@ -287,7 +287,7 @@ export async function streamChat(
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, model_id: modelId }),
     signal,
   });
 
@@ -380,21 +380,17 @@ export function buildExportMarkdown(messages: MessageItem[]): string {
 // ============ 当前启用模型徽标 ============
 
 /** 顶部展示当前启用的 LLM 模型，点击跳转 /settings/llm 配置页 */
-export function ActiveModelBadge() {
+export function ActiveModelBadge({ activeModel }: { activeModel: { provider: string; model: string } | null }) {
   const [model, setModel] = useState<string>('');
 
   useEffect(() => {
-    let cancelled = false;
-    api.get<{ provider: string; model: string } | null>('/llm-configs/active')
-      .then((rec) => {
-        if (!cancelled && rec) {
-          const providerLabel = findPreset(rec.provider)?.label || rec.provider;
-          setModel(`${providerLabel} · ${rec.model}`);
-        }
-      })
-      .catch(() => { if (!cancelled) setModel(''); });
-    return () => { cancelled = true; };
-  }, []);
+    if (activeModel) {
+      const providerLabel = findPreset(activeModel.provider)?.label || activeModel.provider;
+      setModel(`${providerLabel} · ${activeModel.model}`);
+    } else {
+      setModel('');
+    }
+  }, [activeModel]);
 
   return (
     <Link to="/settings/llm" className="inline-flex items-center no-underline">

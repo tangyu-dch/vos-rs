@@ -346,22 +346,19 @@ fn security_routes() -> Router<AppState> {
 #[derive(serde::Deserialize)]
 struct CopilotRequest {
     query: String,
+    model_id: Option<i64>,
 }
 
 async fn handle_copilot_chat(
     State(state): State<crate::AppState>,
     Json(payload): Json<CopilotRequest>,
 ) -> Result<Json<copilot::CopilotChatResponse>, crate::ApiError> {
-    let active_llm = match state.store.get_active_llm_config().await {
-        Ok(Some(rec)) => Some(copilot::LlmConfig::from(rec)),
-        Ok(None) => None,
-        Err(e) => {
-            tracing::warn!(error = %e, "读取当前 LLM 配置失败，回退到无 LLM 模式");
-            None
-        }
+    let active_llm = match crate::llm_configs::get_llm_config_from_redis(&state, payload.model_id).await {
+        Some(rec) => Some(copilot::LlmConfig::from(rec)),
+        None => None,
     };
     let engine = copilot::TelecomCopilotEngine::new(&state, active_llm);
-    let response = engine.analyze(&payload.query).await;
+    let response = engine.analyze(&payload.query, None).await;
     Ok(Json(response))
 }
 

@@ -747,6 +747,11 @@ async fn main() -> anyhow::Result<()> {
         llm_client,
     };
 
+    // 启动时从数据库重建 Redis 缓存中的所有 LLM 配置
+    if let Err(e) = crate::llm_configs::rebuild_llm_configs_in_redis(&state).await {
+        tracing::error!("启动时重建 Redis LLM 配置缓存失败: {:?}", e);
+    }
+
     let cors_origins_raw = api_network.allowed_origins.clone().unwrap_or_default();
     let cors = CorsLayer::new();
     let cors = if !cors_origins_raw.trim().is_empty() {

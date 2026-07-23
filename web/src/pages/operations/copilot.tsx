@@ -41,6 +41,7 @@ export function CopilotPage() {
   const [sending, setSending] = useState(false);
   const [inputQuery, setInputQuery] = useState('');
   const abortRef = useRef<AbortController | null>(null);
+  const [activeModel, setActiveModel] = useState<{ id: number; provider: string; model: string } | null>(null);
 
   // ============ 自动滚动到底部（流式输出 + 新消息）============
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -68,6 +69,20 @@ export function CopilotPage() {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight });
   }, [currentId]);
+
+  // ============ 获取当前启用的模型 ============
+  const fetchActiveModel = useCallback(async () => {
+    try {
+      const rec = await api.get<{ id: number; provider: string; model: string } | null>('/llm-configs/active');
+      setActiveModel(rec);
+    } catch {
+      setActiveModel(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchActiveModel();
+  }, [fetchActiveModel]);
 
   // ============ 中断当前流 ============
   const abortStream = useCallback(() => {
@@ -201,6 +216,17 @@ export function CopilotPage() {
       setSending(false);
       return;
     }
+
+    // 发送时获取最新激活的模型配置，确保新消息使用新的模型配置
+    let currentModelId = activeModel?.id;
+    try {
+      const rec = await api.get<{ id: number; provider: string; model: string } | null>('/llm-configs/active');
+      if (rec) {
+        setActiveModel(rec);
+        currentModelId = rec.id;
+      }
+    } catch {}
+
     const url = `/api/v1/copilot/sessions/${sessionId}/chat/stream`;
 
     try {
@@ -237,7 +263,7 @@ export function CopilotPage() {
             llmStatus: m.llmStatus || '调用失败',
           } : m)));
         },
-      }, controller.signal);
+      }, currentModelId ?? undefined, controller.signal);
     } catch (err) {
       // 用户主动中断（abort）时保留已有内容，不清空
       if (!controller.signal.aborted) {
@@ -299,7 +325,7 @@ export function CopilotPage() {
         <div className="h-14 px-6 border-b border-default-200 flex items-center justify-between shrink-0 bg-content1/50 backdrop-blur-md z-10">
           <div className="flex items-center gap-3">
             <span className="text-sm font-bold text-foreground">Copilot 智能运维助手</span>
-            <ActiveModelBadge />
+            <ActiveModelBadge activeModel={activeModel} />
           </div>
           <div className="flex gap-2 items-center">
             {(hasMessages || sending) && (

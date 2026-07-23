@@ -89,14 +89,9 @@ pub async fn chat_in_session_stream(
         .map_err(|e| ApiError::internal(format!("保存用户消息失败: {e}")))?;
 
     // 3) 采集业务数据 + 生成梯形图（不依赖 LLM，可先完成）
-    // 运行时从数据库读取当前启用的 LLM 配置（is_active=true）
-    let active_llm = match state.store.get_active_llm_config().await {
-        Ok(Some(rec)) => Some(crate::copilot::LlmConfig::from(rec)),
-        Ok(None) => None,
-        Err(e) => {
-            tracing::warn!(error = %e, "读取当前 LLM 配置失败，回退到无 LLM 模式");
-            None
-        }
+    let active_llm = match crate::llm_configs::get_llm_config_from_redis(&state, payload.model_id).await {
+        Some(rec) => Some(crate::copilot::LlmConfig::from(rec)),
+        None => None,
     };
     let engine = TelecomCopilotEngine::new(&state, active_llm.clone());
     let intent = TelecomCopilotEngine::classify_intent(&query);
@@ -194,7 +189,7 @@ async fn run_stream_loop(
 
     // 流式 LLM 调用或 fallback
     let (full_report, root_cause, suggested_action, final_llm_status) = if context.llm_enabled {
-        match stream_llm_response(&tx, &state.llm_client, &active_llm, query, payload, ascii_ladder).await {
+        match stream_llm_response(&tx, state, &active_llm, session_id, query, payload, ascii_ladder).await {
             Ok(text) => (text, String::new(), String::new(), context.llm_status.clone()),
             Err(e) => {
                 tracing::warn!(error = %e, "LLM 流式调用失败，回退到结构化报告");
@@ -264,8 +259,9 @@ async fn run_stream_loop(
 /// 返回完整文本。如果 HTTP 请求本身失败或响应解析失败，返回 Err。
 async fn stream_llm_response(
     tx: &mpsc::Sender<Event>,
-    client: &reqwest::Client,
+    state: &AppState,
     active_llm: &Option<LlmConfig>,
+    session_id: &str,
     query: &str,
     payload: &Payload,
     ascii_ladder: &str,
@@ -277,7 +273,6 @@ async fn stream_llm_response(
     let context_json = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
 
     // 构建用户消息：业务数据 JSON + 可选的 SIP 梯形图 ASCII
-    // LLM 自行判断是否在回答中包含梯形图（用 ```text 代码块包裹）
     let ladder_section = if ascii_ladder.trim().is_empty() {
         String::new()
     } else {
@@ -289,23 +284,41 @@ async fn stream_llm_response(
         "用户问题：{query}\n\n当前真实业务数据（JSON）：\n{context_json}{ladder_section}"
     );
 
+    // 获取并组装上下文历史对话（拉取最近 11 条，包含刚保存的最新 user 消息）
+    let history = state
+        .store
+        .list_copilot_messages(session_id, 11)
+        .await
+        .unwrap_or_default();
+
+    let mut messages = vec![
+        serde_json::json!({
+            "role": "system",
+            "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）和信令数据，协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答要求：\n1. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析报告 (Analysis Report)：结合数据对当前系统状态或呼叫流程进行专业、生动的解读，避免冰冷的格式化叙述。\n   - ## 🔍 根因分析 (Root Cause)：深入剖析导致问题的底层原因（如网络延迟、信令超时、鉴权失败等），若无异常则明确告知。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引（如修改路由规则、更新分机配置、核对运营商中继配置等）。\n2. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流，不要让人觉得机械呆板。\n3. **梯形图输出**：如果上下文中包含 SIP 信令交互梯形图且用户问题与之相关，请在回答中合适的位置以 ```text 代码块原样输出该梯形图。\n4. **数据校验**：如果提供的业务数据为空，请礼貌地予以说明，并提示用户如何开启相应模块的持久化。"
+        })
+    ];
+
+    // 排除最后一条（那是当前最新的消息，我们需要它带上当前最新的 telemetry payload 数据进行分析）
+    for msg in history.iter().take(history.len().saturating_sub(1)) {
+        messages.push(serde_json::json!({
+            "role": if msg.role == "user" { "user" } else { "assistant" },
+            "content": msg.content
+        }));
+    }
+
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": user_content
+    }));
+
     let body = serde_json::json!({
         "model": llm.model,
         "temperature": llm.temperature,
         "stream": true,
-        "messages": [
-            {
-                "role": "system",
-                "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）和信令数据，协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答要求：\n1. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析报告 (Analysis Report)：结合数据对当前系统状态或呼叫流程进行专业、生动的解读，避免冰冷的格式化叙述。\n   - ## 🔍 根因分析 (Root Cause)：深入剖析导致问题的底层原因（如网络延迟、信令超时、鉴权失败等），若无异常则明确告知。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引（如修改路由规则、更新分机配置、核对运营商中继配置等）。\n2. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流，不要让人觉得机械呆板。\n3. **梯形图输出**：如果上下文中包含 SIP 信令交互梯形图且用户问题与之相关，请在回答中合适的位置以 ```text 代码块原样输出该梯形图。\n4. **数据校验**：如果提供的业务数据为空，请礼貌地予以说明，并提示用户如何开启相应模块的持久化。"
-            },
-            {
-                "role": "user",
-                "content": user_content
-            }
-        ]
+        "messages": messages
     });
 
-    let resp = client
+    let resp = state.llm_client
         .post(&url)
         .header("Authorization", format!("Bearer {}", llm.api_key))
         .header("Content-Type", "application/json")

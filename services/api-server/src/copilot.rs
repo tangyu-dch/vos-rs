@@ -142,7 +142,7 @@ impl<'a> TelecomCopilotEngine<'a> {
     }
 
     /// 分析自然语言问题：意图识别 → 真实数据采集 → SIP 梯形图重建 → 可选 LLM 调用。
-    pub async fn analyze(&self, query: &str) -> CopilotChatResponse {
+    pub async fn analyze(&self, query: &str, history: Option<&[cdr_core::CopilotMessage]>) -> CopilotChatResponse {
         let intent = Self::classify_intent(query);
         let payload = self.collect_payload(query, intent).await;
         let steps = Self::build_ladder_steps(&payload);
@@ -151,7 +151,7 @@ impl<'a> TelecomCopilotEngine<'a> {
 
         let (report, root_cause, suggested_action, llm_status) = match &self.llm {
             Some(llm) if llm.is_configured() => {
-                match self.call_llm(query, &context_json).await {
+                match self.call_llm(query, &context_json, history).await {
                     Ok(text) => (
                         text,
                         String::new(),
@@ -409,25 +409,43 @@ impl<'a> TelecomCopilotEngine<'a> {
     }
 
     /// 调用 OpenAI 兼容的 chat completions 接口
-    async fn call_llm(&self, query: &str, context: &str) -> Result<String, String> {
+    async fn call_llm(
+        &self,
+        query: &str,
+        context: &str,
+        history: Option<&[cdr_core::CopilotMessage]>,
+    ) -> Result<String, String> {
         let llm = self.llm.as_ref().ok_or("LLM 未配置")?;
         let url = format!(
             "{}/chat/completions",
             llm.base_url.trim_end_matches('/')
         );
+        let mut messages = vec![
+            json!({
+                "role": "system",
+                "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答要求：\n1. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析报告 (Analysis Report)：结合数据对当前系统状态或呼叫流程进行专业、生动的解读，避免冰冷的格式化叙述。\n   - ## 🔍 根因分析 (Root Cause)：深入剖析导致问题的底层原因（如网络延迟、信令超时、鉴权失败等），若无异常则明确告知。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引（如修改路由规则、更新分机配置、核对运营商中继配置等）。\n2. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流，不要让人觉得机械呆板。\n3. **数据校验**：如果提供的业务数据为空，请礼貌地予以说明，并提示用户如何开启相应模块的持久化。"
+            })
+        ];
+
+        if let Some(hist) = history {
+            // 排除最后一条（那是当前最新的消息，我们需要它带上当前最新的 telemetry payload 数据进行分析）
+            for msg in hist.iter().take(hist.len().saturating_sub(1)) {
+                messages.push(json!({
+                    "role": if msg.role == "user" { "user" } else { "assistant" },
+                    "content": msg.content
+                }));
+            }
+        }
+
+        messages.push(json!({
+            "role": "user",
+            "content": format!("用户问题：{query}\n\n当前真实业务数据（JSON）：\n{context}")
+        }));
+
         let body = json!({
             "model": llm.model,
             "temperature": llm.temperature,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答要求：\n1. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析报告 (Analysis Report)：结合数据对当前系统状态或呼叫流程进行专业、生动的解读，避免冰冷的格式化叙述。\n   - ## 🔍 根因分析 (Root Cause)：深入剖析导致问题的底层原因（如网络延迟、信令超时、鉴权失败等），若无异常则明确告知。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引（如修改路由规则、更新分机配置、核对运营商中继配置等）。\n2. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流，不要让人觉得机械呆板。\n3. **数据校验**：如果提供的业务数据为空，请礼貌地予以说明，并提示用户如何开启相应模块的持久化。"
-                },
-                {
-                    "role": "user",
-                    "content": format!("用户问题：{query}\n\n当前真实业务数据（JSON）：\n{context}")
-                }
-            ]
+            "messages": messages
         });
         let resp = self
             .state

@@ -35,12 +35,14 @@ pub struct CreateSessionRequest {
 #[derive(Debug, Deserialize)]
 pub struct ChatInSessionRequest {
     pub query: String,
+    pub model_id: Option<i64>,
 }
 
 /// 流式 chat 请求体（与 ChatInSessionRequest 相同，单独定义避免歧义）
 #[derive(Debug, Deserialize)]
 pub struct ChatStreamRequest {
     pub query: String,
+    pub model_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -230,17 +232,21 @@ pub async fn chat_in_session(
         .map_err(|e| ApiError::internal(format!("保存用户消息失败: {e}")))?;
 
     // 3) 调用引擎分析（真实业务数据采集 + LLM 调用 + 回退结构化报告）
-    // 运行时从数据库读取当前启用的 LLM 配置
-    let active_llm = match state.store.get_active_llm_config().await {
-        Ok(Some(rec)) => Some(crate::copilot::LlmConfig::from(rec)),
-        Ok(None) => None,
-        Err(e) => {
-            tracing::warn!(error = %e, "读取当前 LLM 配置失败，回退到无 LLM 模式");
-            None
-        }
+    // 运行时从 Redis 读取当前启用的 LLM 配置
+    let active_llm = match crate::llm_configs::get_llm_config_from_redis(&state, payload.model_id).await {
+        Some(rec) => Some(crate::copilot::LlmConfig::from(rec)),
+        None => None,
     };
     let engine = TelecomCopilotEngine::new(&state, active_llm);
-    let analysis = engine.analyze(query).await;
+    
+    // 获取当前会话上下文（包含刚插入的最新消息）
+    let history = state
+        .store
+        .list_copilot_messages(&session_id, 11)
+        .await
+        .unwrap_or_default();
+        
+    let analysis = engine.analyze(query, Some(&history)).await;
     let intent_str = TelecomCopilotEngine::classify_intent(query).as_str();
 
     // 4) 落库 assistant 回答

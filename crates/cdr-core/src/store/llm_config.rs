@@ -53,6 +53,17 @@ impl PostgresCdrStore {
         .await
     }
 
+    /// 获取指定 ID 的 LLM 配置
+    pub async fn get_llm_config(&self, id: i64) -> Result<Option<LlmConfigRecord>, sqlx::Error> {
+        sqlx::query_as::<_, LlmConfigRecord>(
+            "SELECT id, name, provider, api_key, base_url, model, temperature, is_active, \
+             created_at, updated_at FROM llm_configs WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
     /// 获取当前启用的 LLM 配置（`is_active=true`，全局唯一）
     pub async fn get_active_llm_config(&self) -> Result<Option<LlmConfigRecord>, sqlx::Error> {
         sqlx::query_as::<_, LlmConfigRecord>(
