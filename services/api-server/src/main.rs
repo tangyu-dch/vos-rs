@@ -674,6 +674,9 @@ async fn main() -> anyhow::Result<()> {
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(60))
         .no_proxy()
+        .no_gzip()
+        .no_deflate()
+        .no_brotli()
         .build()?;
 
     let jwt_secret = env::var("VOS_RS_API_JWT_SECRET")

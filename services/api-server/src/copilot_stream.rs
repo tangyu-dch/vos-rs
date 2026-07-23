@@ -322,6 +322,7 @@ async fn stream_llm_response(
         .post(&url)
         .header("Authorization", format!("Bearer {}", llm.api_key))
         .header("Content-Type", "application/json")
+        .header("Accept-Encoding", "identity")
         .json(&body)
         .send()
         .await
@@ -339,7 +340,16 @@ async fn stream_llm_response(
     let mut full_text = String::new();
 
     while let Some(chunk_result) = byte_stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("读取 LLM 流失败: {e}"))?;
+        let chunk = match chunk_result {
+            Ok(c) => c,
+            Err(e) => {
+                if !full_text.is_empty() {
+                    tracing::warn!("LLM 流读取中途断开，但已成功接收部分分析内容: {e}");
+                    return Ok(full_text);
+                }
+                return Err(format!("读取 LLM 流失败: {e}"));
+            }
+        };
         buf.push_str(&String::from_utf8_lossy(&chunk));
 
         // 按换行符分割，处理完整的行

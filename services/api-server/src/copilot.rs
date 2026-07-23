@@ -462,6 +462,7 @@ impl<'a> TelecomCopilotEngine<'a> {
             .post(&url)
             .header("Authorization", format!("Bearer {}", llm.api_key))
             .header("Content-Type", "application/json")
+            .header("Accept-Encoding", "identity")
             .json(&body)
             .send()
             .await
