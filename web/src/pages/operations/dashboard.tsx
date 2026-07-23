@@ -406,7 +406,7 @@ function NodeTrafficSection() {
 
   useEffect(() => {
     void loadTraffic();
-    const timer = setInterval(() => { void loadTraffic(); }, 30000);
+    const timer = setInterval(() => { void loadTraffic(); }, 5000);
     return () => clearInterval(timer);
   }, [loadTraffic]);
 
@@ -702,7 +702,7 @@ function MonitoringExtrasSection() {
 
   useEffect(() => {
     void loadExtras();
-    const timer = setInterval(() => { void loadExtras(); }, 15000);
+    const timer = setInterval(() => { void loadExtras(); }, 5000);
     return () => clearInterval(timer);
   }, [loadExtras]);
 
