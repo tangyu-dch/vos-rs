@@ -151,3 +151,21 @@ export const egressGroups: ResourceSpec = {
     { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
   ],
 };
+
+export const ivrMenus: ResourceSpec = {
+  title: 'IVR 语音导航',
+  description: '支持多级多节点拖拽编排，18 种节点类型覆盖播放/收号/分支/转接/AI 对话等场景。',
+  path: '/ivr/menus',
+  idKey: 'id',
+  createLabel: '定义新 IVR',
+  fields: [
+    { key: 'id', label: 'IVR ID', required: true, placeholder: '例如 ivr-main-sales' },
+    { key: 'name', label: '流程名称', required: true, placeholder: '例如 售前客服多级导航' },
+    { key: 'did', label: '绑定 DID 号码', placeholder: '例如 4008009000' },
+    { key: 'welcome_prompt', label: '欢迎语音文件', required: true, defaultValue: 'welcome.wav' },
+    { key: 'node_count', label: '节点数', readonly: true },
+    { key: 'timeout_secs', label: '全局超时 (秒)', kind: 'number', required: true, defaultValue: 30, min: 1 },
+    { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
+    { key: 'description', label: '流程描述', kind: 'textarea', fullWidth: true, placeholder: '简要描述此 IVR 流程的用途' },
+  ],
+};

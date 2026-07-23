@@ -5,8 +5,47 @@ use axum::{
 };
 use cdr_core::{DashboardStats, HourlyTrend};
 use futures::stream::{self, Stream};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 use crate::{ApiError, AppState};
+
+/// 活跃通话列表缓存：2 秒 TTL，避免 summary / monitoring-extras / telemetry loop
+/// 在同一时刻重复请求 sip-edge 的 /manage/active-calls 全量接口。
+type CachedActiveCalls = Option<(Instant, Vec<serde_json::Value>)>;
+
+#[derive(Clone)]
+pub struct ActiveCallsCache {
+    inner: Arc<Mutex<CachedActiveCalls>>,
+    ttl: Duration,
+}
+
+impl ActiveCallsCache {
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(None)),
+            ttl,
+        }
+    }
+
+    /// 返回缓存中的活跃通话列表；若已过期则重新拉取。拉取失败时返回空 Vec。
+    pub async fn get_or_fetch(&self, state: &AppState) -> Vec<serde_json::Value> {
+        let now = Instant::now();
+        {
+            let guard = self.inner.lock().await;
+            if let Some((fetched_at, data)) = guard.as_ref() {
+                if now.duration_since(*fetched_at) < self.ttl {
+                    return data.clone();
+                }
+            }
+        }
+        let data = fetch_active_calls_full(state).await;
+        let mut guard = self.inner.lock().await;
+        *guard = Some((now, data.clone()));
+        data
+    }
+}
 
 #[derive(Debug, serde::Serialize)]
 pub struct HourlyTrendResponse {
@@ -22,33 +61,52 @@ pub struct SummaryResponse {
     pub hourly_trends: Vec<HourlyTrendResponse>,
 }
 
+/// 拉取活跃通话列表（全量 JSON），供需要逐条过滤的场景使用（monitoring-extras / telemetry）。
+async fn fetch_active_calls_full(state: &AppState) -> Vec<serde_json::Value> {
+    let url = format!("{}/manage/active-calls", state.sip_manage_base);
+    let token = &state.internal_secret;
+    let request = state.internal_client.get(&url);
+    let request = if !token.is_empty() {
+        request.header("X-VOS-Token", token)
+    } else {
+        request
+    };
+    match request.send().await {
+        Ok(resp) => resp.json::<Vec<serde_json::Value>>().await.unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 轻量拉取活跃通话数量（仅返回一个 usize），summary 接口只需要计数。
+async fn fetch_active_calls_count(state: &AppState) -> i64 {
+    let url = format!("{}/manage/active-calls/count", state.sip_manage_base);
+    let token = &state.internal_secret;
+    let request = state.internal_client.get(&url);
+    let request = if !token.is_empty() {
+        request.header("X-VOS-Token", token)
+    } else {
+        request
+    };
+    match request.send().await {
+        Ok(resp) => resp.json::<usize>().await.map(|n| n as i64).unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
 pub async fn get_dashboard_stats(
     State(state): State<AppState>,
 ) -> Result<Json<SummaryResponse>, ApiError> {
-    let active_calls = {
-        let url = format!("{}/manage/active-calls", state.sip_manage_base);
-        let token = &state.internal_secret;
-        let request = state.internal_client.get(&url);
-        let request = if !token.is_empty() {
-            request.header("X-VOS-Token", token)
-        } else {
-            request
-        };
-        match request.send().await {
-            Ok(resp) => resp
-                .json::<Vec<serde_json::Value>>()
-                .await
-                .map(|calls| calls.len() as i64)
-                .unwrap_or(0),
-            Err(_) => 0,
-        }
-    };
+    // 并行：HTTP 取活跃通话数（轻量 count 接口） + DB 取 24h 趋势
+    // 二者无数据依赖，串行等待会叠加延迟。
+    let (active_calls, trends) = tokio::join!(
+        fetch_active_calls_count(&state),
+        state.store.get_hourly_trend(),
+    );
+    let trends = trends.unwrap_or_default();
 
     let stats = state.store.get_dashboard_stats(active_calls).await.map_err(|e| ApiError {
         error: e.to_string(),
     })?;
-
-    let trends = state.store.get_hourly_trend().await.unwrap_or_default();
 
     let now = time::OffsetDateTime::now_utc()
         .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));
@@ -95,25 +153,7 @@ pub async fn dashboard_events(
         |(state, mut interval)| async move {
             interval.tick().await;
 
-            let token = &state.internal_secret;
-            let active_calls = if !token.is_empty() {
-                match state
-                    .internal_client
-                    .get(format!("{}/manage/active-calls", state.sip_manage_base))
-                    .header("X-VOS-Token", token)
-                    .send()
-                    .await
-                {
-                    Ok(resp) => resp
-                        .json::<Vec<serde_json::Value>>()
-                        .await
-                        .map(|v| v.len() as u32)
-                        .unwrap_or(0),
-                    Err(_) => 0,
-                }
-            } else {
-                0
-            };
+            let active_calls = state.active_calls_cache.get_or_fetch(&state).await.len() as u32;
 
             let trunk_online_count = match state.store.list_gateways_full().await {
                 Ok(gateways) => gateways
@@ -166,57 +206,42 @@ pub async fn get_node_traffic(
         hours.push(h);
     }
 
-    let mut result = Vec::new();
-    let mut conn = state.redis_client.clone();
+    let hour_strs: Vec<String> = hours.iter().map(|h| format!("{:02}:00", h)).collect();
 
-    // 1. SIP Nodes
-    for node_id in sip_nodes {
-        let redis_key = format!("vos_rs:traffic:{}", node_id);
-        let traffic_map: std::collections::HashMap<String, u64> = redis::cmd("HGETALL")
-            .arg(&redis_key)
+    // 收集所有节点（SIP + Media），用 Redis pipeline 一次性查询，避免 N 次串行 RTT
+    let all_nodes: Vec<(String, String)> = sip_nodes
+        .into_iter().map(|id| (id, "sip".to_string()))
+        .chain(media_nodes.into_iter().map(|id| (id, "media".to_string())))
+        .collect();
+
+    let mut result = Vec::with_capacity(all_nodes.len());
+    if !all_nodes.is_empty() {
+        let mut conn = state.redis_client.clone();
+        // 构建 pipeline：对每个节点 HGETALL，一次网络往返取回全部
+        let mut pipeline = redis::pipe();
+        for (node_id, _) in &all_nodes {
+            let redis_key = format!("vos_rs:traffic:{}", node_id);
+            pipeline.cmd("HGETALL").arg(&redis_key);
+        }
+        let pipe_result: Vec<std::collections::HashMap<String, u64>> = pipeline
             .query_async(&mut conn)
             .await
             .unwrap_or_default();
 
-        let mut series = Vec::new();
-        for &h in &hours {
-            let hour_str = format!("{:02}:00", h);
-            let kbps = traffic_map.get(&hour_str).cloned().unwrap_or(0);
-            series.push(NodeTrafficItem {
-                hour: hour_str,
-                kbps,
+        for ((node_id, node_type), traffic_map) in all_nodes.iter().zip(pipe_result.into_iter()) {
+            let series: Vec<NodeTrafficItem> = hour_strs
+                .iter()
+                .map(|hs| NodeTrafficItem {
+                    hour: hs.clone(),
+                    kbps: traffic_map.get(hs).cloned().unwrap_or(0),
+                })
+                .collect();
+            result.push(NodeTrafficData {
+                node_id: node_id.clone(),
+                node_type: node_type.clone(),
+                series,
             });
         }
-        result.push(NodeTrafficData {
-            node_id,
-            node_type: "sip".to_string(),
-            series,
-        });
-    }
-
-    // 2. Media Nodes
-    for node_id in media_nodes {
-        let redis_key = format!("vos_rs:traffic:{}", node_id);
-        let traffic_map: std::collections::HashMap<String, u64> = redis::cmd("HGETALL")
-            .arg(&redis_key)
-            .query_async(&mut conn)
-            .await
-            .unwrap_or_default();
-
-        let mut series = Vec::new();
-        for &h in &hours {
-            let hour_str = format!("{:02}:00", h);
-            let kbps = traffic_map.get(&hour_str).cloned().unwrap_or(0);
-            series.push(NodeTrafficItem {
-                hour: hour_str,
-                kbps,
-            });
-        }
-        result.push(NodeTrafficData {
-            node_id,
-            node_type: "media".to_string(),
-            series,
-        });
     }
 
     Ok(Json(result))
@@ -227,25 +252,8 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
     loop {
         interval.tick().await;
 
-        // 1. Get active calls count
-        let active_calls = {
-            let url = format!("{}/manage/active-calls", state.sip_manage_base);
-            let token = &state.internal_secret;
-            let request = state.internal_client.get(&url);
-            let request = if !token.is_empty() {
-                request.header("X-VOS-Token", token)
-            } else {
-                request
-            };
-            match request.send().await {
-                Ok(resp) => resp
-                    .json::<Vec<serde_json::Value>>()
-                    .await
-                    .map(|calls| calls.len() as u64)
-                    .unwrap_or(0),
-                Err(_) => 0,
-            }
-        };
+        // 1. Get active calls count (使用缓存，避免与 summary/extras 重复请求)
+        let active_calls = state.active_calls_cache.get_or_fetch(&state).await.len() as u64;
 
         // 2. Get online nodes list
         let sip_nodes = crate::sip_cluster::get_node_list(&state).await;
@@ -254,16 +262,15 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
         let now = time::OffsetDateTime::now_utc()
             .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));
         let hour_str = format!("{:02}:00", now.hour());
-        let nanos = now.unix_timestamp_nanos() as u64;
 
         let mut conn = state.redis_client.clone();
 
         // 3. Update SIP Nodes traffic in Redis
+        // 仅在有真实活跃通话时写入流量；无通话时写入 0，避免图表出现伪基线曲线
         let sip_count = sip_nodes.len() as u64;
         for node_id in sip_nodes {
-            let node_calls = if sip_count > 0 { active_calls / sip_count } else { active_calls };
-            let jitter = nanos % 4;
-            let kbps = 15 + node_calls * 8 + jitter;
+            let node_calls = if sip_count > 0 { active_calls / sip_count } else { 0 };
+            let kbps = if active_calls > 0 { node_calls * 8 } else { 0 };
             let redis_key = format!("vos_rs:traffic:{}", node_id);
             let _: Result<(), redis::RedisError> = redis::cmd("HSET")
                 .arg(&redis_key)
@@ -276,9 +283,8 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
         // 4. Update Media Nodes traffic in Redis
         let media_count = media_nodes.len() as u64;
         for node_id in media_nodes {
-            let node_calls = if media_count > 0 { active_calls / media_count } else { active_calls };
-            let jitter = nanos % 15;
-            let kbps = 64 + node_calls * 160 + jitter;
+            let node_calls = if media_count > 0 { active_calls / media_count } else { 0 };
+            let kbps = if active_calls > 0 { node_calls * 160 } else { 0 };
             let redis_key = format!("vos_rs:traffic:{}", node_id);
             let _: Result<(), redis::RedisError> = redis::cmd("HSET")
                 .arg(&redis_key)
@@ -288,15 +294,6 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
                 .await;
         }
     }
-}
-
-fn get_pseudo_random(node_id: &str, hour: i32, max: u64) -> u64 {
-    let mut hash = 0u64;
-    for byte in node_id.as_bytes() {
-        hash = hash.wrapping_add(*byte as u64);
-    }
-    hash = hash.wrapping_mul(31).wrapping_add(hour as u64);
-    hash % max
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -333,23 +330,7 @@ pub struct MonitoringExtras {
 pub async fn get_monitoring_extras(
     State(state): State<AppState>,
 ) -> Result<Json<MonitoringExtras>, ApiError> {
-    let active_calls_list = {
-        let url = format!("{}/manage/active-calls", state.sip_manage_base);
-        let token = &state.internal_secret;
-        let request = state.internal_client.get(&url);
-        let request = if !token.is_empty() {
-            request.header("X-VOS-Token", token)
-        } else {
-            request
-        };
-        match request.send().await {
-            Ok(resp) => resp
-                .json::<Vec<serde_json::Value>>()
-                .await
-                .unwrap_or_default(),
-            Err(_) => Vec::new(),
-        }
-    };
+    let active_calls_list = state.active_calls_cache.get_or_fetch(&state).await;
 
     let gateways_full = state.store.list_gateways_full().await.unwrap_or_default();
 
@@ -373,45 +354,21 @@ pub async fn get_monitoring_extras(
         });
     }
 
-    if gateways.is_empty() {
-        gateways.push(GatewayConcurrency {
-            name: "TRUNK-GW-01".to_string(),
-            direction: "egress".to_string(),
-            active_calls: (active_calls_list.len() as u64).min(45),
-            max_channels: 120,
-        });
-        gateways.push(GatewayConcurrency {
-            name: "CUSTOMER-AUTH-IP".to_string(),
-            direction: "access".to_string(),
-            active_calls: (active_calls_list.len() as u64).min(30),
-            max_channels: 100,
-        });
-    }
-
+    // 移除 mock 兜底：无网关数据时返回空列表，让前端展示"无数据"状态
     let (blocked_calls_24h, auth_failures_24h, error_codes_breakdown) = state
         .store
         .get_security_and_errors_24h()
         .await
         .unwrap_or((0, 0, std::collections::HashMap::new()));
 
-    let mut final_breakdown = error_codes_breakdown;
-    if final_breakdown.is_empty() && active_calls_list.is_empty() {
-        final_breakdown.insert("404".to_string(), 0);
-        final_breakdown.insert("486".to_string(), 0);
-        final_breakdown.insert("503".to_string(), 0);
-    } else if final_breakdown.is_empty() {
-        final_breakdown.insert("404".to_string(), 12);
-        final_breakdown.insert("486".to_string(), 34);
-        final_breakdown.insert("503".to_string(), 3);
-    }
-
     let pool_size = state.store.pool().size();
-    let pool_max = 50; 
+    let pool_max = 50;
 
+    // CPU/内存基于活跃通话数估算（仅作运维参考，非真实采集）
     let active_calls_count = active_calls_list.len() as f64;
-    let cpu_percent = (12.4 + active_calls_count * 0.45).min(98.0);
-    let memory_percent = (34.2 + active_calls_count * 0.08).min(95.0);
-    let disk_percent = 56.7; 
+    let cpu_percent = (active_calls_count * 0.45).min(98.0);
+    let memory_percent = (active_calls_count * 0.08).min(95.0);
+    let disk_percent = 0.0;
 
     let resources = SystemResourceStats {
         cpu_percent,
@@ -424,9 +381,9 @@ pub async fn get_monitoring_extras(
     Ok(Json(MonitoringExtras {
         gateways,
         security: SbcSecurityStats {
-            blocked_calls_24h: if blocked_calls_24h == 0 && active_calls_count > 0.0 { 54 } else { blocked_calls_24h },
-            auth_failures_24h: if auth_failures_24h == 0 && active_calls_count > 0.0 { 18 } else { auth_failures_24h },
-            error_codes_breakdown: final_breakdown,
+            blocked_calls_24h,
+            auth_failures_24h,
+            error_codes_breakdown,
         },
         resources,
     }))

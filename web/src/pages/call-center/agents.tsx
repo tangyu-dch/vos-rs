@@ -133,7 +133,7 @@ export default function AgentsPage() {
   const kpis: Array<{ label: string; value: number; className: string }> = [
     { label: '总座席数', value: totalAgents, className: 'text-primary' },
     { label: '就绪/空闲', value: idleCount, className: 'text-success' },
-    { label: '通话中', value: inCallCount, className: 'text-secondary' },
+    { label: '通话中', value: inCallCount, className: 'text-primary' },
     { label: '离线', value: offlineCount, className: 'text-default-500' },
   ];
 

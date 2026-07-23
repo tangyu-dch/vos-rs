@@ -143,7 +143,7 @@ export default function QueuesPage() {
       case 'round_robin':
         return <Chip color="primary" variant="flat" size="sm">轮询分发 (Round Robin)</Chip>;
       case 'ring_all':
-        return <Chip color="secondary" variant="flat" size="sm">群响 (Ring All)</Chip>;
+        return <Chip color="primary" variant="flat" size="sm">群响 (Ring All)</Chip>;
       case 'random':
         return <Chip color="warning" variant="flat" size="sm">随机 (Random)</Chip>;
       case 'longest_idle':
@@ -155,7 +155,7 @@ export default function QueuesPage() {
   const kpis: Array<{ label: string; value: number | string; className: string }> = [
     { label: '呼叫队列总数', value: data.length, className: 'text-primary' },
     { label: '在线绑定座席人次', value: data.reduce((acc, q) => acc + (Array.isArray(q.agents) ? q.agents.length : 0), 0), className: 'text-success' },
-    { label: '可用分发算法', value: '4 种策略', className: 'text-secondary' },
+    { label: '可用分发算法', value: '4 种策略', className: 'text-primary' },
   ];
 
   return (

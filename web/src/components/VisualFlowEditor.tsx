@@ -221,10 +221,10 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
       {/* 顶栏控制条 */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
         <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-ping" />
+          <span className="w-2.5 h-2.5 rounded-full bg-primary-500 animate-ping" />
           <h3 className="text-sm font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
             <span>多级嵌套 IVR 拖拽树状画布 (Multi-level Tree Flow Canvas)</span>
-            <Chip size="sm" color="secondary" variant="flat">真正多级分支 + 音频拖拽上传试听</Chip>
+            <Chip size="sm" color="primary" variant="flat">真正多级分支 + 音频拖拽上传试听</Chip>
           </h3>
         </div>
         <Button size="sm" variant="flat" isIconOnly onPress={onClose}>
@@ -236,7 +236,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
         {/* 1. 左侧可拖拽组件面板 (Palette) */}
         <div className="w-full lg:w-72 p-4 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex flex-col gap-3 shrink-0">
           <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
-            <Layers className="w-4 h-4 text-purple-600" />
+            <Layers className="w-4 h-4 text-primary-600" />
             <span className="text-xs font-bold text-slate-800 dark:text-slate-200">IVR 组件库 (可拖拽源)</span>
           </div>
           <p className="text-[11px] text-slate-500">按住下方卡片拖拽入中间画布，可快速生成支持多级 DTMF 按键分支的 IVR 树节点：</p>
@@ -264,7 +264,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
             })}
           </div>
 
-          <div className="mt-auto p-3 bg-purple-500/10 rounded-xl border border-purple-500/20 text-[11px] text-purple-700 dark:text-purple-300 flex items-center gap-2">
+          <div className="mt-auto p-3 bg-primary-500/10 rounded-xl border border-primary-500/20 text-[11px] text-primary-700 dark:text-primary-300 flex items-center gap-2">
             <Sparkles className="w-4 h-4 shrink-0" />
             <span>每个节点均可任意扩展 1-9 / 0 多级按键跳转分支</span>
           </div>
@@ -274,14 +274,14 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={handleDrop}
-          className="flex-1 p-6 bg-slate-100/70 dark:bg-slate-900/60 rounded-2xl border-2 border-dashed border-purple-300 dark:border-purple-900/50 overflow-y-auto relative flex flex-col gap-6"
+          className="flex-1 p-6 bg-slate-100/70 dark:bg-slate-900/60 rounded-2xl border-2 border-dashed border-primary-300 dark:border-primary-900/50 overflow-y-auto relative flex flex-col gap-6"
         >
           <div className="text-[11px] text-slate-400 font-mono flex items-center justify-between pb-2 border-b border-slate-200/60 dark:border-slate-800">
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span>Multi-level Tree Interactive Canvas (可随意拖放添加节点)</span>
             </div>
-            <span className="text-[10px] text-purple-500 font-semibold">支持多级展开与分支路径</span>
+            <span className="text-[10px] text-primary-500 font-semibold">支持多级展开与分支路径</span>
           </div>
 
           <div className="flex flex-col gap-6 items-center">
@@ -295,14 +295,14 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                     onPress={() => setSelectedNodeId(node.id)}
                     className={`border-2 transition-all ${
                       isSelected
-                        ? 'border-purple-500 shadow-lg scale-[1.01] bg-white dark:bg-slate-900'
-                        : 'border-slate-200/80 dark:border-slate-800 hover:border-purple-300 bg-white/90 dark:bg-slate-900/90'
+                        ? 'border-primary-500 shadow-lg scale-[1.01] bg-white dark:bg-slate-900'
+                        : 'border-slate-200/80 dark:border-slate-800 hover:border-primary-300 bg-white/90 dark:bg-slate-900/90'
                     }`}
                   >
                     <CardBody className="p-4 flex flex-col gap-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-600 flex items-center justify-center font-bold">
+                          <div className="w-9 h-9 rounded-xl bg-primary-500/20 text-primary-600 flex items-center justify-center font-bold">
                             {node.type === 'start' ? <Play className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                           </div>
                           <div>
@@ -315,7 +315,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                           {node.type === 'prompt' && (
                             <Button
                               size="sm"
-                              color="secondary"
+                              color="primary"
                               variant="flat"
                               className="font-bold text-[11px]"
                               startContent={<Plus className="w-3.5 h-3.5" />}
@@ -324,7 +324,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                               + 添加多级按键分支
                             </Button>
                           )}
-                          <Chip size="sm" variant="flat" color={isSelected ? 'secondary' : 'default'}>
+                          <Chip size="sm" variant="flat" color={isSelected ? 'primary' : 'default'}>
                             {node.type.toUpperCase()}
                           </Chip>
                         </div>
@@ -350,7 +350,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                       {node.branches.length > 0 && (
                         <div className="flex flex-col gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                           <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
-                            <GitBranch className="w-3 h-3 text-purple-500" />
+                            <GitBranch className="w-3 h-3 text-primary-500" />
                             下级多级分支列表 (Multi-level Branches):
                           </span>
 
@@ -358,11 +358,11 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                             {node.branches.map((b) => (
                               <div
                                 key={b.id}
-                                className="p-2.5 rounded-xl bg-purple-500/5 dark:bg-purple-950/20 border border-purple-500/20 flex items-center justify-between gap-2"
+                                className="p-2.5 rounded-xl bg-primary-500/5 dark:bg-primary-950/20 border border-primary-500/20 flex items-center justify-between gap-2"
                               >
                                 <div className="flex items-center gap-2">
-                                  <CornerDownRight className="w-3.5 h-3.5 text-purple-500" />
-                                  <Chip size="sm" color="secondary" className="font-mono font-extrabold text-[10px]">
+                                  <CornerDownRight className="w-3.5 h-3.5 text-primary-500" />
+                                  <Chip size="sm" color="primary" className="font-mono font-extrabold text-[10px]">
                                     按键 [{b.dtmfKey}]
                                   </Chip>
                                   <div className="flex flex-col">
@@ -396,7 +396,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
         {/* 3. 右侧节点与音频属性 Inspector */}
         <div className="w-full lg:w-80 p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex flex-col gap-4 shrink-0 overflow-y-auto">
           <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
-            <Settings className="w-4 h-4 text-purple-600" />
+            <Settings className="w-4 h-4 text-primary-600" />
             <span className="text-xs font-bold text-slate-800 dark:text-slate-200">节点与音频属性 (Inspector)</span>
           </div>
 

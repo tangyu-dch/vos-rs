@@ -6,9 +6,8 @@
 import { useMemo, useState } from 'react';
 import {
   Button, Chip, Input, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
-  Card, CardBody,
 } from '@heroui/react';
-import { Send, GitFork, Clock, Network } from 'lucide-react';
+import { Send, Network } from 'lucide-react';
 import { api } from '@/services/client';
 import { ResourceWorkspace } from '@/pages/shared/resource-workspace';
 import type { ResourceSpec } from '@/pages/shared/types';
@@ -53,7 +52,7 @@ export function RoutesPage() {
     // 每行自定义操作: 拓扑编排按钮
     customRowAction: {
       label: '拓扑编排',
-      color: 'secondary',
+      color: 'primary',
       onPress: (row: Entity) => {
         const rule: RouteRuleFields = {
           id: String(row.id ?? ''),
@@ -104,54 +103,22 @@ export function RoutesPage() {
   };
 
   return (
-    <div className="space-y-5">
-      {/* 顶部标题栏 */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-5 bg-content1 rounded-2xl border border-default-200 dark:border-slate-800">
-        <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-2xl bg-purple-500/15 flex items-center justify-center text-purple-600">
-            <GitFork className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold">路由策略编排</h2>
-              <Chip size="sm" color="secondary" variant="flat">表格驱动 · 拓扑可视化</Chip>
-            </div>
-            <p className="text-xs text-default-500 mt-0.5">
-              表格定义路由规则明细,每条规则支持独立的可视化拓扑编排,内置时间路由与主叫过滤
-            </p>
-          </div>
-        </div>
-
-        <Button
-          color="primary"
-          className="font-bold"
-          startContent={<Send className="w-3.5 h-3.5" />}
-          onPress={() => setSimOpen(true)}
-        >
-          路由仿真
-        </Button>
-      </div>
-
+    <>
       {/* 主视图: 表格 (基于 ResourceWorkspace) */}
-      <ResourceWorkspace spec={routeSpec} />
-
-      {/* 时间路由使用说明 */}
-      <Card className="shadow-sm">
-        <CardBody className="p-4 flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <Clock className="w-4 h-4 text-amber-500" />
-            <span className="text-sm font-bold">时间路由与拓扑编排使用说明</span>
-          </div>
-          <div className="text-xs text-default-600 dark:text-default-400 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 pl-6">
-            <p>· <span className="font-semibold">表格字段</span>: 直接编辑表格行即可修改规则参数</p>
-            <p>· <span className="font-semibold">拓扑编排</span>: 点击每行"拓扑编排"按钮,可视化编辑该规则的处理流程</p>
-            <p>· <span className="font-semibold">时间路由</span>: 填写 time_start/time_end/weekdays 即可启用</p>
-            <p>· <span className="font-semibold">双向同步</span>: 画布节点配置修改后,点击"应用拓扑到表格"回写</p>
-            <p>· <span className="font-semibold">工作时间</span>: 09:00-18:00 周一到周五 → 转坐席</p>
-            <p>· <span className="font-semibold">非工作时间</span>: 转 IVR 自助服务或语音留言</p>
-          </div>
-        </CardBody>
-      </Card>
+      <ResourceWorkspace
+        spec={routeSpec}
+        headerActions={
+          <Button
+            color="primary"
+            size="sm"
+            className="font-bold text-white bg-primary-500 hover:bg-primary-600"
+            startContent={<Send className="w-3.5 h-3.5" />}
+            onPress={() => setSimOpen(true)}
+          >
+            路由仿真
+          </Button>
+        }
+      />
 
       {/* 路由规则拓扑编排 Modal (每条规则独立画布) */}
       <Modal
@@ -168,10 +135,10 @@ export function RoutesPage() {
           {() => (
             <>
               <ModalHeader className="flex items-center gap-2 border-b border-default-200 dark:border-slate-800 shrink-0">
-                <Network className="w-5 h-5 text-purple-600" />
+                <Network className="w-5 h-5 text-primary-600" />
                 <span>路由规则拓扑编排</span>
                 {topoRule && (
-                  <Chip size="sm" variant="flat" color="secondary" className="ml-2">
+                  <Chip size="sm" variant="flat" color="primary" className="ml-2">
                     规则: {topoRule.id}
                   </Chip>
                 )}
@@ -270,7 +237,7 @@ export function RoutesPage() {
                   <span className="text-default-300 font-bold">→</span>
                   <div className="flex flex-col items-center">
                     <span className="text-[10px] text-default-400">落地网关</span>
-                    <Chip size="sm" color="secondary" className="font-extrabold text-white">
+                    <Chip size="sm" color="primary" className="font-extrabold text-white">
                       {String(simResult.gateway_id || simResult.target_gateway || 'TRUNK-GW')}
                     </Chip>
                   </div>
@@ -290,6 +257,6 @@ export function RoutesPage() {
           </ModalFooter>
         </ModalContent>
       </Modal>
-    </div>
+    </>
   );
 }

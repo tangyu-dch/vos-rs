@@ -75,7 +75,7 @@ export default function Login() {
             </Card>
             <Card>
               <CardBody className="p-4">
-                <div className="text-2xl font-bold text-secondary">&lt; 1ms</div>
+                <div className="text-2xl font-bold text-primary">&lt; 1ms</div>
                 <div className="text-tiny text-default-500 mt-1">路由计算耗时</div>
               </CardBody>
             </Card>

@@ -1,7 +1,7 @@
 // 运营监控 - 仪表盘
 // 从 console.tsx 拆分与增强
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Button, Card, CardBody, Chip, Progress, Spinner,
 } from '@heroui/react';
@@ -13,6 +13,29 @@ import {
 import { api } from '@/services/client';
 import { ErrorState } from '@/components/detail-shell';
 import { valueText } from '@/pages/shared/format';
+
+/** 测量容器实际渲染宽度，让 SVG viewBox 与渲染区一致，避免 preserveAspectRatio 居中导致鼠标映射偏移。
+ * 使用 callback ref 模式：即使元素在 early return 之后才挂载（如 loading 完成后），也能正确测量。 */
+function useElementWidth<T extends HTMLElement>(fallback: number) {
+  const [width, setWidth] = useState(fallback);
+  const observerRef = useRef<ResizeObserver | null>(null);
+
+  const ref = useCallback((node: T | null) => {
+    // 清理上一次的 observer
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
+    if (!node) return;
+    const measure = () => setWidth(node.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    observerRef.current = observer;
+  }, []);
+
+  return { ref, width };
+}
 
 export interface HourlyTrendItem {
   hour: string;
@@ -51,7 +74,7 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
 
   const maxVal = Math.max(...displayData.map((d) => d.total_calls), 10);
   const chartHeight = 160;
-  const chartWidth = 700;
+  const { ref: chartRef, width: chartWidth } = useElementWidth<HTMLDivElement>(700);
 
   // 悬停状态
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
@@ -132,10 +155,11 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
                 </span>
               </div>
               
-              <div className="relative">
-                <svg 
-                  viewBox={`0 0 ${chartWidth} ${chartHeight}`} 
-                  className="w-full h-40 overflow-visible cursor-crosshair"
+              <div className="relative" ref={chartRef}>
+                <svg
+                  viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+                  className="w-full overflow-visible cursor-crosshair"
+                  style={{ height: `${chartHeight}px` }}
                   onMouseMove={handleMouseMove}
                   onMouseLeave={handleMouseLeave}
                 >
@@ -208,7 +232,7 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
                       <span className="text-default-500 flex items-center gap-1">
                         接通率 (ASR):
                       </span>
-                      <span className="font-bold text-secondary">
+                      <span className="font-bold text-primary">
                         {hoveredData.total_calls > 0 
                           ? `${((hoveredData.answered_calls / hoveredData.total_calls) * 100).toFixed(3)}%`
                           : '0.000%'}
@@ -259,7 +283,7 @@ function MosQualitySection({ data }: { data: Summary }) {
       <CardBody className="p-4 flex flex-col gap-3">
         <div className="flex items-center justify-between border-b border-divider pb-3">
           <div className="flex items-center gap-2">
-            <AudioLines className="w-4 h-4 text-secondary" />
+            <AudioLines className="w-4 h-4 text-primary" />
             <h3 className="text-small font-bold text-foreground">媒体 QoS 与 MOS 评估</h3>
           </div>
           <Chip size="sm" variant="flat" color={hasMos ? (mosColor as 'success' | 'warning' | 'danger') : 'default'}>
@@ -389,9 +413,12 @@ function NodeTrafficSection() {
   const [trafficData, setTrafficData] = useState<NodeTrafficData[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState<'all' | 'sip' | 'media'>('all');
-  
+
   // 悬停状态
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  // 必须在所有 early return 之前调用，避免违反 Hooks 规则
+  const chartHeight = 180;
+  const { ref: chartRef, width: chartWidth } = useElementWidth<HTMLDivElement>(800);
 
   const loadTraffic = useCallback(async () => {
     try {
@@ -406,7 +433,7 @@ function NodeTrafficSection() {
 
   useEffect(() => {
     void loadTraffic();
-    const timer = setInterval(() => { void loadTraffic(); }, 5000);
+    const timer = setInterval(() => { void loadTraffic(); }, 10000);
     return () => clearInterval(timer);
   }, [loadTraffic]);
 
@@ -432,15 +459,12 @@ function NodeTrafficSection() {
     100
   );
 
-  const chartHeight = 180;
-  const chartWidth = 800;
-
   const colors: Record<string, { stroke: string; fill: string; dot: string; text: string }> = {
     'sip-edge-01': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-blue-500', text: 'text-blue-500' },
     'sip-edge-standalone': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-blue-500', text: 'text-blue-500' },
     'media-node-01': { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.1)', dot: 'bg-emerald-500', text: 'text-emerald-500' },
     'local-media': { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.1)', dot: 'bg-emerald-500', text: 'text-emerald-500' },
-    'default-1': { stroke: '#8b5cf6', fill: 'rgba(139, 92, 246, 0.1)', dot: 'bg-purple-500', text: 'text-purple-500' },
+    'default-1': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-primary-500', text: 'text-primary-500' },
     'default-2': { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.1)', dot: 'bg-amber-500', text: 'text-amber-500' },
   };
 
@@ -537,10 +561,11 @@ function NodeTrafficSection() {
 
             <div className="w-full overflow-x-auto pt-2 relative">
               <div className="min-w-[650px] flex flex-col gap-2 relative">
-                <div className="relative">
-                  <svg 
-                    viewBox={`0 0 ${chartWidth} ${chartHeight}`} 
-                    className="w-full h-44 overflow-visible cursor-crosshair"
+                <div className="relative" ref={chartRef}>
+                  <svg
+                    viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+                    className="w-full overflow-visible cursor-crosshair"
+                    style={{ height: `${chartHeight}px` }}
                     onMouseMove={handleMouseMove}
                     onMouseLeave={handleMouseLeave}
                   >
@@ -702,7 +727,7 @@ function MonitoringExtrasSection() {
 
   useEffect(() => {
     void loadExtras();
-    const timer = setInterval(() => { void loadExtras(); }, 5000);
+    const timer = setInterval(() => { void loadExtras(); }, 10000);
     return () => clearInterval(timer);
   }, [loadExtras]);
 
@@ -889,14 +914,14 @@ export function DashboardPage() {
 
   useEffect(() => {
     void load();
-    const timer = setInterval(() => { void load(true); }, 5000);
+    const timer = setInterval(() => { void load(true); }, 10000);
     return () => clearInterval(timer);
   }, [load]);
 
   const metrics: Array<{ label: string; value: string; valueClassName: string; icon: ReactNode }> = [
     { label: '活跃通话', value: valueText(data.active_calls), valueClassName: 'text-success', icon: <Activity className="w-4 h-4 text-success" /> },
     { label: '今日呼叫', value: valueText(data.today_total_calls), valueClassName: 'text-primary', icon: <PhoneCall className="w-4 h-4 text-primary" /> },
-    { label: '接通率 (ASR)', value: data.answer_rate === undefined ? '—' : `${(data.answer_rate * 100).toFixed(3)}%`, valueClassName: 'text-secondary', icon: <Sparkles className="w-4 h-4 text-secondary" /> },
+    { label: '接通率 (ASR)', value: data.answer_rate === undefined ? '—' : `${(data.answer_rate * 100).toFixed(3)}%`, valueClassName: 'text-primary', icon: <Sparkles className="w-4 h-4 text-primary" /> },
     { label: '平均 MOS 评分', value: data.avg_mos !== undefined && data.avg_mos > 0 ? `${data.avg_mos.toFixed(2)}` : '—', valueClassName: 'text-warning', icon: <Award className="w-4 h-4 text-warning" /> },
     { label: '在线分机', value: valueText(data.registered_users), valueClassName: 'text-success', icon: <Users className="w-4 h-4 text-success" /> },
     { label: '可用中继', value: valueText(data.active_gateways), valueClassName: 'text-primary', icon: <Server className="w-4 h-4 text-primary" /> },

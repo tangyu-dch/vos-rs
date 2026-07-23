@@ -154,7 +154,7 @@ export function RouteTopologyPreview({ topology }: { topology: RouteTopology }) 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <Chip size="sm" variant="flat" color="secondary">
+        <Chip size="sm" variant="flat" color="primary">
           {topology.nodes.length} 节点
         </Chip>
         <Chip size="sm" variant="flat" color="primary">
@@ -185,7 +185,7 @@ export function RouteTopologyEditor({ rule, onChange }: RouteTopologyEditorProps
     <div className="flex flex-col gap-3 h-full min-h-0">
       <div className="flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
-          <Chip size="sm" variant="flat" color="secondary">规则: {rule.id}</Chip>
+          <Chip size="sm" variant="flat" color="primary">规则: {rule.id}</Chip>
           <Chip size="sm" variant="flat" color="primary">
             拖拽节点 / 修改配置将实时回写到表格字段
           </Chip>

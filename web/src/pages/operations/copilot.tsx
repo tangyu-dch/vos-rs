@@ -20,25 +20,25 @@ const PRESET_CARDS = [
     title: '排查单通/挂断超时',
     desc: '排查 13800138000 为什么在 10:15 被挂断',
     icon: AlertTriangle,
-    color: 'text-amber-500 bg-amber-500/10 border-amber-500/20'
+    color: 'text-warning bg-warning/10 border-warning/20'
   },
   {
     title: '合成 SIP 交互梯形图',
     desc: '生成最新呼叫的完整 SIP Ladder Diagram 梯形图',
     icon: Terminal,
-    color: 'text-purple-500 bg-purple-500/10 border-purple-500/20'
+    color: 'text-primary bg-primary/10 border-primary/20'
   },
   {
     title: 'Deepfake 声纹防御审计',
     desc: '查询近期 AI 伪造声音拦截日志与硬中断记录',
     icon: ShieldCheck,
-    color: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
+    color: 'text-success bg-success/10 border-success/20'
   },
   {
     title: '全网 QoS 健康检查',
     desc: '评估当前 CPS、RTP 丢包率与集群节点探活状态',
     icon: Activity,
-    color: 'text-blue-500 bg-blue-500/10 border-blue-500/20'
+    color: 'text-primary bg-primary/10 border-primary/20'
   }
 ];
 
@@ -95,47 +95,47 @@ export function CopilotPage() {
   };
 
   return (
-    <div className="flex flex-col gap-5 h-[calc(100vh-100px)]">
-      {/* 顶部现代化 AI Header */}
-      <div className="flex items-center justify-between p-4 px-6 bg-gradient-to-r from-purple-900/30 via-slate-900 to-indigo-900/30 backdrop-blur-md rounded-2xl border border-purple-500/20 shadow-sm shrink-0">
-        <div className="flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-400/30 flex items-center justify-center text-purple-400 shadow-inner">
-            <Bot className="w-6 h-6 animate-pulse" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-extrabold text-slate-800 dark:text-slate-100">LLM Telecom Copilot 智能运维与自愈</h2>
-              <Chip size="sm" color="secondary" variant="flat" className="font-bold border border-purple-400/30">
-                <Sparkles className="w-3 h-3 text-yellow-400 inline mr-1" />
-                AI-Native Autonomous
-              </Chip>
+    <div className="flex flex-col gap-4 h-[calc(100vh-100px)]">
+      {/* 顶部 AI Header（对齐 overview 的 Card 标题栏风格） */}
+      <Card shadow="sm" className="shrink-0">
+        <CardBody className="p-4 flex flex-wrap items-center justify-between gap-4 border-b border-divider">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+              <Bot className="w-6 h-6" />
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              信令分析 · SIP 梯形图合成 · 根因定位 · 容灾热切流自愈
-            </p>
+            <div>
+              <div className="flex items-center gap-2 mb-0.5">
+                <h2 className="text-base font-bold text-foreground">LLM Telecom Copilot 智能运维与自愈</h2>
+                <Chip size="sm" color="primary" variant="flat" startContent={<Sparkles className="w-3 h-3" />}>
+                  AI-Native Autonomous
+                </Chip>
+              </div>
+              <p className="text-tiny text-default-500">
+                信令分析 · SIP 梯形图合成 · 根因定位 · 容灾热切流自愈
+              </p>
+            </div>
           </div>
-        </div>
 
-        <Button
-          size="sm"
-          variant="flat"
-          color="secondary"
-          className="font-bold"
-          startContent={<RefreshCw className="w-3.5 h-3.5" />}
-          onPress={() => setMessages([messages[0]])}
-        >
-          重置对话
-        </Button>
-      </div>
+          <Button
+            size="sm"
+            variant="flat"
+            color="primary"
+            startContent={<RefreshCw className="w-4 h-4" />}
+            onPress={() => setMessages([messages[0]])}
+          >
+            重置对话
+          </Button>
+        </CardBody>
+      </Card>
 
       {/* 主沉浸双栏布局 (Left Sidebar + Right Chat) */}
-      <div className="flex-1 flex gap-5 min-h-0 overflow-hidden">
+      <div className="flex-1 flex gap-4 min-h-0 overflow-hidden">
         {/* 左侧诊断快捷面板 */}
         <div className="w-80 flex flex-col gap-4 shrink-0 overflow-y-auto pr-1">
-          <Card className="shadow-sm border border-slate-200/80 dark:border-slate-800">
+          <Card shadow="sm">
             <CardBody className="p-4 flex flex-col gap-3">
-              <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200 pb-2 border-b border-slate-100 dark:border-slate-800">
-                <Flame className="w-4 h-4 text-purple-500" />
+              <div className="flex items-center gap-2 text-small font-bold text-foreground pb-3 border-b border-divider">
+                <Flame className="w-4 h-4 text-primary" />
                 <span>AI 常用排障剧本 (Presets)</span>
               </div>
 
@@ -146,20 +146,20 @@ export function CopilotPage() {
                     <div
                       key={idx}
                       onClick={() => handleSend(card.desc)}
-                      className="p-3 rounded-xl border border-slate-200/60 dark:border-slate-800 hover:border-purple-500/50 bg-slate-50/50 dark:bg-slate-900/50 hover:bg-purple-500/5 cursor-pointer transition-all flex flex-col gap-1 group"
+                      className="p-3 rounded-xl border border-default-200 hover:border-primary/50 bg-content2/40 hover:bg-primary/5 cursor-pointer transition-all flex flex-col gap-1 group"
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <div className={`p-1.5 rounded-lg border ${card.color}`}>
                             <IconComp className="w-3.5 h-3.5" />
                           </div>
-                          <span className="text-xs font-bold text-slate-800 dark:text-slate-200 group-hover:text-purple-600 dark:group-hover:text-purple-400">
+                          <span className="text-xs font-bold text-foreground group-hover:text-primary">
                             {card.title}
                           </span>
                         </div>
-                        <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                        <ChevronRight className="w-3.5 h-3.5 text-default-400 group-hover:translate-x-0.5 transition-transform" />
                       </div>
-                      <p className="text-[11px] text-slate-500 line-clamp-2 pl-0.5">{card.desc}</p>
+                      <p className="text-[11px] text-default-500 line-clamp-2 pl-0.5">{card.desc}</p>
                     </div>
                   );
                 })}
@@ -167,19 +167,19 @@ export function CopilotPage() {
             </CardBody>
           </Card>
 
-          <div className="p-4 bg-purple-500/10 rounded-2xl border border-purple-500/20 flex flex-col gap-2 text-xs text-purple-700 dark:text-purple-300">
+          <div className="p-4 bg-primary/10 rounded-xl border border-primary/20 flex flex-col gap-2 text-tiny text-primary">
             <div className="flex items-center gap-1.5 font-bold">
               <HelpCircle className="w-4 h-4" />
               <span>智能提示词建议</span>
             </div>
-            <p className="text-[11px] leading-relaxed text-purple-600/90 dark:text-purple-300/90">
+            <p className="text-[11px] leading-relaxed text-default-500">
               您可以直接打字询问特定 Call-ID、主被叫号码、网关熔断记录或请求生成特定时间段的 SIP 交互梯形图。
             </p>
           </div>
         </div>
 
         {/* 右侧聊天沉浸主窗口 */}
-        <Card className="flex-1 shadow-sm border border-slate-200/80 dark:border-slate-800 flex flex-col overflow-hidden">
+        <Card shadow="sm" className="flex-1 flex flex-col overflow-hidden">
           <CardBody className="p-0 flex flex-col h-full overflow-hidden">
             {/* 消息滚动区域 */}
             <ScrollShadow className="flex-1 p-6 space-y-6 overflow-y-auto">
@@ -189,10 +189,10 @@ export function CopilotPage() {
                   className={`flex gap-4 max-w-4xl ${m.sender === 'user' ? 'ml-auto flex-row-reverse' : ''}`}
                 >
                   <div
-                    className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 font-bold shadow-xs ${
+                    className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 font-bold ${
                       m.sender === 'user'
-                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white'
-                        : 'bg-purple-500/15 border border-purple-500/30 text-purple-600 dark:text-purple-400'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-primary/10 border border-primary/20 text-primary'
                     }`}
                   >
                     {m.sender === 'user' ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
@@ -202,52 +202,52 @@ export function CopilotPage() {
                     <div
                       className={`p-4 rounded-2xl text-xs leading-relaxed ${
                         m.sender === 'user'
-                          ? 'bg-purple-600 text-white rounded-tr-none shadow-md'
-                          : 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 rounded-tl-none border border-slate-200/80 dark:border-slate-800 shadow-sm'
+                          ? 'bg-primary text-primary-foreground rounded-tr-none'
+                          : 'bg-content2 text-foreground rounded-tl-none border border-default-200'
                       }`}
                     >
                       <div className="flex items-center justify-between text-[10px] opacity-70 mb-1.5 font-mono">
                         <span>{m.sender === 'user' ? 'OPERATOR' : 'TELECOM COPILOT AGENT'}</span>
                         <span>{m.timestamp}</span>
                       </div>
-                      <p className="whitespace-pre-wrap font-medium text-xs text-slate-700 dark:text-slate-200">{m.text}</p>
+                      <p className="whitespace-pre-wrap font-medium text-xs">{m.text}</p>
                     </div>
 
                     {/* 故障根因分析 */}
                     {m.rootCause && (
-                      <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs flex flex-col gap-1">
-                        <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-bold">
+                      <div className="p-3.5 bg-warning/10 border border-warning/20 rounded-xl text-xs flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5 text-warning font-bold">
                           <AlertTriangle className="w-4 h-4" />
                           <span>故障根因定位 (Root Cause):</span>
                         </div>
-                        <span className="text-slate-700 dark:text-slate-300 font-mono text-[11px] pl-5">{m.rootCause}</span>
+                        <span className="text-foreground font-mono text-[11px] pl-5">{m.rootCause}</span>
                       </div>
                     )}
 
                     {/* 自动自愈策略下发 */}
                     {m.suggestedAction && (
-                      <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs flex flex-col gap-1">
-                        <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-bold">
+                      <div className="p-3.5 bg-success/10 border border-success/20 rounded-xl text-xs flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5 text-success font-bold">
                           <ShieldCheck className="w-4 h-4" />
                           <span>自动自愈策略执行 (Self-Healing Action):</span>
                         </div>
-                        <span className="text-slate-700 dark:text-slate-300 font-mono text-[11px] pl-5">{m.suggestedAction}</span>
+                        <span className="text-foreground font-mono text-[11px] pl-5">{m.suggestedAction}</span>
                       </div>
                     )}
 
                     {/* 高亮渲染 SIP 信令梯形图 (Call Ladder Diagram ASCII) */}
                     {m.ladderAscii && (
-                      <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 flex flex-col gap-2 shadow-inner">
-                        <div className="flex items-center justify-between text-[11px] text-purple-400 font-mono font-bold pb-2 border-b border-slate-800/80">
+                      <div className="p-4 bg-content2 rounded-2xl border border-default-200 flex flex-col gap-2">
+                        <div className="flex items-center justify-between text-[11px] text-primary font-mono font-bold pb-2 border-b border-divider">
                           <div className="flex items-center gap-1.5">
-                            <Terminal className="w-3.5 h-3.5 text-purple-400" />
+                            <Terminal className="w-3.5 h-3.5 text-primary" />
                             <span>SIP Call Ladder Diagram (信令交互梯形图)</span>
                           </div>
-                          <Chip size="sm" color="secondary" variant="flat" className="text-[10px]">
+                          <Chip size="sm" color="primary" variant="flat" className="text-[10px]">
                             Generated
                           </Chip>
                         </div>
-                        <pre className="text-[11px] font-mono text-emerald-400 overflow-x-auto whitespace-pre leading-tight py-2">
+                        <pre className="text-[11px] font-mono text-success overflow-x-auto whitespace-pre leading-tight py-2">
                           {m.ladderAscii}
                         </pre>
                       </div>
@@ -260,7 +260,7 @@ export function CopilotPage() {
             <Divider />
 
             {/* 底部 Input 提问输入条 */}
-            <div className="p-4 bg-slate-50/80 dark:bg-slate-950/80 flex items-center gap-3">
+            <div className="p-4 bg-content2/60 flex items-center gap-3">
               <Input
                 variant="bordered"
                 size="lg"
@@ -269,12 +269,11 @@ export function CopilotPage() {
                 onValueChange={setInputQuery}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                 isDisabled={loading}
-                startContent={<MessageSquare className="w-4 h-4 text-slate-400" />}
+                startContent={<MessageSquare className="w-4 h-4 text-default-400" />}
                 endContent={
                   <Button
                     size="sm"
-                    color="secondary"
-                    className="font-bold bg-purple-600 text-white shadow-md"
+                    color="primary"
                     isLoading={loading}
                     onPress={() => handleSend()}
                     startContent={!loading && <Send className="w-3.5 h-3.5" />}

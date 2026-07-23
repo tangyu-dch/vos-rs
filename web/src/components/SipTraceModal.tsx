@@ -64,7 +64,7 @@ export function SipTraceModal({ isOpen, onClose, callId }: SipTraceModalProps) {
     if (msg.startsWith('100') || msg.startsWith('180') || msg.startsWith('183')) return 'primary';
     if (msg.startsWith('4') || msg.startsWith('5') || msg.startsWith('6')) return 'danger';
     if (msg === 'INVITE') return 'warning';
-    if (msg === 'BYE') return 'secondary';
+    if (msg === 'BYE') return 'primary';
     return 'default';
   };
 
@@ -72,7 +72,7 @@ export function SipTraceModal({ isOpen, onClose, callId }: SipTraceModalProps) {
     <Modal isOpen={isOpen} onOpenChange={(o) => !o && onClose()} size="4xl" scrollBehavior="inside">
       <ModalContent className="max-w-5xl">
         <ModalHeader className="flex items-center gap-2 text-slate-800 border-b border-slate-100 pb-3">
-          <Activity className="w-5 h-5 text-indigo-600" />
+          <Activity className="w-5 h-5 text-primary-600" />
           <div className="flex flex-col">
             <span className="text-base font-bold">SIP 交互信令梯形图 (SIP Flow Ladder Diagram)</span>
             <span className="text-xs font-mono font-normal text-slate-400">Call-ID: {callId}</span>
@@ -99,7 +99,7 @@ export function SipTraceModal({ isOpen, onClose, callId }: SipTraceModalProps) {
                 {/* 三节点 Header */}
                 <div className="grid grid-cols-3 gap-2 text-center text-xs font-bold py-2 bg-slate-100/80 rounded-xl border border-slate-200/60">
                   <div className="text-blue-600">Caller (主叫)</div>
-                  <div className="text-indigo-700">vos-rs (Switch)</div>
+                  <div className="text-primary-700">vos-rs (Switch)</div>
                   <div className="text-emerald-600">Callee (落地/网关)</div>
                 </div>
 
@@ -114,7 +114,7 @@ export function SipTraceModal({ isOpen, onClose, callId }: SipTraceModalProps) {
                         onClick={() => setSelectedEvent(evt)}
                         className={`p-3 rounded-xl border transition-all cursor-pointer ${
                           isSelected
-                            ? 'bg-indigo-50/80 border-indigo-300 shadow-xs ring-1 ring-indigo-400/30'
+                            ? 'bg-primary-50/80 border-primary-300 shadow-xs ring-1 ring-primary-400/30'
                             : 'bg-white border-slate-200/70 hover:border-slate-300 hover:bg-slate-50/50'
                         }`}
                       >
@@ -128,7 +128,7 @@ export function SipTraceModal({ isOpen, onClose, callId }: SipTraceModalProps) {
                         {/* 箭头示意图 */}
                         <div className="grid grid-cols-2 items-center py-1">
                           {isInbound ? (
-                            <div className="flex items-center gap-1 col-span-1 border-b-2 border-indigo-400 text-indigo-600 font-mono text-xs pb-0.5">
+                            <div className="flex items-center gap-1 col-span-1 border-b-2 border-primary-400 text-primary-600 font-mono text-xs pb-0.5">
                               <span>{evt.message}</span>
                               <ArrowRight className="w-4 h-4 ml-auto stroke-[2.5]" />
                             </div>
@@ -153,7 +153,7 @@ export function SipTraceModal({ isOpen, onClose, callId }: SipTraceModalProps) {
               <div className="lg:col-span-5 flex flex-col bg-slate-900 text-slate-200 rounded-2xl p-4 border border-slate-800 shadow-inner">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
                   <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                    <FileText className="w-4 h-4 text-indigo-400" />
+                    <FileText className="w-4 h-4 text-primary-400" />
                     SIP 报文详情 (Raw View)
                   </span>
                   {selectedEvent?.raw_message && (
@@ -171,7 +171,7 @@ export function SipTraceModal({ isOpen, onClose, callId }: SipTraceModalProps) {
 
                 {selectedEvent ? (
                   <div className="flex-1 overflow-y-auto max-h-[420px]">
-                    <div className="text-xs font-mono text-indigo-300 mb-2">
+                    <div className="text-xs font-mono text-primary-300 mb-2">
                       // Offset: +{selectedEvent.offset_ms}ms | Direction: {selectedEvent.direction}
                     </div>
                     <pre className="text-[11px] font-mono whitespace-pre-wrap leading-relaxed text-slate-300">

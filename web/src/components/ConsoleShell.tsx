@@ -29,7 +29,7 @@ interface NavGroup {
 const groups: NavGroup[] = [
   { label: '运行中心', icon: <Activity className="w-3.5 h-3.5" />, items: [
     { to: '/overview', label: '运行总览', icon: <LayoutDashboard className="w-4 h-4" /> },
-    { to: '/copilot', label: '智能 Copilot', icon: <Bot className="w-4 h-4 text-purple-500 font-bold" /> },
+    { to: '/copilot', label: '智能 Copilot', icon: <Bot className="w-4 h-4 text-primary font-bold" /> },
     { to: '/calls/active', label: '活跃通话', icon: <PhoneCall className="w-4 h-4" /> },
   ] },
   { label: '号码与分机', icon: <Users className="w-3.5 h-3.5" />, items: [

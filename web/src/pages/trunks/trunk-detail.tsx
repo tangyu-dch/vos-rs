@@ -879,7 +879,7 @@ export default function TrunkDetailPage() {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-base font-bold text-foreground">中继 {id}</h2>
-              <Chip size="sm" variant="flat" color={role === 'access' ? 'secondary' : 'primary'}>
+              <Chip size="sm" variant="flat" color={role === 'access' ? 'primary' : 'default'}>
                 {role === 'access' ? '接入中继' : '落地中继'}
               </Chip>
               <Chip size="sm" variant="flat" color={isEnabled ? 'success' : 'danger'}>

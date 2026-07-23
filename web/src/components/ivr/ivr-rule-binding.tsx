@@ -392,7 +392,7 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
             onValueChange={setIvrName}
             classNames={{ input: 'text-base font-bold' }}
           />
-          <Chip size="sm" variant="flat" color="secondary">
+          <Chip size="sm" variant="flat" color="primary">
             {topology.nodes.length} 节点 · {topology.edges.length} 连线
           </Chip>
           {topology.did && <Chip size="sm" variant="flat" color="primary">DID {topology.did}</Chip>}

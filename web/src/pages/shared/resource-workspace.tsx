@@ -7,7 +7,7 @@ import {
   Chip, Switch, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Textarea,
 } from '@heroui/react';
-import { Plus, RefreshCw, Search, Eye, Pencil, Trash2 } from 'lucide-react';
+import { Plus, RefreshCw, Search, Eye, Pencil, Trash2, Download } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/client';
 import {
@@ -184,7 +184,7 @@ export function FieldLabel({ label, required }: { label: string; required?: bool
   );
 }
 
-export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
+export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec; headerActions?: React.ReactNode }) {
   const [rows, setRows] = useState<Entity[]>([]);
   const [pagination, setPagination] = useState({ page: 1, page_size: 20, total: 0, total_pages: 0 });
   const [query, setQuery] = useState('');
@@ -214,6 +214,54 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
       setLoading(false);
     }
   }, [pagination.page, pagination.page_size, spec.path, spec.params]);
+
+  const exportData = () => {
+    if (!rows.length) {
+      message.warning('当前列表无数据可导出');
+      return;
+    }
+    const fieldsToExport = spec.fields.filter((field) => field.kind !== 'secret');
+    const headers = fieldsToExport.map((f) => `"${f.label.replace(/"/g, '""')}"`).join(',');
+    const lines = rows.map((row) => {
+      return fieldsToExport.map((field) => {
+        let value = row[field.key];
+        if (field.key === 'node_count') {
+          value = Array.isArray(row.nodes) ? row.nodes.length : (row.node_count ?? 0);
+        }
+        let text = '';
+        const callText = spec.path === '/calls' ? callDetailText(value, field.key) : undefined;
+        if (callText) {
+          text = callText;
+        } else if (field.kind === 'duration') {
+          text = durationSecondsText(value);
+        } else if (moneyFields.has(field.key)) {
+          text = moneyText(value);
+        } else if (field.kind === 'select') {
+          const options = (field.options || fieldOptions[field.key] || []).map((option) =>
+            typeof option === 'string' ? { label: option, value: option } : option
+          );
+          const actual = field.key === 'role' ? trunkRole(row) : value;
+          text = String(options.find((option) => option.value === String(actual))?.label ?? (field.key === 'role' ? (trunkRole(row) === 'access' ? '接入中继' : '落地中继') : value));
+        } else if (typeof value === 'boolean') {
+          text = value ? '启用' : '停用';
+        } else {
+          text = value !== undefined && value !== null ? String(value) : '';
+        }
+        return `"${text.replace(/"/g, '""')}"`;
+      }).join(',');
+    });
+    const csvContent = [headers, ...lines].join('\n');
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${spec.title}_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    message.success('已自动生成并下载数据列表 (CSV 格式)');
+  };
 
   useEffect(() => { void load(1); }, [spec.path]);
   useEffect(() => {
@@ -343,7 +391,10 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
   const visibleFields = spec.fields.filter((field) => field.kind !== 'secret').slice(0, 7);
 
   const renderCell = (row: Entity, field: FieldSpec) => {
-    const value = row[field.key];
+    let value = row[field.key];
+    if (field.key === 'node_count') {
+      value = Array.isArray(row.nodes) ? row.nodes.length : (row.node_count ?? 0);
+    }
     const callText = spec.path === '/calls' ? callDetailText(value, field.key) : undefined;
     if (['status', 'state', 'enabled', 'health'].includes(field.key)) {
       const positive = ['active', 'online', 'registered', 'healthy', 'answered', 'enabled', 'closed', true].includes(value as never);
@@ -375,8 +426,12 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
               {spec.description && <p className="text-tiny text-default-500 mt-0.5">{spec.description}</p>}
             </div>
             <div className="flex items-center gap-2">
+              {headerActions}
               <Button variant="flat" size="sm" isLoading={loading} onPress={() => load()} startContent={<RefreshCw className="w-4 h-4" />}>
                 刷新
+              </Button>
+              <Button variant="flat" size="sm" onPress={exportData} startContent={<Download className="w-4 h-4" />}>
+                导出
               </Button>
               {!spec.readOnly && (
                 <Button color="primary" size="sm" onPress={() => void openForm(null)} startContent={<Plus className="w-4 h-4" />}>
@@ -465,7 +520,7 @@ export function ResourceWorkspace({ spec }: { spec: ResourceSpec }) {
                           {spec.customRowAction && (
                             <Button
                               size="sm"
-                              color={spec.customRowAction.color ?? 'secondary'}
+                              color={spec.customRowAction.color ?? 'primary'}
                               variant="flat"
                               className="font-bold"
                               onPress={() => spec.customRowAction!.onPress(row)}

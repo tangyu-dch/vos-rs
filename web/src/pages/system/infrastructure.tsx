@@ -163,10 +163,10 @@ export function InfrastructurePage() {
               <CardBody className="p-5 flex flex-col gap-3">
                 <div className="flex items-center justify-between pb-3 border-b border-divider">
                   <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-secondary" />
+                    <Sparkles className="w-4 h-4 text-primary" />
                     <h3 className="text-sm font-bold text-foreground">媒体质量指标 (QoS & MOS)</h3>
                   </div>
-                  <Chip color="secondary" size="sm" variant="flat">Opus / G.711</Chip>
+                  <Chip color="primary" size="sm" variant="flat">Opus / G.711</Chip>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60 flex flex-col items-center">
@@ -176,7 +176,7 @@ export function InfrastructurePage() {
                   </div>
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60 flex flex-col items-center">
                     <span className="text-[10px] text-slate-400">Jitter 抖动缓冲区</span>
-                    <span className="text-xl font-extrabold text-indigo-600 font-mono mt-1">15 ms</span>
+                    <span className="text-xl font-extrabold text-primary-600 font-mono mt-1">15 ms</span>
                     <span className="text-[10px] text-slate-400 mt-1">自适应缓冲机制</span>
                   </div>
                 </div>

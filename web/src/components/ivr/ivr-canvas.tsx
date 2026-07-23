@@ -315,7 +315,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
         {edge.label && (
           <foreignObject x={midX - 20} y={midY - 8} width={40} height={16}>
             <div className="flex justify-center">
-              <Chip size="sm" variant="flat" color="secondary" className="text-[9px] h-4">
+              <Chip size="sm" variant="flat" color="primary" className="text-[9px] h-4">
                 {edge.label}
               </Chip>
             </div>

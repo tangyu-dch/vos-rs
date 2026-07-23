@@ -256,7 +256,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
         {edge.label && (
           <foreignObject x={midX - 20} y={midY - 8} width={40} height={16}>
             <div className="flex justify-center">
-              <Chip size="sm" variant="flat" color="secondary" className="text-[9px] h-4">{edge.label}</Chip>
+              <Chip size="sm" variant="flat" color="primary" className="text-[9px] h-4">{edge.label}</Chip>
             </div>
           </foreignObject>
         )}
@@ -348,7 +348,7 @@ export function RouteCanvas({ topology, onChange }: RouteCanvasProps) {
           </div>
         )}
         <div className="absolute top-3 right-3">
-          <Chip size="sm" variant="flat" color="secondary">
+          <Chip size="sm" variant="flat" color="primary">
             {topology.nodes.length} 节点 · {topology.edges.length} 连线
           </Chip>
         </div>

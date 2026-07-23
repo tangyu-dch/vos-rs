@@ -90,6 +90,8 @@ pub(crate) struct AppState {
     pub(crate) redis_client: redis::aio::ConnectionManager,
     pub(crate) sip_node_key_prefix: String,
     pub(crate) sip_auth_realm: String,
+    /// 活跃通话列表缓存（2s TTL），消除 summary/extras/telemetry 重复 HTTP 请求
+    pub(crate) active_calls_cache: crate::dashboard::ActiveCallsCache,
 }
 
 /// 管理列表统一分页参数；服务端限制单页最大 100 条，避免大响应拖慢 API。
@@ -709,6 +711,7 @@ async fn main() -> anyhow::Result<()> {
         redis_client,
         sip_node_key_prefix,
         sip_auth_realm,
+        active_calls_cache: crate::dashboard::ActiveCallsCache::new(std::time::Duration::from_secs(2)),
     };
 
     let cors_origins_raw = api_network.allowed_origins.clone().unwrap_or_default();
