@@ -432,7 +432,7 @@ impl<'a> TelecomCopilotEngine<'a> {
         let mut messages = vec![
             json!({
                 "role": "system",
-                "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）以及可调用的工具（Tools），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答与工具调用要求：\n1. **智能冲突与重复检测**：在进行路由创建、分机开户、网关绑定或 IVR 配置时，如工具返回了 `conflict: true` 冲突警告或目标关联不存在（如路由的目标网关不存在、DID 重复绑定、分机号重复等），必须在回复中明确指出具体的冲突点与原因，并主动给出可替代的解决建议方案（例如建议更换 ID、先创建网关、或使用不同的前缀）。\n2. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析报告 (Analysis Report)：结合数据对当前系统状态、业务配置或呼叫流程进行专业解读。\n   - ## 🔍 根因与冲突诊断 (Diagnostics)：深入剖析原因、冲突点或可能的影响。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引。\n3. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流。"
+                "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）以及可调用的工具（Tools），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答与工具调用要求：\n1. **智能数据整理与格式清洗 (AI Reformatting)**：当用户以不规整的自然语言、微信聊天文本、非标准表格或杂乱文本粘贴数据（如分机开户、网关列表、路由规则、资费表等）要求导入时，你必须发挥 AI 智能分析能力，提取出其中的有效字段，将其整理清洗为标准的 CSV 结构文本（如分机: `username,password`，网关: `id,name,ip_address,port`，路由: `id,prefix,gateway_id,priority`，资费: `prefix,rate_per_minute`），然后将清洗好的 CSV 文本传入对应的导入工具 (`vos_import_extensions`, `vos_import_gateways`, `vos_import_routes`, `vos_import_rates`) 进行精准执行！并在回复中向用户展示你清洗好的标准表格明细。\n2. **智能冲突与重复检测**：在进行路由创建、分机开户、网关绑定或 IVR 配置时，如工具返回了 `conflict: true` 冲突警告或目标关联不存在（如路由的目标网关不存在、DID 重复绑定、分机号重复等），必须在回复中明确指出具体的冲突点与原因，并主动给出可替代的解决建议方案（例如建议更换 ID、先创建网关、或使用不同的前缀）。\n3. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析与处理报告 (Report)：结合数据对当前系统状态、业务配置或数据导入/导出结果进行专业解读。\n   - ## 🔍 数据清洗与整理明细 (Cleaned Records)：展示提取清洗后的标准结构表格。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引。\n4. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流。"
             })
         ];
 
@@ -896,11 +896,11 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_import_extensions",
-                "description": "批量导入 SIP 分机账号（支持传入 CSV 格式文本: username,password）。",
+                "description": "智能批量导入 SIP 分机账号。无论是规整的 CSV，还是杂乱的自然语言文本（如 '小王8001密码123456，小张8002密码888888'），大模型都会自动提取整理为标准 CSV ('username,password') 并通过本工具下发开户。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "content": { "type": "string", "description": "包含分机账号和密码的 CSV 文本或明细串" }
+                        "content": { "type": "string", "description": "由 AI 整理提取出的标准 CSV 格式分机明细 ('username,password')" }
                     },
                     "required": ["content"]
                 }
@@ -910,11 +910,11 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_import_gateways",
-                "description": "批量导入/更新中继网关节点（支持 CSV 文本: id,name,ip_address,port）。",
+                "description": "智能批量导入/更新中继网关节点。对于杂乱的输入文本，大模型先自动提取整理为标准 CSV ('id,name,ip_address,port')，再调用本工具下发绑定。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "content": { "type": "string", "description": "包含网关 ID、名称、IP 和端口的 CSV 文本" }
+                        "content": { "type": "string", "description": "由 AI 整理提取出的标准 CSV 格式网关明细 ('id,name,ip_address,port')" }
                     },
                     "required": ["content"]
                 }
@@ -924,11 +924,11 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_import_routes",
-                "description": "批量导入前缀路由规则并自动重载选路引擎（支持 CSV 文本: id,prefix,gateway_id,priority）。",
+                "description": "智能批量导入前缀选路路由规则。大模型先自动将杂乱输入清洗整理为标准 CSV ('id,prefix,gateway_id,priority')，再调用本工具下发并实时重载选路引擎。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "content": { "type": "string", "description": "包含路由 ID、前缀、网关 ID 和优先级的 CSV 文本" }
+                        "content": { "type": "string", "description": "由 AI 整理提取出的标准 CSV 格式路由明细 ('id,prefix,gateway_id,priority')" }
                     },
                     "required": ["content"]
                 }
@@ -938,11 +938,11 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "vos_import_rates",
-                "description": "批量导入/更新资费费率表（支持 CSV 文本: prefix,rate_per_minute）。",
+                "description": "智能批量导入/更新资费费率表。大模型先自动将杂乱输入清洗整理为标准 CSV ('prefix,rate_per_minute')，再调用本工具下发。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "content": { "type": "string", "description": "包含号码前缀和每分钟费率的 CSV 文本" }
+                        "content": { "type": "string", "description": "由 AI 整理提取出的标准 CSV 格式资费明细 ('prefix,rate_per_minute')" }
                     },
                     "required": ["content"]
                 }
