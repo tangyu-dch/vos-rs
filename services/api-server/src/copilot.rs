@@ -204,6 +204,14 @@ impl<'a> TelecomCopilotEngine<'a> {
             || q.contains("500")
             || q.contains("failed")
             || q.contains("timeout")
+            || q.contains("通话")
+            || q.contains("记录")
+            || q.contains("cdr")
+            || q.contains("呼叫")
+            || q.contains("最新")
+            || q.contains("详情")
+            || q.contains("call")
+            || q.contains("record")
         {
             return CopilotIntent::CallFailure;
         }
@@ -245,6 +253,17 @@ impl<'a> TelecomCopilotEngine<'a> {
 
         match intent {
             CopilotIntent::CallFailure | CopilotIntent::SipLadder => {
+                // 1. 总是获取绝对最新的通话记录（不论成功与否）
+                if let Ok((latest, _)) = self
+                    .state
+                    .store
+                    .list_cdrs(1, 1, None, None, None, None, None, None, None)
+                    .await
+                {
+                    payload.latest_cdr = latest.into_iter().next();
+                }
+                
+                // 2. 获取最近 10 条释放异常（失败）的通话记录
                 if let Ok((failed, _)) = self
                     .state
                     .store
@@ -253,18 +272,8 @@ impl<'a> TelecomCopilotEngine<'a> {
                 {
                     payload.recent_failed_cdrs = failed;
                 }
-                if payload.recent_failed_cdrs.is_empty() {
-                    if let Ok((latest, _)) = self
-                        .state
-                        .store
-                        .list_cdrs(1, 1, None, None, None, None, None, None, None)
-                        .await
-                    {
-                        payload.latest_cdr = latest.into_iter().next();
-                    }
-                } else {
-                    payload.latest_cdr = payload.recent_failed_cdrs.first().cloned();
-                }
+                
+                // 3. 关联获取最新通话记录的真实 SIP 信令流抓包
                 if let Some(cdr) = &payload.latest_cdr {
                     if let Ok(flows) = self.state.store.get_sip_flows(&cdr.call_id).await {
                         payload.sip_flows = flows;
