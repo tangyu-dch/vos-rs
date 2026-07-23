@@ -38,6 +38,7 @@ export interface Summary {
 }
 
 /** 24h 呼叫趋势图（支持数据渲染与零数据降级 fallback） */
+/** 24h 呼叫趋势图（支持数据渲染与零数据降级 fallback） */
 function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
   const hasData = Boolean(trends && trends.length > 0 && trends.some((t) => t.total_calls > 0));
 
@@ -51,6 +52,9 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
   const maxVal = Math.max(...displayData.map((d) => d.total_calls), 10);
   const chartHeight = 160;
   const chartWidth = 700;
+
+  // 悬停状态
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
   // 生成 SVG 路径
   const pointsTotal = displayData.map((d, idx) => {
@@ -67,9 +71,25 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
 
   const areaTotal = `0,${chartHeight} ${pointsTotal} ${chartWidth},${chartHeight}`;
 
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!hasData) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pct = x / rect.width;
+    const idx = Math.min(Math.max(Math.round(pct * (displayData.length - 1)), 0), displayData.length - 1);
+    setHoveredIdx(idx);
+  };
+
+  const handleMouseLeave = () => {
+    setHoveredIdx(null);
+  };
+
+  const hoveredData = hoveredIdx !== null ? displayData[hoveredIdx] : null;
+  const hoveredX = hoveredIdx !== null ? (hoveredIdx / (displayData.length - 1)) * chartWidth : 0;
+
   return (
     <Card shadow="sm" className="w-full">
-      <CardBody className="p-4 flex flex-col gap-3">
+      <CardBody className="p-4 flex flex-col gap-3 relative">
         <div className="flex items-center justify-between border-b border-divider pb-3">
           <div className="flex items-center gap-2">
             <BarChart2 className="w-4 h-4 text-primary" />
@@ -101,8 +121,8 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
           </div>
         ) : (
           /* 有数据正常渲染 SVG 图表 */
-          <div className="w-full overflow-x-auto pt-2">
-            <div className="min-w-[600px] flex flex-col gap-2">
+          <div className="w-full overflow-x-auto pt-2 relative">
+            <div className="min-w-[600px] flex flex-col gap-2 relative">
               <div className="flex items-center gap-4 text-tiny text-default-500 justify-end pr-2">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-primary" /> 呼叫总量
@@ -111,44 +131,103 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
                   <span className="w-2.5 h-2.5 rounded-full bg-success" /> 应答量
                 </span>
               </div>
-              <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="w-full h-40 overflow-visible">
-                {/* 网格线 */}
-                <line x1="0" y1={chartHeight} x2={chartWidth} y2={chartHeight} className="stroke-default-200" strokeWidth="1" />
-                <line x1="0" y1={chartHeight / 2} x2={chartWidth} y2={chartHeight / 2} className="stroke-default-100" strokeDasharray="3 3" />
+              
+              <div className="relative">
+                <svg 
+                  viewBox={`0 0 ${chartWidth} ${chartHeight}`} 
+                  className="w-full h-40 overflow-visible cursor-crosshair"
+                  onMouseMove={handleMouseMove}
+                  onMouseLeave={handleMouseLeave}
+                >
+                  {/* 网格线 */}
+                  <line x1="0" y1={chartHeight} x2={chartWidth} y2={chartHeight} className="stroke-default-200" strokeWidth="1" />
+                  <line x1="0" y1={chartHeight / 2} x2={chartWidth} y2={chartHeight / 2} className="stroke-default-100" strokeDasharray="3 3" />
 
-                {/* 呼叫总量渐变填充 */}
-                <defs>
-                  <linearGradient id="totalGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.25" />
-                    <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.0" />
-                  </linearGradient>
-                </defs>
-                <polygon points={areaTotal} fill="url(#totalGradient)" />
+                  {/* 呼叫总量渐变填充 */}
+                  <defs>
+                    <linearGradient id="totalGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.25" />
+                      <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.0" />
+                    </linearGradient>
+                  </defs>
+                  <polygon points={areaTotal} fill="url(#totalGradient)" />
 
-                {/* 趋势折线 */}
-                <polyline fill="none" className="stroke-primary" strokeWidth="2.5" points={pointsTotal} />
-                <polyline fill="none" className="stroke-success" strokeWidth="2" strokeDasharray="4 2" points={pointsAnswered} />
+                  {/* 趋势折线 */}
+                  <polyline fill="none" className="stroke-primary" strokeWidth="2.5" points={pointsTotal} />
+                  <polyline fill="none" className="stroke-success" strokeWidth="2" strokeDasharray="4 2" points={pointsAnswered} />
 
-                {/* 数据节点点阵 */}
+                  {/* 数据节点点阵 */}
+                  {displayData.map((d, idx) => {
+                    const x = (idx / (displayData.length - 1)) * chartWidth;
+                    const y = chartHeight - (d.total_calls / maxVal) * (chartHeight - 20);
+                    if (d.total_calls === 0) return null;
+                    return (
+                      <circle key={d.hour} cx={x} cy={y} r="3" className="fill-primary stroke-white" strokeWidth="1.5" />
+                    );
+                  })}
+
+                  {/* 悬停辅助垂直线 */}
+                  {hoveredIdx !== null && (
+                    <line 
+                      x1={hoveredX} 
+                      y1={0} 
+                      x2={hoveredX} 
+                      y2={chartHeight} 
+                      className="stroke-default-400" 
+                      strokeWidth="1.5" 
+                      strokeDasharray="3 3" 
+                    />
+                  )}
+                </svg>
+
+                {/* 浮动提示框 Tooltip */}
+                {hoveredIdx !== null && hoveredData && (
+                  <div 
+                    className="absolute z-50 pointer-events-none bg-background/95 dark:bg-slate-900/95 backdrop-blur shadow-lg border border-default-200 p-2.5 rounded-lg text-tiny font-mono flex flex-col gap-1 w-44"
+                    style={{
+                      left: `${Math.min(Math.max((hoveredX / chartWidth) * 100, 5), 75)}%`,
+                      top: '10px'
+                    }}
+                  >
+                    <div className="font-bold border-b border-default-200 pb-1 mb-1 text-foreground text-center">
+                      时间点：{hoveredData.hour}
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-default-500 flex items-center gap-1">
+                        <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse" /> 呼叫总量:
+                      </span>
+                      <span className="font-bold text-primary">{hoveredData.total_calls}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-default-500 flex items-center gap-1">
+                        <span className="w-2.5 h-2.5 rounded-full bg-success" /> 应答数量:
+                      </span>
+                      <span className="font-bold text-success">{hoveredData.answered_calls}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-default-500 flex items-center gap-1">
+                        接通率 (ASR):
+                      </span>
+                      <span className="font-bold text-secondary">
+                        {hoveredData.total_calls > 0 
+                          ? `${((hoveredData.answered_calls / hoveredData.total_calls) * 100).toFixed(3)}%`
+                          : '0.000%'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* X 轴时间刻度 - 动态展示近 24 小时 */}
+              <div className="flex justify-between text-[10px] text-default-400 px-1 font-mono">
                 {displayData.map((d, idx) => {
-                  const x = (idx / (displayData.length - 1)) * chartWidth;
-                  const y = chartHeight - (d.total_calls / maxVal) * (chartHeight - 20);
-                  if (d.total_calls === 0) return null;
+                  const showLabel = idx % 2 === 0 || idx === displayData.length - 1;
                   return (
-                    <circle key={d.hour} cx={x} cy={y} r="3" className="fill-primary stroke-white" strokeWidth="1.5" />
+                    <span key={idx} className={showLabel ? '' : 'opacity-0'}>
+                      {d.hour}
+                    </span>
                   );
                 })}
-              </svg>
-
-              {/* X 轴时间刻度 */}
-              <div className="flex justify-between text-[10px] text-default-400 px-1">
-                <span>00:00</span>
-                <span>04:00</span>
-                <span>08:00</span>
-                <span>12:00</span>
-                <span>16:00</span>
-                <span>20:00</span>
-                <span>23:00</span>
               </div>
             </div>
           </div>
@@ -310,6 +389,9 @@ function NodeTrafficSection() {
   const [trafficData, setTrafficData] = useState<NodeTrafficData[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState<'all' | 'sip' | 'media'>('all');
+  
+  // 悬停状态
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
   const loadTraffic = useCallback(async () => {
     try {
@@ -376,9 +458,25 @@ function NodeTrafficSection() {
     return `${kbps} Kbps`;
   };
 
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (allHours.length === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pct = x / rect.width;
+    const idx = Math.min(Math.max(Math.round(pct * (allHours.length - 1)), 0), allHours.length - 1);
+    setHoveredIdx(idx);
+  };
+
+  const handleMouseLeave = () => {
+    setHoveredIdx(null);
+  };
+
+  const hoveredX = hoveredIdx !== null && allHours.length > 1 ? (hoveredIdx / (allHours.length - 1)) * chartWidth : 0;
+  const hoveredTime = hoveredIdx !== null ? allHours[hoveredIdx] : '';
+
   return (
     <Card shadow="sm" className="w-full">
-      <CardBody className="p-4 flex flex-col gap-4">
+      <CardBody className="p-4 flex flex-col gap-4 relative">
         <div className="flex flex-wrap items-center justify-between border-b border-divider pb-3 gap-2">
           <div className="flex items-center gap-2">
             <Radio className="w-4 h-4 text-primary" />
@@ -421,7 +519,7 @@ function NodeTrafficSection() {
             <p className="text-tiny text-default-400">没有匹配的节点流量数据</p>
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4 relative">
             <div className="flex flex-wrap gap-x-4 gap-y-2 text-tiny justify-end">
               {filteredData.map((node, idx) => {
                 const c = getNodeColor(node.node_id, idx);
@@ -437,67 +535,118 @@ function NodeTrafficSection() {
               })}
             </div>
 
-            <div className="w-full overflow-x-auto pt-2">
-              <div className="min-w-[650px] flex flex-col gap-2">
-                <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="w-full h-44 overflow-visible">
-                  <line x1="0" y1={chartHeight} x2={chartWidth} y2={chartHeight} className="stroke-default-200" strokeWidth="1" />
-                  <line x1="0" y1={chartHeight * 0.75} x2={chartWidth} y2={chartHeight * 0.75} className="stroke-default-100" strokeDasharray="3 3" />
-                  <line x1="0" y1={chartHeight * 0.5} x2={chartWidth} y2={chartHeight * 0.5} className="stroke-default-100" strokeDasharray="3 3" />
-                  <line x1="0" y1={chartHeight * 0.25} x2={chartWidth} y2={chartHeight * 0.25} className="stroke-default-100" strokeDasharray="3 3" />
+            <div className="w-full overflow-x-auto pt-2 relative">
+              <div className="min-w-[650px] flex flex-col gap-2 relative">
+                <div className="relative">
+                  <svg 
+                    viewBox={`0 0 ${chartWidth} ${chartHeight}`} 
+                    className="w-full h-44 overflow-visible cursor-crosshair"
+                    onMouseMove={handleMouseMove}
+                    onMouseLeave={handleMouseLeave}
+                  >
+                    <line x1="0" y1={chartHeight} x2={chartWidth} y2={chartHeight} className="stroke-default-200" strokeWidth="1" />
+                    <line x1="0" y1={chartHeight * 0.75} x2={chartWidth} y2={chartHeight * 0.75} className="stroke-default-100" strokeDasharray="3 3" />
+                    <line x1="0" y1={chartHeight * 0.5} x2={chartWidth} y2={chartHeight * 0.5} className="stroke-default-100" strokeDasharray="3 3" />
+                    <line x1="0" y1={chartHeight * 0.25} x2={chartWidth} y2={chartHeight * 0.25} className="stroke-default-100" strokeDasharray="3 3" />
 
-                  <text x="5" y={chartHeight * 0.25 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.75))}/s</text>
-                  <text x="5" y={chartHeight * 0.5 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.5))}/s</text>
-                  <text x="5" y={chartHeight * 0.75 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.25))}/s</text>
+                    <text x="5" y={chartHeight * 0.25 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.75))}/s</text>
+                    <text x="5" y={chartHeight * 0.5 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.5))}/s</text>
+                    <text x="5" y={chartHeight * 0.75 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.25))}/s</text>
 
-                  {filteredData.map((node, nodeIdx) => {
-                    const c = getNodeColor(node.node_id, nodeIdx);
-                    
-                    const points = node.series.map((item, idx) => {
-                      const x = (idx / (node.series.length - 1)) * chartWidth;
-                      const y = chartHeight - (item.kbps / maxVal) * (chartHeight - 30);
-                      return `${x},${y}`;
-                    }).join(' ');
+                    {filteredData.map((node, nodeIdx) => {
+                      const c = getNodeColor(node.node_id, nodeIdx);
+                      
+                      const points = node.series.map((item, idx) => {
+                        const x = (idx / (node.series.length - 1)) * chartWidth;
+                        const y = chartHeight - (item.kbps / maxVal) * (chartHeight - 30);
+                        return `${x},${y}`;
+                      }).join(' ');
 
-                    return (
-                      <g key={node.node_id}>
-                        <polyline 
-                          fill="none" 
-                          stroke={c.stroke} 
-                          strokeWidth="2.5" 
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          points={points} 
-                          style={{ filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.08))' }}
-                        />
-                        {node.series.map((item, idx) => {
-                          const x = (idx / (node.series.length - 1)) * chartWidth;
-                          const y = chartHeight - (item.kbps / maxVal) * (chartHeight - 30);
-                          if (idx % 3 !== 0 && idx !== node.series.length - 1) return null;
-                          return (
-                            <circle 
-                              key={idx} 
-                              cx={x} 
-                              cy={y} 
-                              r="3.5" 
-                              fill={c.stroke}
-                              className="stroke-white dark:stroke-slate-900" 
-                              strokeWidth="1.5"
-                            />
-                          );
-                        })}
-                      </g>
-                    );
-                  })}
-                </svg>
+                      return (
+                        <g key={node.node_id}>
+                          <polyline 
+                            fill="none" 
+                            stroke={c.stroke} 
+                            strokeWidth="2.5" 
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            points={points} 
+                            style={{ filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.08))' }}
+                          />
+                          {node.series.map((item, idx) => {
+                            const x = (idx / (node.series.length - 1)) * chartWidth;
+                            const y = chartHeight - (item.kbps / maxVal) * (chartHeight - 30);
+                            if (idx % 3 !== 0 && idx !== node.series.length - 1) return null;
+                            return (
+                              <circle 
+                                key={idx} 
+                                cx={x} 
+                                cy={y} 
+                                r="3.5" 
+                                fill={c.stroke}
+                                className="stroke-white dark:stroke-slate-900" 
+                                strokeWidth="1.5"
+                              />
+                            );
+                          })}
+                        </g>
+                      );
+                    })}
 
+                    {/* 悬停辅助垂直线 */}
+                    {hoveredIdx !== null && (
+                      <line 
+                        x1={hoveredX} 
+                        y1={0} 
+                        x2={hoveredX} 
+                        y2={chartHeight} 
+                        className="stroke-default-400" 
+                        strokeWidth="1.5" 
+                        strokeDasharray="3 3" 
+                      />
+                    )}
+                  </svg>
+
+                  {/* 浮动提示框 Tooltip */}
+                  {hoveredIdx !== null && hoveredTime && (
+                    <div 
+                      className="absolute z-50 pointer-events-none bg-background/95 dark:bg-slate-900/95 backdrop-blur shadow-lg border border-default-200 p-2.5 rounded-lg text-tiny font-mono flex flex-col gap-1 w-52"
+                      style={{
+                        left: `${Math.min(Math.max((hoveredX / chartWidth) * 100, 5), 72)}%`,
+                        top: '10px'
+                      }}
+                    >
+                      <div className="font-bold border-b border-default-200 pb-1 mb-1 text-foreground text-center">
+                        采样时刻：{hoveredTime}
+                      </div>
+                      {filteredData.map((node, nodeIdx) => {
+                        const c = getNodeColor(node.node_id, nodeIdx);
+                        const val = node.series[hoveredIdx]?.kbps || 0;
+                        return (
+                          <div key={node.node_id} className="flex justify-between gap-4 items-center">
+                            <span className="text-default-500 flex items-center gap-1.5 truncate max-w-[120px]">
+                              <span className={`w-2 h-2 rounded-full ${c.dot}`} />
+                              {node.node_id}:
+                            </span>
+                            <span className={`font-bold ${c.text}`}>{formatKbps(val)}/s</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* X 轴时间刻度 - 动态展示近 24 小时 */}
                 {allHours.length > 0 && (
                   <div className="flex justify-between text-[10px] text-default-400 px-1 font-mono">
-                    <span>{allHours[0]}</span>
-                    <span>{allHours[Math.floor(allHours.length * 0.2)]}</span>
-                    <span>{allHours[Math.floor(allHours.length * 0.4)]}</span>
-                    <span>{allHours[Math.floor(allHours.length * 0.6)]}</span>
-                    <span>{allHours[Math.floor(allHours.length * 0.8)]}</span>
-                    <span>{allHours[allHours.length - 1]}</span>
+                    {allHours.map((hour, idx) => {
+                      const showLabel = idx % 2 === 0 || idx === allHours.length - 1;
+                      return (
+                        <span key={idx} className={showLabel ? '' : 'opacity-0'}>
+                          {hour}
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
               </div>
