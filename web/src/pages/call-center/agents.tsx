@@ -123,10 +123,7 @@ export default function AgentsPage() {
     }
     try {
       setLoading(true);
-      const response = (await api.get('/call-center/agents?export=true', {
-        responseType: 'blob',
-      })) as any;
-      const blob = response.data;
+      const blob = await api.blob('/call-center/agents?export=true');
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.setAttribute('href', url);

@@ -69,10 +69,7 @@ export function ActiveCallsPage() {
     }
     try {
       setLoading(true);
-      const response = (await api.get('/calls/active?export=true', {
-        responseType: 'blob',
-      })) as any;
-      const blob = response.data;
+      const blob = await api.blob('/calls/active?export=true');
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.setAttribute('href', url);

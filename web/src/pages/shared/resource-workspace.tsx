@@ -230,23 +230,11 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
         ...spec.params,
       }).toString();
 
-      const response = (await api.get(`${spec.path}?${queryParams}`, {
-        responseType: 'blob',
-      })) as any;
-
-      const blob = response.data;
+      const blob = await api.blob(`${spec.path}?${queryParams}`);
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.setAttribute('href', url);
-
-      const contentDisposition = response.headers['content-disposition'];
-      let filename = `${spec.title}_${new Date().toISOString().slice(0, 10)}.csv`;
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename="?([^"]+)"?/);
-        if (match && match[1]) {
-          filename = match[1];
-        }
-      }
+      const filename = `${spec.title}_${new Date().toISOString().slice(0, 10)}.csv`;
 
       link.setAttribute('download', filename);
       link.style.visibility = 'hidden';
@@ -264,21 +252,11 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
   const downloadTemplate = async () => {
     try {
       setLoading(true);
-      const response = (await api.get(`${spec.path}/import-template`, {
-        responseType: 'blob',
-      })) as any;
-      const blob = response.data;
+      const blob = await api.blob(`${spec.path}/import-template`);
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.setAttribute('href', url);
-      const contentDisposition = response.headers['content-disposition'];
-      let filename = `${spec.title}_导入模板.csv`;
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename="?([^"]+)"?/);
-        if (match && match[1]) {
-          filename = match[1];
-        }
-      }
+      const filename = `${spec.title}_导入模板.csv`;
       link.setAttribute('download', filename);
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
