@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Input, ScrollShadow, Spinner } from '@heroui/react';
 import {
   Send, Bot, User, AlertTriangle, Lightbulb, RefreshCw,
-  Download, Trash2, Square, Paperclip, Image as ImageIcon, X, FileText,
+  Download, Trash2, Square, Paperclip, Image as ImageIcon, X, FileText, Mic, Volume2,
 } from 'lucide-react';
 import { api } from '@/services/client';
 import { getAccessToken } from '@/services/auth';
@@ -107,6 +107,117 @@ export function CopilotPage() {
       message.success('已自动捕获剪贴板图片/文件附件');
     }
   }, [processFiles]);
+
+  // ============ STT 语音识别与 TTS 语音播报状态 ============
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSec, setRecordingSec] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<number | null>(null);
+  const [playingMsgId, setPlayingMsgId] = useState<string | null>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+
+  const toggleRecording = useCallback(async () => {
+    if (isRecording) {
+      // 停止录音并触发 STT
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        message.info('正在通过 STT 语音引擎识别...');
+
+        try {
+          const formData = new FormData();
+          formData.append('audio', audioBlob, 'speech.webm');
+          if (activeModel?.id) formData.append('model_id', String(activeModel.id));
+
+          const token = getAccessToken();
+          const res = await fetch('/api/speech/stt', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: formData,
+          });
+
+          if (!res.ok) throw new Error('语音识别失败');
+          const data: { text: string } = await res.json();
+
+          if (data.text) {
+            setInputQuery(data.text);
+            message.success(`识别成功: "${data.text}"`);
+          } else {
+            message.warning('未识别出有效文本');
+          }
+        } catch {
+          message.error('语音识别解析失败，请检查 STT 模型配置');
+        }
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+      setRecordingSec(0);
+
+      recordTimerRef.current = window.setInterval(() => {
+        setRecordingSec((prev) => prev + 1);
+      }, 1000);
+    } catch {
+      message.error('无法访问麦克风，请检查浏览器权限设置');
+    }
+  }, [isRecording, activeModel]);
+
+  const playTts = useCallback(async (msgId: string, text: string) => {
+    if (playingMsgId === msgId && audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      setPlayingMsgId(null);
+      return;
+    }
+
+    message.info('正在由 TTS 语音引擎合成分析报告...');
+    try {
+      const token = getAccessToken();
+      const res = await fetch('/api/speech/tts', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text, model_id: activeModel?.id }),
+      });
+
+      if (!res.ok) throw new Error('TTS 合成失败');
+      const blob = await res.blob();
+      const audioUrl = URL.createObjectURL(blob);
+
+      if (audioPlayerRef.current) audioPlayerRef.current.pause();
+      const audio = new Audio(audioUrl);
+      audioPlayerRef.current = audio;
+
+      audio.onended = () => setPlayingMsgId(null);
+      audio.onerror = () => {
+        message.error('播放合成音频失败');
+        setPlayingMsgId(null);
+      };
+
+      await audio.play();
+      setPlayingMsgId(msgId);
+    } catch {
+      message.error('TTS 语音合成失败，请检查模型设置中是否开启支持 TTS 的厂商模型');
+    }
+  }, [playingMsgId, activeModel]);
 
   // ============ 自动滚动到底部（流式输出 + 新消息）============
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -539,7 +650,16 @@ export function CopilotPage() {
                         ) : (
                           <>
                             <MarkdownReport content={m.text} />
-                            <div className="flex items-center justify-end gap-2 mt-2 pt-1 border-t border-default-100/50 text-[10px] text-default-400">
+                            <div className="flex items-center justify-end gap-3 mt-2 pt-1 border-t border-default-100/50 text-[10px] text-default-400">
+                              <button
+                                type="button"
+                                onClick={() => playTts(m.id, m.text)}
+                                className={`hover:text-primary transition-colors flex items-center gap-1 cursor-pointer ${
+                                  playingMsgId === m.id ? 'text-primary font-bold animate-pulse' : ''
+                                }`}
+                              >
+                                <Volume2 className="w-3 h-3" /> {playingMsgId === m.id ? '暂停朗读' : '语音朗读'}
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -590,6 +710,23 @@ export function CopilotPage() {
 
           {/* 底部浮动输入框胶囊（包含附件预览、图片识别与焦点态增强）*/}
           <div className="w-full px-4 py-4 shrink-0 bg-transparent flex flex-col gap-2">
+            {/* 录音中的红色浮动指示 Pills */}
+            {isRecording && (
+              <div className="w-full max-w-[94%] mx-auto flex items-center justify-between px-4 py-2 bg-danger/10 border border-danger/30 rounded-2xl text-xs text-danger font-medium animate-pulse shadow-sm">
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-danger animate-ping" />
+                  <span>正在录音中... ({recordingSec} 秒)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleRecording}
+                  className="px-3 py-1 bg-danger text-danger-foreground rounded-lg font-bold hover:bg-danger/90 transition-colors"
+                >
+                  停止并识别
+                </button>
+              </div>
+            )}
+
             {/* 已附件列表预览 Chip Pills */}
             {attachedFiles.length > 0 && (
               <div className="w-full max-w-[94%] mx-auto flex flex-wrap items-center gap-2 px-2">
@@ -651,6 +788,18 @@ export function CopilotPage() {
                 isDisabled={sending}
                 startContent={
                   <div className="flex items-center gap-1.5 text-default-400 mr-1">
+                    <button
+                      type="button"
+                      title={isRecording ? '点击停止录音' : '按麦克风开启 STT 语音识别'}
+                      onClick={toggleRecording}
+                      className={`p-1 rounded-lg transition-colors ${
+                        isRecording
+                          ? 'text-danger bg-danger/10 animate-pulse'
+                          : 'hover:text-primary hover:bg-default-100'
+                      }`}
+                    >
+                      <Mic className="w-4 h-4" />
+                    </button>
                     <button
                       type="button"
                       title="上传数据/日志文件 (.csv, .json, .txt, .log)"
