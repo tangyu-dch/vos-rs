@@ -278,6 +278,7 @@ impl PostgresCdrStore {
         active_calls: i64,
     ) -> Result<DashboardStats, sqlx::Error> {
         let today_start = time::OffsetDateTime::now_utc()
+            .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC))
             .replace_time(time::Time::from_hms(0, 0, 0).unwrap_or(time::Time::MIDNIGHT));
         let row = sqlx::query(
             "SELECT \
@@ -334,6 +335,7 @@ impl PostgresCdrStore {
 
     pub async fn get_hourly_trend(&self) -> Result<Vec<HourlyTrend>, sqlx::Error> {
         let today_start = time::OffsetDateTime::now_utc()
+            .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC))
             .replace_time(time::Time::from_hms(0, 0, 0).unwrap_or(time::Time::MIDNIGHT));
         let rows = sqlx::query(
             "SELECT EXTRACT(HOUR FROM started_at)::INTEGER as hour, \

@@ -133,7 +133,8 @@ pub async fn get_node_traffic(
     let sip_nodes = crate::sip_cluster::get_node_list(&state).await;
     let media_nodes = crate::media_cluster::get_node_list(&state).await;
 
-    let now = time::OffsetDateTime::now_utc();
+    let now = time::OffsetDateTime::now_utc()
+        .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));
     let current_hour = now.hour() as i32;
     let mut hours = Vec::new();
     for i in (0..24).rev() {
@@ -226,7 +227,8 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
         let sip_nodes = crate::sip_cluster::get_node_list(&state).await;
         let media_nodes = crate::media_cluster::get_node_list(&state).await;
 
-        let now = time::OffsetDateTime::now_utc();
+        let now = time::OffsetDateTime::now_utc()
+            .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));
         let hour_str = format!("{:02}:00", now.hour());
         let nanos = now.unix_timestamp_nanos() as u64;
 
