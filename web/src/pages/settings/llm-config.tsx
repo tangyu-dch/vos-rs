@@ -19,7 +19,7 @@ import {
 } from './llm-presets';
 
 const EMPTY_FORM: UpsertLlmConfigInput = {
-  name: '', provider: 'zhipu', api_key: '', base_url: '', model: '', temperature: 0.3,
+  name: '', provider: '', api_key: '', base_url: '', model: '', temperature: 0.3,
 };
 
 const PAGE_SIZE = 10;
@@ -103,8 +103,8 @@ export function LlmConfigPage() {
   };
 
   const handleSave = async () => {
-    if (!form.name.trim() || !form.api_key.trim() || !form.base_url.trim() || !form.model.trim()) {
-      message.warning('请填写名称、API Key、Base URL 和模型');
+    if (!form.name.trim() || !form.provider.trim() || !form.api_key.trim() || !form.base_url.trim() || !form.model.trim()) {
+      message.warning('请选择厂商并填写名称、API Key、Base URL 和模型');
       return;
     }
     setSaving(true);
