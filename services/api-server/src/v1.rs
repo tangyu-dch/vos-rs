@@ -79,6 +79,14 @@ fn subscriber_routes() -> Router<AppState> {
             get(users::list_users).post(users::create_user),
         )
         .route(
+            "/api/v1/extensions/import",
+            post(crate::import::import_users),
+        )
+        .route(
+            "/api/v1/extensions/import-template",
+            get(crate::import::import_users_template),
+        )
+        .route(
             "/api/v1/extensions/:username",
             get(details::extension)
                 .put(users::update_user)
@@ -91,6 +99,14 @@ fn subscriber_routes() -> Router<AppState> {
         .route(
             "/api/v1/numbers",
             get(numbers::list_numbers).post(numbers::create_number),
+        )
+        .route(
+            "/api/v1/numbers/import",
+            post(crate::import::import_numbers),
+        )
+        .route(
+            "/api/v1/numbers/import-template",
+            get(crate::import::import_numbers_template),
         )
         .route(
             "/api/v1/numbers/:number",
@@ -192,6 +208,14 @@ fn routing_routes() -> Router<AppState> {
             get(routes::list_routes).post(routes::create_route),
         )
         .route(
+            "/api/v1/routing/rules/import",
+            post(crate::import::import_routes),
+        )
+        .route(
+            "/api/v1/routing/rules/import-template",
+            get(crate::import::import_routes_template),
+        )
+        .route(
             "/api/v1/routing/rules/:id",
             put(routes::update_route).delete(routes::delete_route),
         )
@@ -238,6 +262,14 @@ fn billing_routes() -> Router<AppState> {
         .route(
             "/api/v1/billing/rates",
             get(billing::list_rates).post(billing::create_rate),
+        )
+        .route(
+            "/api/v1/billing/rates/import",
+            post(crate::import::import_rates),
+        )
+        .route(
+            "/api/v1/billing/rates/import-template",
+            get(crate::import::import_rates_template),
         )
         .route(
             "/api/v1/billing/rates/:id",

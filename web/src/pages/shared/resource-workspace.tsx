@@ -489,7 +489,7 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
               <Button variant="flat" size="sm" onPress={exportData} startContent={<Download className="w-4 h-4" />}>
                 导出
               </Button>
-              {['/api/users', '/api/numbers', '/api/rates', '/api/routes'].includes(spec.path) && (
+              {['/extensions', '/numbers', '/billing/rates', '/routing/rules'].includes(spec.path) && (
                 <Button variant="flat" size="sm" onPress={() => setIsImportOpen(true)} startContent={<Upload className="w-4 h-4" />}>
                   导入
                 </Button>
