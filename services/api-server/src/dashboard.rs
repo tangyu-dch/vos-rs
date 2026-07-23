@@ -8,9 +8,23 @@ use futures::stream::{self, Stream};
 
 use crate::{ApiError, AppState};
 
+#[derive(Debug, serde::Serialize)]
+pub struct HourlyTrendResponse {
+    pub hour: String,
+    pub total_calls: i64,
+    pub answered_calls: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SummaryResponse {
+    #[serde(flatten)]
+    pub stats: DashboardStats,
+    pub hourly_trends: Vec<HourlyTrendResponse>,
+}
+
 pub async fn get_dashboard_stats(
     State(state): State<AppState>,
-) -> Result<Json<DashboardStats>, ApiError> {
+) -> Result<Json<SummaryResponse>, ApiError> {
     let active_calls = {
         let url = format!("{}/manage/active-calls", state.sip_manage_base);
         let token = &state.internal_secret;
@@ -18,14 +32,7 @@ pub async fn get_dashboard_stats(
         let request = if !token.is_empty() {
             request.header("X-VOS-Token", token)
         } else {
-            return state
-                .store
-                .get_dashboard_stats(0)
-                .await
-                .map(Json)
-                .map_err(|e| ApiError {
-                    error: e.to_string(),
-                });
+            request
         };
         match request.send().await {
             Ok(resp) => resp
@@ -36,14 +43,31 @@ pub async fn get_dashboard_stats(
             Err(_) => 0,
         }
     };
-    state
-        .store
-        .get_dashboard_stats(active_calls)
-        .await
-        .map(Json)
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })
+
+    let stats = state.store.get_dashboard_stats(active_calls).await.map_err(|e| ApiError {
+        error: e.to_string(),
+    })?;
+
+    let trends = state.store.get_hourly_trend().await.unwrap_or_default();
+
+    let now = time::OffsetDateTime::now_utc()
+        .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));
+    let current_hour = now.hour() as i32;
+    let mut hourly_trends = Vec::new();
+    for i in (0..24).rev() {
+        let h = (current_hour - i + 24) % 24;
+        let hour_str = format!("{:02}:00", h);
+        let db_trend = trends.iter().find(|t| t.hour == h);
+        let total_calls = db_trend.map(|t| t.total).unwrap_or(0);
+        let answered_calls = db_trend.map(|t| t.answered).unwrap_or(0);
+        hourly_trends.push(HourlyTrendResponse {
+            hour: hour_str,
+            total_calls,
+            answered_calls,
+        });
+    }
+
+    Ok(Json(SummaryResponse { stats, hourly_trends }))
 }
 
 pub async fn get_dashboard_trend(
@@ -133,35 +157,27 @@ pub async fn get_node_traffic(
     let sip_nodes = crate::sip_cluster::get_node_list(&state).await;
     let media_nodes = crate::media_cluster::get_node_list(&state).await;
 
-    let now = time::OffsetDateTime::now_utc()
-        .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));
-    let current_hour = now.hour() as i32;
-    let mut hours = Vec::new();
-    for i in (0..24).rev() {
-        let h = (current_hour - i + 24) % 24;
-        hours.push(h);
-    }
-
     let mut result = Vec::new();
     let mut conn = state.redis_client.clone();
 
     // 1. SIP Nodes
     for node_id in sip_nodes {
-        let redis_key = format!("vos_rs:traffic:{}", node_id);
-        let traffic_map: std::collections::HashMap<String, u64> = redis::cmd("HGETALL")
+        let redis_key = format!("vos_rs:traffic:list:{}", node_id);
+        let list: Vec<String> = redis::cmd("LRANGE")
             .arg(&redis_key)
+            .arg(0)
+            .arg(-1)
             .query_async(&mut conn)
             .await
             .unwrap_or_default();
 
         let mut series = Vec::new();
-        for &h in &hours {
-            let hour_str = format!("{:02}:00", h);
-            let kbps = traffic_map.get(&hour_str).cloned().unwrap_or(0);
-            series.push(NodeTrafficItem {
-                hour: hour_str,
-                kbps,
-            });
+        for item_str in list {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&item_str) {
+                let hour = val.get("time").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let kbps = val.get("kbps").and_then(|v| v.as_u64()).unwrap_or(0);
+                series.push(NodeTrafficItem { hour, kbps });
+            }
         }
         result.push(NodeTrafficData {
             node_id,
@@ -172,21 +188,22 @@ pub async fn get_node_traffic(
 
     // 2. Media Nodes
     for node_id in media_nodes {
-        let redis_key = format!("vos_rs:traffic:{}", node_id);
-        let traffic_map: std::collections::HashMap<String, u64> = redis::cmd("HGETALL")
+        let redis_key = format!("vos_rs:traffic:list:{}", node_id);
+        let list: Vec<String> = redis::cmd("LRANGE")
             .arg(&redis_key)
+            .arg(0)
+            .arg(-1)
             .query_async(&mut conn)
             .await
             .unwrap_or_default();
 
         let mut series = Vec::new();
-        for &h in &hours {
-            let hour_str = format!("{:02}:00", h);
-            let kbps = traffic_map.get(&hour_str).cloned().unwrap_or(0);
-            series.push(NodeTrafficItem {
-                hour: hour_str,
-                kbps,
-            });
+        for item_str in list {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&item_str) {
+                let hour = val.get("time").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let kbps = val.get("kbps").and_then(|v| v.as_u64()).unwrap_or(0);
+                series.push(NodeTrafficItem { hour, kbps });
+            }
         }
         result.push(NodeTrafficData {
             node_id,
@@ -229,7 +246,7 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
 
         let now = time::OffsetDateTime::now_utc()
             .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));
-        let hour_str = format!("{:02}:00", now.hour());
+        let time_str = format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second());
         let nanos = now.unix_timestamp_nanos() as u64;
 
         let mut conn = state.redis_client.clone();
@@ -240,11 +257,22 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
             let node_calls = if sip_count > 0 { active_calls / sip_count } else { active_calls };
             let jitter = nanos % 4;
             let kbps = 15 + node_calls * 8 + jitter;
-            let redis_key = format!("vos_rs:traffic:{}", node_id);
-            let _: Result<(), redis::RedisError> = redis::cmd("HSET")
+            let redis_key = format!("vos_rs:traffic:list:{}", node_id);
+            let payload = serde_json::json!({
+                "time": time_str,
+                "kbps": kbps
+            }).to_string();
+
+            let _: Result<(), redis::RedisError> = redis::cmd("RPUSH")
                 .arg(&redis_key)
-                .arg(&hour_str)
-                .arg(kbps)
+                .arg(&payload)
+                .query_async(&mut conn)
+                .await;
+
+            let _: Result<(), redis::RedisError> = redis::cmd("LTRIM")
+                .arg(&redis_key)
+                .arg(-30)
+                .arg(-1)
                 .query_async(&mut conn)
                 .await;
         }
@@ -255,11 +283,22 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
             let node_calls = if media_count > 0 { active_calls / media_count } else { active_calls };
             let jitter = nanos % 15;
             let kbps = 64 + node_calls * 160 + jitter;
-            let redis_key = format!("vos_rs:traffic:{}", node_id);
-            let _: Result<(), redis::RedisError> = redis::cmd("HSET")
+            let redis_key = format!("vos_rs:traffic:list:{}", node_id);
+            let payload = serde_json::json!({
+                "time": time_str,
+                "kbps": kbps
+            }).to_string();
+
+            let _: Result<(), redis::RedisError> = redis::cmd("RPUSH")
                 .arg(&redis_key)
-                .arg(&hour_str)
-                .arg(kbps)
+                .arg(&payload)
+                .query_async(&mut conn)
+                .await;
+
+            let _: Result<(), redis::RedisError> = redis::cmd("LTRIM")
+                .arg(&redis_key)
+                .arg(-30)
+                .arg(-1)
                 .query_async(&mut conn)
                 .await;
         }

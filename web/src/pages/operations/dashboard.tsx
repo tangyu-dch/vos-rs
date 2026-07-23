@@ -235,8 +235,8 @@ function MosQualitySection({ data }: { data: Summary }) {
 /** 呼叫成功率与 ASR 分析（含零数据降级） */
 function SuccessRateSection({ data }: { data: Summary }) {
   const hasCalls = Boolean(data.today_total_calls && data.today_total_calls > 0);
-  const asr = data.answer_rate !== undefined ? data.answer_rate : (hasCalls ? 100 : undefined);
-  const ner = data.ner_rate !== undefined ? data.ner_rate : (hasCalls ? 100 : undefined);
+  const asr = data.answer_rate !== undefined ? data.answer_rate * 100 : (hasCalls ? 100 : undefined);
+  const ner = data.ner_rate !== undefined ? data.ner_rate * 100 : (hasCalls ? 100 : undefined);
 
   return (
     <Card shadow="sm">
@@ -257,7 +257,7 @@ function SuccessRateSection({ data }: { data: Summary }) {
             <div className="flex justify-between text-tiny">
               <span className="font-medium text-default-500">接通率 (ASR)</span>
               <span className={`font-bold font-mono ${asr !== undefined ? 'text-success' : 'text-default-400'}`}>
-                {asr !== undefined ? `${asr}%` : '—%'}
+                {asr !== undefined ? `${asr.toFixed(3)}%` : '—%'}
               </span>
             </div>
             <Progress
@@ -273,7 +273,7 @@ function SuccessRateSection({ data }: { data: Summary }) {
             <div className="flex justify-between text-tiny">
               <span className="font-medium text-default-500">网络有效到达率 (NER)</span>
               <span className={`font-bold font-mono ${ner !== undefined ? 'text-primary' : 'text-default-400'}`}>
-                {ner !== undefined ? `${ner}%` : '—%'}
+                {ner !== undefined ? `${ner.toFixed(3)}%` : '—%'}
               </span>
             </div>
             <Progress
@@ -747,7 +747,7 @@ export function DashboardPage() {
   const metrics: Array<{ label: string; value: string; valueClassName: string; icon: ReactNode }> = [
     { label: '活跃通话', value: valueText(data.active_calls), valueClassName: 'text-success', icon: <Activity className="w-4 h-4 text-success" /> },
     { label: '今日呼叫', value: valueText(data.today_total_calls), valueClassName: 'text-primary', icon: <PhoneCall className="w-4 h-4 text-primary" /> },
-    { label: '接通率 (ASR)', value: data.answer_rate === undefined ? '—' : `${data.answer_rate}%`, valueClassName: 'text-secondary', icon: <Sparkles className="w-4 h-4 text-secondary" /> },
+    { label: '接通率 (ASR)', value: data.answer_rate === undefined ? '—' : `${(data.answer_rate * 100).toFixed(3)}%`, valueClassName: 'text-secondary', icon: <Sparkles className="w-4 h-4 text-secondary" /> },
     { label: '平均 MOS 评分', value: data.avg_mos !== undefined && data.avg_mos > 0 ? `${data.avg_mos.toFixed(2)}` : '—', valueClassName: 'text-warning', icon: <Award className="w-4 h-4 text-warning" /> },
     { label: '在线分机', value: valueText(data.registered_users), valueClassName: 'text-success', icon: <Users className="w-4 h-4 text-success" /> },
     { label: '可用中继', value: valueText(data.active_gateways), valueClassName: 'text-primary', icon: <Server className="w-4 h-4 text-primary" /> },
