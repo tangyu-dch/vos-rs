@@ -390,10 +390,10 @@ export function CopilotPage() {
                     >
                       {m.sender === 'user' ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
                     </div>
-                    <div className="flex flex-col gap-2.5 flex-1 min-w-0">
+                    <div className={`flex flex-col gap-2.5 flex-1 min-w-0 ${m.sender === 'user' ? 'items-end' : 'items-start'}`}>
                       {/* 消息气泡 */}
                       <div
-                        className={`p-4 rounded-2xl text-xs leading-relaxed shadow-sm ${
+                        className={`p-4 rounded-2xl text-xs leading-relaxed shadow-sm w-fit max-w-full ${
                           m.sender === 'user'
                             ? 'bg-primary text-primary-foreground rounded-tr-none'
                             : 'bg-content1 text-foreground rounded-tl-none border border-default-200'
@@ -420,7 +420,7 @@ export function CopilotPage() {
 
                       {/* 根因分析卡片（warning 主题，加深对比度）*/}
                       {m.rootCause && (
-                        <div className="p-3.5 bg-warning/10 border border-warning/30 rounded-xl text-xs flex flex-col gap-1.5 shadow-sm">
+                        <div className="w-full p-3.5 bg-warning/10 border border-warning/30 rounded-xl text-xs flex flex-col gap-1.5 shadow-sm">
                           <div className="flex items-center gap-1.5 text-warning font-bold">
                             <AlertTriangle className="w-4 h-4" />
                             <span>根因分析 (Root Cause)</span>
@@ -433,7 +433,7 @@ export function CopilotPage() {
 
                       {/* 建议动作卡片（primary 主题，加深对比度）*/}
                       {m.suggestedAction && (
-                        <div className="p-3.5 bg-primary/10 border border-primary/30 rounded-xl text-xs flex flex-col gap-1.5 shadow-sm">
+                        <div className="w-full p-3.5 bg-primary/10 border border-primary/30 rounded-xl text-xs flex flex-col gap-1.5 shadow-sm">
                           <div className="flex items-center gap-1.5 text-primary font-bold">
                             <Lightbulb className="w-4 h-4" />
                             <span>建议动作 (Suggested Action)</span>
