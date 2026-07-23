@@ -56,9 +56,9 @@ pub async fn chat_in_session_stream(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(session_id): Path<String>,
-    Json(payload): Json<ChatStreamRequest>,
+    Json(chat_req): Json<ChatStreamRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let query = payload.query.trim().to_string();
+    let query = chat_req.query.trim().to_string();
     if query.is_empty() {
         return Err(ApiError::bad_request("参数无效：查询不能为空".to_string()));
     }
@@ -89,7 +89,7 @@ pub async fn chat_in_session_stream(
         .map_err(|e| ApiError::internal(format!("保存用户消息失败: {e}")))?;
 
     // 3) 采集业务数据 + 生成梯形图（不依赖 LLM，可先完成）
-    let active_llm = match crate::llm_configs::get_llm_config_from_redis(&state, payload.model_id).await {
+    let active_llm = match crate::llm_configs::get_llm_config_from_redis(&state, chat_req.model_id).await {
         Some(rec) => Some(crate::copilot::LlmConfig::from(rec)),
         None => None,
     };
@@ -121,6 +121,8 @@ pub async fn chat_in_session_stream(
     let query_clone = query.clone();
     let ascii_ladder_clone = ascii_ladder.clone();
     let active_llm_clone = active_llm.clone();
+    let images_clone = chat_req.images.clone();
+
     tokio::spawn(async move {
         let ctx = StreamContext {
             state: &state_clone,
@@ -134,6 +136,7 @@ pub async fn chat_in_session_stream(
             payload: &payload_data,
             ascii_ladder: &ascii_ladder_clone,
             active_llm: active_llm_clone,
+            images: images_clone,
         };
         let result = run_stream_loop(tx, ctx).await;
         if let Err(e) = result {
@@ -161,6 +164,7 @@ struct StreamContext<'a> {
     payload: &'a Payload,
     ascii_ladder: &'a str,
     active_llm: Option<LlmConfig>,
+    images: Option<Vec<String>>,
 }
 
 /// 流式推送主循环：发送 user_message → context → delta* → done
@@ -180,6 +184,7 @@ async fn run_stream_loop(
         payload,
         ascii_ladder,
         active_llm,
+        images,
     } = ctx;
     // 发送 user_message 事件
     send_event(&tx, "user_message", &user_message).await?;
@@ -189,7 +194,7 @@ async fn run_stream_loop(
 
     // 流式 LLM 调用或 fallback
     let (full_report, root_cause, suggested_action, final_llm_status) = if context.llm_enabled {
-        match stream_llm_response(&tx, state, &active_llm, session_id, query, payload, ascii_ladder).await {
+        match stream_llm_response(&tx, state, &active_llm, session_id, query, payload, ascii_ladder, &images).await {
             Ok(text) => (text, String::new(), String::new(), context.llm_status.clone()),
             Err(e) => {
                 tracing::warn!(error = %e, "LLM 流式调用失败，回退到结构化报告");
@@ -218,7 +223,7 @@ async fn run_stream_loop(
             ladder_diagram_ascii: None,
             llm_enabled: Some(context.llm_enabled),
             llm_status: option_str(&final_llm_status),
-            intent: Some(intent.as_str()),
+            intent: Some(context.intent.as_str()),
         })
         .await
         .map_err(|e| format!("保存 assistant 回答失败: {e}"))?;
@@ -265,6 +270,7 @@ async fn stream_llm_response(
     query: &str,
     payload: &Payload,
     ascii_ladder: &str,
+    images: &Option<Vec<String>>,
 ) -> Result<String, String> {
     let llm = active_llm
         .as_ref()
@@ -306,10 +312,36 @@ async fn stream_llm_response(
         }));
     }
 
-    messages.push(serde_json::json!({
-        "role": "user",
-        "content": user_content
-    }));
+    let user_message_value = if let Some(ref img_list) = images {
+        if !img_list.is_empty() {
+            let mut parts = vec![serde_json::json!({
+                "type": "text",
+                "text": user_content
+            })];
+            for img_url in img_list {
+                parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": { "url": img_url }
+                }));
+            }
+            serde_json::json!({
+                "role": "user",
+                "content": parts
+            })
+        } else {
+            serde_json::json!({
+                "role": "user",
+                "content": user_content
+            })
+        }
+    } else {
+        serde_json::json!({
+            "role": "user",
+            "content": user_content
+        })
+    };
+
+    messages.push(user_message_value);
 
     let body = serde_json::json!({
         "model": llm.model,

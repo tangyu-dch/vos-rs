@@ -298,6 +298,7 @@ export async function streamChat(
   callbacks: StreamCallbacks,
   modelId?: number,
   signal?: AbortSignal,
+  images?: string[],
 ): Promise<void> {
   const response = await fetch(url, {
     method: 'POST',
@@ -305,7 +306,7 @@ export async function streamChat(
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ query, model_id: modelId }),
+    body: JSON.stringify({ query, model_id: modelId, images }),
     signal,
   });
 

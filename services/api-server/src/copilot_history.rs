@@ -43,6 +43,7 @@ pub struct ChatInSessionRequest {
 pub struct ChatStreamRequest {
     pub query: String,
     pub model_id: Option<i64>,
+    pub images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Default)]

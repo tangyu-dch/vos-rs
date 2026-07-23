@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Input, ScrollShadow, Spinner } from '@heroui/react';
 import {
   Send, Bot, User, AlertTriangle, Lightbulb, RefreshCw,
-  MessageSquare, Download, Trash2, Square,
+  Download, Trash2, Square, Paperclip, Image as ImageIcon, X, FileText,
 } from 'lucide-react';
 import { api } from '@/services/client';
 import { getAccessToken } from '@/services/auth';
@@ -42,6 +42,59 @@ export function CopilotPage() {
   const [inputQuery, setInputQuery] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const [activeModel, setActiveModel] = useState<{ id: number; provider: string; model: string } | null>(null);
+
+  // ============ 附件/图片上传状态 ============
+  const [attachedFiles, setAttachedFiles] = useState<{
+    id: string;
+    file: File;
+    name: string;
+    sizeStr: string;
+    isImage: boolean;
+    previewUrl?: string;
+    textContent?: string;
+    base64Data?: string;
+  }[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const processFiles = useCallback((files: FileList | File[]) => {
+    Array.from(files).forEach((file) => {
+      const isImage = file.type.startsWith('image/');
+      const sizeStr = file.size < 1024 * 1024
+        ? `${(file.size / 1024).toFixed(1)} KB`
+        : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+
+      const id = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const reader = new FileReader();
+
+      if (isImage) {
+        reader.onload = (e) => {
+          const base64 = e.target?.result as string;
+          setAttachedFiles((prev) => [
+            ...prev,
+            { id, file, name: file.name, sizeStr, isImage: true, previewUrl: base64, base64Data: base64 },
+          ]);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        reader.onload = (e) => {
+          const text = e.target?.result as string;
+          setAttachedFiles((prev) => [
+            ...prev,
+            { id, file, name: file.name, sizeStr, isImage: false, textContent: text },
+          ]);
+        };
+        reader.readAsText(file);
+      }
+    });
+  }, []);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+      e.preventDefault();
+      processFiles(e.clipboardData.files);
+      message.success('已自动捕获剪贴板图片/文件附件');
+    }
+  }, [processFiles]);
 
   // ============ 自动滚动到底部（流式输出 + 新消息）============
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -173,7 +226,21 @@ export function CopilotPage() {
   // ============ 发送消息（SSE 流式 + 打字机渲染）============
   const handleSend = useCallback(async (queryText?: string) => {
     const query = (queryText || inputQuery).trim();
-    if (!query || sending) return;
+    if ((!query && attachedFiles.length === 0) || sending) return;
+
+    // 整合附件信息
+    const images = attachedFiles.filter((f) => f.isImage && f.base64Data).map((f) => f.base64Data as string);
+    const textAppend = attachedFiles
+      .filter((f) => !f.isImage && f.textContent)
+      .map((f) => `\n\n[📁 附加文件/数据: ${f.name}]\n\`\`\`\n${f.textContent}\n\`\`\``)
+      .join('');
+
+    const fullQuery = query + textAppend;
+    const displayQuery = query || (attachedFiles.length > 0 ? `[发送了 ${attachedFiles.length} 个附件进行分析]` : '');
+
+    // 清空已发送附件与输入框
+    setAttachedFiles([]);
+    if (!queryText) setInputQuery('');
 
     // 中断上一个流
     abortStream();
@@ -204,10 +271,9 @@ export function CopilotPage() {
     const userTempId = `tmp-user-${Date.now()}`;
     const botTempId = `tmp-bot-${Date.now()}`;
     const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    const userMsg: MessageItem = { id: userTempId, sender: 'user', text: query, timestamp: ts };
+    const userMsg: MessageItem = { id: userTempId, sender: 'user', text: displayQuery, timestamp: ts };
     const botMsg: MessageItem = { id: botTempId, sender: 'bot', text: '', timestamp: ts };
     setMessages((prev) => [...prev, userMsg, botMsg]);
-    if (!queryText) setInputQuery('');
     setSending(true);
 
     const token = getAccessToken();
@@ -230,40 +296,48 @@ export function CopilotPage() {
     const url = `/api/v1/copilot/sessions/${sessionId}/chat/stream`;
 
     try {
-      await streamChat(url, token, query, {
-        onUserMessage: (msg) => {
-          setMessages((prev) => prev.map((m) => (m.id === userTempId ? toMessageItem(msg) : m)));
+      await streamChat(
+        url,
+        token,
+        fullQuery,
+        {
+          onUserMessage: (msg) => {
+            setMessages((prev) => prev.map((m) => (m.id === userTempId ? toMessageItem(msg) : m)));
+          },
+          onContext: (ctx) => {
+            // LLM 状态信息（梯形图已内嵌到 LLM 回答的 markdown 中，不再单独推送）
+            setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
+              ...m,
+              llmEnabled: ctx.llm_enabled,
+              llmStatus: ctx.llm_status,
+              intent: ctx.intent,
+            } : m)));
+          },
+          onDelta: (text) => {
+            // 逐字追加（打字机效果）
+            setMessages((prev) => prev.map((m) => (m.id === botTempId ? { ...m, text: m.text + text } : m)));
+          },
+          onDone: (data) => {
+            // 用后端正式 assistant 消息替换临时占位
+            setMessages((prev) => prev.map((m) => (m.id === botTempId ? toMessageItem(data.assistant_message) : m)));
+            setSessions((prev) => {
+              const others = prev.filter((s) => s.id !== data.session.id);
+              return [data.session, ...others];
+            });
+          },
+          onError: (error) => {
+            setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
+              ...m,
+              text: m.text || `诊断失败：${error}`,
+              llmEnabled: false,
+              llmStatus: m.llmStatus || '调用失败',
+            } : m)));
+          },
         },
-        onContext: (ctx) => {
-          // LLM 状态信息（梯形图已内嵌到 LLM 回答的 markdown 中，不再单独推送）
-          setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
-            ...m,
-            llmEnabled: ctx.llm_enabled,
-            llmStatus: ctx.llm_status,
-            intent: ctx.intent,
-          } : m)));
-        },
-        onDelta: (text) => {
-          // 逐字追加（打字机效果）
-          setMessages((prev) => prev.map((m) => (m.id === botTempId ? { ...m, text: m.text + text } : m)));
-        },
-        onDone: (data) => {
-          // 用后端正式 assistant 消息替换临时占位
-          setMessages((prev) => prev.map((m) => (m.id === botTempId ? toMessageItem(data.assistant_message) : m)));
-          setSessions((prev) => {
-            const others = prev.filter((s) => s.id !== data.session.id);
-            return [data.session, ...others];
-          });
-        },
-        onError: (error) => {
-          setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
-            ...m,
-            text: m.text || `诊断失败：${error}`,
-            llmEnabled: false,
-            llmStatus: m.llmStatus || '调用失败',
-          } : m)));
-        },
-      }, currentModelId ?? undefined, controller.signal);
+        currentModelId ?? undefined,
+        controller.signal,
+        images.length > 0 ? images : undefined,
+      );
     } catch (err) {
       // 用户主动中断（abort）时保留已有内容，不清空
       if (!controller.signal.aborted) {
@@ -495,8 +569,54 @@ export function CopilotPage() {
             </div>
           </ScrollShadow>
 
-          {/* 底部浮动输入框胶囊（焦点态增强）*/}
-          <div className="w-full px-4 py-4 shrink-0 bg-transparent">
+          {/* 底部浮动输入框胶囊（包含附件预览、图片识别与焦点态增强）*/}
+          <div className="w-full px-4 py-4 shrink-0 bg-transparent flex flex-col gap-2">
+            {/* 已附件列表预览 Chip Pills */}
+            {attachedFiles.length > 0 && (
+              <div className="w-full max-w-[94%] mx-auto flex flex-wrap items-center gap-2 px-2">
+                {attachedFiles.map((file) => (
+                  <div
+                    key={file.id}
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-default-100 dark:bg-default-50/10 border border-default-200 rounded-full text-xs text-foreground shadow-sm transition-all"
+                  >
+                    {file.isImage ? (
+                      file.previewUrl ? (
+                        <img src={file.previewUrl} alt={file.name} className="w-4 h-4 rounded object-cover" />
+                      ) : (
+                        <ImageIcon className="w-3.5 h-3.5 text-primary" />
+                      )
+                    ) : (
+                      <FileText className="w-3.5 h-3.5 text-secondary" />
+                    )}
+                    <span className="max-w-[140px] truncate font-medium">{file.name}</span>
+                    <span className="text-[10px] text-default-400">({file.sizeStr})</span>
+                    <button
+                      type="button"
+                      onClick={() => setAttachedFiles((prev) => prev.filter((f) => f.id !== file.id))}
+                      className="hover:text-danger p-0.5 rounded-full transition-colors ml-0.5"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 隐藏的 File Input 用于激活本地文件选择 */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              multiple
+              accept=".csv,.json,.log,.txt,image/*"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  processFiles(e.target.files);
+                  e.target.value = '';
+                }
+              }}
+            />
+
             <div className="w-full max-w-[94%] mx-auto rounded-3xl border-2 border-default-200 hover:border-primary/40 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 bg-content1 shadow-lg p-2 flex items-center gap-2 transition-all duration-200">
               <Input
                 variant="flat"
@@ -504,12 +624,32 @@ export function CopilotPage() {
                   inputWrapper: 'bg-transparent shadow-none hover:bg-transparent focus-within:bg-transparent',
                   input: 'text-sm',
                 }}
-                placeholder="询问 Copilot 排查通话问题 (如: 查一下刚才 13800138000 为什么被断开...)"
+                placeholder="询问问题、粘贴图片/日志、或上传 CSV 进行导入排查... (可直接 Ctrl+V / Cmd+V 粘贴截图)"
                 value={inputQuery}
                 onValueChange={setInputQuery}
                 onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())}
+                onPaste={handlePaste}
                 isDisabled={sending}
-                startContent={<MessageSquare className="w-4 h-4 text-default-400" />}
+                startContent={
+                  <div className="flex items-center gap-1.5 text-default-400 mr-1">
+                    <button
+                      type="button"
+                      title="上传数据/日志文件 (.csv, .json, .txt, .log)"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="p-1 hover:text-primary hover:bg-default-100 rounded-lg transition-colors"
+                    >
+                      <Paperclip className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      title="截图/图片识别异常"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="p-1 hover:text-primary hover:bg-default-100 rounded-lg transition-colors"
+                    >
+                      <ImageIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                }
                 endContent={
                   <Button
                     size="sm"
