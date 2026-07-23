@@ -12,8 +12,11 @@ use crate::{parse_dt, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct ReportQuery {
-    start_time: Option<String>,
-    end_time: Option<String>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub caller: Option<String>,
+    pub callee: Option<String>,
+    pub status: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -186,21 +189,40 @@ pub async fn export_cdrs_csv(
     let (start, end) = range_or_default(&q);
     let pool = state.store.pool();
 
-    let rows = sqlx::query(
+    let mut query = String::from(
         "SELECT call_id, COALESCE(caller,''), COALESCE(callee,''), \
          started_at, answered_at, ended_at, duration_ms, billable_duration_ms, status, \
          COALESCE(failure_status_code::text,''), COALESCE(failure_reason,''), \
          COALESCE(mos::text,''), COALESCE(dtmf_digits,''), \
          COALESCE(caller_rtcp_rtt_ms::text,''), COALESCE(caller_rtcp_jitter_ms::text,''), \
          COALESCE(caller_rtcp_loss_rate::text,'') \
-         FROM call_cdrs WHERE started_at >= $1 AND started_at <= $2 \
-         ORDER BY started_at DESC",
-    )
-    .bind(start)
-    .bind(end)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+         FROM call_cdrs WHERE started_at >= $1 AND started_at <= $2"
+    );
+
+    if let Some(ref caller) = q.caller {
+        if !caller.is_empty() {
+            query.push_str(&format!(" AND caller LIKE '%{}%'", caller.replace('\'', "")));
+        }
+    }
+    if let Some(ref callee) = q.callee {
+        if !callee.is_empty() {
+            query.push_str(&format!(" AND callee LIKE '%{}%'", callee.replace('\'', "")));
+        }
+    }
+    if let Some(ref status) = q.status {
+        if !status.is_empty() {
+            query.push_str(&format!(" AND status = '{}'", status.replace('\'', "")));
+        }
+    }
+
+    query.push_str(" ORDER BY started_at DESC LIMIT 5000");
+
+    let rows = sqlx::query(&query)
+        .bind(start)
+        .bind(end)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut csv = String::from(
         "call_id,caller,callee,started_at,answered_at,ended_at,duration_ms,billable_duration_ms,status,failure_status_code,failure_reason,mos,dtmf_digits,ring_ms,rtt_ms,jitter_ms,loss_rate\n",

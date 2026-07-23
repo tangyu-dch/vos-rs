@@ -834,6 +834,23 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
                     "required": ["id"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_export_cdrs",
+                "description": "根据多条件（主叫 caller、被叫 callee、状态 status：ANSWERED/FAILED/BUSY、时间范围）进行数据导出，生成包含筛选结果的 CSV 文件直接下载链接。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "caller": { "type": "string", "description": "主叫号码筛选" },
+                        "callee": { "type": "string", "description": "被叫号码筛选" },
+                        "status": { "type": "string", "description": "呼叫状态 (如 ANSWERED, FAILED, BUSY)" },
+                        "start_time": { "type": "string", "description": "起始时间" },
+                        "end_time": { "type": "string", "description": "截止时间" }
+                    }
+                }
+            }
         }
     ])
 }
@@ -1253,6 +1270,41 @@ impl<'a> TelecomCopilotEngine<'a> {
                     Ok(false) => json!({ "success": false, "error": format!("风控规则 {} 不存在", id) }),
                     Err(e) => json!({ "error": e.to_string() }),
                 }
+            }
+            "vos_export_cdrs" => {
+                let caller = args.get("caller").and_then(|v| v.as_str()).unwrap_or("");
+                let callee = args.get("callee").and_then(|v| v.as_str()).unwrap_or("");
+                let status = args.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                let start_time = args.get("start_time").and_then(|v| v.as_str()).unwrap_or("");
+                let end_time = args.get("end_time").and_then(|v| v.as_str()).unwrap_or("");
+
+                let (cdrs, total) = self.state.store.list_cdrs(
+                    1, 5,
+                    if status.is_empty() { None } else { Some(status) },
+                    None,
+                    if caller.is_empty() { None } else { Some(caller) },
+                    if callee.is_empty() { None } else { Some(callee) },
+                    None, None, None
+                ).await.unwrap_or((vec![], 0));
+
+                let mut download_url = format!("/api/v1/reports/export?limit=5000");
+                if !caller.is_empty() { download_url.push_str(&format!("&caller={}", urlencoding_str(caller))); }
+                if !callee.is_empty() { download_url.push_str(&format!("&callee={}", urlencoding_str(callee))); }
+                if !status.is_empty() { download_url.push_str(&format!("&status={}", urlencoding_str(status))); }
+                if !start_time.is_empty() { download_url.push_str(&format!("&start_time={}", urlencoding_str(start_time))); }
+                if !end_time.is_empty() { download_url.push_str(&format!("&end_time={}", urlencoding_str(end_time))); }
+
+                let absolute_download_url = format!("http://localhost:8081{}", download_url);
+
+                json!({
+                    "success": true,
+                    "total_matched": total,
+                    "download_url": absolute_download_url,
+                    "relative_url": download_url,
+                    "preview_sample": cdrs,
+                    "message": format!("已根据筛选条件成功匹配出 {} 条 CDR 呼叫记录。", total),
+                    "download_markdown": format!("[📥 点击这里下载全量 CDR 呼叫详单数据报表 (CSV 文件)]({})", absolute_download_url)
+                })
             }
             _ => json!({ "error": format!("未知工具: {name}") }),
         }
