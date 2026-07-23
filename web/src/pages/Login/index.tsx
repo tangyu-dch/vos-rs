@@ -38,7 +38,7 @@ export default function Login() {
       {/* 左侧：品牌介绍区 */}
       <div className="relative hidden lg:flex lg:col-span-7 flex-col justify-between p-16 bg-content2 overflow-hidden">
         <div className="relative z-10 flex items-center gap-3">
-          <div className="w-11 h-11 rounded-medium bg-primary flex items-center justify-center font-black text-2xl text-primary-foreground">
+          <div className="w-11 h-11 rounded-medium bg-primary flex items-center justify-center font-black text-2xl text-foreground">
             V
           </div>
           <div>

@@ -15,7 +15,7 @@ pub fn csv_quote(s: &str) -> String {
 pub fn to_csv_response(filename: &str, headers: &[&str], rows: &[Vec<String>]) -> Response {
     let mut csv_data = String::new();
     // UTF-8 BOM to support Chinese characters in Excel
-    csv_data.push_str("\u{feff}");
+    csv_data.push('\u{feff}');
 
     // Headers
     let header_line = headers
@@ -24,7 +24,7 @@ pub fn to_csv_response(filename: &str, headers: &[&str], rows: &[Vec<String>]) -
         .collect::<Vec<_>>()
         .join(",");
     csv_data.push_str(&header_line);
-    csv_data.push_str("\n");
+    csv_data.push('\n');
 
     // Rows
     for row in rows {
@@ -34,7 +34,7 @@ pub fn to_csv_response(filename: &str, headers: &[&str], rows: &[Vec<String>]) -
             .collect::<Vec<_>>()
             .join(",");
         csv_data.push_str(&row_line);
-        csv_data.push_str("\n");
+        csv_data.push('\n');
     }
 
     Response::builder()

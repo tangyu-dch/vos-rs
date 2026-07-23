@@ -11,27 +11,29 @@ server:
 # ---------------------------------------------------------------------------
 # 🤖 大模型 (LLM) 与 AI Voice Agent 核心对接配置
 # ---------------------------------------------------------------------------
+# 注意：以下 API Key 仅为本地测试用途，请勿提交到生产仓库。
+#       可通过环境变量 VOS_RS_LLM_API_KEY 覆盖此处的值。
 llm_integration:
   # 是否启用 LLM 集成 (true / false)
   enabled: true
 
-  # 模型提供商: "openai" | "gemini" | "deepseek" | "local_vllm" | "ollama"
-  provider: "openai"
+  # 模型提供商: "zhipu" | "openai" | "gemini" | "deepseek" | "local_vllm" | "ollama"
+  provider: "zhipu"
 
-  # 大模型 API 密钥 (API Key)
-  api_key: "sk-proj-your-actual-api-key-here"
+  # 大模型 API 密钥 (API Key) — 智谱 GLM-4.7-flash 测试 Key
+  api_key: "6f86ed5fe1c04366918e12e5170f4660.CRsePLgiumNbWmh0"
 
-  # 大模型 REST 基础 Endpoint 地址
-  base_url: "https://api.openai.com/v1"
+  # 大模型 REST 基础 Endpoint 地址 (智谱 OpenAI 兼容协议)
+  base_url: "https://open.bigmodel.cn/api/paas/v4"
 
-  # 默认模型名称
-  model: "gpt-4o-realtime-preview"
+  # 默认模型名称 (GLM-4.7-flash 完全免费)
+  model: "glm-4.7-flash"
 
   # OpenAI Realtime 全双工音频 Token 直连 WebSocket 地址 (选填)
-  realtime_websocket_url: "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
+  realtime_websocket_url: ""
 
   # 采样温度 (0.0 ~ 1.0)
-  temperature: 0.7
+  temperature: 0.3
 
   # 音频打断 (Barge-in) 静音检测敏感度 (0.0 ~ 1.0)
   vad_threshold: 0.65

@@ -30,6 +30,7 @@ import { RoutesPage } from '@/pages/system/routes';
 import { SecurityPage } from '@/pages/system/security';
 import { InfrastructurePage } from '@/pages/system/infrastructure';
 import { SettingsPage } from '@/pages/system/settings';
+import { LlmConfigPage } from '@/pages/settings/llm-config';
 
 import { CopilotPage } from '@/pages/operations/copilot';
 
@@ -69,6 +70,7 @@ function PrivateConsole() {
         <Route path="/security" element={<ProtectedPage path="/security"><SecurityPage /></ProtectedPage>} />
         <Route path="/infrastructure" element={<ProtectedPage path="/infrastructure"><InfrastructurePage /></ProtectedPage>} />
         <Route path="/settings" element={<ProtectedPage path="/settings"><SettingsPage /></ProtectedPage>} />
+        <Route path="/settings/llm" element={<ProtectedPage path="/settings"><LlmConfigPage /></ProtectedPage>} />
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Routes>
     </ConsoleShell>

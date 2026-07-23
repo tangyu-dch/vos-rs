@@ -464,7 +464,7 @@ function NodeTrafficSection() {
     'sip-edge-standalone': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-blue-500', text: 'text-blue-500' },
     'media-node-01': { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.1)', dot: 'bg-emerald-500', text: 'text-emerald-500' },
     'local-media': { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.1)', dot: 'bg-emerald-500', text: 'text-emerald-500' },
-    'default-1': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-primary-500', text: 'text-primary-500' },
+    'default-1': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-primary', text: 'text-primary' },
     'default-2': { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.1)', dot: 'bg-amber-500', text: 'text-amber-500' },
   };
 

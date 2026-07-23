@@ -7,7 +7,7 @@ import {
   Chip, Switch, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Textarea,
 } from '@heroui/react';
-import { Plus, RefreshCw, Search, Eye, Pencil, Trash2, Download, Upload } from 'lucide-react';
+import { Plus, RefreshCw, Search, Eye, Pencil, Trash2, Download, Upload, FileText, CheckCircle2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/client';
 import {
@@ -703,33 +703,55 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
             setImportFile(null);
           }
         }}
-        size="md"
+        size="2xl"
       >
         <ModalContent>
-          <ModalHeader>批量数据导入 · {spec.title}</ModalHeader>
-          <ModalBody>
-            <div className="flex flex-col gap-4 py-2">
-              <div className="flex items-center justify-between p-3 bg-default-50 rounded-lg border border-divider">
-                <div>
-                  <h4 className="text-small font-bold">第一步：获取导入数据模板</h4>
-                  <p className="text-tiny text-default-500">使用官方模板避免列名或格式不匹配。</p>
+          <ModalHeader className="text-lg font-bold border-b border-divider">
+            批量数据导入 · {spec.title}
+          </ModalHeader>
+          <ModalBody className="py-5">
+            <div className="flex flex-col gap-5">
+              {/* 第一步：下载模板 */}
+              <div className="flex items-center justify-between p-4 bg-content2 rounded-xl border border-divider">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-small font-bold text-foreground">第一步：获取导入数据模板</h4>
+                    <p className="text-tiny text-default-500 mt-0.5">使用官方模板避免列名或格式不匹配。</p>
+                  </div>
                 </div>
-                <Button size="sm" color="secondary" variant="flat" onPress={downloadTemplate}>
+                <Button size="sm" color="primary" variant="flat" onPress={downloadTemplate}>
                   下载模板
                 </Button>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <h4 className="text-small font-bold">第二步：选择并上传 CSV 文件</h4>
-                <div 
-                  className="flex flex-col items-center justify-center border-2 border-dashed border-divider hover:border-primary rounded-xl p-6 bg-default-50 cursor-pointer transition-colors"
+              {/* 第二步：上传 CSV */}
+              <div className="flex flex-col gap-2.5">
+                <h4 className="text-small font-bold text-foreground">第二步：选择并上传 CSV 文件</h4>
+                <div
+                  className="flex flex-col items-center justify-center gap-3 border-2 border-dashed border-default-300 hover:border-primary hover:bg-primary/5 rounded-2xl py-12 px-6 bg-content2/40 cursor-pointer transition-all"
                   onClick={() => document.getElementById('csv-import-file')?.click()}
                 >
-                  <Upload className="w-8 h-8 text-default-400 mb-2" />
+                  <div className="w-14 h-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center">
+                    <Upload className="w-7 h-7" />
+                  </div>
                   {importFile ? (
-                    <span className="text-small font-bold text-success">{importFile.name}</span>
+                    <div className="flex flex-col items-center gap-1">
+                      <span className="text-base font-bold text-success flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4" />
+                        {importFile.name}
+                      </span>
+                      <span className="text-tiny text-default-500">
+                        {(importFile.size / 1024).toFixed(1)} KB · 点击重新选择
+                      </span>
+                    </div>
                   ) : (
-                    <span className="text-small text-default-500">点击选择或拖拽 CSV 文件至此</span>
+                    <div className="flex flex-col items-center gap-1">
+                      <span className="text-base font-medium text-foreground">点击选择或拖拽 CSV 文件至此</span>
+                      <span className="text-tiny text-default-500">仅支持 .csv 格式文件</span>
+                    </div>
                   )}
                   <input
                     id="csv-import-file"
@@ -746,9 +768,9 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
               </div>
             </div>
           </ModalBody>
-          <ModalFooter>
-            <Button 
-              variant="flat" 
+          <ModalFooter className="border-t border-divider">
+            <Button
+              variant="flat"
               onPress={() => {
                 setIsImportOpen(false);
                 setImportFile(null);
@@ -756,11 +778,12 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
             >
               取消
             </Button>
-            <Button 
-              color="primary" 
-              isLoading={importing} 
+            <Button
+              color="primary"
+              isLoading={importing}
               onPress={handleImportSubmit}
               isDisabled={!importFile}
+              startContent={!importing && <Upload className="w-4 h-4" />}
             >
               验证并导入
             </Button>

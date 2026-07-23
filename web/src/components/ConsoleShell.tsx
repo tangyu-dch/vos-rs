@@ -6,7 +6,7 @@ import {
 } from '@heroui/react';
 import {
   LayoutDashboard, PhoneCall, Users, BookOpen, GitBranch, GitFork, Bot,
-  Grid, Server, ShieldCheck, ShieldAlert, Settings, LogOut, ChevronDown, Menu as MenuIcon, Activity,
+  Grid, Server, ShieldCheck, ShieldAlert, Settings, LogOut, ChevronDown, Menu as MenuIcon, Activity, Cpu,
   Sun, Moon, ChevronsLeft, ChevronsRight,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -60,20 +60,20 @@ const groups: NavGroup[] = [
   { label: '系统与安全', icon: <ShieldCheck className="w-3.5 h-3.5" />, items: [
     { to: '/security', label: '安全策略', icon: <ShieldCheck className="w-4 h-4" /> },
     { to: '/infrastructure', label: '集群节点', icon: <ShieldAlert className="w-4 h-4" /> },
+    { to: '/settings/llm', label: 'LLM 配置', icon: <Cpu className="w-4 h-4" /> },
     { to: '/settings', label: '系统设置', icon: <Settings className="w-4 h-4" /> },
   ] },
 ];
 
-/** 判断 path 是否匹配当前路由 */
+/** 判断 path 是否匹配当前路由（最长前缀匹配，避免 /settings/llm 同时命中 /settings） */
 function useIsActive() {
   const location = useLocation();
-  return (path: string) => {
-    if (path === '/calls') {
-      return location.pathname === path
-        || (location.pathname.startsWith('/calls/') && !location.pathname.startsWith('/calls/active'));
-    }
-    return location.pathname === path || location.pathname.startsWith(`${path}/`);
-  };
+  // 计算当前路径的最佳匹配（最长前缀），仅该路径被视为 active
+  const allPaths = groups.flatMap((g) => g.items.map((i) => i.to));
+  const bestMatch = allPaths
+    .filter((p) => location.pathname === p || location.pathname.startsWith(`${p}/`))
+    .sort((a, b) => b.length - a.length)[0];
+  return (path: string) => path === bestMatch;
 }
 
 interface NavigationProps {
@@ -113,7 +113,7 @@ function Navigation({ role, collapsed = false, close }: NavigationProps) {
                     aria-current={active ? 'page' : undefined}
                     className={`w-10 h-10 mx-auto flex items-center justify-center rounded-medium transition-colors
                       ${active
-                        ? 'bg-primary text-primary-foreground'
+                        ? 'bg-primary text-foreground'
                         : 'text-default-500 hover:text-foreground hover:bg-default-100'}`}
                   >
                     {item.icon}
@@ -175,14 +175,17 @@ export default function ConsoleShell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const { session, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const active = groups.flatMap((group) => group.items).find((item) => location.pathname.startsWith(item.to));
+  const allItems = groups.flatMap((group) => group.items);
+  const active = allItems
+    .filter((item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`))
+    .sort((a, b) => b.to.length - a.to.length)[0];
 
   const sidebarWidth = collapsed ? 'w-[68px] min-w-[68px] max-w-[68px]' : 'w-60 shrink-0';
 
   const sidebarHeader = (hidden: boolean) => (
     <div className={`h-16 border-b border-default-100 flex items-center shrink-0 ${hidden ? 'px-2' : 'px-5'}`}>
       <div className="flex items-center gap-3 overflow-hidden">
-        <div className="w-9 h-9 rounded-medium bg-primary flex items-center justify-center font-black text-primary-foreground text-xl shrink-0">
+        <div className="w-9 h-9 rounded-medium bg-primary flex items-center justify-center font-black text-foreground text-xl shrink-0">
           V
         </div>
         {!hidden && (

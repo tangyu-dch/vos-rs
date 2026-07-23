@@ -60,16 +60,6 @@ const systemConfigGroups: ConfigGroup[] = [
     ],
   },
   {
-    key: 'llm_integration', label: '大模型与 AI Voice 配置', description: '配置 OpenAI / Gemini / DeepSeek / 本地 vLLM 热生效参数。', fields: [
-      { key: 'llm_enabled', label: '启用 LLM 对接', kind: 'boolean', hint: '允许呼叫中心与 Copilot 对接大模型' },
-      { key: 'llm_provider', label: '模型提供商 (Provider)', hint: 'openai | gemini | deepseek | local_vllm | ollama' },
-      { key: 'llm_base_url', label: 'LLM Endpoint (Base URL)', hint: '例如 https://api.openai.com/v1 或 http://localhost:11434/v1', fullWidth: true },
-      { key: 'llm_api_key', label: 'LLM API Key', kind: 'secret', hint: '用于访问大模型的授权 Key (如 sk-proj-xxx)', fullWidth: true },
-      { key: 'llm_model', label: '默认模型名称 (Model)', hint: '例如 gpt-4o-realtime-preview 或 deepseek-chat' },
-      { key: 'llm_temperature', label: '采样温度 (Temperature)', kind: 'decimal', hint: '0.0 ~ 1.0 创造力系数' },
-    ],
-  },
-  {
     key: 'billing', label: '计费与 CDR', description: '余额风控、结算与话单持久化。', fields: [
       { key: 'balance_enforcement_enabled', label: '余额强制校验', kind: 'boolean', hint: '呼叫前校验账户可用余额' },
       { key: 'billing_settlement_enabled', label: '启用计费结算', kind: 'boolean', hint: '通话结束后执行费用结算' },

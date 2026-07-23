@@ -37,7 +37,7 @@ pub async fn import_users_template() -> impl IntoResponse {
     crate::utils::to_csv_response(
         "users_import_template.csv",
         &["分机号", "注册密码"],
-        &vec![vec!["8001".to_string(), "123456".to_string()]],
+        &[vec!["8001".to_string(), "123456".to_string()]],
     )
 }
 
@@ -100,7 +100,7 @@ pub async fn import_numbers_template() -> impl IntoResponse {
     crate::utils::to_csv_response(
         "numbers_import_template.csv",
         &["号码", "关联分机", "落地中继", "呼叫方向", "最大并发", "状态"],
-        &vec![vec![
+        &[vec![
             "13800138000".to_string(),
             "8001".to_string(),
             "carrier-a".to_string(),
@@ -181,7 +181,7 @@ pub async fn import_rates_template() -> impl IntoResponse {
     crate::utils::to_csv_response(
         "rates_import_template.csv",
         &["费率标识", "前缀号码", "每分钟费率", "计费周期(秒)", "单周期价格"],
-        &vec![vec![
+        &[vec![
             "cn-rate".to_string(),
             "86".to_string(),
             "0.1".to_string(),
@@ -258,7 +258,7 @@ pub async fn import_routes_template() -> impl IntoResponse {
     crate::utils::to_csv_response(
         "routes_import_template.csv",
         &["路由标识", "号码前缀", "优先级", "目标网关", "每呼叫成本", "权重", "生效时间(开始)", "生效时间(结束)"],
-        &vec![vec![
+        &[vec![
             "to-carrier-a".to_string(),
             "86".to_string(),
             "100".to_string(),

@@ -11,11 +11,14 @@ mod call_center;
 mod calls;
 mod cdr;
 mod copilot;
+mod copilot_history;
+mod copilot_stream;
 mod dashboard;
 mod details;
 mod gateways;
 mod hot_cache;
 mod ivr_menus;
+mod llm_configs;
 mod media_cluster;
 mod metrics;
 mod numbers;
@@ -95,6 +98,9 @@ pub(crate) struct AppState {
     pub(crate) sip_auth_realm: String,
     /// 活跃通话列表缓存（2s TTL），消除 summary/extras/telemetry 重复 HTTP 请求
     pub(crate) active_calls_cache: crate::dashboard::ActiveCallsCache,
+    /// LLM 专用 HTTP 客户端（长超时，与 sip-edge 内部管理调用的 internal_client 分离）。
+    /// LLM 配置（api_key/base_url/model）运行时从数据库 llm_configs 表读取，无需重启即可切换。
+    pub(crate) llm_client: reqwest::Client,
 }
 
 /// 管理列表统一分页参数；服务端限制单页最大 100 条，避免大响应拖慢 API。
@@ -140,6 +146,16 @@ impl ApiError {
     }
 
     pub(crate) fn forbidden(msg: impl Into<String>) -> Self {
+        Self { error: msg.into() }
+    }
+
+    /// 404：依赖 `IntoResponse` 通过 "不存在" 关键字识别状态码
+    pub(crate) fn not_found(msg: impl Into<String>) -> Self {
+        Self { error: msg.into() }
+    }
+
+    /// 400：依赖 `IntoResponse` 通过 "参数无效" 关键字识别状态码
+    pub(crate) fn bad_request(msg: impl Into<String>) -> Self {
         Self { error: msg.into() }
     }
 }
@@ -652,6 +668,14 @@ async fn main() -> anyhow::Result<()> {
         .timeout(std::time::Duration::from_secs(3))
         .build()?;
 
+    // LLM 专用 HTTP 客户端：大模型推理响应较慢，需要长超时（60s），且不应影响 sip-edge 短连接管理调用。
+    // 注意：智谱等国内 LLM 服务直连更稳定，禁用系统代理避免本地代理（如 Clash）不稳定导致请求失败。
+    let llm_client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(60))
+        .no_proxy()
+        .build()?;
+
     let jwt_secret = env::var("VOS_RS_API_JWT_SECRET")
         .ok()
         .or(api_security.jwt_secret.clone())
@@ -673,6 +697,7 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .or(api_security.internal_secret)
         .unwrap_or_else(|| "internal-dev-secret".to_string());
+
     let host = env::var("VOS_RS_API_HOST")
         .ok()
         .or_else(|| api_network.host.clone())
@@ -719,6 +744,7 @@ async fn main() -> anyhow::Result<()> {
         sip_node_key_prefix,
         sip_auth_realm,
         active_calls_cache: crate::dashboard::ActiveCallsCache::new(std::time::Duration::from_secs(2)),
+        llm_client,
     };
 
     let cors_origins_raw = api_network.allowed_origins.clone().unwrap_or_default();

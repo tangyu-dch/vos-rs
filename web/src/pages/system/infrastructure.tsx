@@ -176,7 +176,7 @@ export function InfrastructurePage() {
                   </div>
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60 flex flex-col items-center">
                     <span className="text-[10px] text-slate-400">Jitter 抖动缓冲区</span>
-                    <span className="text-xl font-extrabold text-primary-600 font-mono mt-1">15 ms</span>
+                    <span className="text-xl font-extrabold text-primary font-mono mt-1">15 ms</span>
                     <span className="text-[10px] text-slate-400 mt-1">自适应缓冲机制</span>
                   </div>
                 </div>

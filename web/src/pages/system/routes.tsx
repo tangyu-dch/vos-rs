@@ -111,7 +111,7 @@ export function RoutesPage() {
           <Button
             color="primary"
             size="sm"
-            className="font-bold text-white bg-primary-500 hover:bg-primary-600"
+            className="font-bold text-white bg-primary hover:bg-primary/80"
             startContent={<Send className="w-3.5 h-3.5" />}
             onPress={() => setSimOpen(true)}
           >
@@ -135,7 +135,7 @@ export function RoutesPage() {
           {() => (
             <>
               <ModalHeader className="flex items-center gap-2 border-b border-default-200 dark:border-slate-800 shrink-0">
-                <Network className="w-5 h-5 text-primary-600" />
+                <Network className="w-5 h-5 text-primary" />
                 <span>路由规则拓扑编排</span>
                 {topoRule && (
                   <Chip size="sm" variant="flat" color="primary" className="ml-2">
@@ -198,7 +198,7 @@ export function RoutesPage() {
               {simError && <p className="text-tiny text-danger">{simError}</p>}
             </div>
             {simResult && (
-              <div className="mt-2 flex flex-col gap-3 p-4 rounded-2xl bg-default-50 border border-default-200">
+              <div className="mt-2 flex flex-col gap-3 p-4 rounded-2xl bg-content2 border border-default-200">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-500" />

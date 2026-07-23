@@ -47,6 +47,11 @@ mod utils;
 pub use models::*;
 pub use termination_models::*;
 pub use utils::current_hhmm;
+/// 重新导出 CdrAuditSnapshot，供下游（如 api-server copilot）构造 CdrEvent 时使用。
+pub use call_core::CdrAuditSnapshot;
+// Copilot 历史会话相关类型，供 api-server 直接使用
+pub use store::copilot::{AppendCopilotMessageInput, CopilotMessage, CopilotSession};
+pub use store::llm_config::{LlmConfigRecord, UpsertLlmConfigInput};
 
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
@@ -309,6 +314,27 @@ impl PostgresCdrStore {
             .execute(&mut *tx)
             .await?;
         sqlx::query(CREATE_SIP_FLOWS_TIMESTAMP_INDEX_SQL)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(CREATE_COPILOT_SESSIONS_TABLE_SQL)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(CREATE_COPILOT_SESSIONS_OPERATOR_INDEX_SQL)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(CREATE_COPILOT_MESSAGES_TABLE_SQL)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(CREATE_COPILOT_MESSAGES_SESSION_INDEX_SQL)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(CREATE_LLM_CONFIGS_TABLE_SQL)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(CREATE_LLM_CONFIGS_ACTIVE_INDEX_SQL)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(SEED_DEFAULT_LLM_CONFIG_SQL)
             .execute(&mut *tx)
             .await?;
         for migration_sql in termination_schema::MIGRATE_TERMINATION_DOMAIN_SQL {

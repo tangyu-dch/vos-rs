@@ -584,6 +584,75 @@ INSERT INTO system_configs (config_key, config_value, description) VALUES
 ON CONFLICT (config_key) DO NOTHING
 "#;
 
+/// Copilot 会话表：存储运维助手的多轮对话会话元数据
+pub(super) const CREATE_COPILOT_SESSIONS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS copilot_sessions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    operator TEXT NOT NULL,
+    llm_provider TEXT,
+    llm_model TEXT,
+    pinned BOOLEAN NOT NULL DEFAULT FALSE,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    last_message_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+pub(super) const CREATE_COPILOT_SESSIONS_OPERATOR_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_copilot_sessions_operator ON copilot_sessions (operator, last_message_at DESC NULLS LAST)";
+
+/// Copilot 消息表：存储每个会话内的逐条消息（user / assistant）
+pub(super) const CREATE_COPILOT_MESSAGES_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS copilot_messages (
+    id BIGSERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES copilot_sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    root_cause TEXT,
+    suggested_action TEXT,
+    ladder_diagram_ascii TEXT,
+    llm_enabled BOOLEAN,
+    llm_status TEXT,
+    intent TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+pub(super) const CREATE_COPILOT_MESSAGES_SESSION_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_copilot_messages_session ON copilot_messages (session_id, created_at)";
+
+/// LLM 配置表：存储多个大模型厂商配置，通过 is_active 标识当前启用的配置。
+/// Copilot 运行时从该表读取 is_active=true 的记录动态调用 LLM。
+pub(super) const CREATE_LLM_CONFIGS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS llm_configs (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    provider TEXT NOT NULL,
+    api_key TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    model TEXT NOT NULL,
+    temperature REAL NOT NULL DEFAULT 0.3,
+    is_active BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+pub(super) const CREATE_LLM_CONFIGS_ACTIVE_INDEX_SQL: &str =
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_configs_active_singleton ON llm_configs (is_active) WHERE is_active = true";
+
+/// 启动时若 llm_configs 表为空，种子插入一条默认智谱 GLM 配置并设为启用。
+pub(super) const SEED_DEFAULT_LLM_CONFIG_SQL: &str = r#"
+INSERT INTO llm_configs (name, provider, api_key, base_url, model, temperature, is_active)
+SELECT '智谱 GLM-4.7-flash (默认)', 'zhipu',
+       '6f86ed5fe1c04366918e12e5170f4660.CRsePLgiumNbWmh0',
+       'https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash', 0.3, true
+WHERE NOT EXISTS (SELECT 1 FROM llm_configs)
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::SEED_SYSTEM_CONFIGS_SQL;

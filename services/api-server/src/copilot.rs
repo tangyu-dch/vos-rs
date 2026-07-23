@@ -1,16 +1,66 @@
-//! # 大模型驱动的自然语言智能运维与自愈 (LLM Telecom Copilot & Self-Healing Engine)
+//! # 真实业务数据驱动的 LLM Telecom Copilot
 //!
-//! 提供 SIP 抓包/CDR 日志自然语言分析、自动生成 ASCII 格式 SIP 梯形图 (Call Ladder Diagram)，
-//! 以及故障自动化隔离与热切流自愈决策。
+//! 基于真实 CDR / SIP 信令流 / 注册状态 / 计费账户 / 网关配置 / sip-edge 管理 API
+//! 进行排障分析；当配置了 LLM（OpenAI 兼容协议）时调用大模型生成自然语言报告，
+//! 否则返回结构化 Markdown 报告并明确提示"LLM 未配置"。
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use time::OffsetDateTime;
+
+use cdr_core::{
+    BillingAccount, CdrEvent, DashboardStats, LlmConfigRecord, SipFlowRecord, SipGateway,
+    SipRegistration,
+};
+
+use crate::AppState;
+
+/// LLM 配置：运行时从数据库 `llm_configs` 表（is_active=true）加载。
+/// 启动时不再从 config.yaml 读取，切换厂商/模型无需重启。
+#[derive(Debug, Clone, Default)]
+pub struct LlmConfig {
+    pub enabled: bool,
+    pub provider: String,
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+    pub temperature: f32,
+}
+
+impl From<LlmConfigRecord> for LlmConfig {
+    fn from(r: LlmConfigRecord) -> Self {
+        Self {
+            enabled: r.is_active,
+            provider: r.provider,
+            api_key: r.api_key,
+            base_url: r.base_url,
+            model: r.model,
+            temperature: r.temperature,
+        }
+    }
+}
+
+impl LlmConfig {
+    /// 是否已配置：开关启用 + API Key 非空且非占位符。
+    pub fn is_configured(&self) -> bool {
+        if !self.enabled || self.api_key.trim().is_empty() {
+            return false;
+        }
+        let key = self.api_key.trim();
+        !key.starts_with("sk-proj-your")
+            && !key.starts_with("sk-deepseek-your")
+            && !key.starts_with("AIzaSyYour")
+            && !key.eq_ignore_ascii_case("not-needed")
+            && !key.eq_ignore_ascii_case("placeholder")
+    }
+}
 
 /// SIP 信令梯形图事件节点
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SipLadderStep {
     pub timestamp: String,
-    pub direction: String,        // "A -> B", "B -> A", "A -> Gateway"
-    pub method_or_status: String, // "INVITE", "180 Ringing", "200 OK", "BYE"
+    pub direction: String,
+    pub method_or_status: String,
     pub summary: String,
 }
 
@@ -23,105 +73,532 @@ pub struct CopilotChatResponse {
     pub suggested_action: String,
     pub ladder_diagram_ascii: String,
     pub steps: Vec<SipLadderStep>,
+    /// LLM 是否实际启用（用于前端展示状态徽标）
+    pub llm_enabled: bool,
+    /// LLM 状态消息（例如"未配置 LLM，以下为结构化业务数据"）
+    pub llm_status: String,
 }
 
-pub struct TelecomCopilotEngine;
+/// 用户查询意图分类（用于选择性采集数据）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CopilotIntent {
+    CallFailure,
+    SipLadder,
+    SystemHealth,
+    Registration,
+    Billing,
+    Gateway,
+    General,
+}
 
-impl TelecomCopilotEngine {
-    pub fn new() -> Self {
-        Self
+impl Default for CopilotIntent {
+    fn default() -> Self {
+        Self::General
+    }
+}
+
+impl CopilotIntent {
+    /// 字符串表示，用于落库到 `copilot_messages.intent`
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::CallFailure => "CallFailure",
+            Self::SipLadder => "SipLadder",
+            Self::SystemHealth => "SystemHealth",
+            Self::Registration => "Registration",
+            Self::Billing => "Billing",
+            Self::Gateway => "Gateway",
+            Self::General => "General",
+        }
+    }
+}
+
+/// 真实业务数据采集结果
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct Payload {
+    pub(crate) query: String,
+    pub(crate) intent: CopilotIntent,
+    pub(crate) generated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) dashboard_stats: Option<DashboardStats>,
+    pub(crate) recent_failed_cdrs: Vec<CdrEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) latest_cdr: Option<CdrEvent>,
+    pub(crate) sip_flows: Vec<SipFlowRecord>,
+    pub(crate) registrations: Vec<SipRegistration>,
+    pub(crate) billing_accounts: Vec<BillingAccount>,
+    pub(crate) gateways: Vec<SipGateway>,
+    pub(crate) active_calls: Vec<Value>,
+}
+
+pub struct TelecomCopilotEngine<'a> {
+    state: &'a AppState,
+    llm: Option<LlmConfig>,
+}
+
+impl<'a> TelecomCopilotEngine<'a> {
+    pub fn new(state: &'a AppState, llm: Option<LlmConfig>) -> Self {
+        Self { state, llm }
     }
 
-    /// 分析自然语言问题与呼叫排障需求
-    pub fn analyze(&self, query: &str) -> CopilotChatResponse {
-        let is_error_query = query.contains("断")
-            || query.contains("超时")
-            || query.contains("挂断")
-            || query.contains("404")
-            || query.contains("503");
-
-        let steps = vec![
-            SipLadderStep {
-                timestamp: "10:15:00.102".to_string(),
-                direction: "UAC -> sip-edge".to_string(),
-                method_or_status: "INVITE sip:13800138000@vos".to_string(),
-                summary: "发起呼叫，匹配落地中继 TRUNK-GW-01".to_string(),
-            },
-            SipLadderStep {
-                timestamp: "10:15:00.120".to_string(),
-                direction: "sip-edge -> UAC".to_string(),
-                method_or_status: "100 Trying".to_string(),
-                summary: "信令层完成 Digest 摘要鉴权".to_string(),
-            },
-            SipLadderStep {
-                timestamp: "10:15:00.350".to_string(),
-                direction: "sip-edge -> GW-01".to_string(),
-                method_or_status: "INVITE sip:13800138000@gw".to_string(),
-                summary: "透传改写号码，分配 RTP 媒体端口 20004".to_string(),
-            },
-            SipLadderStep {
-                timestamp: "10:15:05.352".to_string(),
-                direction: "GW-01 -> sip-edge".to_string(),
-                method_or_status: if is_error_query {
-                    "503 Service Unavailable"
-                } else {
-                    "200 OK"
-                }
-                .to_string(),
-                summary: if is_error_query {
-                    "上游中继超时拒绝"
-                } else {
-                    "双方建立通话媒体流"
-                }
-                .to_string(),
-            },
-            SipLadderStep {
-                timestamp: "10:15:05.355".to_string(),
-                direction: "sip-edge -> UAC".to_string(),
-                method_or_status: if is_error_query {
-                    "503 Service Unavailable"
-                } else {
-                    "200 OK"
-                }
-                .to_string(),
-                summary: if is_error_query {
-                    "触发 LCR 备用路由盲转切流"
-                } else {
-                    "正常通话中"
-                }
-                .to_string(),
-            },
-        ];
-
+    /// 分析自然语言问题：意图识别 → 真实数据采集 → SIP 梯形图重建 → 可选 LLM 调用。
+    pub async fn analyze(&self, query: &str) -> CopilotChatResponse {
+        let intent = Self::classify_intent(query);
+        let payload = self.collect_payload(query, intent).await;
+        let steps = Self::build_ladder_steps(&payload);
         let ascii_ladder = Self::generate_ascii_ladder(&steps);
+        let context_json = serde_json::to_string_pretty(&payload).unwrap_or_default();
 
-        if is_error_query {
-            CopilotChatResponse {
-                query: query.to_string(),
-                analysis_report: "根据分析近期 SIP 梯形图与日志：呼叫在 10:15:05 收到落地网关 TRUNK-GW-01 返回的 503 Service Unavailable 响应。原因系上游运营商通道并发满额闪断。".to_string(),
-                root_cause: "TRUNK-GW-01 响应超时，达到熔断阀值。".to_string(),
-                suggested_action: "Copilot 已自动将 TRUNK-GW-01 降级，并将后续流量热切至备用中继 TRUNK-GW-02 (已完成自愈切流)。".to_string(),
-                ladder_diagram_ascii: ascii_ladder,
-                steps,
+        let (report, root_cause, suggested_action, llm_status) = match &self.llm {
+            Some(llm) if llm.is_configured() => {
+                match self.call_llm(query, &context_json).await {
+                    Ok(text) => (
+                        text,
+                        String::new(),
+                        String::new(),
+                        format!("LLM 已启用 (provider={}, model={})", llm.provider, llm.model),
+                    ),
+                    Err(error) => {
+                        tracing::warn!(%error, "LLM 调用失败，回退到结构化报告");
+                        let (r, rc, sa) = Self::build_fallback_report(query, intent, &payload);
+                        (r, rc, sa, format!("LLM 调用失败：{error}；以下为结构化真实业务数据"))
+                    }
+                }
             }
-        } else {
-            CopilotChatResponse {
-                query: query.to_string(),
-                analysis_report: "网络与软交换系统运行良好。过去 1 小时内全网平均 CPS: 820，平均 RTP 丢包率: 0.02%，QoS 处于优良等级。".to_string(),
-                root_cause: "无异常。".to_string(),
-                suggested_action: "无需人工干预，系统集群节点自愈监控开启中。".to_string(),
-                ladder_diagram_ascii: ascii_ladder,
-                steps,
+            _ => {
+                let (r, rc, sa) = Self::build_fallback_report(query, intent, &payload);
+                (
+                    r,
+                    rc,
+                    sa,
+                    "LLM 未配置（数据库无启用配置），以下为结构化真实业务数据".to_string(),
+                )
+            }
+        };
+
+        let llm_enabled = self.llm.as_ref().is_some_and(|l| l.is_configured());
+        CopilotChatResponse {
+            query: query.to_string(),
+            analysis_report: report,
+            root_cause,
+            suggested_action,
+            ladder_diagram_ascii: ascii_ladder,
+            steps,
+            llm_enabled,
+            llm_status,
+        }
+    }
+
+    /// 基于关键词识别用户意图（中英文混合）
+    pub fn classify_intent(query: &str) -> CopilotIntent {
+        let q = query.to_lowercase();
+        if q.contains("梯形图") || q.contains("ladder") || q.contains("sip flow") || q.contains("信令") {
+            return CopilotIntent::SipLadder;
+        }
+        if q.contains("挂断")
+            || q.contains("超时")
+            || q.contains("失败")
+            || q.contains("断")
+            || q.contains("404")
+            || q.contains("503")
+            || q.contains("500")
+            || q.contains("failed")
+            || q.contains("timeout")
+        {
+            return CopilotIntent::CallFailure;
+        }
+        if q.contains("注册") || q.contains("register") || q.contains("分机") || q.contains("extension") {
+            return CopilotIntent::Registration;
+        }
+        if q.contains("计费") || q.contains("余额") || q.contains("billing") || q.contains("balance") {
+            return CopilotIntent::Billing;
+        }
+        if q.contains("网关") || q.contains("中继") || q.contains("gateway") || q.contains("trunk") {
+            return CopilotIntent::Gateway;
+        }
+        if q.contains("cps")
+            || q.contains("并发")
+            || q.contains("丢包")
+            || q.contains("健康")
+            || q.contains("qos")
+            || q.contains("状态")
+            || q.contains("capacity")
+        {
+            return CopilotIntent::SystemHealth;
+        }
+        CopilotIntent::General
+    }
+
+    /// 根据意图选择性采集真实业务数据
+    pub(crate) async fn collect_payload(&self, query: &str, intent: CopilotIntent) -> Payload {
+        let mut payload = Payload {
+            intent,
+            query: query.to_string(),
+            generated_at: OffsetDateTime::now_utc().to_string(),
+            ..Default::default()
+        };
+
+        // 全局概览（轻量）总是采集
+        if let Ok(stats) = self.state.store.get_dashboard_stats(0).await {
+            payload.dashboard_stats = Some(stats);
+        }
+
+        match intent {
+            CopilotIntent::CallFailure | CopilotIntent::SipLadder => {
+                if let Ok((failed, _)) = self
+                    .state
+                    .store
+                    .list_cdrs(1, 10, Some("failed"), None, None, None, None, None, None)
+                    .await
+                {
+                    payload.recent_failed_cdrs = failed;
+                }
+                if payload.recent_failed_cdrs.is_empty() {
+                    if let Ok((latest, _)) = self
+                        .state
+                        .store
+                        .list_cdrs(1, 1, None, None, None, None, None, None, None)
+                        .await
+                    {
+                        payload.latest_cdr = latest.into_iter().next();
+                    }
+                } else {
+                    payload.latest_cdr = payload.recent_failed_cdrs.first().cloned();
+                }
+                if let Some(cdr) = &payload.latest_cdr {
+                    if let Ok(flows) = self.state.store.get_sip_flows(&cdr.call_id).await {
+                        payload.sip_flows = flows;
+                    }
+                }
+            }
+            CopilotIntent::Registration => {
+                if let Ok(regs) = self.state.store.list_registrations().await {
+                    payload.registrations = regs;
+                }
+            }
+            CopilotIntent::Billing => {
+                if let Ok(accts) = self.state.store.list_accounts().await {
+                    payload.billing_accounts = accts;
+                }
+            }
+            CopilotIntent::Gateway => {
+                if let Ok(gws) = self.state.store.list_gateways_full().await {
+                    payload.gateways = gws;
+                }
+            }
+            CopilotIntent::SystemHealth | CopilotIntent::General => {
+                payload.active_calls = self.fetch_active_calls().await;
             }
         }
+
+        payload
+    }
+
+    /// 转发到 sip-edge `/manage/active-calls` 获取活跃通话列表
+    async fn fetch_active_calls(&self) -> Vec<Value> {
+        let url = format!("{}/manage/active-calls", self.state.sip_manage_base);
+        let resp = self
+            .state
+            .internal_client
+            .get(&url)
+            .header("X-VOS-Token", &self.state.internal_secret)
+            .send()
+            .await;
+        match resp {
+            Ok(r) if r.status().is_success() => r.json::<Vec<Value>>().await.unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 优先从真实 SipFlows 重建梯形图，否则从 CDR 合成
+    pub(crate) fn build_ladder_steps(payload: &Payload) -> Vec<SipLadderStep> {
+        if !payload.sip_flows.is_empty() {
+            if let Some(cdr) = &payload.latest_cdr {
+                return Self::ladder_from_flows(&payload.sip_flows, cdr.started_at_ms);
+            }
+        }
+        if let Some(cdr) = &payload.latest_cdr {
+            return Self::ladder_from_cdr(cdr);
+        }
+        Vec::new()
+    }
+
+    fn ladder_from_flows(flows: &[SipFlowRecord], start_ms: i64) -> Vec<SipLadderStep> {
+        flows
+            .iter()
+            .map(|f| {
+                let ts = f.timestamp.unix_timestamp() * 1000 + f.timestamp.millisecond() as i64;
+                let offset = (ts - start_ms).max(0);
+                SipLadderStep {
+                    timestamp: format!("+{offset}ms"),
+                    direction: f.direction.clone(),
+                    method_or_status: f.method.clone(),
+                    summary: format!("{} → {}", f.from_addr, f.to_addr),
+                }
+            })
+            .collect()
+    }
+
+    fn ladder_from_cdr(cdr: &CdrEvent) -> Vec<SipLadderStep> {
+        let caller = cdr.caller.clone().unwrap_or_else(|| "UAC".into());
+        let callee = cdr.callee.clone().unwrap_or_else(|| "UAS".into());
+        let started = cdr.started_at_ms;
+        let ended = cdr.ended_at_ms;
+        let failure_code = cdr
+            .failure_status_code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "200 OK".into());
+
+        let mut steps = vec![
+            SipLadderStep {
+                timestamp: "+0ms".into(),
+                direction: "UAC -> sip-edge".into(),
+                method_or_status: "INVITE".into(),
+                summary: format!("发起呼叫: {caller} → {callee}"),
+            },
+            SipLadderStep {
+                timestamp: "+1ms".into(),
+                direction: "sip-edge -> UAC".into(),
+                method_or_status: "100 Trying".into(),
+                summary: "B2BUA 收到 INVITE".into(),
+            },
+            SipLadderStep {
+                timestamp: "+2ms".into(),
+                direction: "sip-edge -> GW".into(),
+                method_or_status: "INVITE".into(),
+                summary: format!("改写号码并透传至落地中继 (leg={})", cdr.direction),
+            },
+        ];
+        if let Some(ans) = cdr.answered_at_ms {
+            steps.push(SipLadderStep {
+                timestamp: format!("+{}ms", (ans - started).max(0)),
+                direction: "GW -> sip-edge".into(),
+                method_or_status: "200 OK".into(),
+                summary: "被叫摘机应答".into(),
+            });
+            steps.push(SipLadderStep {
+                timestamp: format!("+{}ms", (ans - started + 1).max(0)),
+                direction: "sip-edge -> UAC".into(),
+                method_or_status: "200 OK".into(),
+                summary: "B2BUA 透传应答给主叫".into(),
+            });
+        } else {
+            steps.push(SipLadderStep {
+                timestamp: format!("+{}ms", (ended - started).max(0)),
+                direction: "GW -> sip-edge".into(),
+                method_or_status: failure_code.clone(),
+                summary: cdr
+                    .failure_reason
+                    .clone()
+                    .unwrap_or_else(|| "呼叫未接通".into()),
+            });
+            steps.push(SipLadderStep {
+                timestamp: format!("+{}ms", (ended - started + 1).max(0)),
+                direction: "sip-edge -> UAC".into(),
+                method_or_status: failure_code,
+                summary: format!("呼叫状态: {}", cdr.status),
+            });
+        }
+        steps.push(SipLadderStep {
+            timestamp: format!("+{}ms", (ended - started).max(0)),
+            direction: "UAC -> sip-edge".into(),
+            method_or_status: "BYE".into(),
+            summary: format!("通话结束，总时长 {} ms", cdr.duration_ms),
+        });
+        steps
+    }
+
+    /// 调用 OpenAI 兼容的 chat completions 接口
+    async fn call_llm(&self, query: &str, context: &str) -> Result<String, String> {
+        let llm = self.llm.as_ref().ok_or("LLM 未配置")?;
+        let url = format!(
+            "{}/chat/completions",
+            llm.base_url.trim_end_matches('/')
+        );
+        let body = json!({
+            "model": llm.model,
+            "temperature": llm.temperature,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "你是 vos-rs 电信级 VoIP 软交换平台的运维助手 Copilot。基于真实业务数据回答用户的运维排障问题。回答需简洁、专业、可执行，包含：1) 分析报告；2) 根因定位；3) 建议动作。若数据为空请明确告知。"
+                },
+                {
+                    "role": "user",
+                    "content": format!("用户问题：{query}\n\n当前真实业务数据（JSON）：\n{context}")
+                }
+            ]
+        });
+        let resp = self
+            .state
+            .llm_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", llm.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP 请求失败: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("LLM HTTP {status}: {}", truncate(&text, 500)));
+        }
+        let val: Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("解析 LLM 响应失败: {e}"))?;
+        val.get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| "LLM 响应缺少 choices[0].message.content".into())
+    }
+
+    /// 未配置 LLM 或 LLM 调用失败时的结构化 Markdown 报告
+    pub(crate) fn build_fallback_report(
+        query: &str,
+        intent: CopilotIntent,
+        payload: &Payload,
+    ) -> (String, String, String) {
+        let mut report = String::new();
+        report.push_str("# Copilot 结构化分析报告\n\n");
+        report.push_str(&format!("**用户问题**：{query}\n\n"));
+        report.push_str(&format!("**意图识别**：{intent:?}\n\n"));
+        report.push_str(&format!("**生成时间**：{}\n\n", payload.generated_at));
+
+        if let Some(stats) = &payload.dashboard_stats {
+            report.push_str("## 系统概览\n");
+            report.push_str(&format!("- 今日通话总数：{}\n", stats.today_total_calls));
+            report.push_str(&format!(
+                "- 应答 {}，取消 {}，失败 {}\n",
+                stats.today_answered_calls, stats.today_canceled_calls, stats.today_failed_calls
+            ));
+            report.push_str(&format!("- 应答率：{:.2}%\n", stats.answer_rate * 100.0));
+            report.push_str(&format!(
+                "- 注册分机：{}，活跃网关：{}\n",
+                stats.registered_users, stats.active_gateways
+            ));
+            report.push_str(&format!(
+                "- 平均 MOS：{:?}，平均丢包率：{:?}\n\n",
+                stats.avg_mos, stats.avg_loss_rate
+            ));
+        }
+
+        if !payload.recent_failed_cdrs.is_empty() {
+            report.push_str("## 最近失败通话 (Top 10)\n");
+            for cdr in &payload.recent_failed_cdrs {
+                report.push_str(&format!(
+                    "- `{}` {}→{} status={} code={:?} reason={} duration={}ms\n",
+                    cdr.call_id,
+                    cdr.caller.as_deref().unwrap_or("-"),
+                    cdr.callee.as_deref().unwrap_or("-"),
+                    cdr.status,
+                    cdr.failure_status_code,
+                    cdr.failure_reason.as_deref().unwrap_or("-"),
+                    cdr.duration_ms
+                ));
+            }
+            report.push('\n');
+        }
+
+        if let Some(cdr) = &payload.latest_cdr {
+            report.push_str("## 最新通话 CDR\n");
+            report.push_str(&format!(
+                "```json\n{}\n```\n\n",
+                serde_json::to_string_pretty(cdr).unwrap_or_default()
+            ));
+        }
+
+        if !payload.sip_flows.is_empty() {
+            report.push_str(&format!("## SIP 信令流（{} 条真实抓包）\n", payload.sip_flows.len()));
+            for f in payload.sip_flows.iter().take(50) {
+                report.push_str(&format!(
+                    "- [{}] {} {} {}→{}\n",
+                    f.timestamp, f.method, f.direction, f.from_addr, f.to_addr
+                ));
+            }
+            report.push('\n');
+        }
+
+        // SIP 信令交互梯形图：作为 markdown 代码块内嵌到报告中
+        let ladder_steps = Self::build_ladder_steps(payload);
+        if !ladder_steps.is_empty() {
+            let ascii = Self::generate_ascii_ladder(&ladder_steps);
+            report.push_str("## SIP Call Ladder Diagram（信令交互梯形图）\n");
+            report.push_str(&format!("```text\n{ascii}```\n\n"));
+        }
+
+        push_section(&mut report, "SIP 注册状态", &payload.registrations, |r| {
+            format!("- aor={} contact={} expires_at={}\n", r.aor, r.contact_uri, r.expires_at)
+        });
+        push_section(&mut report, "计费账户", &payload.billing_accounts, |a| {
+            format!(
+                "- {} balance={} {} credit_limit={}\n",
+                a.username, a.balance, a.currency, a.credit_limit
+            )
+        });
+        push_section(&mut report, "网关配置", &payload.gateways, |g| {
+            format!(
+                "- id={} host={}:{} type={:?} role={:?}\n",
+                g.id,
+                g.host,
+                g.port.unwrap_or(5060),
+                g.gateway_type,
+                g.role
+            )
+        });
+
+        if !payload.active_calls.is_empty() {
+            report.push_str(&format!("## 活跃通话（{} 条）\n", payload.active_calls.len()));
+            for c in payload.active_calls.iter().take(10) {
+                report.push_str(&format!("- {}\n", c));
+            }
+            report.push('\n');
+        }
+
+        let (root_cause, suggested_action) = match intent {
+            CopilotIntent::CallFailure if payload.recent_failed_cdrs.is_empty() => (
+                "数据库中无失败通话记录".into(),
+                "无需处理；如需排查请确认 CDR 持久化开关已开启".into(),
+            ),
+            CopilotIntent::CallFailure => {
+                let cdr = &payload.recent_failed_cdrs[0];
+                (
+                    format!(
+                        "最近失败通话 {} status={} code={:?}",
+                        cdr.call_id, cdr.status, cdr.failure_status_code
+                    ),
+                    format!(
+                        "建议检查 failure_reason：{}；必要时联系中继运营商",
+                        cdr.failure_reason.as_deref().unwrap_or("-")
+                    ),
+                )
+            }
+            CopilotIntent::SipLadder if payload.sip_flows.is_empty() => (
+                "无 SIP 抓包记录".into(),
+                "请确认 sip-edge 已开启信令流持久化（sip_flows 表）".into(),
+            ),
+            CopilotIntent::SipLadder => (
+                format!("已加载 {} 条真实信令流", payload.sip_flows.len()),
+                "对照梯形图检查异常响应码与时间间隔".into(),
+            ),
+            CopilotIntent::SystemHealth => (
+                "基于实时采集的 dashboard 数据".into(),
+                "若 CPS 或丢包异常，请检查 sip-edge 节点负载与 Redis 集群状态".into(),
+            ),
+            _ => ("见上方结构化数据".into(), "结合业务实际判断".into()),
+        };
+
+        (report, root_cause, suggested_action)
     }
 
     /// 动态渲染 ASCII 格式的 SIP 交互梯形图 (Call Ladder Diagram)
     pub fn generate_ascii_ladder(steps: &[SipLadderStep]) -> String {
         let mut out = String::new();
-        out.push_str(
-            "   [ Caller (UAC) ]            [ sip-edge B2BUA ]            [ Gateway (UAS) ]\n",
-        );
+        out.push_str("   [ Caller (UAC) ]            [ sip-edge B2BUA ]            [ Gateway (UAS) ]\n");
         out.push_str("          |                            |                            |\n");
 
         for s in steps {
@@ -158,16 +635,95 @@ impl TelecomCopilotEngine {
     }
 }
 
+fn push_section<T>(out: &mut String, title: &str, items: &[T], render: impl Fn(&T) -> String) {
+    if items.is_empty() {
+        return;
+    }
+    out.push_str(&format!("## {title}（{} 条）\n", items.len()));
+    for item in items.iter().take(20) {
+        out.push_str(&render(item));
+    }
+    out.push('\n');
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_telecom_copilot_analysis() {
-        let engine = TelecomCopilotEngine::new();
-        let res = engine.analyze("为什么 13800138000 通话挂断超时了？");
-        assert!(res.analysis_report.contains("503 Service Unavailable"));
-        assert!(res.ladder_diagram_ascii.contains("sip-edge"));
-        assert!(!res.steps.is_empty());
+    fn classify_intent_matches_chinese_keywords() {
+        assert_eq!(
+            TelecomCopilotEngine::classify_intent("排查 13800138000 挂断原因"),
+            CopilotIntent::CallFailure
+        );
+        assert_eq!(
+            TelecomCopilotEngine::classify_intent("生成 SIP 梯形图"),
+            CopilotIntent::SipLadder
+        );
+        assert_eq!(
+            TelecomCopilotEngine::classify_intent("查询计费余额"),
+            CopilotIntent::Billing
+        );
+    }
+
+    #[test]
+    fn llm_config_detects_placeholder_keys() {
+        let mut cfg = LlmConfig {
+            enabled: true,
+            provider: "zhipu".into(),
+            api_key: String::new(),
+            base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
+            model: "glm-4-flash".into(),
+            temperature: 0.3,
+        };
+        assert!(!cfg.is_configured(), "空 key 不应视为已配置");
+        cfg.api_key = "sk-proj-your-actual-api-key-here".into();
+        assert!(!cfg.is_configured(), "占位符 key 不应视为已配置");
+        cfg.api_key = "6f86ed5fe1c04366918e12e5170f4660.CRsePLgiumNbWmh0".into();
+        assert!(cfg.is_configured(), "真实 key 应视为已配置");
+    }
+
+    fn make_test_cdr() -> CdrEvent {
+        CdrEvent {
+            call_id: "test-1".into(),
+            caller: Some("1001".into()),
+            callee: Some("13800138000".into()),
+            started_at_ms: 0,
+            answered_at_ms: None,
+            ended_at_ms: 5000,
+            duration_ms: 5000,
+            billable_duration_ms: 0,
+            status: "failed".into(),
+            failure_status_code: Some(503),
+            failure_reason: Some("Service Unavailable".into()),
+            caller_rtcp_loss_rate: None,
+            caller_rtcp_jitter_ms: None,
+            caller_rtcp_rtt_ms: None,
+            gateway_rtcp_loss_rate: None,
+            gateway_rtcp_jitter_ms: None,
+            gateway_rtcp_rtt_ms: None,
+            mos: None,
+            dtmf_digits: None,
+            recording_path: None,
+            direction: "outbound".into(),
+            audit: cdr_core::CdrAuditSnapshot::default(),
+        }
+    }
+
+    #[test]
+    fn ladder_from_cdr_synthesizes_failed_call() {
+        let cdr = make_test_cdr();
+        let steps = TelecomCopilotEngine::ladder_from_cdr(&cdr);
+        assert!(steps.iter().any(|s| s.method_or_status.contains("503")));
+        let ascii = TelecomCopilotEngine::generate_ascii_ladder(&steps);
+        assert!(ascii.contains("sip-edge"));
     }
 }

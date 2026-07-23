@@ -147,7 +147,7 @@ export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
                 <div className="mt-4 pt-4 border-t border-divider">
                   <h4 className="text-small font-semibold text-foreground mb-3">SDP 媒体协商 (解析)</h4>
                   {parsedSDP.map((media, i) => (
-                    <div key={i} className="mb-3 p-3 rounded-medium bg-primary-50">
+                    <div key={i} className="mb-3 p-3 rounded-medium bg-primary/10">
                       <div className="grid grid-cols-3 gap-2 text-tiny">
                         <div>
                           <span className="text-default-500">媒体类型: </span>

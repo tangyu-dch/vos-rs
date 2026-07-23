@@ -207,16 +207,6 @@ cdr_worker:
     nak_delay_ms: 5000
     db_retry_attempts: 5
 
-# ==========================================
-# 5. 大模型 (LLM) 与 AI Voice 对接统一配置
-# ==========================================
-llm_integration:
-  enabled: true
-  provider: "openai"
-  api_key: "sk-proj-your-api-key-here"
-  base_url: "https://api.openai.com/v1"
-  model: "gpt-4o-realtime-preview"
-  realtime_websocket_url: "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
-  temperature: 0.7
-  vad_threshold: 0.65
+# 注：LLM 配置已迁移至数据库 llm_configs 表，通过 Web 界面「系统与安全 → LLM 配置」管理，
+# 支持多厂商（智谱/通义/文心/DeepSeek/Kimi/OpenAI/自定义）动态切换，无需重启服务。
 

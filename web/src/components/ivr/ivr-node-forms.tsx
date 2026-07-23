@@ -313,7 +313,7 @@ export function NodeConfigForm({ type, config, onChange }: NodeFormProps) {
             </Field>
           </div>
           {config.strategy === 'time_based' && (
-            <div className="grid grid-cols-2 gap-3 p-3 bg-default-50 rounded-lg">
+            <div className="grid grid-cols-2 gap-3 p-3 bg-content2 rounded-lg">
               <Field label="生效开始时间">
                 <Input
                   variant="bordered"

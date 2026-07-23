@@ -2,7 +2,7 @@
 
 use axum::{
     body::{to_bytes, Body},
-    extract::Request,
+    extract::{Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -14,9 +14,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    anti_fraud, audit, auth, billing, call_center, calls, cdr, copilot, dashboard, details,
-    gateways, ivr_menus, media_cluster, numbers, recording, registrations, report, routes,
-    sip_cluster, system, termination, users, AppState,
+    anti_fraud, audit, auth, billing, call_center, calls, cdr, copilot, copilot_history,
+    copilot_stream, dashboard, details, gateways, ivr_menus, llm_configs, media_cluster, numbers,
+    recording, registrations, report, routes, sip_cluster, system, termination, users, AppState,
 };
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -308,6 +308,39 @@ fn security_routes() -> Router<AppState> {
         )
         .route("/api/v1/security/audit-logs", get(audit::list_audit_logs))
         .route("/api/v1/copilot/chat", post(handle_copilot_chat))
+        // Copilot 历史会话：行级按 operator 隔离，所有写操作要求 Bearer JWT
+        .route(
+            "/api/v1/copilot/sessions",
+            get(copilot_history::list_sessions).post(copilot_history::create_session),
+        )
+        .route(
+            "/api/v1/copilot/sessions/:id",
+            get(copilot_history::get_session)
+                .put(copilot_history::update_session)
+                .delete(copilot_history::delete_session),
+        )
+        .route(
+            "/api/v1/copilot/sessions/:id/chat",
+            post(copilot_history::chat_in_session),
+        )
+        .route(
+            "/api/v1/copilot/sessions/:id/chat/stream",
+            post(copilot_stream::chat_in_session_stream),
+        )
+        // LLM 配置管理：多厂商配置 CRUD + 启用切换，Copilot 运行时动态读取
+        .route(
+            "/api/v1/llm-configs",
+            get(llm_configs::list_llm_configs).post(llm_configs::create_llm_config),
+        )
+        .route(
+            "/api/v1/llm-configs/active",
+            get(llm_configs::get_active_llm_config),
+        )
+        .route(
+            "/api/v1/llm-configs/:id",
+            put(llm_configs::update_llm_config).delete(llm_configs::delete_llm_config),
+        )
+        .route("/api/v1/llm-configs/:id/activate", post(llm_configs::activate_llm_config))
 }
 
 #[derive(serde::Deserialize)]
@@ -316,10 +349,20 @@ struct CopilotRequest {
 }
 
 async fn handle_copilot_chat(
+    State(state): State<crate::AppState>,
     Json(payload): Json<CopilotRequest>,
 ) -> Result<Json<copilot::CopilotChatResponse>, crate::ApiError> {
-    let engine = copilot::TelecomCopilotEngine::new();
-    Ok(Json(engine.analyze(&payload.query)))
+    let active_llm = match state.store.get_active_llm_config().await {
+        Ok(Some(rec)) => Some(copilot::LlmConfig::from(rec)),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "读取当前 LLM 配置失败，回退到无 LLM 模式");
+            None
+        }
+    };
+    let engine = copilot::TelecomCopilotEngine::new(&state, active_llm);
+    let response = engine.analyze(&payload.query).await;
+    Ok(Json(response))
 }
 
 fn infrastructure_routes() -> Router<AppState> {
@@ -402,7 +445,10 @@ fn request_id(request: &Request) -> String {
 
 async fn envelope_response(response: Response, request_id: &str, path: &str) -> Response {
     let status = response.status();
-    if (!is_json_response(&response) && status.is_success() && is_raw_response(path)) || is_csv_response(&response) {
+    if (!is_json_response(&response) && status.is_success() && is_raw_response(path))
+        || is_csv_response(&response)
+        || is_sse_response(&response)
+    {
         return with_request_id(response, request_id);
     }
     let (mut parts, body) = response.into_parts();
@@ -460,6 +506,15 @@ fn is_csv_response(response: &Response) -> bool {
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("text/csv"))
+}
+
+/// SSE 流式响应（`text/event-stream`）不做 envelope 包装，直接透传
+fn is_sse_response(response: &Response) -> bool {
+    response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"))
 }
 
 fn contract_payload(status: StatusCode, value: Value, request_id: &str, path: &str) -> Value {
