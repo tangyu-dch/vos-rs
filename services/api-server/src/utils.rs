@@ -48,3 +48,63 @@ pub fn to_csv_response(filename: &str, headers: &[&str], rows: &[Vec<String>]) -
         .body(Body::from(csv_data))
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to generate CSV").into_response())
 }
+
+pub fn parse_csv(content: &str) -> Vec<Vec<String>> {
+    let mut result = Vec::new();
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    for line in normalized.split('\n') {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut row = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if c == '"' {
+                if in_quotes && i + 1 < chars.len() && chars[i + 1] == '"' {
+                    current.push('"');
+                    i += 2;
+                    continue;
+                } else {
+                    in_quotes = !in_quotes;
+                }
+            } else if c == ',' && !in_quotes {
+                row.push(current.trim().to_string());
+                current = String::new();
+            } else {
+                current.push(c);
+            }
+            i += 1;
+        }
+        row.push(current.trim().to_string());
+        result.push(row);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_csv_simple() {
+        let data = "col1,col2,col3\nval1,val2,val3";
+        let parsed = parse_csv(data);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0], vec!["col1", "col2", "col3"]);
+        assert_eq!(parsed[1], vec!["val1", "val2", "val3"]);
+    }
+
+    #[test]
+    fn test_parse_csv_with_quotes() {
+        let data = "col1,\"col2,with,commas\",col3\n\"val1\"\"with\"\"quotes\",val2,val3";
+        let parsed = parse_csv(data);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0], vec!["col1", "col2,with,commas", "col3"]);
+        assert_eq!(parsed[1], vec!["val1\"with\"quotes", "val2", "val3"]);
+    }
+}

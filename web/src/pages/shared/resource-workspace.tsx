@@ -7,7 +7,7 @@ import {
   Chip, Switch, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Textarea,
 } from '@heroui/react';
-import { Plus, RefreshCw, Search, Eye, Pencil, Trash2, Download } from 'lucide-react';
+import { Plus, RefreshCw, Search, Eye, Pencil, Trash2, Download, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/client';
 import {
@@ -201,6 +201,9 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
   const [fieldOptions, setFieldOptions] = useState<Record<string, SelectOptionSpec[]>>({});
   const [confirmRow, setConfirmRow] = useState<Entity | null>(null);
   const navigate = useNavigate();
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async (page = pagination.page) => {
     setLoading(true); setError('');
@@ -255,6 +258,64 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
       message.error(err instanceof Error ? err.message : '请求后端导出数据失败');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const downloadTemplate = async () => {
+    try {
+      setLoading(true);
+      const response = (await api.get(`${spec.path}/import-template`, {
+        responseType: 'blob',
+      })) as any;
+      const blob = response.data;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = `${spec.title}_导入模板.csv`;
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (match && match[1]) {
+          filename = match[1];
+        }
+      }
+      link.setAttribute('download', filename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      message.success('导入模板下载成功');
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '下载导入模板失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleImportSubmit = async () => {
+    if (!importFile) {
+      message.warning('请先选择要上传的 CSV 文件');
+      return;
+    }
+    try {
+      setImporting(true);
+      const formData = new FormData();
+      formData.append('file', importFile);
+      const response = (await api.post(`${spec.path}/import`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      })) as any;
+      const count = response.data?.imported_count || 0;
+      message.success(`成功导入 ${count} 条记录！`);
+      setIsImportOpen(false);
+      setImportFile(null);
+      void load(1);
+    } catch (err: any) {
+      const errMsg = err.response?.data?.message || err.message || '导入数据失败';
+      message.error(errMsg);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -428,6 +489,11 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
               <Button variant="flat" size="sm" onPress={exportData} startContent={<Download className="w-4 h-4" />}>
                 导出
               </Button>
+              {['/api/users', '/api/numbers', '/api/rates', '/api/routes'].includes(spec.path) && (
+                <Button variant="flat" size="sm" onPress={() => setIsImportOpen(true)} startContent={<Upload className="w-4 h-4" />}>
+                  导入
+                </Button>
+              )}
               {!spec.readOnly && (
                 <Button color="primary" size="sm" onPress={() => void openForm(null)} startContent={<Plus className="w-4 h-4" />}>
                   {spec.createLabel || '新建'}
@@ -650,6 +716,79 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
         }}
         onClose={() => setConfirmRow(null)}
       />
+
+      <Modal
+        isOpen={isImportOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsImportOpen(false);
+            setImportFile(null);
+          }
+        }}
+        size="md"
+      >
+        <ModalContent>
+          <ModalHeader>批量数据导入 · {spec.title}</ModalHeader>
+          <ModalBody>
+            <div className="flex flex-col gap-4 py-2">
+              <div className="flex items-center justify-between p-3 bg-default-50 rounded-lg border border-divider">
+                <div>
+                  <h4 className="text-small font-bold">第一步：获取导入数据模板</h4>
+                  <p className="text-tiny text-default-500">使用官方模板避免列名或格式不匹配。</p>
+                </div>
+                <Button size="sm" color="secondary" variant="flat" onPress={downloadTemplate}>
+                  下载模板
+                </Button>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <h4 className="text-small font-bold">第二步：选择并上传 CSV 文件</h4>
+                <div 
+                  className="flex flex-col items-center justify-center border-2 border-dashed border-divider hover:border-primary rounded-xl p-6 bg-default-50 cursor-pointer transition-colors"
+                  onClick={() => document.getElementById('csv-import-file')?.click()}
+                >
+                  <Upload className="w-8 h-8 text-default-400 mb-2" />
+                  {importFile ? (
+                    <span className="text-small font-bold text-success">{importFile.name}</span>
+                  ) : (
+                    <span className="text-small text-default-500">点击选择或拖拽 CSV 文件至此</span>
+                  )}
+                  <input
+                    id="csv-import-file"
+                    type="file"
+                    accept=".csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        setImportFile(e.target.files[0]);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button 
+              variant="flat" 
+              onPress={() => {
+                setIsImportOpen(false);
+                setImportFile(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button 
+              color="primary" 
+              isLoading={importing} 
+              onPress={handleImportSubmit}
+              isDisabled={!importFile}
+            >
+              验证并导入
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </>
   );
 }

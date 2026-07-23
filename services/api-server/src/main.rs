@@ -28,6 +28,7 @@ mod system;
 mod termination;
 mod users;
 mod utils;
+mod import;
 mod v1;
 
 
@@ -790,6 +791,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/cdrs/:call_id/dtmf", get(get_dtmf_events))
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/users/:username", put(update_user).delete(delete_user))
+        .route("/api/users/import", post(import::import_users))
+        .route("/api/users/import-template", get(import::import_users_template))
         .route("/api/gateways", get(list_gateways).post(create_gateway))
         .route(
             "/api/gateways/:id",
@@ -797,12 +800,16 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/routes", get(list_routes).post(create_route))
         .route("/api/routes/:id", put(update_route).delete(delete_route))
+        .route("/api/routes/import", post(import::import_routes))
+        .route("/api/routes/import-template", get(import::import_routes_template))
         .route("/api/registrations", get(list_registrations))
         .route("/api/recordings/:call_id/audio", get(get_recording_audio))
         .route("/api/reports/summary", get(get_report_summary))
         .route("/api/reports/export", get(export_cdrs_csv))
         .route("/api/rates", get(list_rates).post(create_rate))
         .route("/api/rates/:id", put(update_rate).delete(delete_rate))
+        .route("/api/rates/import", post(import::import_rates))
+        .route("/api/rates/import-template", get(import::import_rates_template))
         .route("/api/accounts", get(list_accounts))
         .route("/api/accounts/:username/credit", post(credit_account))
         .route("/api/ledger", get(list_ledger))
@@ -816,6 +823,8 @@ async fn main() -> anyhow::Result<()> {
             "/api/numbers/:number",
             put(update_number).delete(delete_number),
         )
+        .route("/api/numbers/import", post(import::import_numbers))
+        .route("/api/numbers/import-template", get(import::import_numbers_template))
         .route(
             "/api/anti-fraud/rules",
             get(list_anti_fraud_rules).post(create_anti_fraud_rule),
@@ -912,6 +921,7 @@ mod tests {
             page_size: Some(10_000),
             gateway_type: None,
             role: None,
+            export: None,
         };
 
         assert_eq!(normalize_page(&query), (1, 100, 0));
