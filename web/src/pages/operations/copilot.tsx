@@ -2,8 +2,9 @@ import { useState } from 'react';
 import {
   Card, CardBody, Button, Input, Chip, ScrollShadow, Divider
 } from '@heroui/react';
-import { Sparkles, Send, Bot, User, Terminal, AlertTriangle, ShieldCheck, RefreshCw, MessageSquare, Flame, HelpCircle, Activity, ChevronRight } from 'lucide-react';
+import { Sparkles, Send, Bot, User, Terminal, AlertTriangle, ShieldCheck, RefreshCw, MessageSquare, Flame, HelpCircle, Activity, ChevronRight, Download } from 'lucide-react';
 import { api } from '@/services/client';
+import { message } from '@/utils/toast';
 
 interface MessageItem {
   id: string;
@@ -94,6 +95,53 @@ export function CopilotPage() {
     }
   };
 
+  const handleExport = () => {
+    if (messages.length <= 1) {
+      message.warning('没有可导出的诊断记录');
+      return;
+    }
+
+    let mdContent = `# LLM Telecom Copilot 诊断分析报告\n`;
+    mdContent += `导出时间: ${new Date().toLocaleString()}\n\n`;
+    mdContent += `-------------------------------------------\n\n`;
+
+    messages.forEach((m) => {
+      const role = m.sender === 'user' ? 'OPERATOR (操作员)' : 'TELECOM COPILOT (智能运维助手)';
+      mdContent += `### [${m.timestamp}] ${role}\n\n`;
+      mdContent += `${m.text}\n\n`;
+
+      if (m.rootCause) {
+        mdContent += `> **故障根因定位 (Root Cause):**\n`;
+        mdContent += `> ${m.rootCause}\n\n`;
+      }
+
+      if (m.suggestedAction) {
+        mdContent += `> **自动自愈策略 (Self-Healing Action):**\n`;
+        mdContent += `> ${m.suggestedAction}\n\n`;
+      }
+
+      if (m.ladderAscii) {
+        mdContent += `**SIP 信令交互梯形图 (Call Ladder Diagram):**\n`;
+        mdContent += `\`\`\`text\n`;
+        mdContent += `${m.ladderAscii}\n`;
+        mdContent += `\`\`\`\n\n`;
+      }
+
+      mdContent += `-------------------------------------------\n\n`;
+    });
+
+    const blob = new Blob(['\ufeff' + mdContent], { type: 'text/markdown;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Copilot_Diagnosis_Report_${new Date().toISOString().slice(0, 10)}.md`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    message.success('已成功导出 Copilot 诊断分析报告 (Markdown 格式)');
+  };
+
   return (
     <div className="flex flex-col gap-4 h-[calc(100vh-100px)]">
       {/* 顶部 AI Header（对齐 overview 的 Card 标题栏风格） */}
@@ -116,15 +164,25 @@ export function CopilotPage() {
             </div>
           </div>
 
-          <Button
-            size="sm"
-            variant="flat"
-            color="primary"
-            startContent={<RefreshCw className="w-4 h-4" />}
-            onPress={() => setMessages([messages[0]])}
-          >
-            重置对话
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="flat"
+              onPress={handleExport}
+              startContent={<Download className="w-4 h-4" />}
+            >
+              导出诊断报告
+            </Button>
+            <Button
+              size="sm"
+              variant="flat"
+              color="primary"
+              startContent={<RefreshCw className="w-4 h-4" />}
+              onPress={() => setMessages([messages[0]])}
+            >
+              重置对话
+            </Button>
+          </div>
         </CardBody>
       </Card>
 
