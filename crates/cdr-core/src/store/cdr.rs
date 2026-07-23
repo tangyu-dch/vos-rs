@@ -338,7 +338,7 @@ impl PostgresCdrStore {
             .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC))
             .replace_time(time::Time::from_hms(0, 0, 0).unwrap_or(time::Time::MIDNIGHT));
         let rows = sqlx::query(
-            "SELECT EXTRACT(HOUR FROM started_at)::INTEGER as hour, \
+            "SELECT EXTRACT(HOUR FROM started_at AT TIME ZONE 'Asia/Shanghai')::INTEGER as hour, \
                      COUNT(*) as total, \
                      COUNT(*) FILTER (WHERE status = 'answered') as answered \
               FROM call_cdrs WHERE started_at >= $1 \
