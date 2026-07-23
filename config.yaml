@@ -186,7 +186,7 @@ api_server:
     allowed_origins: ""
   security:
     jwt_secret: "secret"
-    internal_secret: "compose-internal-secret"
+    internal_secret: "sipp-performance-secret"
   admin_credentials:
     admin_password: "admin"
     operator_password: "operator"

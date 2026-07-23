@@ -132,7 +132,6 @@ pub async fn get_node_traffic(
 ) -> Result<Json<Vec<NodeTrafficData>>, ApiError> {
     let sip_nodes = crate::sip_cluster::get_node_list(&state).await;
     let media_nodes = crate::media_cluster::get_node_list(&state).await;
-    let trends = state.store.get_hourly_trend().await.unwrap_or_default();
 
     let now = time::OffsetDateTime::now_utc();
     let current_hour = now.hour() as i32;
@@ -143,21 +142,23 @@ pub async fn get_node_traffic(
     }
 
     let mut result = Vec::new();
+    let mut conn = state.redis_client.clone();
 
     // 1. SIP Nodes
-    let sip_count = sip_nodes.len() as u64;
     for node_id in sip_nodes {
+        let redis_key = format!("vos_rs:traffic:{}", node_id);
+        let traffic_map: std::collections::HashMap<String, u64> = redis::cmd("HGETALL")
+            .arg(&redis_key)
+            .query_async(&mut conn)
+            .await
+            .unwrap_or_default();
+
         let mut series = Vec::new();
         for &h in &hours {
-            let trend = trends.iter().find(|t| t.hour == h);
-            let calls = trend.map(|t| t.answered as u64).unwrap_or(0);
-            let node_calls = if sip_count > 0 { calls / sip_count } else { 0 };
-            
-            // Background traffic + active calls load + pseudo-random jitter
-            let pseudo = get_pseudo_random(&node_id, h, 4);
-            let kbps = 15 + node_calls * 8 + pseudo;
+            let hour_str = format!("{:02}:00", h);
+            let kbps = traffic_map.get(&hour_str).cloned().unwrap_or(0);
             series.push(NodeTrafficItem {
-                hour: format!("{:02}:00", h),
+                hour: hour_str,
                 kbps,
             });
         }
@@ -169,19 +170,20 @@ pub async fn get_node_traffic(
     }
 
     // 2. Media Nodes
-    let media_count = media_nodes.len() as u64;
     for node_id in media_nodes {
+        let redis_key = format!("vos_rs:traffic:{}", node_id);
+        let traffic_map: std::collections::HashMap<String, u64> = redis::cmd("HGETALL")
+            .arg(&redis_key)
+            .query_async(&mut conn)
+            .await
+            .unwrap_or_default();
+
         let mut series = Vec::new();
         for &h in &hours {
-            let trend = trends.iter().find(|t| t.hour == h);
-            let calls = trend.map(|t| t.answered as u64).unwrap_or(0);
-            let node_calls = if media_count > 0 { calls / media_count } else { 0 };
-
-            // Background RTP/RTCP packets + active calls payload + pseudo-random jitter
-            let pseudo = get_pseudo_random(&node_id, h, 25);
-            let kbps = 64 + node_calls * 160 + pseudo;
+            let hour_str = format!("{:02}:00", h);
+            let kbps = traffic_map.get(&hour_str).cloned().unwrap_or(0);
             series.push(NodeTrafficItem {
-                hour: format!("{:02}:00", h),
+                hour: hour_str,
                 kbps,
             });
         }
@@ -193,6 +195,73 @@ pub async fn get_node_traffic(
     }
 
     Ok(Json(result))
+}
+
+pub async fn start_traffic_telemetry_loop(state: AppState) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+
+        // 1. Get active calls count
+        let active_calls = {
+            let url = format!("{}/manage/active-calls", state.sip_manage_base);
+            let token = &state.internal_secret;
+            let request = state.internal_client.get(&url);
+            let request = if !token.is_empty() {
+                request.header("X-VOS-Token", token)
+            } else {
+                request
+            };
+            match request.send().await {
+                Ok(resp) => resp
+                    .json::<Vec<serde_json::Value>>()
+                    .await
+                    .map(|calls| calls.len() as u64)
+                    .unwrap_or(0),
+                Err(_) => 0,
+            }
+        };
+
+        // 2. Get online nodes list
+        let sip_nodes = crate::sip_cluster::get_node_list(&state).await;
+        let media_nodes = crate::media_cluster::get_node_list(&state).await;
+
+        let now = time::OffsetDateTime::now_utc();
+        let hour_str = format!("{:02}:00", now.hour());
+        let nanos = now.unix_timestamp_nanos() as u64;
+
+        let mut conn = state.redis_client.clone();
+
+        // 3. Update SIP Nodes traffic in Redis
+        let sip_count = sip_nodes.len() as u64;
+        for node_id in sip_nodes {
+            let node_calls = if sip_count > 0 { active_calls / sip_count } else { active_calls };
+            let jitter = nanos % 4;
+            let kbps = 15 + node_calls * 8 + jitter;
+            let redis_key = format!("vos_rs:traffic:{}", node_id);
+            let _: Result<(), redis::RedisError> = redis::cmd("HSET")
+                .arg(&redis_key)
+                .arg(&hour_str)
+                .arg(kbps)
+                .query_async(&mut conn)
+                .await;
+        }
+
+        // 4. Update Media Nodes traffic in Redis
+        let media_count = media_nodes.len() as u64;
+        for node_id in media_nodes {
+            let node_calls = if media_count > 0 { active_calls / media_count } else { active_calls };
+            let jitter = nanos % 15;
+            let kbps = 64 + node_calls * 160 + jitter;
+            let redis_key = format!("vos_rs:traffic:{}", node_id);
+            let _: Result<(), redis::RedisError> = redis::cmd("HSET")
+                .arg(&redis_key)
+                .arg(&hour_str)
+                .arg(kbps)
+                .query_async(&mut conn)
+                .await;
+        }
+    }
 }
 
 fn get_pseudo_random(node_id: &str, hour: i32, max: u64) -> u64 {

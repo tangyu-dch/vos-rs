@@ -833,9 +833,12 @@ async fn main() -> anyhow::Result<()> {
         .merge(protected_routes)
         .merge(v1_public_routes)
         .merge(v1_protected_routes)
-        .with_state(state)
+        .with_state(state.clone())
         .layer(cors)
         .layer(TraceLayer::new_for_http());
+
+    // Spawn background traffic telemetry loop to periodically report node traffic to Redis
+    tokio::spawn(crate::dashboard::start_traffic_telemetry_loop(state.clone()));
 
     tracing::info!("API server listening on {}", addr);
 
