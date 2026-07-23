@@ -276,6 +276,14 @@
 
 ![系统设置-窄屏](./docs/assets/settings-narrow.png)
 
+### 🤖 Copilot 智能运维助手（大屏自适应 & 多轮对话上下文）
+
+![Copilot 智能运维助手](./docs/assets/copilot.png)
+
+### ⚙️ 大模型厂商配置管理（支持智谱 GLM、通义千问、DeepSeek 等热插拔）
+
+![大模型配置管理](./docs/assets/llm-configs.png)
+
 ### 安全防护（SBC / TLS）
 
 ![安全防护](./docs/assets/security.png)
