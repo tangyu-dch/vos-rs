@@ -421,7 +421,7 @@ impl<'a> TelecomCopilotEngine<'a> {
             "messages": [
                 {
                     "role": "system",
-                    "content": "你是 vos-rs 电信级 VoIP 软交换平台的运维助手 Copilot。基于真实业务数据回答用户的运维排障问题。回答需简洁、专业、可执行，包含：1) 分析报告；2) 根因定位；3) 建议动作。若数据为空请明确告知。"
+                    "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答要求：\n1. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析报告 (Analysis Report)：结合数据对当前系统状态或呼叫流程进行专业、生动的解读，避免冰冷的格式化叙述。\n   - ## 🔍 根因分析 (Root Cause)：深入剖析导致问题的底层原因（如网络延迟、信令超时、鉴权失败等），若无异常则明确告知。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引（如修改路由规则、更新分机配置、核对运营商中继配置等）。\n2. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流，不要让人觉得机械呆板。\n3. **数据校验**：如果提供的业务数据为空，请礼貌地予以说明，并提示用户如何开启相应模块的持久化。"
                 },
                 {
                     "role": "user",
@@ -561,38 +561,43 @@ impl<'a> TelecomCopilotEngine<'a> {
 
         let (root_cause, suggested_action) = match intent {
             CopilotIntent::CallFailure if payload.recent_failed_cdrs.is_empty() => (
-                "数据库中无失败通话记录".into(),
-                "无需处理；如需排查请确认 CDR 持久化开关已开启".into(),
+                "数据库中无失败通话记录。".to_string(),
+                "无需处理；如需排查请确认 CDR 持久化开关已开启。".to_string(),
             ),
             CopilotIntent::CallFailure => {
                 let cdr = &payload.recent_failed_cdrs[0];
                 (
                     format!(
-                        "最近失败通话 {} status={} code={:?}",
+                        "最近失败通话 `{}` 状态为 `{}`，失败响应码为 `{:?}`。",
                         cdr.call_id, cdr.status, cdr.failure_status_code
                     ),
                     format!(
-                        "建议检查 failure_reason：{}；必要时联系中继运营商",
-                        cdr.failure_reason.as_deref().unwrap_or("-")
+                        "建议检查 `failure_reason`（**{}**）；必要时联系中继运营商进行信令联调。",
+                        cdr.failure_reason.as_deref().unwrap_or("未记录原因")
                     ),
                 )
             }
             CopilotIntent::SipLadder if payload.sip_flows.is_empty() => (
-                "无 SIP 抓包记录".into(),
-                "请确认 sip-edge 已开启信令流持久化（sip_flows 表）".into(),
+                "系统中无当前呼叫的真实 SIP 抓包记录。".to_string(),
+                "请确认信令网关 `sip-edge` 已开启信令持久化配置（检查数据库中的 `sip_flows` 表是否正常写入）。".to_string(),
             ),
             CopilotIntent::SipLadder => (
-                format!("已加载 {} 条真实信令流", payload.sip_flows.len()),
-                "对照梯形图检查异常响应码与时间间隔".into(),
+                format!("已成功从底层抓包数据加载 {} 条真实信令交互记录。", payload.sip_flows.len()),
+                "请结合上方的交互时序梯形图，重点核对各请求的时间间隔与响应状态码（如 4xx/5xx）是否符合预期。".to_string(),
             ),
             CopilotIntent::SystemHealth => (
-                "基于实时采集的 dashboard 数据".into(),
-                "若 CPS 或丢包异常，请检查 sip-edge 节点负载与 Redis 集群状态".into(),
+                "已基于系统底层核心指标进行健康性评估。".to_string(),
+                "若当前 CPS、接通率或丢包率等核心指标异常，请排查 `sip-edge` 节点负载、Redis 鉴权缓存响应时间以及数据库连接池容量。".to_string(),
             ),
-            _ => ("见上方结构化数据".into(), "结合业务实际判断".into()),
+            _ => ("已在上方生成该场景的结构化真实业务数据。".to_string(), "请根据上述数据和呼叫情况，结合具体业务逻辑和运营商中继链路进行判断。".to_string()),
         };
 
-        (report, root_cause, suggested_action)
+        report.push_str("## 🔍 根因分析 (Root Cause)\n");
+        report.push_str(&format!("{}\n\n", root_cause));
+        report.push_str("## 💡 建议动作 (Suggested Action)\n");
+        report.push_str(&format!("{}\n\n", suggested_action));
+
+        (report, String::new(), String::new())
     }
 
     /// 动态渲染 ASCII 格式的 SIP 交互梯形图 (Call Ladder Diagram)
