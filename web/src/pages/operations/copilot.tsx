@@ -41,7 +41,14 @@ export function CopilotPage() {
   const [sending, setSending] = useState(false);
   const [inputQuery, setInputQuery] = useState('');
   const abortRef = useRef<AbortController | null>(null);
-  const [activeModel, setActiveModel] = useState<{ id: number; provider: string; model: string } | null>(null);
+  const [activeModel, setActiveModel] = useState<{
+    id: number;
+    provider: string;
+    model: string;
+    supports_vision?: boolean;
+    supports_stt?: boolean;
+    supports_tts?: boolean;
+  } | null>(null);
 
   // ============ 附件/图片上传状态 ============
   const [attachedFiles, setAttachedFiles] = useState<{
@@ -59,6 +66,11 @@ export function CopilotPage() {
   const processFiles = useCallback((files: FileList | File[]) => {
     Array.from(files).forEach((file) => {
       const isImage = file.type.startsWith('image/');
+      if (isImage && activeModel && activeModel.supports_vision === false) {
+        message.error(`当前激活的大模型 (${activeModel.model}) 未开启图文识别 (Vision) 能力。请在 [模型设置] 中勾选支持 Vision 或切换多模态模型。`);
+        return;
+      }
+
       const sizeStr = file.size < 1024 * 1024
         ? `${(file.size / 1024).toFixed(1)} KB`
         : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
@@ -86,7 +98,7 @@ export function CopilotPage() {
         reader.readAsText(file);
       }
     });
-  }, []);
+  }, [activeModel]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     if (e.clipboardData.files && e.clipboardData.files.length > 0) {
@@ -126,7 +138,14 @@ export function CopilotPage() {
   // ============ 获取当前启用的模型 ============
   const fetchActiveModel = useCallback(async () => {
     try {
-      const rec = await api.get<{ id: number; provider: string; model: string } | null>('/llm-configs/active');
+      const rec = await api.get<{
+        id: number;
+        provider: string;
+        model: string;
+        supports_vision?: boolean;
+        supports_stt?: boolean;
+        supports_tts?: boolean;
+      } | null>('/llm-configs/active');
       setActiveModel(rec);
     } catch {
       setActiveModel(null);

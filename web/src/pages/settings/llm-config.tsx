@@ -4,11 +4,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button, Card, CardBody, Chip, Input, Modal, ModalBody, ModalContent,
-  ModalFooter, ModalHeader, Select, SelectItem, Spinner,
-  Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Pagination,
+  ModalFooter, ModalHeader, Select, SelectItem, Spinner, Table, TableHeader,
+  TableColumn, TableBody, TableRow, TableCell, Pagination, Switch,
 } from '@heroui/react';
 import {
-  Plus, RefreshCw, Trash2, CheckCircle2, Pencil, ExternalLink, Cpu, Search,
+  Plus, RefreshCw, Trash2, CheckCircle2, Pencil, ExternalLink, Cpu, Search, Eye, Mic, Volume2,
 } from 'lucide-react';
 import { api } from '@/services/client';
 import { message } from '@/utils/toast';
@@ -20,6 +20,7 @@ import {
 
 const EMPTY_FORM: UpsertLlmConfigInput = {
   name: '', provider: '', api_key: '', base_url: '', model: '', temperature: 0.3,
+  supports_vision: true, supports_stt: false, supports_tts: false,
 };
 
 const PAGE_SIZE = 10;
@@ -87,6 +88,9 @@ export function LlmConfigPage() {
     setForm({
       name: rec.name, provider: rec.provider, api_key: rec.api_key,
       base_url: rec.base_url, model: rec.model, temperature: rec.temperature,
+      supports_vision: rec.supports_vision ?? true,
+      supports_stt: rec.supports_stt ?? false,
+      supports_tts: rec.supports_tts ?? false,
     });
     setModalOpen(true);
   };
@@ -229,6 +233,7 @@ export function LlmConfigPage() {
               <TableColumn key="name">名称</TableColumn>
               <TableColumn key="provider" width={140}>厂商</TableColumn>
               <TableColumn key="model">模型</TableColumn>
+              <TableColumn key="capabilities" width={180}>模型能力矩阵</TableColumn>
               <TableColumn key="base_url">Base URL</TableColumn>
               <TableColumn key="api_key" width={160}>API Key</TableColumn>
               <TableColumn key="temperature" width={70} align="center">温度</TableColumn>
@@ -262,6 +267,28 @@ export function LlmConfigPage() {
                     </TableCell>
                     <TableCell key="model">
                       <span className="font-mono text-xs text-foreground">{cfg.model}</span>
+                    </TableCell>
+                    <TableCell key="capabilities">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {cfg.supports_vision !== false && (
+                          <Chip size="sm" color="secondary" variant="flat" startContent={<Eye className="w-3 h-3" />}>
+                            Vision
+                          </Chip>
+                        )}
+                        {cfg.supports_stt && (
+                          <Chip size="sm" color="warning" variant="flat" startContent={<Mic className="w-3 h-3" />}>
+                            STT 语音
+                          </Chip>
+                        )}
+                        {cfg.supports_tts && (
+                          <Chip size="sm" color="success" variant="flat" startContent={<Volume2 className="w-3 h-3" />}>
+                            TTS 朗读
+                          </Chip>
+                        )}
+                        {!cfg.supports_vision && !cfg.supports_stt && !cfg.supports_tts && (
+                          <span className="text-tiny text-default-400">仅自然语言对话</span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell key="base_url">
                       <span className="font-mono text-xs text-default-600 break-all">{cfg.base_url}</span>
@@ -379,6 +406,53 @@ export function LlmConfigPage() {
                 value={String(form.temperature)}
                 onChange={(e) => setForm({ ...form, temperature: parseFloat(e.target.value) || 0 })}
               />
+            </div>
+
+            {/* 模型能力开关矩阵 */}
+            <div className="border border-default-200 rounded-xl p-3.5 bg-default-50/50 flex flex-col gap-2.5">
+              <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5 text-primary" /> 模型高级能力矩阵 (Capability Matrix)
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                <div className="flex items-center justify-between p-2 rounded-lg bg-content1 border border-default-200">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold flex items-center gap-1"><Eye className="w-3 h-3 text-secondary" /> 图文识别 (Vision)</span>
+                    <span className="text-[10px] text-default-400">支持图片/截图分析</span>
+                  </div>
+                  <Switch
+                    size="sm"
+                    color="secondary"
+                    isSelected={form.supports_vision ?? true}
+                    onValueChange={(val) => setForm({ ...form, supports_vision: val })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-2 rounded-lg bg-content1 border border-default-200">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold flex items-center gap-1"><Mic className="w-3 h-3 text-warning" /> 语音识别 (STT)</span>
+                    <span className="text-[10px] text-default-400">支持语音转文本</span>
+                  </div>
+                  <Switch
+                    size="sm"
+                    color="warning"
+                    isSelected={form.supports_stt ?? false}
+                    onValueChange={(val) => setForm({ ...form, supports_stt: val })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-2 rounded-lg bg-content1 border border-default-200">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold flex items-center gap-1"><Volume2 className="w-3 h-3 text-success" /> 语音合成 (TTS)</span>
+                    <span className="text-[10px] text-default-400">支持语音播报朗读</span>
+                  </div>
+                  <Switch
+                    size="sm"
+                    color="success"
+                    isSelected={form.supports_tts ?? false}
+                    onValueChange={(val) => setForm({ ...form, supports_tts: val })}
+                  />
+                </div>
+              </div>
             </div>
           </ModalBody>
           <ModalFooter>

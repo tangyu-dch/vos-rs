@@ -636,10 +636,19 @@ CREATE TABLE IF NOT EXISTS llm_configs (
     model TEXT NOT NULL,
     temperature REAL NOT NULL DEFAULT 0.3,
     is_active BOOLEAN NOT NULL DEFAULT FALSE,
+    supports_vision BOOLEAN NOT NULL DEFAULT TRUE,
+    supports_stt BOOLEAN NOT NULL DEFAULT FALSE,
+    supports_tts BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
+
+pub(super) const MIGRATE_LLM_CONFIGS_CAPABILITIES_SQL: &[&str] = &[
+    "ALTER TABLE llm_configs ADD COLUMN IF NOT EXISTS supports_vision BOOLEAN NOT NULL DEFAULT TRUE",
+    "ALTER TABLE llm_configs ADD COLUMN IF NOT EXISTS supports_stt BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE llm_configs ADD COLUMN IF NOT EXISTS supports_tts BOOLEAN NOT NULL DEFAULT FALSE",
+];
 
 pub(super) const CREATE_LLM_CONFIGS_ACTIVE_INDEX_SQL: &str =
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_configs_active_singleton ON llm_configs (is_active) WHERE is_active = true";
