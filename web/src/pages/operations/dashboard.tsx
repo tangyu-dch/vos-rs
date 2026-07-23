@@ -295,6 +295,220 @@ function SuccessRateSection({ data }: { data: Summary }) {
   );
 }
 
+export interface NodeTrafficItem {
+  hour: string;
+  kbps: number;
+}
+
+export interface NodeTrafficData {
+  node_id: string;
+  node_type: string; // "sip" or "media"
+  series: NodeTrafficItem[];
+}
+
+function NodeTrafficSection() {
+  const [trafficData, setTrafficData] = useState<NodeTrafficData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedType, setSelectedType] = useState<'all' | 'sip' | 'media'>('all');
+
+  const loadTraffic = useCallback(async () => {
+    try {
+      const res = await api.get<NodeTrafficData[]>('/overview/node-traffic');
+      setTrafficData(res);
+    } catch (e) {
+      console.error('加载节点流量失败:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTraffic();
+    const timer = setInterval(() => { void loadTraffic(); }, 30000);
+    return () => clearInterval(timer);
+  }, [loadTraffic]);
+
+  if (loading) {
+    return (
+      <Card shadow="sm" className="w-full">
+        <CardBody className="p-8 flex justify-center items-center">
+          <Spinner label="加载节点流量数据中..." />
+        </CardBody>
+      </Card>
+    );
+  }
+
+  const filteredData = trafficData.filter(d => {
+    if (selectedType === 'all') return true;
+    return d.node_type === selectedType;
+  });
+
+  const allHours = trafficData[0]?.series.map(s => s.hour) || [];
+  
+  const maxVal = Math.max(
+    ...filteredData.flatMap(d => d.series.map(s => s.kbps)),
+    100
+  );
+
+  const chartHeight = 180;
+  const chartWidth = 800;
+
+  const colors: Record<string, { stroke: string; fill: string; dot: string; text: string }> = {
+    'sip-edge-01': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-blue-500', text: 'text-blue-500' },
+    'sip-edge-standalone': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-blue-500', text: 'text-blue-500' },
+    'media-node-01': { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.1)', dot: 'bg-emerald-500', text: 'text-emerald-500' },
+    'local-media': { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.1)', dot: 'bg-emerald-500', text: 'text-emerald-500' },
+    'default-1': { stroke: '#8b5cf6', fill: 'rgba(139, 92, 246, 0.1)', dot: 'bg-purple-500', text: 'text-purple-500' },
+    'default-2': { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.1)', dot: 'bg-amber-500', text: 'text-amber-500' },
+  };
+
+  const getNodeColor = (id: string, index: number) => {
+    if (colors[id]) return colors[id];
+    const keys = ['default-1', 'default-2'];
+    const key = keys[index % keys.length];
+    return colors[key];
+  };
+
+  const formatKbps = (kbps: number) => {
+    if (kbps >= 1000) {
+      return `${(kbps / 1000).toFixed(1)} Mbps`;
+    }
+    return `${kbps} Kbps`;
+  };
+
+  return (
+    <Card shadow="sm" className="w-full">
+      <CardBody className="p-4 flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between border-b border-divider pb-3 gap-2">
+          <div className="flex items-center gap-2">
+            <Radio className="w-4 h-4 text-primary" />
+            <h3 className="text-small font-bold text-foreground">各节点每秒流量使用 (近 24 小时)</h3>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Button 
+              size="sm" 
+              variant={selectedType === 'all' ? 'solid' : 'light'} 
+              color={selectedType === 'all' ? 'primary' : 'default'}
+              onPress={() => setSelectedType('all')}
+              className="h-7 min-w-12 px-2"
+            >
+              全部
+            </Button>
+            <Button 
+              size="sm" 
+              variant={selectedType === 'sip' ? 'solid' : 'light'} 
+              color={selectedType === 'sip' ? 'primary' : 'default'}
+              onPress={() => setSelectedType('sip')}
+              className="h-7 min-w-12 px-2"
+            >
+              信令 (SIP)
+            </Button>
+            <Button 
+              size="sm" 
+              variant={selectedType === 'media' ? 'solid' : 'light'} 
+              color={selectedType === 'media' ? 'primary' : 'default'}
+              onPress={() => setSelectedType('media')}
+              className="h-7 min-w-12 px-2"
+            >
+              媒体 (RTP)
+            </Button>
+          </div>
+        </div>
+
+        {filteredData.length === 0 ? (
+          <div className="py-8 flex flex-col items-center justify-center bg-content2/30 rounded-xl">
+            <Activity className="w-8 h-8 text-default-400 opacity-60 mb-2" />
+            <p className="text-tiny text-default-400">没有匹配的节点流量数据</p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap gap-x-4 gap-y-2 text-tiny justify-end">
+              {filteredData.map((node, idx) => {
+                const c = getNodeColor(node.node_id, idx);
+                const latestKbps = node.series[node.series.length - 1]?.kbps || 0;
+                return (
+                  <div key={node.node_id} className="flex items-center gap-2 bg-content2/40 px-2 py-1 rounded">
+                    <span className={`w-2 h-2 rounded-full ${c.dot}`} />
+                    <span className="font-mono font-semibold text-foreground">{node.node_id}</span>
+                    <span className="text-default-400">({node.node_type === 'sip' ? 'SIP' : 'RTP'})</span>
+                    <span className={`font-mono font-bold ${c.text}`}>{formatKbps(latestKbps)}/s</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="w-full overflow-x-auto pt-2">
+              <div className="min-w-[650px] flex flex-col gap-2">
+                <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="w-full h-44 overflow-visible">
+                  <line x1="0" y1={chartHeight} x2={chartWidth} y2={chartHeight} className="stroke-default-200" strokeWidth="1" />
+                  <line x1="0" y1={chartHeight * 0.75} x2={chartWidth} y2={chartHeight * 0.75} className="stroke-default-100" strokeDasharray="3 3" />
+                  <line x1="0" y1={chartHeight * 0.5} x2={chartWidth} y2={chartHeight * 0.5} className="stroke-default-100" strokeDasharray="3 3" />
+                  <line x1="0" y1={chartHeight * 0.25} x2={chartWidth} y2={chartHeight * 0.25} className="stroke-default-100" strokeDasharray="3 3" />
+
+                  <text x="5" y={chartHeight * 0.25 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.75))}/s</text>
+                  <text x="5" y={chartHeight * 0.5 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.5))}/s</text>
+                  <text x="5" y={chartHeight * 0.75 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.25))}/s</text>
+
+                  {filteredData.map((node, nodeIdx) => {
+                    const c = getNodeColor(node.node_id, nodeIdx);
+                    
+                    const points = node.series.map((item, idx) => {
+                      const x = (idx / (node.series.length - 1)) * chartWidth;
+                      const y = chartHeight - (item.kbps / maxVal) * (chartHeight - 30);
+                      return `${x},${y}`;
+                    }).join(' ');
+
+                    return (
+                      <g key={node.node_id}>
+                        <polyline 
+                          fill="none" 
+                          stroke={c.stroke} 
+                          strokeWidth="2.5" 
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          points={points} 
+                          style={{ filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.08))' }}
+                        />
+                        {node.series.map((item, idx) => {
+                          const x = (idx / (node.series.length - 1)) * chartWidth;
+                          const y = chartHeight - (item.kbps / maxVal) * (chartHeight - 30);
+                          if (idx % 3 !== 0 && idx !== node.series.length - 1) return null;
+                          return (
+                            <circle 
+                              key={idx} 
+                              cx={x} 
+                              cy={y} 
+                              r="3.5" 
+                              fill={c.stroke}
+                              className="stroke-white dark:stroke-slate-900" 
+                              strokeWidth="1.5"
+                            />
+                          );
+                        })}
+                      </g>
+                    );
+                  })}
+                </svg>
+
+                {allHours.length > 0 && (
+                  <div className="flex justify-between text-[10px] text-default-400 px-1 font-mono">
+                    <span>{allHours[0]}</span>
+                    <span>{allHours[Math.floor(allHours.length * 0.2)]}</span>
+                    <span>{allHours[Math.floor(allHours.length * 0.4)]}</span>
+                    <span>{allHours[Math.floor(allHours.length * 0.6)]}</span>
+                    <span>{allHours[Math.floor(allHours.length * 0.8)]}</span>
+                    <span>{allHours[allHours.length - 1]}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 export function DashboardPage() {
   const [data, setData] = useState<Summary>({});
   const [error, setError] = useState('');
@@ -376,6 +590,9 @@ export function DashboardPage() {
 
               {/* 24 小时呼叫趋势图 (含零数据降级) */}
               <HourlyTrendsSection trends={data.hourly_trends} />
+
+              {/* 运行节点流量使用统计 (按照近 24 小时每秒流量展示) */}
+              <NodeTrafficSection />
 
               {/* 媒体 QoS + 接通率 + 容量与引擎状态 */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

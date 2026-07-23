@@ -225,6 +225,19 @@ fn validate(config: &MediaClusterConfigPayload) -> Result<(), &'static str> {
     Ok(())
 }
 
+pub(crate) async fn get_node_list(state: &AppState) -> Vec<String> {
+    let mut list = Vec::new();
+    if let Ok(config) = load_stored(state.store.pool()).await {
+        for node in config.nodes {
+            list.push(node.id);
+        }
+    }
+    if list.is_empty() {
+        list.push("media-node-01".to_string());
+    }
+    list
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

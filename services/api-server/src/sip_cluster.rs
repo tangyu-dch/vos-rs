@@ -302,6 +302,19 @@ fn status_from_record(record: SipNodeRecord, ttl_secs: i64) -> SipNodeStatus {
     }
 }
 
+pub(crate) async fn get_node_list(state: &AppState) -> Vec<String> {
+    let mut list = Vec::new();
+    if let Ok(status) = load_status(&state.redis_client, &state.sip_node_key_prefix).await {
+        for node in status.nodes {
+            list.push(node.node_id);
+        }
+    }
+    if list.is_empty() {
+        list.push("sip-edge-01".to_string());
+    }
+    list
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
