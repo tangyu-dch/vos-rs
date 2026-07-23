@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Button, Card, CardBody, Chip, Table, TableHeader, TableColumn, TableBody, TableRow, TableCell,
 } from '@heroui/react';
-import { RefreshCw, Eye, PhoneOff, Activity } from 'lucide-react';
+import { RefreshCw, Eye, PhoneOff, Activity, Download } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/client';
 import { useAuth } from '@/auth/AuthContext';
@@ -62,6 +62,34 @@ export function ActiveCallsPage() {
     }
   };
 
+  const handleExport = () => {
+    if (!rows.length) {
+      message.warning('当前无活跃通话可导出');
+      return;
+    }
+    const headers = '"通话 ID","主叫号码","被叫号码","状态","开始时间","中继网关"';
+    const lines = rows.map((row) => {
+      const callId = String(entityId(row, 'call_id'));
+      const caller = String(row.caller ?? '');
+      const callee = String(row.callee ?? '');
+      const state = String(row.state ?? '');
+      const started = String(callDetailText(row.started_at_ms, 'started_at_ms'));
+      const gateway = String(row.gateway ?? '');
+      return `"${callId}","${caller}","${callee}","${state}","${started}","${gateway.replace(/"/g, '""')}"`;
+    });
+    const csvContent = [headers, ...lines].join('\n');
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Active_Calls_List_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    message.success('已自动生成并下载活跃通话列表 (CSV 格式)');
+  };
+
   return (
     <Card shadow="sm" className="p-2">
       <CardBody className="p-4 flex flex-col gap-4">
@@ -73,9 +101,14 @@ export function ActiveCallsPage() {
             </div>
             <p className="text-tiny text-default-500">实时查看正在建立与通话中的会话，支持强拆挂断与 SIP 事务分析</p>
           </div>
-          <Button variant="flat" size="sm" isLoading={loading} onPress={load} startContent={<RefreshCw className="w-4 h-4" />}>
-            刷新
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="flat" size="sm" isLoading={loading} onPress={load} startContent={<RefreshCw className="w-4 h-4" />}>
+              刷新
+            </Button>
+            <Button variant="flat" size="sm" onPress={handleExport} startContent={<Download className="w-4 h-4" />}>
+              导出
+            </Button>
+          </div>
         </div>
 
         {error ? (

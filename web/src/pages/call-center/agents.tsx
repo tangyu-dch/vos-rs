@@ -4,7 +4,7 @@ import {
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Select, SelectItem,
   useDisclosure,
 } from '@heroui/react';
-import { Plus, RefreshCw, Search, Pencil, Trash2, LayoutGrid, List } from 'lucide-react';
+import { Plus, RefreshCw, Search, Pencil, Trash2, LayoutGrid, List, Download } from 'lucide-react';
 import { api } from '@/services/client';
 import { ErrorState, LoadingState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
@@ -116,6 +116,36 @@ export default function AgentsPage() {
       (a.extension || '').includes(searchKey)
   );
 
+  const handleExport = () => {
+    if (!filteredData.length) {
+      message.warning('当前列表无数据可导出');
+      return;
+    }
+    const headers = '"座席姓名","座席工号","SIP分机号","当前状态","当前通话"';
+    const lines = filteredData.map((a) => {
+      const name = a.name ? String(a.name) : '';
+      const id = a.agent_id ? String(a.agent_id) : '';
+      const ext = a.extension ? `sip:${a.extension}` : '';
+      let status = '离线 (Offline)';
+      if (a.status === 'idle') status = '空闲 (Ready)';
+      else if (a.status === 'in_call') status = '通话中 (In Call)';
+      else if (a.status === 'busy') status = '示忙 (Busy)';
+      const call = a.current_call ? String(a.current_call) : '无通话';
+      return `"${name.replace(/"/g, '""')}","${id.replace(/"/g, '""')}","${ext}","${status}","${call.replace(/"/g, '""')}"`;
+    });
+    const csvContent = [headers, ...lines].join('\n');
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Agents_List_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    message.success('已自动生成并下载座席列表 (CSV 格式)');
+  };
+
   const getStatusChip = (status: string) => {
     switch (status) {
       case 'idle':
@@ -198,6 +228,15 @@ export default function AgentsPage() {
                 startContent={<RefreshCw className="w-4 h-4" />}
               >
                 刷新
+              </Button>
+
+              <Button
+                variant="flat"
+                size="sm"
+                onPress={handleExport}
+                startContent={<Download className="w-4 h-4" />}
+              >
+                导出
               </Button>
 
               <Button

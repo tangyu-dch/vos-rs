@@ -4,7 +4,7 @@ import {
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Select, SelectItem,
   useDisclosure,
 } from '@heroui/react';
-import { Plus, RefreshCw, Search, Pencil, Trash2, Music } from 'lucide-react';
+import { Plus, RefreshCw, Search, Pencil, Trash2, Music, Download } from 'lucide-react';
 import { api } from '@/services/client';
 import { ErrorState, LoadingState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
@@ -138,6 +138,37 @@ export default function QueuesPage() {
       (q.id || '').toLowerCase().includes(searchKey.toLowerCase())
   );
 
+  const handleExport = () => {
+    if (!filteredData.length) {
+      message.warning('当前列表无数据可导出');
+      return;
+    }
+    const headers = '"队列 ID","队列名称","分配策略","MOH 背景音乐文件","最大等待时间(秒)","绑定座席数"';
+    const lines = filteredData.map((q) => {
+      const qId = q.id ? String(q.id) : '';
+      const qName = q.name ? String(q.name) : '';
+      let strat = '最长空闲优先 (Longest Idle)';
+      if (q.strategy === 'round_robin') strat = '轮询分发 (Round Robin)';
+      else if (q.strategy === 'ring_all') strat = '群响 (Ring All)';
+      else if (q.strategy === 'random') strat = '随机 (Random)';
+      const moh = q.moh_file || 'moh.wav';
+      const waitSecs = `${q.max_wait_secs || 300}s`;
+      const agentCount = Array.isArray(q.agents) ? `${q.agents.length} 个座席` : '0 个座席';
+      return `"${qId.replace(/"/g, '""')}","${qName.replace(/"/g, '""')}","${strat}","${moh.replace(/"/g, '""')}","${waitSecs}","${agentCount}"`;
+    });
+    const csvContent = [headers, ...lines].join('\n');
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Queues_List_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    message.success('已自动生成并下载呼叫队列列表 (CSV 格式)');
+  };
+
   const getStrategyChip = (strategy: string) => {
     switch (strategy) {
       case 'round_robin':
@@ -198,6 +229,14 @@ export default function QueuesPage() {
                 startContent={<RefreshCw className="w-4 h-4" />}
               >
                 刷新
+              </Button>
+              <Button
+                variant="flat"
+                size="sm"
+                onPress={handleExport}
+                startContent={<Download className="w-4 h-4" />}
+              >
+                导出
               </Button>
               <Button
                 color="primary"
