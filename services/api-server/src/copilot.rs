@@ -591,6 +591,107 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
                 "description": "查询防刷量、频控与反欺诈风控规则。",
                 "parameters": { "type": "object", "properties": {}, "required": [] }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_extensions",
+                "description": "获取 SIP 分机账号列表或指定分机配置信息。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "username": { "type": "string", "description": "分机账号/用户名过滤" }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_create_extension",
+                "description": "创建新的 SIP 分机账号（指定分机账号 username 与密码 password）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "username": { "type": "string", "description": "分机账号/用户名" },
+                        "password": { "type": "string", "description": "分机注册密码" }
+                    },
+                    "required": ["username", "password"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_delete_extension",
+                "description": "删除指定的 SIP 分机账号。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "username": { "type": "string", "description": "待删除的分机账号" }
+                    },
+                    "required": ["username"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_list_ivr_menus",
+                "description": "获取系统的 IVR 语音导航菜单流程列表。",
+                "parameters": { "type": "object", "properties": {}, "required": [] }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_create_ivr_menu",
+                "description": "创建或更新 IVR 语音导航菜单流程（指定菜单 ID id、名称 name、绑定的 DID 号码 did、欢迎语 welcome_prompt）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "IVR 菜单唯一标识 ID" },
+                        "name": { "type": "string", "description": "IVR 菜单显示名称" },
+                        "did": { "type": "string", "description": "绑定的呼入 DID 号码" },
+                        "welcome_prompt": { "type": "string", "description": "欢迎提示音语音内容或路径" }
+                    },
+                    "required": ["id", "name"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_create_gateway",
+                "description": "创建对接网关/中继线路（指定网关 ID id、名称 name、目标 IP ip_address、端口 port）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "网关唯一 ID" },
+                        "name": { "type": "string", "description": "网关名称" },
+                        "ip_address": { "type": "string", "description": "目标 IP 地址" },
+                        "port": { "type": "integer", "description": "目标端口 (默认 5060)", "default": 5060 }
+                    },
+                    "required": ["id", "name", "ip_address"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "vos_create_route",
+                "description": "创建前缀号段呼叫路由规则（指定路由 ID id、被叫前缀 prefix、出局网关 ID gateway_id、优先级 priority）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "路由唯一 ID" },
+                        "prefix": { "type": "string", "description": "被叫前缀号码 (如 86, 010)" },
+                        "gateway_id": { "type": "string", "description": "绑定的出口网关 ID" },
+                        "priority": { "type": "integer", "description": "优先级 (越小越优先)", "default": 1 }
+                    },
+                    "required": ["id", "prefix", "gateway_id"]
+                }
+            }
         }
     ])
 }
@@ -673,11 +774,130 @@ impl<'a> TelecomCopilotEngine<'a> {
                     Err(e) => json!({ "error": e.to_string() }),
                 }
             }
+            "vos_list_anti_fraud_rules" => {
+                let rules = self.state.store.list_anti_fraud_rules().await.unwrap_or_default();
+                json!({ "rules": rules })
+            }
+            "vos_list_extensions" => {
+                let username = args.get("username").and_then(|v| v.as_str());
+                match self.state.store.list_users().await {
+                    Ok(users) => {
+                        let filtered: Vec<_> = if let Some(u) = username {
+                            users.into_iter().filter(|user| user.username.contains(u)).collect()
+                        } else {
+                            users
+                        };
+                        json!({ "total": filtered.len(), "extensions": filtered })
+                    }
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "vos_create_extension" => {
+                let username = args.get("username").and_then(|v| v.as_str()).unwrap_or("");
+                let password = args.get("password").and_then(|v| v.as_str()).unwrap_or("");
+                if username.is_empty() || password.is_empty() {
+                    return json!({ "success": false, "error": "分机账号 username 和密码 password 不能为空" });
+                }
+                let realm = self.state.store.get_system_config("auth_realm").await.ok().flatten().unwrap_or_else(|| "vos-rs".into());
+                let ha1 = format!("{:x}", md5::compute(format!("{username}:{realm}:{password}").as_bytes()));
+                match self.state.store.insert_user(username, &ha1).await {
+                    Ok(_) => {
+                        let _ = crate::hot_cache::set_auth_user(self.state, username, &ha1).await;
+                        json!({ "success": true, "message": format!("分机账号 {} 创建成功", username) })
+                    }
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_delete_extension" => {
+                let username = args.get("username").and_then(|v| v.as_str()).unwrap_or("");
+                match self.state.store.delete_user(username).await {
+                    Ok(_) => json!({ "success": true, "message": format!("分机账号 {} 已删除", username) }),
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_list_ivr_menus" => {
+                match self.state.store.list_ivr_menus().await {
+                    Ok(menus) => json!({ "ivr_menus": menus }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "vos_create_ivr_menu" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let did = args.get("did").and_then(|v| v.as_str()).unwrap_or("");
+                let welcome_prompt = args.get("welcome_prompt").and_then(|v| v.as_str()).unwrap_or("");
+                if id.is_empty() || name.is_empty() {
+                    return json!({ "success": false, "error": "IVR 菜单 ID 和名称不能为空" });
+                }
+                let res = sqlx::query(
+                    "INSERT INTO ivr_menus (id, name, description, did, welcome_prompt, timeout_secs, enabled, nodes, edges) \
+                     VALUES ($1, $2, $3, $4, $5, 10, true, '[]'::jsonb, '[]'::jsonb) \
+                     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, did = EXCLUDED.did, welcome_prompt = EXCLUDED.welcome_prompt"
+                )
+                .bind(id)
+                .bind(name)
+                .bind("由 Copilot 自动创建")
+                .bind(did)
+                .bind(welcome_prompt)
+                .execute(self.state.store.pool())
+                .await;
+                match res {
+                    Ok(_) => json!({ "success": true, "message": format!("IVR 菜单 {} ({}) 创建成功", name, id) }),
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_create_gateway" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let ip = args.get("ip_address").and_then(|v| v.as_str()).unwrap_or("");
+                let port = args.get("port").and_then(|v| v.as_i64()).unwrap_or(5060) as i32;
+                if id.is_empty() || name.is_empty() || ip.is_empty() {
+                    return json!({ "success": false, "error": "网关 ID、名称与 IP 地址不能为空" });
+                }
+                let res = sqlx::query(
+                    "INSERT INTO sip_gateways (id, name, ip_address, port, enabled) VALUES ($1, $2, $3, $4, true) \
+                     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, ip_address = EXCLUDED.ip_address, port = EXCLUDED.port"
+                )
+                .bind(id)
+                .bind(name)
+                .bind(ip)
+                .bind(port)
+                .execute(self.state.store.pool())
+                .await;
+                match res {
+                    Ok(_) => json!({ "success": true, "message": format!("中继网关 {} ({}:{}) 创建成功", name, ip, port) }),
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
+            "vos_create_route" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
+                let gw_id = args.get("gateway_id").and_then(|v| v.as_str()).unwrap_or("");
+                let priority = args.get("priority").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+                if id.is_empty() || prefix.is_empty() || gw_id.is_empty() {
+                    return json!({ "success": false, "error": "路由 ID、号码前缀与网关 ID 不能为空" });
+                }
+                let res = sqlx::query(
+                    "INSERT INTO sip_routes (id, prefix, priority, gateway_id) VALUES ($1, $2, $3, $4) \
+                     ON CONFLICT (id) DO UPDATE SET prefix = EXCLUDED.prefix, priority = EXCLUDED.priority, gateway_id = EXCLUDED.gateway_id"
+                )
+                .bind(id)
+                .bind(prefix)
+                .bind(priority)
+                .bind(gw_id)
+                .execute(self.state.store.pool())
+                .await;
+                match res {
+                    Ok(_) => {
+                        let _ = crate::routes::publish_route_reload(&self.state.nats_client).await;
+                        json!({ "success": true, "message": format!("前缀路由 {} (前缀: {}, 网关: {}) 创建成功", id, prefix, gw_id) })
+                    }
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                }
+            }
             _ => json!({ "error": format!("未知工具: {name}") }),
         }
     }
-
-    /// 未配置 LLM 或 LLM 调用失败时的结构化 Markdown 报告
     pub(crate) fn build_fallback_report(
         query: &str,
         intent: CopilotIntent,
