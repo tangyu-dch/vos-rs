@@ -21,6 +21,7 @@ export interface MessageItem {
   sender: 'user' | 'bot';
   text: string;
   images?: string[];
+  files?: { name: string; sizeStr?: string; content?: string }[];
   rootCause?: string;
   suggestedAction?: string;
   ladderAscii?: string;

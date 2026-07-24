@@ -43,8 +43,9 @@ export function CopilotPage() {
   const abortRef = useRef<AbortController | null>(null);
   const [activeModel, setActiveModel] = useState<{ id: number; provider: string; model: string } | null>(null);
 
-  // ============ 图片大图预览 Lightbox 状态 ============
+  // ============ 图片与 CSV 附件预览 Modal 状态 ============
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<{ name: string; content: string } | null>(null);
 
   // ============ 附件/图片上传状态 ============
   const [attachedFiles, setAttachedFiles] = useState<{
@@ -233,6 +234,10 @@ export function CopilotPage() {
 
     // 整合附件信息
     const images = attachedFiles.filter((f) => f.isImage && f.base64Data).map((f) => f.base64Data as string);
+    const attachedTextFiles = attachedFiles
+      .filter((f) => !f.isImage && f.textContent)
+      .map((f) => ({ name: f.name, sizeStr: f.sizeStr, content: f.textContent }));
+
     const textAppend = attachedFiles
       .filter((f) => !f.isImage && f.textContent)
       .map((f) => `\n\n[📁 附加文件/数据: ${f.name}]\n\`\`\`\n${f.textContent}\n\`\`\``)
@@ -279,6 +284,7 @@ export function CopilotPage() {
       sender: 'user',
       text: displayQuery,
       images: images.length > 0 ? images : undefined,
+      files: attachedTextFiles.length > 0 ? attachedTextFiles : undefined,
       timestamp: ts,
     };
     const botMsg: MessageItem = { id: botTempId, sender: 'bot', text: '', timestamp: ts };
@@ -311,7 +317,7 @@ export function CopilotPage() {
         fullQuery,
         {
           onUserMessage: (msg) => {
-            setMessages((prev) => prev.map((m) => (m.id === userTempId ? { ...toMessageItem(msg), images: m.images } : m)));
+            setMessages((prev) => prev.map((m) => (m.id === userTempId ? { ...toMessageItem(msg), images: m.images, files: m.files } : m)));
           },
           onContext: (ctx) => {
             // LLM 状态信息（梯形图已内嵌到 LLM 回答的 markdown 中，不再单独推送）
@@ -524,6 +530,7 @@ export function CopilotPage() {
                         </div>
                         {m.sender === 'user' ? (
                           <div className="flex flex-col gap-2">
+                            {/* 图片附件微缩图 */}
                             {m.images && m.images.length > 0 && (
                               <div className="flex flex-wrap gap-2 max-w-full my-1">
                                 {m.images.map((imgUrl, idx) => (
@@ -537,6 +544,38 @@ export function CopilotPage() {
                                 ))}
                               </div>
                             )}
+
+                            {/* CSV / 文本数据文件附件卡片 */}
+                            {m.files && m.files.length > 0 && (
+                              <div className="flex flex-col gap-2 my-1">
+                                {m.files.map((file, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="flex items-center justify-between p-2.5 rounded-xl bg-black/20 border border-primary-foreground/20 text-xs shadow-sm hover:border-primary-foreground/40 transition-colors"
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <div className="w-8 h-8 rounded-lg bg-primary-foreground/10 flex items-center justify-center shrink-0">
+                                        <FileText className="w-4 h-4 text-primary-foreground" />
+                                      </div>
+                                      <div className="flex flex-col min-w-0">
+                                        <span className="font-bold truncate text-primary-foreground">{file.name}</span>
+                                        <span className="text-[10px] text-primary-foreground/70">{file.sizeStr || '数据文件'}</span>
+                                      </div>
+                                    </div>
+                                    {file.content && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setPreviewFile({ name: file.name, content: file.content as string })}
+                                        className="px-2.5 py-1 rounded-lg bg-primary-foreground/20 hover:bg-primary-foreground/30 text-[11px] font-medium text-primary-foreground transition-colors shrink-0 flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <FileText className="w-3 h-3" /> 预览 CSV 数据
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
                             {m.text && <p className="whitespace-pre-wrap font-medium text-xs">{m.text}</p>}
                           </div>
                         ) : isStreaming ? (
@@ -718,6 +757,61 @@ export function CopilotPage() {
                 alt="大图预览"
                 className="max-h-[75vh] max-w-full rounded-xl object-contain shadow-2xl border border-default-200"
               />
+            )}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
+
+      {/* CSV / 文本文件内容表格查看器 Modal */}
+      <Modal
+        isOpen={previewFile !== null}
+        onClose={() => setPreviewFile(null)}
+        size="4xl"
+        scrollBehavior="inside"
+        classNames={{
+          backdrop: 'bg-black/80 backdrop-blur-md',
+          base: 'bg-content1/95 border border-default-200 shadow-2xl rounded-2xl max-h-[85vh]',
+        }}
+      >
+        <ModalContent>
+          <ModalHeader className="flex items-center justify-between text-sm font-bold border-b border-default-100">
+            <div className="flex items-center gap-2">
+              <FileText className="w-4 h-4 text-primary" />
+              <span>文件内容预览: {previewFile?.name}</span>
+            </div>
+          </ModalHeader>
+          <ModalBody className="p-4 overflow-x-auto">
+            {previewFile && (
+              previewFile.name.endsWith('.csv') ? (
+                <div className="w-full overflow-x-auto border border-default-200 rounded-xl">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead>
+                      <tr className="bg-default-100 border-b border-default-200 text-foreground font-semibold">
+                        {previewFile.content.split('\n')[0]?.split(',').map((h, i) => (
+                          <th key={i} className="px-3 py-2 border-r border-default-200 last:border-r-0 whitespace-nowrap">
+                            {h.trim().replace(/^"|"$/g, '')}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewFile.content.split('\n').slice(1).filter((row) => row.trim().length > 0).map((row, rIdx) => (
+                        <tr key={rIdx} className="border-b border-default-100 hover:bg-default-50/50">
+                          {row.split(',').map((cell, cIdx) => (
+                            <td key={cIdx} className="px-3 py-1.5 border-r border-default-100 last:border-r-0 whitespace-nowrap text-default-600">
+                              {cell.trim().replace(/^"|"$/g, '')}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <pre className="p-4 rounded-xl bg-default-100 text-xs font-mono whitespace-pre-wrap overflow-x-auto text-foreground border border-default-200">
+                  {previewFile.content}
+                </pre>
+              )
             )}
           </ModalBody>
         </ModalContent>
