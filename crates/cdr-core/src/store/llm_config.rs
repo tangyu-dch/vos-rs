@@ -19,9 +19,6 @@ pub struct LlmConfigRecord {
     pub model: String,
     pub temperature: f32,
     pub is_active: bool,
-    pub supports_vision: bool,
-    pub supports_stt: bool,
-    pub supports_tts: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -38,20 +35,10 @@ pub struct UpsertLlmConfigInput {
     pub model: String,
     #[serde(default = "default_temperature")]
     pub temperature: f32,
-    #[serde(default = "default_true")]
-    pub supports_vision: bool,
-    #[serde(default)]
-    pub supports_stt: bool,
-    #[serde(default)]
-    pub supports_tts: bool,
 }
 
 fn default_temperature() -> f32 {
     0.3
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl PostgresCdrStore {
@@ -59,7 +46,6 @@ impl PostgresCdrStore {
     pub async fn list_llm_configs(&self) -> Result<Vec<LlmConfigRecord>, sqlx::Error> {
         sqlx::query_as::<_, LlmConfigRecord>(
             "SELECT id, name, provider, api_key, base_url, model, temperature, is_active, \
-             supports_vision, supports_stt, supports_tts, \
              created_at, updated_at FROM llm_configs \
              ORDER BY is_active DESC, updated_at DESC",
         )
@@ -71,7 +57,6 @@ impl PostgresCdrStore {
     pub async fn get_llm_config(&self, id: i64) -> Result<Option<LlmConfigRecord>, sqlx::Error> {
         sqlx::query_as::<_, LlmConfigRecord>(
             "SELECT id, name, provider, api_key, base_url, model, temperature, is_active, \
-             supports_vision, supports_stt, supports_tts, \
              created_at, updated_at FROM llm_configs WHERE id = $1",
         )
         .bind(id)
@@ -83,7 +68,6 @@ impl PostgresCdrStore {
     pub async fn get_active_llm_config(&self) -> Result<Option<LlmConfigRecord>, sqlx::Error> {
         sqlx::query_as::<_, LlmConfigRecord>(
             "SELECT id, name, provider, api_key, base_url, model, temperature, is_active, \
-             supports_vision, supports_stt, supports_tts, \
              created_at, updated_at FROM llm_configs WHERE is_active = true LIMIT 1",
         )
         .fetch_optional(&self.pool)
@@ -102,9 +86,9 @@ impl PostgresCdrStore {
             .await?
             .get(0);
         let record = sqlx::query_as::<_, LlmConfigRecord>(
-            "INSERT INTO llm_configs (name, provider, api_key, base_url, model, temperature, is_active, supports_vision, supports_stt, supports_tts) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
-             RETURNING id, name, provider, api_key, base_url, model, temperature, is_active, supports_vision, supports_stt, supports_tts, created_at, updated_at",
+            "INSERT INTO llm_configs (name, provider, api_key, base_url, model, temperature, is_active) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             RETURNING id, name, provider, api_key, base_url, model, temperature, is_active, created_at, updated_at",
         )
         .bind(&input.name)
         .bind(&input.provider)
@@ -113,9 +97,6 @@ impl PostgresCdrStore {
         .bind(&input.model)
         .bind(input.temperature)
         .bind(!has_active)
-        .bind(input.supports_vision)
-        .bind(input.supports_stt)
-        .bind(input.supports_tts)
         .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -130,8 +111,8 @@ impl PostgresCdrStore {
     ) -> Result<Option<LlmConfigRecord>, sqlx::Error> {
         sqlx::query_as::<_, LlmConfigRecord>(
             "UPDATE llm_configs SET name=$1, provider=$2, api_key=$3, base_url=$4, model=$5, \
-             temperature=$6, supports_vision=$7, supports_stt=$8, supports_tts=$9, updated_at=now() WHERE id=$10 \
-             RETURNING id, name, provider, api_key, base_url, model, temperature, is_active, supports_vision, supports_stt, supports_tts, created_at, updated_at",
+             temperature=$6, updated_at=now() WHERE id=$7 \
+             RETURNING id, name, provider, api_key, base_url, model, temperature, is_active, created_at, updated_at",
         )
         .bind(&input.name)
         .bind(&input.provider)
@@ -139,9 +120,6 @@ impl PostgresCdrStore {
         .bind(&input.base_url)
         .bind(&input.model)
         .bind(input.temperature)
-        .bind(input.supports_vision)
-        .bind(input.supports_stt)
-        .bind(input.supports_tts)
         .bind(id)
         .fetch_optional(&self.pool)
         .await
@@ -184,7 +162,7 @@ impl PostgresCdrStore {
         let _ = affected;
         let record = sqlx::query_as::<_, LlmConfigRecord>(
             "UPDATE llm_configs SET is_active=true, updated_at=now() WHERE id=$1 \
-             RETURNING id, name, provider, api_key, base_url, model, temperature, is_active, supports_vision, supports_stt, supports_tts, created_at, updated_at",
+             RETURNING id, name, provider, api_key, base_url, model, temperature, is_active, created_at, updated_at",
         )
         .bind(id)
         .fetch_optional(&mut *tx)

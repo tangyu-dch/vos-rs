@@ -77,9 +77,6 @@ export interface LlmConfigRecord {
   model: string;
   temperature: number;
   is_active: boolean;
-  supports_vision?: boolean;
-  supports_stt?: boolean;
-  supports_tts?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -92,9 +89,6 @@ export interface UpsertLlmConfigInput {
   base_url: string;
   model: string;
   temperature: number;
-  supports_vision?: boolean;
-  supports_stt?: boolean;
-  supports_tts?: boolean;
 }
 
 /** API Key 脱敏：仅显示前 6 位和后 4 位 */

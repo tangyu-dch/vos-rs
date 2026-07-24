@@ -337,9 +337,6 @@ impl PostgresCdrStore {
         sqlx::query(SEED_DEFAULT_LLM_CONFIG_SQL)
             .execute(&mut *tx)
             .await?;
-        for migration_sql in schema::MIGRATE_LLM_CONFIGS_CAPABILITIES_SQL {
-            sqlx::query(migration_sql).execute(&mut *tx).await?;
-        }
         for migration_sql in termination_schema::MIGRATE_TERMINATION_DOMAIN_SQL {
             sqlx::query(migration_sql).execute(&mut *tx).await?;
         }

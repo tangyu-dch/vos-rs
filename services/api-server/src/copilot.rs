@@ -25,12 +25,6 @@ pub struct LlmConfig {
     pub base_url: String,
     pub model: String,
     pub temperature: f32,
-    #[allow(dead_code)]
-    pub supports_vision: bool,
-    #[allow(dead_code)]
-    pub supports_stt: bool,
-    #[allow(dead_code)]
-    pub supports_tts: bool,
 }
 
 impl From<LlmConfigRecord> for LlmConfig {
@@ -42,9 +36,6 @@ impl From<LlmConfigRecord> for LlmConfig {
             base_url: r.base_url,
             model: r.model,
             temperature: r.temperature,
-            supports_vision: r.supports_vision,
-            supports_stt: r.supports_stt,
-            supports_tts: r.supports_tts,
         }
     }
 }
@@ -61,21 +52,6 @@ impl LlmConfig {
             && !key.starts_with("AIzaSyYour")
             && !key.eq_ignore_ascii_case("not-needed")
             && !key.eq_ignore_ascii_case("placeholder")
-    }
-
-    #[allow(dead_code)]
-    pub fn supports_vision(&self) -> bool {
-        self.supports_vision
-    }
-
-    #[allow(dead_code)]
-    pub fn supports_stt(&self) -> bool {
-        self.supports_stt
-    }
-
-    #[allow(dead_code)]
-    pub fn supports_tts(&self) -> bool {
-        self.supports_tts
     }
 }
 
@@ -1911,9 +1887,6 @@ mod tests {
             base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
             model: "glm-4-flash".into(),
             temperature: 0.3,
-            supports_vision: true,
-            supports_stt: false,
-            supports_tts: false,
         };
         assert!(!cfg.is_configured(), "空 key 不应视为已配置");
         cfg.api_key = "sk-proj-your-actual-api-key-here".into();
