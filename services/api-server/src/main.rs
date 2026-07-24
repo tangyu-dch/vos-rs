@@ -316,22 +316,25 @@ async fn audit_log(
         axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::PATCH
     ) {
         let (parts, body) = req.into_parts();
-        const MAX_AUDIT_BODY_BYTES: usize = 256 * 1024;
+        const MAX_BODY_BUFFER_BYTES: usize = 15 * 1024 * 1024; // 允许最大 15MB 图像/附件数据流
+        const MAX_AUDIT_LOG_TEXT_BYTES: usize = 256 * 1024; // 数据库审计记录上限 256KB
         let content_type = parts
             .headers
             .get(axum::http::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let body_result = axum::body::to_bytes(body, MAX_AUDIT_BODY_BYTES).await;
+        let body_result = axum::body::to_bytes(body, MAX_BODY_BUFFER_BYTES).await;
         let body_bytes = match body_result {
             Ok(bytes) => bytes,
             Err(error) => {
-                tracing::warn!(%error, request_id = %request_id, "读取审计请求体失败，跳过请求体记录");
+                tracing::warn!(%error, request_id = %request_id, "读取请求体失败");
                 axum::body::Bytes::new()
             }
         };
-        let body_str = if content_type.starts_with("application/json") {
+        let body_str = if body_bytes.len() > MAX_AUDIT_LOG_TEXT_BYTES {
+            format!("[请求体包含附件/多模态图片，完整大小 {} 字节，审计日志自动省简]", body_bytes.len())
+        } else if content_type.starts_with("application/json") {
             sanitize_audit_json(&body_bytes)
         } else if body_bytes.is_empty() {
             String::new()

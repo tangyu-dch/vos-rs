@@ -79,8 +79,9 @@ pub struct ChatInSessionResponse {
 pub async fn create_session(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Json(payload): Json<CreateSessionRequest>,
+    payload: Option<Json<CreateSessionRequest>>,
 ) -> Result<Json<CopilotSession>, ApiError> {
+    let payload = payload.map(|Json(p)| p).unwrap_or_default();
     let id = format!("cp-{}", Uuid::new_v4().simple());
     let title = payload
         .title
@@ -154,8 +155,9 @@ pub async fn update_session(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(session_id): Path<String>,
-    Json(payload): Json<UpdateSessionRequest>,
+    payload: Option<Json<UpdateSessionRequest>>,
 ) -> Result<Json<CopilotSession>, ApiError> {
+    let payload = payload.map(|Json(p)| p).unwrap_or_default();
     let trimmed_title = payload
         .title
         .map(|s| s.trim().to_string())
