@@ -38,6 +38,7 @@ pub struct CopilotMessage {
     /// 角色：`user` | `assistant`
     pub role: String,
     pub content: String,
+    pub images: Option<Vec<String>>,
     pub root_cause: Option<String>,
     pub suggested_action: Option<String>,
     pub ladder_diagram_ascii: Option<String>,
@@ -55,6 +56,7 @@ pub struct AppendCopilotMessageInput<'a> {
     pub session_id: &'a str,
     pub role: &'a str,
     pub content: &'a str,
+    pub images: Option<&'a [String]>,
     pub root_cause: Option<&'a str>,
     pub suggested_action: Option<&'a str>,
     pub ladder_diagram_ascii: Option<&'a str>,
@@ -73,7 +75,7 @@ impl PostgresCdrStore {
         llm_provider: Option<&str>,
         llm_model: Option<&str>,
     ) -> Result<CopilotSession, sqlx::Error> {
-        let row = sqlx::query(
+        let row = sqlx::query_as::<_, CopilotSession>(
             "INSERT INTO copilot_sessions (id, title, operator, llm_provider, llm_model) \
              VALUES ($1, $2, $3, $4, $5) \
              RETURNING id, title, operator, llm_provider, llm_model, pinned, archived, \
@@ -86,23 +88,10 @@ impl PostgresCdrStore {
         .bind(llm_model)
         .fetch_one(&self.pool)
         .await?;
-        Ok(CopilotSession {
-            id: row.get(0),
-            title: row.get(1),
-            operator: row.get(2),
-            llm_provider: row.get(3),
-            llm_model: row.get(4),
-            pinned: row.get(5),
-            archived: row.get(6),
-            message_count: row.get(7),
-            last_message_at: row.get(8),
-            created_at: row.get(9),
-            updated_at: row.get(10),
-        })
+        Ok(row)
     }
 
-    /// 列出指定操作员的会话（默认排除归档，按最后消息时间倒序）。
-    /// `limit` 上限 100，避免一次拉取过多。
+    /// 列出指定操作员的会话（默认按更新时间倒序）。
     pub async fn list_copilot_sessions(
         &self,
         operator: &str,
@@ -115,7 +104,7 @@ impl PostgresCdrStore {
                 "SELECT id, title, operator, llm_provider, llm_model, pinned, archived, \
                         message_count, last_message_at, created_at, updated_at \
                  FROM copilot_sessions WHERE operator = $1 \
-                 ORDER BY pinned DESC, last_message_at DESC NULLS LAST, created_at DESC LIMIT $2",
+                 ORDER BY pinned DESC, updated_at DESC LIMIT $2",
             )
             .bind(operator)
             .bind(limit)
@@ -125,8 +114,8 @@ impl PostgresCdrStore {
             sqlx::query_as::<_, CopilotSession>(
                 "SELECT id, title, operator, llm_provider, llm_model, pinned, archived, \
                         message_count, last_message_at, created_at, updated_at \
-                 FROM copilot_sessions WHERE operator = $1 AND archived = FALSE \
-                 ORDER BY pinned DESC, last_message_at DESC NULLS LAST, created_at DESC LIMIT $2",
+                 FROM copilot_sessions WHERE operator = $1 AND archived = false \
+                 ORDER BY pinned DESC, updated_at DESC LIMIT $2",
             )
             .bind(operator)
             .bind(limit)
@@ -136,7 +125,7 @@ impl PostgresCdrStore {
         Ok(rows)
     }
 
-    /// 获取单个会话元数据。若会话不存在或属于其他操作员则返回 `None`。
+    /// 获取单个会话详情。确保 `operator` 匹配，隔离越权访问。
     pub async fn get_copilot_session(
         &self,
         id: &str,
@@ -154,7 +143,7 @@ impl PostgresCdrStore {
         Ok(row)
     }
 
-    /// 更新会话元数据：标题 / 置顶 / 归档。任一 `None` 字段不更新。
+    /// 更新会话属性（标题 / 置顶 / 归档）。仅修改传入 `Some` 的字段。
     pub async fn update_copilot_session(
         &self,
         id: &str,
@@ -183,19 +172,20 @@ impl PostgresCdrStore {
         Ok(row)
     }
 
-    /// 删除会话（外键 ON DELETE CASCADE 会自动清理消息）。
-    /// 返回是否实际删除了一行。
+    /// 删除指定会话（触发外键级联清理消息）。隔离操作员权限。
     pub async fn delete_copilot_session(
         &self,
         id: &str,
         operator: &str,
     ) -> Result<bool, sqlx::Error> {
-        let affected = sqlx::query("DELETE FROM copilot_sessions WHERE id = $1 AND operator = $2")
-            .bind(id)
-            .bind(operator)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
+        let affected = sqlx::query(
+            "DELETE FROM copilot_sessions WHERE id = $1 AND operator = $2",
+        )
+        .bind(id)
+        .bind(operator)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
         Ok(affected > 0)
     }
 
@@ -208,15 +198,16 @@ impl PostgresCdrStore {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             "INSERT INTO copilot_messages \
-                (session_id, role, content, root_cause, suggested_action, \
+                (session_id, role, content, images, root_cause, suggested_action, \
                  ladder_diagram_ascii, llm_enabled, llm_status, intent) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             RETURNING id, session_id, role, content, root_cause, suggested_action, \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             RETURNING id, session_id, role, content, images, root_cause, suggested_action, \
                        ladder_diagram_ascii, llm_enabled, llm_status, intent, created_at",
         )
         .bind(input.session_id)
         .bind(input.role)
         .bind(input.content)
+        .bind(input.images)
         .bind(input.root_cause)
         .bind(input.suggested_action)
         .bind(input.ladder_diagram_ascii)
@@ -241,13 +232,14 @@ impl PostgresCdrStore {
             session_id: row.get(1),
             role: row.get(2),
             content: row.get(3),
-            root_cause: row.get(4),
-            suggested_action: row.get(5),
-            ladder_diagram_ascii: row.get(6),
-            llm_enabled: row.get(7),
-            llm_status: row.get(8),
-            intent: row.get(9),
-            created_at: row.get(10),
+            images: row.get(4),
+            root_cause: row.get(5),
+            suggested_action: row.get(6),
+            ladder_diagram_ascii: row.get(7),
+            llm_enabled: row.get(8),
+            llm_status: row.get(9),
+            intent: row.get(10),
+            created_at: row.get(11),
         })
     }
 
@@ -260,7 +252,7 @@ impl PostgresCdrStore {
     ) -> Result<Vec<CopilotMessage>, sqlx::Error> {
         let limit = limit.clamp(1, 500);
         let rows = sqlx::query_as::<_, CopilotMessage>(
-            "SELECT id, session_id, role, content, root_cause, suggested_action, \
+            "SELECT id, session_id, role, content, images, root_cause, suggested_action, \
                     ladder_diagram_ascii, llm_enabled, llm_status, intent, created_at \
              FROM copilot_messages WHERE session_id = $1 \
              ORDER BY created_at ASC, id ASC LIMIT $2",

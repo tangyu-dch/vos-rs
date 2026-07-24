@@ -611,6 +611,7 @@ CREATE TABLE IF NOT EXISTS copilot_messages (
     session_id TEXT NOT NULL REFERENCES copilot_sessions(id) ON DELETE CASCADE,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
+    images TEXT[],
     root_cause TEXT,
     suggested_action TEXT,
     ladder_diagram_ascii TEXT,
@@ -620,6 +621,9 @@ CREATE TABLE IF NOT EXISTS copilot_messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
+
+pub(super) const MIGRATE_COPILOT_MESSAGES_IMAGES_SQL: &str =
+    "ALTER TABLE copilot_messages ADD COLUMN IF NOT EXISTS images TEXT[];";
 
 pub(super) const CREATE_COPILOT_MESSAGES_SESSION_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_copilot_messages_session ON copilot_messages (session_id, created_at)";

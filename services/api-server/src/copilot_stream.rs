@@ -72,12 +72,14 @@ pub async fn chat_in_session_stream(
         .ok_or_else(|| ApiError::not_found("会话不存在".to_string()))?;
 
     // 2) 落库用户消息
+    let images_slice = chat_req.images.as_deref();
     let user_message = state
         .store
         .append_copilot_message(AppendCopilotMessageInput {
             session_id: &session_id,
             role: "user",
             content: &query,
+            images: images_slice,
             root_cause: None,
             suggested_action: None,
             ladder_diagram_ascii: None,
@@ -218,6 +220,7 @@ async fn run_stream_loop(
             session_id,
             role: "assistant",
             content: &full_report,
+            images: None,
             root_cause: option_str(&root_cause),
             suggested_action: option_str(&suggested_action),
             ladder_diagram_ascii: None,

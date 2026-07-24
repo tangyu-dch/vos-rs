@@ -328,6 +328,9 @@ impl PostgresCdrStore {
         sqlx::query(CREATE_COPILOT_MESSAGES_SESSION_INDEX_SQL)
             .execute(&mut *tx)
             .await?;
+        sqlx::query(MIGRATE_COPILOT_MESSAGES_IMAGES_SQL)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query(CREATE_LLM_CONFIGS_TABLE_SQL)
             .execute(&mut *tx)
             .await?;

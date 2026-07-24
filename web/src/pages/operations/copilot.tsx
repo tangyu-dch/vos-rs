@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Input, ScrollShadow, Spinner } from '@heroui/react';
+import { Button, Input, Modal, ModalBody, ModalContent, ModalHeader, ScrollShadow, Spinner } from '@heroui/react';
 import {
   Send, Bot, User, AlertTriangle, Lightbulb, RefreshCw,
   Download, Trash2, Square, Paperclip, Image as ImageIcon, X, FileText,
@@ -42,6 +42,9 @@ export function CopilotPage() {
   const [inputQuery, setInputQuery] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const [activeModel, setActiveModel] = useState<{ id: number; provider: string; model: string } | null>(null);
+
+  // ============ 图片大图预览 Lightbox 状态 ============
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   // ============ 附件/图片上传状态 ============
   const [attachedFiles, setAttachedFiles] = useState<{
@@ -528,8 +531,8 @@ export function CopilotPage() {
                                     key={idx}
                                     src={imgUrl}
                                     alt={`分析识别截图-${idx + 1}`}
-                                    className="max-h-48 max-w-sm rounded-xl border border-primary-foreground/30 shadow-md cursor-pointer hover:opacity-90 transition-opacity object-contain bg-black/20"
-                                    onClick={() => window.open(imgUrl, '_blank')}
+                                    className="max-h-48 max-w-sm rounded-xl border border-primary-foreground/30 shadow-md cursor-pointer hover:opacity-90 hover:scale-[1.02] transition-all object-contain bg-black/20"
+                                    onClick={() => setPreviewImage(imgUrl)}
                                   />
                                 ))}
                               </div>
@@ -598,7 +601,8 @@ export function CopilotPage() {
                 {attachedFiles.map((file) => (
                   <div
                     key={file.id}
-                    className="flex items-center gap-1.5 px-2.5 py-1 bg-default-100 dark:bg-default-50/10 border border-default-200 rounded-full text-xs text-foreground shadow-sm transition-all"
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-default-100 dark:bg-default-50/10 border border-default-200 rounded-full text-xs text-foreground shadow-sm transition-all cursor-pointer hover:border-primary/50"
+                    onClick={() => file.previewUrl && setPreviewImage(file.previewUrl)}
                   >
                     {file.isImage ? (
                       file.previewUrl ? (
@@ -613,7 +617,10 @@ export function CopilotPage() {
                     <span className="text-[10px] text-default-400">({file.sizeStr})</span>
                     <button
                       type="button"
-                      onClick={() => setAttachedFiles((prev) => prev.filter((f) => f.id !== file.id))}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAttachedFiles((prev) => prev.filter((f) => f.id !== file.id));
+                      }}
                       className="hover:text-danger p-0.5 rounded-full transition-colors ml-0.5"
                     >
                       <X className="w-3 h-3" />
@@ -688,6 +695,33 @@ export function CopilotPage() {
           </div>
         </div>
       </div>
+
+      {/* 图片大图预览 Lightbox 弹窗 */}
+      <Modal
+        isOpen={previewImage !== null}
+        onClose={() => setPreviewImage(null)}
+        size="4xl"
+        scrollBehavior="inside"
+        classNames={{
+          backdrop: 'bg-black/80 backdrop-blur-md',
+          base: 'bg-content1/95 border border-default-200 shadow-2xl rounded-2xl',
+        }}
+      >
+        <ModalContent>
+          <ModalHeader className="flex items-center justify-between text-sm font-bold border-b border-default-100">
+            <span>图片大图预览</span>
+          </ModalHeader>
+          <ModalBody className="p-6 flex items-center justify-center min-h-[350px]">
+            {previewImage && (
+              <img
+                src={previewImage}
+                alt="大图预览"
+                className="max-h-[75vh] max-w-full rounded-xl object-contain shadow-2xl border border-default-200"
+              />
+            )}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
 
       {/* 删除会话的浮动提示（无障碍） */}
       <span className="sr-only">

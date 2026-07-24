@@ -51,6 +51,7 @@ export interface CopilotMessageDTO {
   session_id: string;
   role: string;
   content: string;
+  images?: string[] | null;
   root_cause: string | null;
   suggested_action: string | null;
   ladder_diagram_ascii: string | null;
@@ -250,6 +251,7 @@ export function toMessageItem(m: CopilotMessageDTO): MessageItem {
     id: `db-${m.id}`,
     sender: isUser ? 'user' : 'bot',
     text: m.content,
+    images: m.images ?? undefined,
     rootCause: m.root_cause ?? undefined,
     suggestedAction: m.suggested_action ?? undefined,
     ladderAscii: m.ladder_diagram_ascii ?? undefined,
