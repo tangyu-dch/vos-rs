@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vos-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: vos_user
+      POSTGRES_PASSWORD: vos_password
+      POSTGRES_DB: vos_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vos_user -d vos_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: vos-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: vos-nats
+    restart: always
+    command: ["-js"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4222"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vos-api-server
+    restart: always
+    command: ["/app/api-server"]
+    ports:
+      - "8080:8080"
+    environment:
+      - VOS_RS_DATABASE_URL=postgres://vos_user:vos_password@postgres:5432/vos_db
+      - VOS_RS_REDIS_URL=redis://redis:6379/0
+      - VOS_RS_NATS_URL=nats://nats:4222
+      - VOS_RS_JWT_SECRET=dev-secret-key-change-in-prod-32chars
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  sip-edge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vos-sip-edge
+    restart: always
+    command: ["/app/sip-edge"]
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "8082:8082/tcp"
+    environment:
+      - VOS_RS_DATABASE_URL=postgres://vos_user:vos_password@postgres:5432/vos_db
+      - VOS_RS_REDIS_URL=redis://redis:6379/0
+      - VOS_RS_NATS_URL=nats://nats:4222
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

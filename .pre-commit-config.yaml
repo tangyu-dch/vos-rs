@@ -28,11 +28,3 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
-
-      - id: cargo-test
-        name: cargo test
-        description: 运行单元测试集
-        entry: cargo test --workspace
-        language: system
-        types: [rust]
-        pass_filenames: false

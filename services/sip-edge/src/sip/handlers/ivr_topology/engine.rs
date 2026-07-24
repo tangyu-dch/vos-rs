@@ -157,6 +157,7 @@ pub async fn execute(
 }
 
 /// 分发到具体节点执行器
+#[allow(clippy::too_many_arguments)]
 async fn execute_node(
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,

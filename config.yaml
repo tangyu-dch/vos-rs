@@ -19,13 +19,13 @@ connections:
     host: "127.0.0.1"
     port: 5432
     username: "tangyu"
-    password: ""
+    password: ""  # 开发环境无密码；生产环境留空将自动使用 VOS_RS_DATABASE_URL 覆盖
     database: "vos_rs"
     max_connections: 50
   redis:
     host: "127.0.0.1"
     port: 6379
-    password: ""
+    password: ""  # 开发环境无密码；生产环境留空将自动使用 VOS_RS_REDIS_URL 覆盖
     database: 0
     max_connections: 50
   nats:

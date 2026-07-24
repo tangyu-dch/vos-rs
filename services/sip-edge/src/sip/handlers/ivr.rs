@@ -176,6 +176,26 @@ pub(crate) async fn handle_ivr_locally(
     let a_port = a_relay_endpoint.port;
     let internal_call_id_clone = internal_call_id.clone();
     let request_clone = request.clone();
+
+    // 有拓扑画布时走拓扑执行引擎，否则走扁平 DTMF 表（向后兼容）
+    if let Some(topology) = ivr_menu
+        .topology
+        .as_ref()
+        .filter(|t| !t.nodes.is_empty())
+    {
+        spawn_topology_execution(
+            edge_state_clone,
+            edge_config_clone,
+            topology.clone(),
+            internal_call_id_clone,
+            did_dest.number.clone(),
+            a_port,
+            peer,
+            request_clone,
+        );
+        return vec![PendingDatagram::new(peer.to_string(), response_bytes)];
+    }
+
     let current_menu = ivr_menu;
 
     // 启动 IVR 状态机后台监测协程
@@ -193,6 +213,52 @@ pub(crate) async fn handle_ivr_locally(
     });
 
     vec![PendingDatagram::new(peer.to_string(), response_bytes)]
+}
+
+/// 在独立 task 中执行 IVR 拓扑引擎。
+///
+/// 从 `template_request` 的 From 头提取主叫号码，构建 [`IvrExecutionContext`] 后
+/// 调用 [`crate::sip::handlers::ivr_topology::execute`]。
+#[allow(clippy::too_many_arguments)]
+fn spawn_topology_execution(
+    edge_state: Arc<EdgeState>,
+    edge_config: Arc<EdgeConfig>,
+    topology: crate::sip::handlers::ivr_topology::IvrTopology,
+    call_id: String,
+    did: String,
+    a_port: u16,
+    peer: SocketAddr,
+    template_request: SipRequest,
+) {
+    let caller_id = template_request
+        .headers
+        .get("from")
+        .and_then(|v| v.as_str().split("sip:").nth(1))
+        .and_then(|s| s.split('@').next())
+        .unwrap_or_default()
+        .to_string();
+    let mut context = crate::sip::handlers::ivr_topology::IvrExecutionContext::new(
+        call_id.clone(),
+        caller_id,
+        did,
+    );
+    info!(
+        call_id = %call_id,
+        nodes = topology.nodes.len(),
+        "IVR 菜单具备拓扑画布, 分流至拓扑执行引擎"
+    );
+    tokio::spawn(async move {
+        crate::sip::handlers::ivr_topology::execute(
+            &edge_state,
+            &edge_config,
+            &topology,
+            &mut context,
+            a_port,
+            peer,
+            &template_request,
+        )
+        .await;
+    });
 }
 
 async fn run_ivr_menu_loop(
