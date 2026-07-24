@@ -15,6 +15,9 @@ pub mod executors;
 pub mod types;
 pub mod voice_engine;
 
+#[cfg(test)]
+mod tests;
+
 pub use engine::execute;
 pub use types::{
     IvrExecutionContext, IvrNodeType, IvrTopology, NodeExecuteResult, Position, TopologyEdge,
