@@ -6,7 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-orange?logo=rust)](https://www.rust-lang.org/)
 [![Edition](https://img.shields.io/badge/Edition-2021-blue)](https://doc.rust-lang.org/edition-guide/)
-[![License: Non-Commercial](https://img.shields.io/badge/License-Non--Commercial-red.svg)](./LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](./LICENSE)
 [![CPS](https://img.shields.io/badge/CPS-5000%2B-emerald)](https://github.com/tangyu-dch/vos-rs.git)
 [![XDP](https://img.shields.io/badge/Media_Engine-eBPF%2FXDP-purple)](https://github.com/tangyu-dch/vos-rs.git)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14%2B-blue?logo=postgresql)](https://www.postgresql.org/)
@@ -1027,23 +1027,35 @@ A: 单节点推荐配置：
 - [DashMap](https://github.com/xacrimon/dashmap) — 并发 HashMap
 - [async-nats](https://github.com/nats-io/nats.rs) — NATS 客户端
 - [HeroUI](https://www.heroui.com/) — React 组件库
-- [Tailwind CSS](https://tailwindcss.com/) — 原子化 CSS 框架
-- [React](https://react.dev/) — UI 框架
+## 📄 许可证与开源双轨声明 (License & Open-Core Notice)
 
-## 📄 许可证与严禁商业使用声明 (License & Non-Commercial Notice)
+本项目采用 **开源核心 + 商业企业版增值 (Open-Core)** 架构路线：
 
-> [!CAUTION]
-> ### ⛔ 严禁商业用途警告 (Strict Non-Commercial Restriction)
-> 本项目遵循 **[vos-rs 非商业用途开源许可协议 (Non-Commercial License)](./LICENSE)**。
-> **【绝对禁止】** 未经官方团队书面授权，任何人或机构不得将本项目代码、二进制文件、衍生作品或架构用于任何商业运营、收费 SaaS 云服务托管、商业产品集成销售或生产环境部署！
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 开源核心 (Open Source Core)                 │
+│                     License: Apache-2.0                     │
+│  - sip-core (零依赖 SIP 2.0 解析/组包引擎)                     │
+│  - sdp-core (零依赖 SDP 解析与 SDP Rewrite)                    │
+│  - rtp-core (RTP/RTCP 收发、Buffer Pool、SRTP 加密)            │
+│  - call-core (呼叫状态机与基础 LCR 前缀路由)                    │
+│  - cdr-core (PostgreSQL 基础话单持久化与计费模型)              │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+┌──────────────────────────────▼──────────────────────────────┐
+│                商业增值插件/企业版 (Enterprise)               │
+│                    License: Commercial / Closed             │
+│  - AI Copilot 智能话务员与在线 LLM 协同排错                      │
+│  - 高并发分布式集群路由 (sip-router 集群控制器 + Kamailio HA)     │
+│  - 企业级图形化 IVR 拖拽画布引擎 & AI Agent 实时语音感知 (ASR/TTS)  │
+│  - 电信级反欺诈高级防护规则与实时并发风控                             │
+└─────────────────────────────────────────────────────────────┘
+```
 
-> [!IMPORTANT]
-> ### 许可允许范围 (Permitted Uses)
-> - ✅ **个人学习与教学研究**
-> - ✅ **非商业性质的代码验证与测试**
-> - ✅ **学术探讨与非营利实验环境搭建**
-> 
-> 如需申请商业授权 (Commercial Licensing) 或生产部署许可，请联系官方邮箱：`tangyu.dch@gmail.com`
+> [!NOTE]
+> ### 宽松开源许可 (Apache 2.0 License)
+> 本项目核心基础代码（包含 `sip-core`, `sdp-core`, `rtp-core`, `call-core`, `cdr-core`）遵循 **[Apache License 2.0](./LICENSE)**。
+> 您可以自由使用、修改、分发开源核心代码，并享受明确的专利授权保障。
 
 ---
 
@@ -1070,6 +1082,6 @@ A: 单节点推荐配置：
 
 **[⬆ 回到顶部](#vos-rs)**
 
-Made with ❤️ by vos-rs team · Non-Commercial License Protected
+Made with ❤️ by vos-rs team · Released under Apache-2.0 License
 
 </div>
