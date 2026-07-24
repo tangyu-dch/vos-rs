@@ -1,53 +1,95 @@
 # VOS-RS Web 管理控制台
 
-基于 Arco Design React 的 VOS-RS VoIP 运营平台管理前端。
+## 这是什么？
 
-## 功能特性
-
-- 📊 **仪表板** - 实时呼叫统计、质量指标和趋势图表
-- 📞 **呼叫记录** - 查看和筛选 CDR 记录，包含详细质量信息
-- 👤 **SIP 用户管理** - 管理 SIP 用户账户
-- 🔌 **网关管理** - 配置 SIP 网关
-- 🛣️ **路由管理** - 配置呼叫路由规则
-- 📱 **注册信息** - 查看在线设备注册状态
+VOS-RS Web 管理控制台是 vos-rs 电信级 VoIP 软交换平台的统一前端，提供从实时通话监控、号码与中继配置，到 IVR 呼叫中心、计费与路由策略、AI 运维助手、安全防护的端到端运营能力。前端基于 React 18 + TypeScript + Vite 5 构建，UI 采用 HeroUI v2.8 + Tailwind CSS v4，对接后端 `/api/v1/` RESTful 接口（JWT 鉴权）。
 
 ## 技术栈
 
-- React 18
-- TypeScript
-- Arco Design React
-- React Router v6
-- ECharts
-- Vite
-- Axios
+| 类别 | 技术 | 版本 |
+|------|------|------|
+| UI 框架 | React | 18.3 |
+| 主语言 | TypeScript | ≥ 5.3 |
+| 构建工具 | Vite | 5.3+ |
+| UI 组件库 | HeroUI（@heroui/react） | 2.8+ |
+| CSS 框架 | Tailwind CSS | 4.3+ |
+| 路由 | React Router DOM | 6.25+ |
+| HTTP 客户端 | Axios | 1.7+ |
+| 图表 | ECharts | 5.5+ |
+| 通知 | sonner | 1.7+ |
+| 图标 | lucide-react | 1.25+ |
+| 动效 | framer-motion | 12+ |
+| Markdown 渲染 | react-markdown + remark-gfm | 10+ / 4+ |
+| 单元测试 | Vitest + Testing Library | 2.1+ |
+| E2E 测试 | Playwright | 1.55+ |
+
+## 功能页面一览
+
+| 分组 | 路由 | 页面 | 说明 |
+|------|------|------|------|
+| 运营监控 | `/overview` | 仪表盘 | 实时并发/CPS/话费/中继状态 |
+| | `/calls/active` | 活跃通话 | 在线通话监控/强制挂断 |
+| | `/calls` | 呼叫记录 | CDR 话单查询 |
+| | `/calls/:id` | 呼叫详情 | 单次呼叫信令梯形图/媒体质量 |
+| | `/copilot` | AI 运维助手 | LLM 自然语言排障/SIP 梯形图 |
+| 号码管理 | `/extensions` | 分机管理 | SIP 用户 CRUD |
+| | `/extensions/:id` | 分机详情 | 单分机配置/订阅状态 |
+| | `/numbers` | 号码管理 | DID 号码 |
+| | `/caller-pools` | 主叫号码池 | 号码池分配 |
+| | `/caller-pools/:id` | 号码池详情 | 池内号码列表 |
+| | `/did-destinations` | DID 目的地 | DID 映射 |
+| 中继管理 | `/trunks/access` | 接入中继 | 入局中继 |
+| | `/trunks/egress` | 落地中继 | 出局中继 |
+| | `/trunks/:id` | 中继详情 | 单中继配置/健康状态 |
+| | `/egress-groups` | 落地分组 | 中继分组/负载均衡 |
+| | `/egress-groups/:id` | 落地分组详情 | 组内中继编排 |
+| 呼叫中心 | `/ivr` | IVR 编辑器 | 可视化拖拽画板 |
+| | `/queues` | 队列管理 | ACD 排队策略 |
+| | `/agents` | 坐席管理 | 坐席状态/技能组 |
+| 路由计费 | `/routing` | 路由配置 | LCR 路由规则 |
+| | `/billing/accounts` | 计费账户 | 余额/预扣费 |
+| | `/billing/rates` | 费率管理 | 前缀费率 |
+| | `/billing/transactions` | 交易记录 | 充值/扣费流水 |
+| 系统设置 | `/settings` | 系统设置 | SIP/媒体/录音/TLS 参数 |
+| | `/settings/llm` | LLM 配置 | 大模型厂商管理 |
+| | `/security` | 安全防护 | SBC/ACL/反欺诈 |
+| | `/infrastructure` | 基础设施 | 节点/集群/Redis |
+
+> 未匹配路由会重定向到 `/overview`；权限不足时由 `canAccessPage(session.role, path)` 拦截并跳回 `/overview`。路由定义见 `src/App.tsx`。
 
 ## 项目结构
 
 ```
 web/
 ├── src/
-│   ├── components/         # 公共组件
-│   │   ├── Layout.tsx     # 主布局组件
-│   │   └── Layout.css
-│   ├── pages/             # 页面组件
-│   │   ├── Dashboard/     # 仪表板
-│   │   ├── Cdr/          # 呼叫记录
-│   │   ├── Users/        # SIP 用户
-│   │   ├── Gateways/     # 网关管理
-│   │   ├── Routes/       # 路由管理
-│   │   └── Registrations/ # 注册信息
-│   ├── services/          # API 服务
-│   │   └── api.ts
-│   ├── types/             # TypeScript 类型定义
-│   │   └── index.ts
-│   ├── App.tsx            # 主应用组件
-│   ├── main.tsx           # 入口文件
-│   └── index.css
-├── index.html
+│   ├── pages/            # 14+ 页面组件
+│   │   ├── Login/        # 登录页
+│   │   ├── operations/   # 仪表盘/活跃通话/Copilot/呼叫详情
+│   │   ├── numbers/      # 分机/号码/号码池/DID 目的地
+│   │   ├── trunks/       # 接入/落地中继/落地分组
+│   │   ├── call-center/  # IVR/队列/坐席
+│   │   ├── billing/      # 账户/费率/交易/呼叫记录
+│   │   ├── system/       # 路由/安全/基础设施/设置
+│   │   ├── settings/     # LLM 配置
+│   │   └── shared/       # 跨页面共享详情/格式化工具
+│   ├── components/       # ConsoleShell/detail-shell/ErrorBoundary
+│   │   └── ivr/          # IVR 可视化画板节点/表单
+│   ├── services/         # API 客户端 + auth/resources 等
+│   ├── auth/             # AuthContext（会话/角色）
+│   ├── hooks/            # usePageVisibility
+│   ├── theme/            # ThemeContext（暗黑/浅色）
+│   ├── utils/            # charts/sip/toast
+│   ├── types/            # TypeScript 类型定义
+│   ├── test/             # 单元测试 + setup
+│   ├── App.tsx           # 路由定义 + 权限守卫
+│   ├── hero.ts           # HeroUI 主题映射
+│   ├── main.tsx          # 入口（ThemeProvider 注入）
+│   └── index.css         # Tailwind 入口
+├── Dockerfile
+├── nginx.conf
 ├── package.json
 ├── tsconfig.json
-├── vite.config.ts
-└── README.md
+└── vite.config.ts
 ```
 
 ## 快速开始
@@ -55,229 +97,225 @@ web/
 ### 前置要求
 
 - Node.js 18+
-- PostgreSQL 14+ (用于后端存储)
-- Rust 1.70+ (用于后端 API 服务)
+- Rust ≥ 1.89（用于后端服务）
+- PostgreSQL 14+（主数据 + CDR）
 
-### 1. 启动后端 API 服务
-
-首先，确保你有一个运行的 PostgreSQL 数据库。
+### 1. 启动后端 API
 
 ```bash
-# 在项目根目录
-cd vos-rs
-
-# 设置环境变量
-export DATABASE_URL=postgres://user:password@localhost/vos_rs
-
-# 启动 API 服务
+# 项目根目录
+export VOS_RS_DATABASE_URL=postgres://user:password@localhost:5432/vosrs
+export VOS_RS_NATS_URL=nats://localhost:4222
 cargo run -p api-server
 ```
 
-API 服务将在 `http://localhost:8080` 启动。
+API 服务默认监听 `http://localhost:8081`。
 
 ### 2. 启动前端开发服务器
 
 ```bash
 cd web
-
-# 安装依赖
 npm install
-
-# 启动开发服务器
 npm run dev
 ```
 
-访问 `http://localhost:3000` 查看应用。
+默认访问 `http://localhost:5173`，Vite 代理将 `/api/v1` 转发到后端。
 
-### 3. 构建生产版本
+### 3. 生产构建
 
 ```bash
 cd web
-npm run build
+npm run build        # 产物输出到 web/dist
+npm run preview      # 本地预览生产包
 ```
 
-构建产物将输出到 `web/dist` 目录。
+## 后端 API 对接
 
-## 后端 API
+### 接口前缀与鉴权
 
-### 接口列表
+- 所有业务接口前缀：`/api/v1/`
+- 鉴权方式：**JWT Bearer Token**（除 `/metrics`、`/api/v1/auth/login` 外均需鉴权）
+- 登录获取 Token：
 
-| 方法 | 路径 | 说明 |
+  ```http
+  POST /api/v1/auth/login
+  Content-Type: application/json
+
+  { "username": "admin", "password": "******" }
+  ```
+
+  响应：
+
+  ```json
+  { "code": 0, "message": "success", "data": { "access_token": "eyJhbGciOi..." } }
+  ```
+
+- 请求头需携带 `Authorization: Bearer <access_token>`，由 `services/client.ts` 拦截器自动注入。
+- 401 响应会触发会话清理并跳转 `/login`。
+
+### 统一响应格式
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": { },
+  "timestamp": 1720000000,
+  "request_id": "req_xxxxxxxxxxxx"
+}
+```
+
+错误响应额外附带 `details` 字段说明失败原因。
+
+### 主要端点（按页面分组）
+
+| 路径 | 方法 | 说明 |
 |------|------|------|
-| GET | /health | 健康检查 |
-| GET | /api/dashboard/stats | 获取仪表板统计 |
-| GET | /api/cdrs | 获取呼叫记录列表 |
-| GET | /api/cdrs/:call_id | 获取单个呼叫详情 |
-| GET | /api/cdrs/:call_id/dtmf | 获取 DTMF 事件 |
-| GET | /api/users | 获取用户列表 |
-| POST | /api/users | 创建用户 |
-| PUT | /api/users/:username | 更新用户 |
-| DELETE | /api/users/:username | 删除用户 |
-| GET | /api/gateways | 获取网关列表 |
-| POST | /api/gateways | 创建网关 |
-| PUT | /api/gateways/:id | 更新网关 |
-| DELETE | /api/gateways/:id | 删除网关 |
-| GET | /api/routes | 获取路由列表 |
-| POST | /api/routes | 创建路由 |
-| PUT | /api/routes/:id | 更新路由 |
-| DELETE | /api/routes/:id | 删除路由 |
-| GET | /api/registrations | 获取注册信息 |
+| `/api/v1/auth/login` | POST | 登录获取 JWT |
+| `/api/v1/dashboard/stats` | GET | 仪表盘统计 |
+| `/api/v1/active-calls` | GET | 活跃通话列表 |
+| `/api/v1/cdr` | GET | CDR 话单查询（注意：单数为 `cdr`） |
+| `/api/v1/copilot/sessions/:id/chat/stream` | GET(SSE) | Copilot 流式对话 |
+| `/api/v1/users` | CRUD | SIP 用户管理 |
+| `/api/v1/gateways` | CRUD | 网关管理 |
+| `/api/v1/routes` | CRUD | 路由管理 |
+| `/api/v1/numbers` | CRUD | 号码管理 |
+| `/api/v1/rates` | CRUD | 费率管理 |
+| `/api/v1/billing/accounts` | CRUD | 计费账户 |
+| `/api/v1/billing/transactions` | GET | 交易流水 |
+| `/api/v1/recordings` | GET | 录音查询 |
+| `/api/v1/registrations` | GET | 注册状态 |
+| `/api/v1/anti-fraud/rules` | CRUD | 反欺诈规则 |
+| `/metrics` | GET | Prometheus 指标（无需鉴权） |
 
-### API 请求/响应示例
+### SSE 流式接口
 
-#### 获取仪表板统计
-
-```bash
-GET /api/dashboard/stats
-```
-
-响应：
-```json
-{
-  "active_calls": 5,
-  "today_total_calls": 156,
-  "today_answered_calls": 132,
-  "answer_rate": 84.6,
-  "avg_mos": 4.1,
-  "avg_loss_rate": 0.2,
-  "avg_jitter_ms": 4.5,
-  "registered_users": 23,
-  "active_gateways": 2
-}
-```
-
-#### 获取呼叫记录
-
-```bash
-GET /api/cdrs?page=1&page_size=20&status=answered
-```
-
-响应：
-```json
-{
-  "items": [
-    {
-      "call_id": "call-1@example.com",
-      "caller": "sip:1001@example.com",
-      "callee": "13800138000",
-      "started_at_ms": 1720000000000,
-      "duration_ms": 60000,
-      "status": "answered",
-      "mos": 4.2
-    }
-  ],
-  "total": 156,
-  "page": 1,
-  "page_size": 20
-}
-```
+Copilot 对话通过 `EventSource` 消费 `/api/v1/copilot/sessions/:id/chat/stream`，逐 token 推送 `text/event-stream` 事件，前端在 `pages/operations/copilot*` 系列组件中聚合渲染。
 
 ## 环境配置
 
-### 前端配置
+### 前端
 
-在 `web/vite.config.ts` 中可以配置 API 代理：
-
-```typescript
-server: {
-  port: 3000,
-  proxy: {
-    '/api': {
-      target: 'http://localhost:8080',
-      changeOrigin: true
-    }
-  }
-}
+```bash
+# web/.env.local
+VITE_API_BASE_URL=http://localhost:8081   # 后端 API 地址
+VITE_WS_BASE_URL=ws://localhost:8081      # WebSocket 地址（可选）
 ```
 
-### 后端配置
+Vite 开发服务器默认通过 `vite.config.ts` 中的 `proxy` 把 `/api/v1` 转发到 `VITE_API_BASE_URL`，前端代码无需感知绝对域名。
 
-使用环境变量配置后端：
+### 后端（节选，完整列表见 `docs/development/ENV_VARS.md`）
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| DATABASE_URL | PostgreSQL 连接字符串 | postgres://localhost/vos_rs |
+| 变量 | 说明 |
+|------|------|
+| `VOS_RS_DATABASE_URL` | PostgreSQL 连接串 |
+| `VOS_RS_NATS_URL` | NATS JetStream 地址 |
+| `VOS_RS_SIP_BIND` | SIP 监听地址 |
+| `VOS_RS_AUTH_ENABLED` | 是否启用 SIP Digest Auth |
+| `VOS_RS_RTP_PORT_MIN` / `VOS_RS_RTP_PORT_MAX` | RTP 端口范围 |
+| `VOS_RS_RECORDING_ENABLED` | 录音开关 |
+| `VOS_RS_SBC_ALLOW` / `VOS_RS_SBC_BLOCK` | SBC IP 白/黑名单（CIDR） |
 
-## 数据库表结构
+> 注意：所有后端变量统一以 `VOS_RS_` 为前缀，与历史文档中的 `DATABASE_URL` 不再兼容。
 
-### call_cdrs
+## 主题系统
 
-| 列 | 类型 | 说明 |
-|----|------|------|
-| id | BIGSERIAL | 主键 |
-| call_id | TEXT | 呼叫 ID |
-| caller | TEXT | 主叫 |
-| callee | TEXT | 被叫 |
-| started_at | TIMESTAMPTZ | 开始时间 |
-| answered_at | TIMESTAMPTZ | 应答时间 |
-| ended_at | TIMESTAMPTZ | 结束时间 |
-| duration_ms | BIGINT | 时长 |
-| billable_duration_ms | BIGINT | 计费时长 |
-| status | TEXT | 状态 |
-| failure_status_code | INTEGER | 失败状态码 |
-| failure_reason | TEXT | 失败原因 |
-| caller_rtcp_loss_rate | DOUBLE PRECISION | 主叫丢包率 |
-| caller_rtcp_jitter_ms | DOUBLE PRECISION | 主叫抖动 |
-| caller_rtcp_rtt_ms | INTEGER | 主叫 RTT |
-| gateway_rtcp_loss_rate | DOUBLE PRECISION | 网关丢包率 |
-| gateway_rtcp_jitter_ms | DOUBLE PRECISION | 网关抖动 |
-| gateway_rtcp_rtt_ms | INTEGER | 网关 RTT |
-| mos | DOUBLE PRECISION | MOS 值 |
-| dtmf_digits | TEXT | DTMF 按键 |
-| inserted_at | TIMESTAMPTZ | 插入时间 |
+- `ThemeProvider` 通过 `localStorage` 持久化用户偏好，键名为 `vos-theme`，值为 `dark` 或 `light`。
+- HeroUI 通过 `<html class="dark">` 切换暗色主题；同时设置 `root.style.colorScheme` 以兼容原生控件。
+- 默认主题：**light**（在 `src/theme/ThemeContext.tsx` 的 `readStoredTheme` 中可修改回退默认值）。
+- 切换 API：`const { theme, toggleTheme, setTheme } = useTheme();`。
 
-### sip_users
+## 测试
 
-| 列 | 类型 | 说明 |
-|----|------|------|
-| username | TEXT | 用户名 (主键) |
-| password | TEXT | 密码 |
-| created_at | TIMESTAMPTZ | 创建时间 |
+### 单元测试（Vitest）
 
-### sip_gateways
+```bash
+cd web
+npm test             # 运行所有 *.test.ts(x)
+npm run test -- --watch
+```
 
-| 列 | 类型 | 说明 |
-|----|------|------|
-| id | TEXT | 网关 ID (主键) |
-| host | TEXT | 主机地址 |
-| port | INTEGER | 端口 |
-| transport | TEXT | 传输协议 |
-| max_capacity | INTEGER | 最大容量 |
-| created_at | TIMESTAMPTZ | 创建时间 |
+测试覆盖 `services/`（API 客户端、auth）、`utils/`（charts、sip、toast）、`pages/`（call-detail、trunks、resource-form、termination-config）等模块，运行环境为 jsdom，setup 文件位于 `src/test/setup.ts`。
 
-### sip_routes
+### E2E 测试（Playwright）
 
-| 列 | 类型 | 说明 |
-|----|------|------|
-| id | TEXT | 路由 ID (主键) |
-| prefix | TEXT | 前缀 |
-| priority | INTEGER | 优先级 |
-| gateway_id | TEXT | 网关 ID (外键) |
-| cost | DOUBLE PRECISION | 成本 |
-| created_at | TIMESTAMPTZ | 创建时间 |
+```bash
+cd web
+npm run test:e2e              # 运行端到端用例
+npm run test:e2e:report       # 打开上次报告
+```
 
-### sip_registrations
+## 架构概览
 
-| 列 | 类型 | 说明 |
-|----|------|------|
-| aor | TEXT | AOR |
-| contact_uri | TEXT | 联系地址 |
-| received_from | TEXT | 来源地址 |
-| expires_at | TIMESTAMPTZ | 过期时间 |
-| path | TEXT | Path |
-| updated_at | TIMESTAMPTZ | 更新时间 |
+### 前端导航结构
 
-## 开发说明
+```mermaid
+flowchart LR
+  Login --> ConsoleShell
+  ConsoleShell --> Overview[运营监控]
+  ConsoleShell --> Numbers[号码管理]
+  ConsoleShell --> Trunks[中继管理]
+  ConsoleShell --> CC[呼叫中心]
+  ConsoleShell --> Routing[路由计费]
+  ConsoleShell --> System[系统设置]
 
-### 添加新页面
+  Overview --> Dashboard[仪表盘]
+  Overview --> Active[活跃通话]
+  Overview --> Calls[呼叫记录]
+  Overview --> Copilot[AI 运维助手]
 
-1. 在 `src/pages/` 下创建新页面组件
-2. 在 `src/App.tsx` 中添加路由
-3. 在 `src/components/Layout.tsx` 中添加菜单项
+  Numbers --> Extensions[分机]
+  Numbers --> DidNum[号码/DID]
+  Numbers --> Pools[主叫号码池]
 
-### 自定义主题
+  Trunks --> Access[接入中继]
+  Trunks --> Egress[落地中继]
+  Trunks --> Groups[落地分组]
 
-参考 [Arco Design 主题定制](https://arco.design/react/docs/theme) 文档。
+  CC --> IVR[IVR 编辑器]
+  CC --> Queues[队列]
+  CC --> Agents[坐席]
+
+  Routing --> Routes[路由配置]
+  Routing --> Accounts[计费账户]
+  Routing --> Rates[费率]
+  Routing --> Txn[交易记录]
+
+  System --> Settings[系统设置]
+  System --> LLM[LLM 配置]
+  System --> Sec[安全防护]
+  System --> Infra[基础设施]
+```
+
+### 组件架构
+
+```mermaid
+flowchart TD
+  ThemeProvider --> ErrorBoundary
+  AuthProvider --> ErrorBoundary
+  ErrorBoundary --> App[App.tsx 路由]
+  App --> ConsoleShell
+  ConsoleShell --> Pages[pages/* 页面组件]
+  Pages --> Shared[shared/ 详情与表单]
+  Pages --> Services[services/ API 客户端]
+  Services --> Client[client.ts axios + JWT 拦截器]
+  Client --> Backend[/api/v1/ 后端]
+  Pages --> Theme[useTheme]
+  Pages --> Hooks[hooks/ usePageVisibility]
+  Pages --> Components[components/ ConsoleShell/IVR/SipTrace]
+```
+
+## 相关文档
+
+| 文档 | 位置 |
+|------|------|
+| 项目 AI 指南 | `AGENTS.md` |
+| 架构分析 | `docs/architecture/VOS_RS_ARCHITECTURE_ANALYSIS.md` |
+| 系统架构 | `docs/architecture/ARCHITECTURE.md` |
+| 环境变量参考 | `docs/development/ENV_VARS.md` |
+| 部署指南 | `docs/deployment/DEPLOY.md` |
+| Web 界面使用指南 | `docs/user-guide/WEB_GUIDE.md` |
+| SIP/RTP 完整性 | `docs/architecture/rtp-sip-completeness.md` |
 
 ## 许可证
 

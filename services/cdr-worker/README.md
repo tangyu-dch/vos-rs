@@ -31,6 +31,35 @@ cdr-worker
 PostgreSQL (call_cdrs 表)
 ```
 
+## 架构图
+
+### NATS → Worker → PG 数据流
+
+```mermaid
+flowchart LR
+    SE[sip-edge 通话结束] -- 发布事件 --> N[(NATS JetStream<br/>vos-rs.cdrs)]
+    N -- Pull Consumer --> W[cdr-worker]
+    W -- 累积 50 条 / 100ms 超时 --> B[Batch 聚合]
+    B -- UNNEST 批量 INSERT --> PG[(PostgreSQL<br/>call_cdrs)]
+    W -- ACK 成功 --> N
+    W -- 失败 NAK+退避 --> N
+    W -- 写入失败兜底 --> WAL[(本地 WAL 文件)]
+```
+
+### DLQ 死信队列流转
+
+```mermaid
+flowchart LR
+    M[消息] --> R{重试次数}
+    R -- < max_deliveries=5 --> W[指数退避 NAK]
+    W -- 重新投递 --> N[(NATS 主队列)]
+    R -- >= max_deliveries --> D[(vos-rs.cdrs.dlq 死信队列)]
+    D --> A[人工/告警处理]
+    A -- 修复后重投 --> N
+```
+
+> DLQ 应长期积压为 0；突增意味着数据库长时间不可用或 schema 不匹配，需立即介入。
+
 ## 核心能力
 
 | 能力 | 说明 |

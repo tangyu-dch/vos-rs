@@ -41,6 +41,46 @@ deploy/
 └── docker-compose.env.example  # 环境变量示例
 ```
 
+## 架构图
+
+### 集群部署拓扑
+
+```mermaid
+flowchart TB
+    LB[Nginx 负载均衡] -- HTTP --> AP1[api-server 1]
+    LB -- HTTP --> AP2[api-server 2]
+    UE[用户软电话] -- SIP --> SR[sip-router ×N]
+    SR -- CallID 哈希 --> SE1[sip-edge 1]
+    SR -- CallID 哈希 --> SE2[sip-edge 2]
+    SE1 -- RTP --> ME[media-edge ×N]
+    SE2 -- RTP --> ME
+    SE1 -- CDR 事件 --> NA[(NATS)]
+    NA --> CW[cdr-worker]
+    AP1 -- SQL --> PG[(PostgreSQL 主)]
+    PG -- 复制 --> PGR[(PostgreSQL 从)]
+    CW -- 批量写入 --> PG
+    PM[Prometheus] -- 抓取 --> SE1
+    PM -- 抓取 --> AP1
+    PM -- 抓取 --> ME
+    GR[Grafana] -- 查询 --> PM
+```
+
+### 部署形态对比
+
+```mermaid
+flowchart LR
+    subgraph 单机部署
+        A1[单台主机] --> A2[Docker Compose]
+        A2 --> A3[5 个服务容器]
+    end
+    subgraph 集群部署
+        B1[N 台主机] --> B2[Kubernetes/Helm]
+        B2 --> B3[sip-router ×N]
+        B2 --> B4[sip-edge ×N]
+        B2 --> B5[media-edge ×N]
+    end
+```
+
 ## 部署方式
 
 ### 1. Docker Compose（推荐开发/小规模生产）
@@ -56,11 +96,13 @@ docker compose -f docker-compose.yml up -d
 
 ```bash
 cp ../docker-compose.env.example .env
-# 创建生产 config.yaml，并使 PostgreSQL、Redis、NATS、RustFS 凭据与 .env 一致。
+# 配置环境变量（见 .env.production），并使 PostgreSQL、Redis、NATS、RustFS 凭据与 .env 一致。
 # Redis/NATS 连接串必须携带认证信息，生产覆盖会拒绝缺失的密码变量。
 docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
+
+> 不再使用 `config.yaml`，所有服务通过 `VOS_RS_` 前缀环境变量配置，统一在 `.env` / `.env.production` 中维护。
 
 ### 2. systemd（裸机部署）
 

@@ -45,6 +45,30 @@
 └──────────────┘
 ```
 
+### 服务依赖图
+
+```mermaid
+flowchart TB
+    W[web 前端] -- HTTP --> AP[api-server]
+    AP -- SQL --> PG[(PostgreSQL)]
+    AP -- Redis 缓存 --> RD[(Redis)]
+    AP -- 管理 API --> SE[sip-edge]
+    AP -- 管理 API --> ME[media-edge]
+    U[用户软电话] -- SIP --> SR[sip-router]
+    SR -- CallID 哈希 --> SE
+    SE -- RTP 中继 --> ME
+    SE -- CDR 事件 --> NA[(NATS JetStream)]
+    NA -- 拉取消费 --> CW[cdr-worker]
+    CW -- 批量 INSERT --> PG
+    SE -- 录音 --> ST[(storage-core)]
+```
+
+- **sip-edge**：B2BUA 核心，几乎所有 `crates/` 的能力都通过它运行。
+- **sip-router**：集群前置 SIP 代理，仅在多节点部署时启用。
+- **media-edge**：信令媒体分离后的独立媒体中继节点，与 `sip-edge` 协作。
+- **api-server**：唯一面向前端的 REST 入口，承担 CRUD + 集群管理。
+- **cdr-worker**：CDR 落库最后一环，从 NATS 消费批量写入 PG。
+
 ## 部署形态
 
 ### 1. 单机部署（开发 / 小规模）
@@ -69,7 +93,9 @@ docker compose -f deploy/docker/docker-compose.yml up -d
 
 ### 配置文件
 
-所有服务通过 `config.yaml` 统一配置，环境变量 `VOS_RS_CONFIG_FILE` 指定路径。配置项见 [../docs/development/ENV_VARS.md](../docs/development/ENV_VARS.md)。
+所有服务通过 `VOS_RS_` 前缀环境变量统一配置，建议通过 `.env` 文件或容器编排系统注入（参考 `deploy/docker/docker-compose.env.example` 与仓库根 `.env.production`）。完整配置项见 [../docs/development/ENV_VARS.md](../docs/development/ENV_VARS.md)。
+
+> 历史版本曾使用 `config.yaml`，现已废弃，全部迁移到环境变量。
 
 ### 日志
 

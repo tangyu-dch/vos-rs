@@ -10,6 +10,22 @@
 
 > **注意**：cdr-core 启动时会自动执行 schema 迁移（`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`），这些 SQL 脚本主要用于**一次性数据修复**和**历史迁移**，日常运行不需要手动执行。
 
+## 迁移流程图
+
+```mermaid
+flowchart TB
+    Start[服务启动] --> Auto{cdr-core 自动迁移}
+    Auto -- ADD COLUMN IF NOT EXISTS --> Schema[对齐 schema 缺失字段]
+    Auto -- 已对齐 --> Skip[跳过]
+    Schema --> Run[服务正常运行]
+    Skip --> Run
+    Run -- 历史数据修复需求 --> Manual[手动执行 scripts/*.sql]
+    Manual --> Run
+    Run -- 一次性结构变更 --> Manual
+```
+
+> 自动迁移只补字段不删表；涉及数据回填、表结构重写、索引重建等场景，仍需手动执行 `scripts/` 下的 SQL。
+
 ## 脚本清单
 
 ### SQL 迁移脚本

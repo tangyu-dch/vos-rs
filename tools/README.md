@@ -29,6 +29,32 @@ tools/
 └── seed_extra_cdrs.py         # 批量 CDR 种子数据
 ```
 
+## 架构图
+
+### 测试工具链路
+
+```mermaid
+flowchart TB
+    SIPp[SIPp 场景引擎] -- 发送 SIP/RTP --> SE[sip-edge 被测服务]
+    PyRTP[Python RTP 发送器] -- 裸 RTP --> SE
+    Bench[benchmark/bench.py] -- 编排 --> SIPp
+    Bench -- 编排 --> PyRTP
+    SE -- /manage/active-calls --> Bench
+    SE -- CDR --> PG[(PostgreSQL)]
+    Bench -- 采样 --> Out[target/benchmark/ 产物]
+```
+
+### SIPp 业务流程测试拓扑
+
+```mermaid
+flowchart LR
+    UAC[SIPp UAC 场景] -- INVITE --> SE[sip-edge]
+    SE -- 出局 --> GW[SIPp UAS 模拟网关]
+    SE -- REGISTER --> REG[注册模块]
+    SE -- SRTP --> SR[SRTP 测试场景]
+    SE -- 失败切换 --> FT[故障切换测试]
+```
+
 ## SIPp 场景文件
 
 ### 压测场景

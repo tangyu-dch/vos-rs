@@ -38,6 +38,36 @@
 
 `sip-router` 是集群部署的可选组件，单机部署不需要它。
 
+## 架构图
+
+### 集群部署拓扑
+
+```mermaid
+flowchart TB
+    U[用户软电话] -- SIP --> R[sip-router 无状态代理]
+    R -- OPTIONS 健康探测 --> D[(Redis 节点注册表)]
+    R -- CallID 哈希 --> N1[sip-edge 节点 A]
+    R -- CallID 哈希 --> N2[sip-edge 节点 B]
+    R -- CallID 哈希 --> N3[sip-edge 节点 C]
+    D -- 失败摘除 --> R
+    R -- 对话路由表 --> D
+```
+
+### CallID 哈希分发流程
+
+```mermaid
+flowchart LR
+    M[SIP 请求] -- 提取 CallID --> H[哈希运算]
+    H -- hash(CallID) mod N --> S{节点健康?}
+    S -- 是 --> F[转发到目标节点]
+    S -- 否 --> R[重选下一节点]
+    R --> F
+    F -- in-dialog 请求 --> T[(Redis 对话路由表)]
+    T -- 记录/查询 --> F
+```
+
+> 对话路由表保证 ACK/BYE/Re-INVITE 等 in-dialog 请求路由到初始节点，避免状态不一致。
+
 ## 模块结构
 
 | 模块 | 职责 |
@@ -69,16 +99,17 @@ cargo run -p sip-router --release
 
 ### 配置
 
-`config.yaml` 关键项：
+通过 `VOS_RS_` 前缀环境变量配置（完整列表见 [../../docs/development/ENV_VARS.md](../../docs/development/ENV_VARS.md)）：
 
-```yaml
-router:
-  udp_bind: 0.0.0.0:5060
-  tcp_bind: 0.0.0.0:5060
-  manage_bind: 0.0.0.0:8082
-  redis_url: redis://127.0.0.1:6379
-  dialog_route_ttl_secs: 3600
-```
+| 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `VOS_RS_ROUTER_UDP_BIND` | `0.0.0.0:5060` | UDP 监听地址 |
+| `VOS_RS_ROUTER_TCP_BIND` | `0.0.0.0:5060` | TCP 监听地址 |
+| `VOS_RS_ROUTER_MANAGE_BIND` | `0.0.0.0:8082` | 管理 API 监听地址 |
+| `VOS_RS_REDIS_URL` | `redis://127.0.0.1:6379` | Redis 连接串 |
+| `VOS_RS_ROUTER_DIALOG_ROUTE_TTL_SECS` | `3600` | 对话路由表 TTL (秒) |
+
+> 不再使用 `config.yaml`；如需统一注入，建议通过 `.env` 文件或容器编排系统注入环境变量。
 
 ### Docker
 

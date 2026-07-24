@@ -262,9 +262,45 @@
 
 ![路由配置](./docs/assets/routing.png)
 
+### 呼叫记录（CDR 话单）
+
+![呼叫记录](./docs/assets/calls.png)
+
 ### 计费账户
 
 ![计费账户](./docs/assets/billing-accounts.png)
+
+### 费率管理
+
+![费率管理](./docs/assets/billing-rates.png)
+
+### 交易记录
+
+![交易记录](./docs/assets/billing-transactions.png)
+
+### 号码管理
+
+![号码管理](./docs/assets/numbers.png)
+
+### 主叫号码池
+
+![主叫号码池](./docs/assets/caller-pools.png)
+
+### 落地分组（中继负载均衡）
+
+![落地分组](./docs/assets/egress-groups.png)
+
+### IVR 可视化编辑器（拖拽画板）
+
+![IVR 编辑器](./docs/assets/ivr.png)
+
+### 队列管理（ACD 排队策略）
+
+![队列管理](./docs/assets/queues.png)
+
+### 坐席管理
+
+![坐席管理](./docs/assets/agents.png)
 
 ### 系统设置（响应式自适应）
 
@@ -817,19 +853,14 @@ curl http://localhost:8080/manage/calls/<call_id>/status
 
 完整 AI Voice Agent 插件指南见 [`docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md`](./docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md)。
 
-👉 **详细 LLM 大模型配置文件 (`config/vos_config.yaml`) 与 Web 在线热配置指南** 见 [`docs/development/LLM_INTEGRATION.md`](./docs/development/LLM_INTEGRATION.md)。
+LLM 配置已从 `config.yaml` 迁移至**数据库动态管理**，支持运行时热切换厂商与模型，无需重启服务：
 
-- **方式一：编辑本地配置文件 (`config/vos_config.yaml`)**
-```yaml
-llm_integration:
-  enabled: true
-  provider: "openai" # 支持: openai, gemini, deepseek, local_vllm, ollama
-  api_key: "sk-proj-your-api-key-here"
-  base_url: "https://api.openai.com/v1"
-  model: "gpt-4o-realtime-preview"
-```
-- **方式二：Web 管理控制台在线热更新**
-登录控制台打开 **`系统配置 -> 系统设置` (http://localhost:3001/#/settings)**，在 **`[🤖 大模型与 AI Voice 配置]`** 卡片面板填入 Key 与 Base URL，点击保存即刻在线热生效。
+- **管理入口**：登录控制台打开 **`系统设置 → LLM 配置`** ([http://localhost:3001/settings/llm](http://localhost:3001/settings/llm))
+- **内置厂商预设**：智谱 GLM、通义千问、DeepSeek、百度文心、Kimi、OpenAI，也支持自定义任意 OpenAI 兼容端点
+- **多配置管理**：可创建多条配置，通过 `is_active` 唯一索引确保全局只有一条启用配置
+- **Copilot 联动**：`/copilot` 页面顶部展示当前启用的模型徽标，点击可跳转配置页
+
+> 📖 详细配置指南见 [`docs/development/LLM_INTEGRATION.md`](./docs/development/LLM_INTEGRATION.md)
 
 ---
 
