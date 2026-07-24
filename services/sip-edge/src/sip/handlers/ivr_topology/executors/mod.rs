@@ -33,7 +33,7 @@ pub mod voice;
 /// * `edge_state` - 边缘节点共享状态
 /// * `edge_config` - 边缘节点配置
 //
-// 参数数量由现有 [`crate::sip::handlers::ivr_topology::engine::TopologyEngine`] 调用约定决定，
+// 参数数量由现有 [`crate::sip::handlers::ivr_topology::engine::execute`] 调用约定决定，
 // 暂不允许拆分；与原 stub 实现保持一致。
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch(

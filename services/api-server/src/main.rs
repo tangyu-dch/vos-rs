@@ -69,7 +69,7 @@ use resources::users::{create_user, delete_user, list_users, update_user};
 use system::audit::list_audit_logs;
 use system::auth::login;
 use system::system::{
-    get_system_configs, health, prometheus_metrics, ready, update_system_configs,
+    get_system_configs, health, openapi_spec, prometheus_metrics, ready, update_system_configs,
 };
 
 /// 应用状态：所有处理器共享的状态。
@@ -397,6 +397,7 @@ async fn main() -> anyhow::Result<()> {
     let public_routes = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
+        .route("/api/v1/openapi.json", get(openapi_spec))
         .route("/metrics", get(prometheus_metrics))
         .route("/api/auth/login", post(login));
 

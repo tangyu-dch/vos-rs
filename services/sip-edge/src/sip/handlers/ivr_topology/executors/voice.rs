@@ -2,7 +2,7 @@
 //!
 //! 接入 [`super::super::voice_engine`] 提供的 TTS/ASR 引擎：
 //! - TTS：文本合成 PCM -> 写入临时 WAV -> 复用媒体层 `start_playback` 播放
-//! - ASR：返回 `WaitForAsr` 信号，由 [`super::super::engine::TopologyEngine`] 负责实际等待
+//! - ASR：返回 `WaitForAsr` 信号，由 [`super::super::engine::execute`] 负责实际等待
 //!
 //! TTS/ASR 引擎通过环境变量启用，未启用时节点降级为走 default 端口继续。
 

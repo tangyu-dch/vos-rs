@@ -54,16 +54,18 @@ pub(crate) async fn reload_number_routes(
     }
 
     let mut menus_map = std::collections::HashMap::new();
-    for (id, name, welcome_prompt, timeout_secs) in menus {
-        let menu_actions = actions_map.remove(&id).unwrap_or_default();
+    for record in menus {
+        let menu_actions = actions_map.remove(&record.id).unwrap_or_default();
+        let topology = parse_ivr_topology(&record.nodes, &record.edges);
         menus_map.insert(
-            id.clone(),
+            record.id.clone(),
             crate::edge_state::IvrMenu {
-                id,
-                name,
-                welcome_prompt,
-                timeout_secs,
+                id: record.id,
+                name: record.name,
+                welcome_prompt: record.welcome_prompt,
+                timeout_secs: record.timeout_secs,
                 actions: menu_actions,
+                topology,
             },
         );
     }
@@ -73,6 +75,30 @@ pub(crate) async fn reload_number_routes(
 
     info!(count, "号码与 IVR 路由缓存已刷新");
     Ok(())
+}
+
+/// 将数据库中持久化的 nodes/edges JSONB 字符串解析为 [`IvrTopology`]。
+///
+/// 任一列缺失或解析失败时返回 `None`，调用方回退到扁平 DTMF 表。
+fn parse_ivr_topology(
+    nodes_json: &Option<String>,
+    edges_json: &Option<String>,
+) -> Option<crate::sip::handlers::ivr_topology::IvrTopology> {
+    use crate::sip::handlers::ivr_topology::{IvrTopology, TopologyEdge, TopologyNode};
+
+    let nodes: Vec<TopologyNode> = nodes_json
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| serde_json::from_str(s).ok())?;
+    let edges: Vec<TopologyEdge> = edges_json
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    if nodes.is_empty() {
+        return None;
+    }
+    Some(IvrTopology { nodes, edges })
 }
 
 /// Starts NATS-triggered reloads with a periodic database refresh as fallback.

@@ -737,6 +737,7 @@ async fn test_invite_did_routing_to_ivr() {
                         webhook_method: None,
                     },
                 )]),
+                topology: None,
             },
         );
     }

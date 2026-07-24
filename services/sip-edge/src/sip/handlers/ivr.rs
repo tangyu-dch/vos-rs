@@ -753,6 +753,7 @@ mod tests {
                 );
                 m
             },
+            topology: None,
         };
 
         let menu2 = crate::edge_state::IvrMenu {
@@ -773,6 +774,7 @@ mod tests {
                 );
                 m
             },
+            topology: None,
         };
 
         edge_state

@@ -81,6 +81,9 @@ pub(crate) struct IvrMenu {
     pub(crate) welcome_prompt: String,
     pub(crate) timeout_secs: i32,
     pub(crate) actions: HashMap<String, IvrAction>,
+    /// 可视化拓扑画布（存在且 nodes 非空时走拓扑引擎，否则走扁平 DTMF 表）
+    pub(crate) topology:
+        Option<crate::sip::handlers::ivr_topology::IvrTopology>,
 }
 
 #[derive(Debug, Clone)]

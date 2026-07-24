@@ -23,15 +23,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let nodes = discovery::start(redis.clone(), config.clone()).await?;
     http::start(&config.manage_bind, Arc::clone(&nodes), redis.clone()).await?;
     let routes = routes::DialogRouteStore::new(redis, config.dialog_route_ttl_secs);
-    tokio::try_join!(
-        proxy::run(
-            config.clone(),
-            Arc::clone(&nodes),
-            Arc::clone(&routes),
-            Arc::clone(&guard)
-        ),
-        tcp::run(config, nodes, routes, guard)
-    )?;
+    tokio::select! {
+        res = async {
+            tokio::try_join!(
+                proxy::run(
+                    config.clone(),
+                    Arc::clone(&nodes),
+                    Arc::clone(&routes),
+                    Arc::clone(&guard)
+                ),
+                tcp::run(config, nodes, routes, guard)
+            )
+        } => {
+            if let Err(e) = res {
+                tracing::error!(error = %e, "SIP Router 代理服务异常退出");
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("收到 SIGINT/SIGTERM 终止信号，正在优雅关闭 SIP Router 服务...");
+        }
+    }
+    tracing::info!("SIP Router 服务优雅关闭完成");
     Ok(())
 }
 

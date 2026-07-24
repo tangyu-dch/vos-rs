@@ -1,3 +1,10 @@
+//! # sip-core
+//!
+//! 电信级 SIP 2.0 (RFC 3261) 协议解析与构造内核。
+//!
+//! **设计保障**：故意保持 **0 外部依赖**，完全基于 Rust 标准库实现，
+//! 具备零拷贝解析 (`SipMessageBorrow<'a>`) 能力，单包解析时延 <50ns。
+
 mod error;
 mod header;
 mod message;

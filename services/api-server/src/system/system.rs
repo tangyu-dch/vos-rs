@@ -35,6 +35,57 @@ pub async fn ready(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+/// OpenAPI 3.0 REST API 接口契约导出
+pub async fn openapi_spec() -> impl IntoResponse {
+    let spec = serde_json::json!({
+        "openapi": "3.0.3",
+        "info": {
+            "title": "vos-rs Telecom Softswitch API",
+            "description": "电信级 VoIP 软交换平台 REST API 接口文档",
+            "version": "0.1.0"
+        },
+        "paths": {
+            "/api/v1/health": {
+                "get": {
+                    "summary": "存活探针",
+                    "responses": { "200": { "description": "系统正常" } }
+                }
+            },
+            "/api/v1/ready": {
+                "get": {
+                    "summary": "就绪探针",
+                    "responses": { "200": { "description": "数据库与核心通道就绪" } }
+                }
+            },
+            "/api/v1/cdr": {
+                "get": {
+                    "summary": "话单 (CDR) 分页查询",
+                    "responses": { "200": { "description": "返回 CDR 数组列表" } }
+                }
+            },
+            "/api/v1/dashboard/stats": {
+                "get": {
+                    "summary": "仪表盘实时呼叫与 CAPS 统计",
+                    "responses": { "200": { "description": "实时指标 JSON" } }
+                }
+            },
+            "/api/v1/routes": {
+                "get": {
+                    "summary": "获取路由规则列表",
+                    "responses": { "200": { "description": "路由规则数组" } }
+                }
+            },
+            "/api/v1/ivr/menus": {
+                "get": {
+                    "summary": "获取 IVR 流程拓扑列表",
+                    "responses": { "200": { "description": "IVR 流程节点 JSON" } }
+                }
+            }
+        }
+    });
+    (StatusCode::OK, axum::Json(spec))
+}
+
 pub async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse {
     let url = format!("{}/manage/media-metrics", state.sip_manage_base);
     let secret = state.internal_secret.clone();

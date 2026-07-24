@@ -1,6 +1,6 @@
 use crate::{
     CallerPool, CallerPoolMember, DidDestination, EgressEndpoint, EgressGroup, EgressGroupMember,
-    NumberAllocation, PostgresCdrStore, SourceOutboundPolicy, TrunkIpRule,
+    IvrMenuRecord, NumberAllocation, PostgresCdrStore, SourceOutboundPolicy, TrunkIpRule,
 };
 use sqlx::Row;
 
@@ -475,14 +475,23 @@ impl PostgresCdrStore {
             .collect())
     }
 
-    /// 列出所有 IVR 菜单。
-    pub async fn list_ivr_menus(&self) -> Result<Vec<(String, String, String, i32)>, sqlx::Error> {
-        let rows = sqlx::query("SELECT id, name, welcome_prompt, timeout_secs FROM ivr_menus")
-            .fetch_all(&self.pool)
-            .await?;
+    /// 列出所有 IVR 菜单（含拓扑画布 nodes/edges JSON）。
+    pub async fn list_ivr_menus(&self) -> Result<Vec<IvrMenuRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, name, welcome_prompt, timeout_secs, nodes::text, edges::text FROM ivr_menus",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows
             .into_iter()
-            .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
+            .map(|row| IvrMenuRecord {
+                id: row.get(0),
+                name: row.get(1),
+                welcome_prompt: row.get(2),
+                timeout_secs: row.get(3),
+                nodes: row.get(4),
+                edges: row.get(5),
+            })
             .collect())
     }
 

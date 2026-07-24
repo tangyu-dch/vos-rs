@@ -490,3 +490,17 @@ pub struct SipFlowRecord {
     #[serde(with = "time::serde::rfc3339")]
     pub timestamp: OffsetDateTime,
 }
+
+/// IVR 菜单记录（含拓扑画布 JSON）。
+///
+/// `nodes` / `edges` 为前端拓扑编辑器持久化的 JSONB 字符串，
+/// 由 sip-edge 的 `number_routing` 解析为 `IvrTopology` 后注入 IVR 拓扑执行引擎。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IvrMenuRecord {
+    pub id: String,
+    pub name: String,
+    pub welcome_prompt: String,
+    pub timeout_secs: i32,
+    pub nodes: Option<String>,
+    pub edges: Option<String>,
+}
