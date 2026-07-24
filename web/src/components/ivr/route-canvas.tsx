@@ -275,42 +275,58 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
         {/* 阴影底板 */}
         <rect width={NODE_W} height={NODE_H} y={4} rx={14} className="fill-black/30 blur-sm" opacity={0.5} />
 
-        {/* 节点主体背景卡片（边框颜色与工具箱一致，去掉左边白边） */}
+        {/* 节点主体背景卡片（边框颜色与工具箱一致） */}
         <rect
           width={NODE_W} height={NODE_H} rx={14}
           className={`fill-content1 ${selected ? `${theme.strokeSelected} ring-2 ${theme.ring} shadow-2xl` : `${theme.stroke} hover:stroke-foreground/60`}`}
           strokeWidth={selected ? 2 : 1.5}
         />
 
-        {/* 顶栏主题颜色填充 */}
-        <rect width={NODE_W} height={42} rx={14} className={theme.fillHeader} />
-        <line x1={0} y1={42} x2={NODE_W} y2={42} className="stroke-default-200/30" strokeWidth={1} />
+        {/* 包含子内容/分支时渲染顶栏分割线；无子内容时全卡片统一单色 */}
+        {outPorts.length > 1 ? (
+          <>
+            <rect width={NODE_W} height={42} rx={14} className={theme.fillHeader} />
+            <line x1={0} y1={42} x2={NODE_W} y2={42} className="stroke-default-200/30" strokeWidth={1} />
+          </>
+        ) : (
+          <rect width={NODE_W} height={NODE_H} rx={14} className={theme.fillHeader} />
+        )}
 
-        {/* 顶部标题区（图标 + 名称 + 类型 + 删除） */}
-        <foreignObject x={10} y={7} width={28} height={28}>
-          <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${cat.color} shadow-xs`}>
-            <Icon className="w-4 h-4" />
-          </div>
-        </foreignObject>
+        {/* 顶部标题与图标区（根据是否单色卡片精准计算 Y 轴上下居中坐标） */}
+        {(() => {
+          const isCompact = outPorts.length <= 1;
+          const yIcon = isCompact ? (NODE_H - 28) / 2 : 7;
+          const yText = isCompact ? (NODE_H - 36) / 2 : 4;
+          const yDelete = isCompact ? (NODE_H - 18) / 2 : 12;
 
-        <foreignObject x={44} y={6} width={NODE_W - 76} height={34}>
-          <div className="flex flex-col">
-            <span className="text-xs font-bold text-foreground truncate leading-tight">{node.title}</span>
-            <span className="text-[9px] text-default-400 truncate leading-tight mt-0.5">{node.description || node.type}</span>
-          </div>
-        </foreignObject>
+          return (
+            <>
+              <foreignObject x={10} y={yIcon} width={28} height={28}>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${cat.color} shadow-xs`}>
+                  <Icon className="w-4 h-4" />
+                </div>
+              </foreignObject>
 
-        {/* 删除按钮（hover 显示） */}
-        <foreignObject x={NODE_W - 26} y={6} width={18} height={18}>
-          <button
-            type="button"
-            className="w-4.5 h-4.5 rounded-md flex items-center justify-center text-danger/80 hover:text-danger hover:bg-danger/10 transition-colors"
-            onClick={(e) => deleteNode(node.id, e as unknown as MouseEvent)}
-            aria-label="删除节点"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </foreignObject>
+              <foreignObject x={44} y={yText} width={NODE_W - 76} height={36}>
+                <div className="flex flex-col justify-center h-full min-w-0">
+                  <span className="text-xs font-bold text-foreground truncate leading-tight">{node.title}</span>
+                  <span className="text-[9px] text-default-400 truncate leading-tight mt-0.5">{node.description || node.type}</span>
+                </div>
+              </foreignObject>
+
+              <foreignObject x={NODE_W - 26} y={yDelete} width={18} height={18}>
+                <button
+                  type="button"
+                  className="w-4.5 h-4.5 rounded-md flex items-center justify-center text-danger/80 hover:text-danger hover:bg-danger/10 transition-colors"
+                  onClick={(e) => deleteNode(node.id, e as unknown as MouseEvent)}
+                  aria-label="删除节点"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </foreignObject>
+            </>
+          );
+        })()}
 
         {/* 多端口选项行列表渲染（分流分支/过滤规则独立渲染） */}
         {outPorts.length > 1 && (
