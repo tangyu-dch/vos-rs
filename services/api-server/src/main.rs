@@ -18,7 +18,6 @@ mod details;
 mod gateways;
 mod hot_cache;
 mod ivr_menus;
-mod speech;
 mod llm_configs;
 mod media_cluster;
 mod metrics;
@@ -870,8 +869,6 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/anti-fraud/config", get(list_anti_fraud_config))
         .route("/api/anti-fraud/config/:key", put(update_anti_fraud_config))
-        .route("/api/speech/stt", post(speech::transcribe_speech))
-        .route("/api/speech/tts", post(speech::synthesize_speech))
         .route("/api/audit-logs", get(list_audit_logs))
         .route("/api/dashboard/events", get(dashboard_events))
         .route_layer(axum::middleware::from_fn_with_state(

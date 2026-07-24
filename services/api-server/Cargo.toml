@@ -23,7 +23,7 @@ cdr-core = { path = "../../crates/cdr-core" }
 rust_decimal = { version = "1.36", features = ["serde-float"] }
 anyhow = "1"
 time = { version = "0.3", features = ["parsing"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 storage-core = { path = "../../crates/storage-core" }
 prometheus-client = "0.23"
 jsonwebtoken = "9"
