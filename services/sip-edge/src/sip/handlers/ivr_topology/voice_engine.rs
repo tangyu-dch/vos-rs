@@ -4,8 +4,11 @@
 //! 引擎惰性初始化，首次调用时加载 ONNX 模型。
 //! 同步模型推理在 `tokio::task::spawn_blocking` 中执行，避免阻塞 async runtime。
 
+#[cfg(feature = "enterprise-ai-voice")]
 use sherpa_rs::sense_voice::{SenseVoiceConfig, SenseVoiceRecognizer};
+#[cfg(feature = "enterprise-ai-voice")]
 use sherpa_rs::tts::{VitsTts, VitsTtsConfig};
+#[cfg(feature = "enterprise-ai-voice")]
 use sherpa_rs::OnnxConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -99,21 +102,33 @@ impl Default for AsrConfig {
 ///
 /// 内部用 `tokio::sync::Mutex` 保护 `VitsTts` 实例。
 /// 模型加载与合成均在 `spawn_blocking` 中执行，避免阻塞异步运行时。
+#[cfg(feature = "enterprise-ai-voice")]
 pub struct TtsEngine {
     config: TtsConfig,
     inner: Arc<Mutex<Option<VitsTts>>>,
 }
 
+#[cfg(not(feature = "enterprise-ai-voice"))]
+pub struct TtsEngine {
+    config: TtsConfig,
+}
+
 impl TtsEngine {
-    /// 创建 TTS 引擎 (尚未加载模型)
     pub fn new(config: TtsConfig) -> Self {
-        Self {
-            config,
-            inner: Arc::new(Mutex::new(None)),
+        #[cfg(feature = "enterprise-ai-voice")]
+        {
+            Self {
+                config,
+                inner: Arc::new(Mutex::new(None)),
+            }
+        }
+        #[cfg(not(feature = "enterprise-ai-voice"))]
+        {
+            Self { config }
         }
     }
 
-    /// 惰性加载 TTS 模型 (线程安全，仅首次调用时真正加载)
+    #[cfg(feature = "enterprise-ai-voice")]
     async fn ensure_loaded(&self) -> Result<(), String> {
         let mut guard = self.inner.lock().await;
         if guard.is_some() {
@@ -122,7 +137,6 @@ impl TtsEngine {
         self.validate_paths()?;
 
         let config = self.config.clone();
-        // 模型加载可能较慢 (数百毫秒到数秒)，放到 blocking 线程池执行
         let result = tokio::task::spawn_blocking(move || -> Result<VitsTts, String> {
             let vits_config = build_vits_config(&config);
             Ok(VitsTts::new(vits_config))
@@ -143,7 +157,6 @@ impl TtsEngine {
         }
     }
 
-    /// 校验模型文件路径存在
     fn validate_paths(&self) -> Result<(), String> {
         if self.config.model_path.as_os_str().is_empty() {
             return Err("TTS 模型路径未配置".to_string());
@@ -160,66 +173,73 @@ impl TtsEngine {
         Ok(())
     }
 
-    /// 合成语音 (文本 -> 16-bit PCM)
-    ///
-    /// # Arguments
-    /// * `text` - 待合成的文本 (UTF-8)
-    ///
-    /// # Returns
-    /// * `Ok(TtsResult)` - 合成成功的 PCM 音频
-    /// * `Err(String)` - 模型加载或合成失败
     pub async fn synthesize(&self, text: &str) -> Result<TtsResult, String> {
         if text.trim().is_empty() {
             return Err("TTS 合成文本为空".to_string());
         }
-        self.ensure_loaded().await?;
+        #[cfg(feature = "enterprise-ai-voice")]
+        {
+            self.ensure_loaded().await?;
 
-        let inner = self.inner.clone();
-        let text_owned = text.to_string();
-        let result = tokio::task::spawn_blocking(move || -> Result<TtsResult, String> {
-            // 重新获取锁 (不跨 await 持有)
-            // 注意: 此处在 blocking 线程中，使用 try_lock 不会阻塞 runtime
-            // 但 tokio::sync::Mutex 在 blocking 线程中只能阻塞当前线程
-            let mut guard = inner.blocking_lock();
-            let tts = guard
-                .as_mut()
-                .ok_or_else(|| "TTS 引擎未初始化".to_string())?;
-            let audio = tts
-                .create(&text_owned, TTS_DEFAULT_SID, TTS_DEFAULT_SPEED)
-                .map_err(|e| format!("TTS 合成失败: {e}"))?;
-            let samples = audio
-                .samples
-                .iter()
-                .map(|s| (s * PCM_I16_MAX).clamp(PCM_I16_MIN, PCM_I16_MAX) as i16)
-                .collect();
-            Ok(TtsResult {
-                samples,
-                sample_rate: audio.sample_rate,
+            let inner = self.inner.clone();
+            let text_owned = text.to_string();
+            let result = tokio::task::spawn_blocking(move || -> Result<TtsResult, String> {
+                let mut guard = inner.blocking_lock();
+                let tts = guard
+                    .as_mut()
+                    .ok_or_else(|| "TTS 引擎未初始化".to_string())?;
+                let audio = tts
+                    .create(&text_owned, TTS_DEFAULT_SID, TTS_DEFAULT_SPEED)
+                    .map_err(|e| format!("TTS 合成失败: {e}"))?;
+                let samples = audio
+                    .samples
+                    .iter()
+                    .map(|s| (s * PCM_I16_MAX).clamp(PCM_I16_MIN, PCM_I16_MAX) as i16)
+                    .collect();
+                Ok(TtsResult {
+                    samples,
+                    sample_rate: audio.sample_rate,
+                })
             })
-        })
-        .await
-        .map_err(|e| format!("TTS 任务执行失败: {e}"))?;
+            .await
+            .map_err(|e| format!("TTS 任务执行失败: {e}"))?;
 
-        result
+            result
+        }
+        #[cfg(not(feature = "enterprise-ai-voice"))]
+        {
+            Err("AI 语音引擎未开启 (企业版 feature: enterprise-ai-voice)".to_string())
+        }
     }
 }
 
-/// ASR 引擎单例 (惰性初始化)
+#[cfg(feature = "enterprise-ai-voice")]
 pub struct AsrEngine {
     config: AsrConfig,
     inner: Arc<Mutex<Option<SenseVoiceRecognizer>>>,
 }
 
+#[cfg(not(feature = "enterprise-ai-voice"))]
+pub struct AsrEngine {
+    config: AsrConfig,
+}
+
 impl AsrEngine {
-    /// 创建 ASR 引擎 (尚未加载模型)
     pub fn new(config: AsrConfig) -> Self {
-        Self {
-            config,
-            inner: Arc::new(Mutex::new(None)),
+        #[cfg(feature = "enterprise-ai-voice")]
+        {
+            Self {
+                config,
+                inner: Arc::new(Mutex::new(None)),
+            }
+        }
+        #[cfg(not(feature = "enterprise-ai-voice"))]
+        {
+            Self { config }
         }
     }
 
-    /// 惰性加载 ASR 模型
+    #[cfg(feature = "enterprise-ai-voice")]
     async fn ensure_loaded(&self) -> Result<(), String> {
         let mut guard = self.inner.lock().await;
         if guard.is_some() {
@@ -250,7 +270,6 @@ impl AsrEngine {
         }
     }
 
-    /// 校验模型文件路径存在
     fn validate_paths(&self) -> Result<(), String> {
         if self.config.model_path.as_os_str().is_empty() {
             return Err("ASR 模型路径未配置".to_string());
@@ -267,39 +286,33 @@ impl AsrEngine {
         Ok(())
     }
 
-    /// 识别语音 (16-bit PCM -> 文本)
-    ///
-    /// # Arguments
-    /// * `samples` - 16-bit PCM 单声道样本
-    /// * `sample_rate` - 采样率 (建议 16000 Hz)
-    ///
-    /// # Returns
-    /// * `Ok(String)` - 识别出的文本
-    /// * `Err(String)` - 模型加载或识别失败
-    pub async fn recognize(&self, samples: &[i16], sample_rate: u32) -> Result<String, String> {
-        if samples.is_empty() {
-            return Ok(String::new());
+    pub async fn recognize(&self, _samples: &[i16], _sample_rate: u32) -> Result<String, String> {
+        #[cfg(feature = "enterprise-ai-voice")]
+        {
+            self.ensure_loaded().await?;
+            let inner = self.inner.clone();
+            let samples_vec = _samples.to_vec();
+            let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
+                let mut guard = inner.blocking_lock();
+                let asr = guard
+                    .as_mut()
+                    .ok_or_else(|| "ASR 引擎未初始化".to_string())?;
+                let float_samples: Vec<f32> = samples_vec.iter().map(|&s| s as f32 / 32768.0).collect();
+                let result = asr.transcribe(_sample_rate, &float_samples);
+                Ok(result.text)
+            })
+            .await
+            .map_err(|e| format!("ASR 任务执行失败: {e}"))?;
+            result
         }
-        self.ensure_loaded().await?;
-
-        let inner = self.inner.clone();
-        // i16 -> f32 归一化
-        let samples_f32: Vec<f32> = samples.iter().map(|s| (*s as f32) / PCM_I16_MAX).collect();
-        let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
-            let mut guard = inner.blocking_lock();
-            let recognizer = guard
-                .as_mut()
-                .ok_or_else(|| "ASR 引擎未初始化".to_string())?;
-            let result = recognizer.transcribe(sample_rate, &samples_f32);
-            Ok(result.text)
-        })
-        .await
-        .map_err(|e| format!("ASR 任务执行失败: {e}"))?;
-
-        result
+        #[cfg(not(feature = "enterprise-ai-voice"))]
+        {
+            Err("AI 语音引擎未开启 (企业版 feature: enterprise-ai-voice)".to_string())
+        }
     }
 }
 
+#[cfg(feature = "enterprise-ai-voice")]
 /// 从 [`TtsConfig`] 构建 sherpa-rs [`VitsTtsConfig`]
 fn build_vits_config(config: &TtsConfig) -> VitsTtsConfig {
     VitsTtsConfig {
@@ -333,6 +346,7 @@ fn build_vits_config(config: &TtsConfig) -> VitsTtsConfig {
     }
 }
 
+#[cfg(feature = "enterprise-ai-voice")]
 /// 从 [`AsrConfig`] 构建 sherpa-rs [`SenseVoiceConfig`]
 fn build_sense_config(config: &AsrConfig) -> SenseVoiceConfig {
     SenseVoiceConfig {
@@ -457,6 +471,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "enterprise-ai-voice")]
     fn test_build_vits_config_uses_paths() {
         let config = TtsConfig {
             model_path: PathBuf::from("/tmp/model.onnx"),
@@ -471,6 +486,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "enterprise-ai-voice")]
     fn test_build_sense_config_uses_paths() {
         let config = AsrConfig {
             model_path: PathBuf::from("/tmp/asr.onnx"),
