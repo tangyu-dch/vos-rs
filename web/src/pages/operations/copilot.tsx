@@ -271,7 +271,13 @@ export function CopilotPage() {
     const userTempId = `tmp-user-${Date.now()}`;
     const botTempId = `tmp-bot-${Date.now()}`;
     const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    const userMsg: MessageItem = { id: userTempId, sender: 'user', text: displayQuery, timestamp: ts };
+    const userMsg: MessageItem = {
+      id: userTempId,
+      sender: 'user',
+      text: displayQuery,
+      images: images.length > 0 ? images : undefined,
+      timestamp: ts,
+    };
     const botMsg: MessageItem = { id: botTempId, sender: 'bot', text: '', timestamp: ts };
     setMessages((prev) => [...prev, userMsg, botMsg]);
     setSending(true);
@@ -302,7 +308,7 @@ export function CopilotPage() {
         fullQuery,
         {
           onUserMessage: (msg) => {
-            setMessages((prev) => prev.map((m) => (m.id === userTempId ? toMessageItem(msg) : m)));
+            setMessages((prev) => prev.map((m) => (m.id === userTempId ? { ...toMessageItem(msg), images: m.images } : m)));
           },
           onContext: (ctx) => {
             // LLM 状态信息（梯形图已内嵌到 LLM 回答的 markdown 中，不再单独推送）
@@ -514,7 +520,22 @@ export function CopilotPage() {
                           <span>{m.timestamp}</span>
                         </div>
                         {m.sender === 'user' ? (
-                          <p className="whitespace-pre-wrap font-medium text-xs">{m.text}</p>
+                          <div className="flex flex-col gap-2">
+                            {m.images && m.images.length > 0 && (
+                              <div className="flex flex-wrap gap-2 max-w-full my-1">
+                                {m.images.map((imgUrl, idx) => (
+                                  <img
+                                    key={idx}
+                                    src={imgUrl}
+                                    alt={`分析识别截图-${idx + 1}`}
+                                    className="max-h-48 max-w-sm rounded-xl border border-primary-foreground/30 shadow-md cursor-pointer hover:opacity-90 transition-opacity object-contain bg-black/20"
+                                    onClick={() => window.open(imgUrl, '_blank')}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                            {m.text && <p className="whitespace-pre-wrap font-medium text-xs">{m.text}</p>}
+                          </div>
                         ) : isStreaming ? (
                           <StreamingIndicator />
                         ) : (

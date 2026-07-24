@@ -20,6 +20,7 @@ export interface MessageItem {
   id: string;
   sender: 'user' | 'bot';
   text: string;
+  images?: string[];
   rootCause?: string;
   suggestedAction?: string;
   ladderAscii?: string;
