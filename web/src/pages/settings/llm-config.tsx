@@ -96,7 +96,8 @@ export function LlmConfigPage() {
     setForm((f) => ({
       ...f,
       provider,
-      api_key: '', // 清除 API key 避免厂商混淆
+      // 仅在切换到不同厂商时清除 API Key（不同厂商 key 不通用）
+      api_key: provider === f.provider ? f.api_key : '',
       base_url: preset?.baseUrl ?? f.base_url,
       model: preset?.models[0] ?? f.model,
     }));

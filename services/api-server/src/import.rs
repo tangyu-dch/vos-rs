@@ -34,7 +34,7 @@ async fn get_digest_realm(state: &AppState) -> Result<String, ApiError> {
 // === SIP Users Import ===
 
 pub async fn import_users_template() -> impl IntoResponse {
-    crate::utils::to_csv_response(
+    crate::system::utils::to_csv_response(
         "users_import_template.csv",
         &["分机号", "注册密码"],
         &[vec!["8001".to_string(), "123456".to_string()]],
@@ -46,7 +46,7 @@ pub async fn import_users(
     multipart: Multipart,
 ) -> Result<Json<Value>, ApiError> {
     let content = get_csv_content(multipart).await?;
-    let parsed = crate::utils::parse_csv(&content);
+    let parsed = crate::system::utils::parse_csv(&content);
     if parsed.len() < 2 {
         return Err(ApiError::internal("CSV 模板为空或缺少数据行"));
     }
@@ -88,7 +88,7 @@ pub async fn import_users(
 
     // 同步写入 Redis 缓存
     for (username, ha1) in hot_cache_updates {
-        let _ = crate::hot_cache::set_auth_user(&state, &username, &ha1).await;
+        let _ = crate::system::hot_cache::set_auth_user(&state, &username, &ha1).await;
     }
 
     Ok(Json(json!({ "success": true, "imported_count": imported })))
@@ -97,7 +97,7 @@ pub async fn import_users(
 // === Numbers Import ===
 
 pub async fn import_numbers_template() -> impl IntoResponse {
-    crate::utils::to_csv_response(
+    crate::system::utils::to_csv_response(
         "numbers_import_template.csv",
         &["号码", "关联分机", "落地中继", "呼叫方向", "最大并发", "状态"],
         &[vec![
@@ -116,7 +116,7 @@ pub async fn import_numbers(
     multipart: Multipart,
 ) -> Result<Json<Value>, ApiError> {
     let content = get_csv_content(multipart).await?;
-    let parsed = crate::utils::parse_csv(&content);
+    let parsed = crate::system::utils::parse_csv(&content);
     if parsed.len() < 2 {
         return Err(ApiError::internal("CSV 模板为空或缺少数据行"));
     }
@@ -170,7 +170,7 @@ pub async fn import_numbers(
     tx.commit().await.map_err(|e| ApiError::internal(e.to_string()))?;
 
     // 通知 sip-edge 重新加载路由
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
 
     Ok(Json(json!({ "success": true, "imported_count": imported })))
 }
@@ -178,7 +178,7 @@ pub async fn import_numbers(
 // === Rates Import ===
 
 pub async fn import_rates_template() -> impl IntoResponse {
-    crate::utils::to_csv_response(
+    crate::system::utils::to_csv_response(
         "rates_import_template.csv",
         &["费率标识", "前缀号码", "每分钟费率", "计费周期(秒)", "单周期价格"],
         &[vec![
@@ -196,7 +196,7 @@ pub async fn import_rates(
     multipart: Multipart,
 ) -> Result<Json<Value>, ApiError> {
     let content = get_csv_content(multipart).await?;
-    let parsed = crate::utils::parse_csv(&content);
+    let parsed = crate::system::utils::parse_csv(&content);
     if parsed.len() < 2 {
         return Err(ApiError::internal("CSV 模板为空或缺少数据行"));
     }
@@ -247,7 +247,7 @@ pub async fn import_rates(
     tx.commit().await.map_err(|e| ApiError::internal(e.to_string()))?;
 
     // 预热/刷新内存中的费率配置
-    let _ = crate::hot_cache::rebuild_billing_rates(&state).await;
+    let _ = crate::system::hot_cache::rebuild_billing_rates(&state).await;
 
     Ok(Json(json!({ "success": true, "imported_count": imported })))
 }
@@ -255,7 +255,7 @@ pub async fn import_rates(
 // === Routes Import ===
 
 pub async fn import_routes_template() -> impl IntoResponse {
-    crate::utils::to_csv_response(
+    crate::system::utils::to_csv_response(
         "routes_import_template.csv",
         &["路由标识", "号码前缀", "优先级", "目标网关", "每呼叫成本", "权重", "生效时间(开始)", "生效时间(结束)"],
         &[vec![
@@ -276,7 +276,7 @@ pub async fn import_routes(
     multipart: Multipart,
 ) -> Result<Json<Value>, ApiError> {
     let content = get_csv_content(multipart).await?;
-    let parsed = crate::utils::parse_csv(&content);
+    let parsed = crate::system::utils::parse_csv(&content);
     if parsed.len() < 2 {
         return Err(ApiError::internal("CSV 模板为空或缺少数据行"));
     }
@@ -344,7 +344,7 @@ pub async fn import_routes(
     tx.commit().await.map_err(|e| ApiError::internal(e.to_string()))?;
 
     // 通知 sip-edge 重新加载路由
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
 
     Ok(Json(json!({ "success": true, "imported_count": imported })))
 }

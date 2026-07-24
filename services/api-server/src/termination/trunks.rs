@@ -58,7 +58,7 @@ pub async fn replace_ip_rules(
         .replace_trunk_ip_rules(&id, &rules)
         .await
         .map_err(database)?;
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }
 
@@ -106,6 +106,6 @@ pub async fn replace_endpoints(
         .replace_egress_endpoints(&id, &endpoints)
         .await
         .map_err(database)?;
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }

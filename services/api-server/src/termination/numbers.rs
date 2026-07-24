@@ -11,7 +11,7 @@ pub async fn set_number_owner(
         .await
         .map_err(database)?;
     if updated {
-        crate::routes::publish_route_reload(&state.nats_client).await;
+        crate::resources::routes::publish_route_reload(&state.nats_client).await;
         Ok(StatusCode::OK)
     } else {
         Err((StatusCode::NOT_FOUND, "号码或落地中继不存在".to_string()))
@@ -64,6 +64,6 @@ pub async fn replace_allocations(
         .replace_number_allocations(&number, &allocations)
         .await
         .map_err(database)?;
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }

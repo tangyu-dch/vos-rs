@@ -57,7 +57,7 @@ async fn save_caller_pool(
         })
         .await
         .map_err(database)?;
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
     Ok(status)
 }
 
@@ -88,7 +88,7 @@ pub async fn delete_caller_pool(
         .await
         .map_err(database)?
     {
-        crate::routes::publish_route_reload(&state.nats_client).await;
+        crate::resources::routes::publish_route_reload(&state.nats_client).await;
         Ok(StatusCode::OK)
     } else {
         Err((StatusCode::NOT_FOUND, "号码池不存在".to_string()))
@@ -166,6 +166,6 @@ pub async fn replace_caller_pool_members(
         .replace_caller_pool_members(&id, &members)
         .await
         .map_err(database)?;
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }

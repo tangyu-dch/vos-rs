@@ -37,7 +37,7 @@ async fn save_did(
         })
         .await
         .map_err(database)?;
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
     Ok(status)
 }
 pub async fn create_did(
@@ -64,7 +64,7 @@ pub async fn delete_did(State(state): State<AppState>, Path(number): Path<String
         .await
         .map_err(database)?
     {
-        crate::routes::publish_route_reload(&state.nats_client).await;
+        crate::resources::routes::publish_route_reload(&state.nats_client).await;
         Ok(StatusCode::OK)
     } else {
         Err((StatusCode::NOT_FOUND, "DID 目标不存在".to_string()))

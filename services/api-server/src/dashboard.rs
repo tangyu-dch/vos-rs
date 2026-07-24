@@ -204,8 +204,8 @@ pub struct NodeTrafficData {
 pub async fn get_node_traffic(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<NodeTrafficData>>, ApiError> {
-    let sip_nodes = crate::sip_cluster::get_node_list(&state).await;
-    let media_nodes = crate::media_cluster::get_node_list(&state).await;
+    let sip_nodes = crate::cluster::sip_cluster::get_node_list(&state).await;
+    let media_nodes = crate::cluster::media_cluster::get_node_list(&state).await;
 
     let now = time::OffsetDateTime::now_utc()
         .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));
@@ -266,8 +266,8 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
         let active_calls = state.active_calls_cache.get_or_fetch(&state).await.len() as u64;
 
         // 2. Get online nodes list
-        let sip_nodes = crate::sip_cluster::get_node_list(&state).await;
-        let media_nodes = crate::media_cluster::get_node_list(&state).await;
+        let sip_nodes = crate::cluster::sip_cluster::get_node_list(&state).await;
+        let media_nodes = crate::cluster::media_cluster::get_node_list(&state).await;
 
         let now = time::OffsetDateTime::now_utc()
             .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));

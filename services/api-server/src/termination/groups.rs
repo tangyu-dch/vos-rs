@@ -32,7 +32,7 @@ async fn save_egress_group(
         })
         .await
         .map_err(database)?;
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
     Ok(status)
 }
 
@@ -63,7 +63,7 @@ pub async fn delete_egress_group(
         .await
         .map_err(database)?
     {
-        crate::routes::publish_route_reload(&state.nats_client).await;
+        crate::resources::routes::publish_route_reload(&state.nats_client).await;
         Ok(StatusCode::OK)
     } else {
         Err((StatusCode::NOT_FOUND, "落地组不存在".to_string()))
@@ -132,6 +132,6 @@ pub async fn replace_egress_group_members(
         .replace_egress_group_members(&id, &members)
         .await
         .map_err(database)?;
-    crate::routes::publish_route_reload(&state.nats_client).await;
+    crate::resources::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
 }

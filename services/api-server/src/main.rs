@@ -3,81 +3,68 @@
 //! 本服务提供 VoIP 软交换平台的 RESTful API。
 //!
 
-mod anti_fraud;
-mod audit;
-mod auth;
-mod billing;
-mod call_center;
-mod calls;
-mod cdr;
+// 子目录模块
 mod copilot;
-mod copilot_history;
-mod copilot_stream;
+mod resources;
+mod billing;
+mod system;
+mod cluster;
+mod termination;
+
+// 顶层模块
+mod config;
 mod dashboard;
 mod details;
-mod gateways;
-mod hot_cache;
-mod ivr_menus;
+mod error;
+mod helpers;
 mod llm_configs;
-mod media_cluster;
-mod metrics;
-mod numbers;
+mod middleware;
 mod recording;
-mod registrations;
-mod report;
-mod routes;
-mod sip_cluster;
-mod system;
-mod termination;
-mod users;
-mod utils;
 mod import;
 mod v1;
 
+// 重导出迁移后的公共 API，保持 `crate::ApiError` 等旧路径继续可用。
+pub(crate) use error::ApiError;
+pub(crate) use helpers::{config_logging_filter, normalize_page, parse_dt, validate_runtime_secrets};
+pub(crate) use middleware::{audit_log, jwt_auth};
 
 use axum::{
-    extract::State,
-    http::{HeaderValue, StatusCode},
-    response::IntoResponse,
+    http::HeaderValue,
     routing::{get, post, put},
-    Json, Router,
+    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
-use time::OffsetDateTime;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use billing::{
+use billing::billing::{
     create_rate, credit_account, delete_rate, list_accounts, list_ledger, list_rates,
     reconcile as billing_reconcile, update_rate,
 };
-use calls::{list_active, media_metrics, route_preview, terminate_call as calls_terminate};
+use cluster::calls::{list_active, media_metrics, route_preview, terminate_call as calls_terminate};
 use cdr_core::PostgresCdrStore;
-use media_cluster::{get_media_cluster, update_media_cluster};
-use numbers::{create_number, delete_number, list_numbers, update_number};
+use cluster::media_cluster::{get_media_cluster, update_media_cluster};
+use resources::numbers::{create_number, delete_number, list_numbers, update_number};
 use recording::get_recording_audio;
-use report::{export_cdrs_csv, get_report_summary};
+use billing::report::{export_cdrs_csv, get_report_summary};
 
-use jsonwebtoken::{decode, DecodingKey, Validation};
-use uuid::Uuid;
-
-use anti_fraud::{
+use billing::anti_fraud::{
     create_anti_fraud_rule, delete_anti_fraud_rule, list_anti_fraud_config, list_anti_fraud_rules,
     update_anti_fraud_config, update_anti_fraud_rule,
 };
-use audit::list_audit_logs;
-use auth::{login, role_allows, Claims};
-use cdr::{get_cdr, get_dtmf_events, list_cdrs};
+use system::audit::list_audit_logs;
+use system::auth::login;
+use billing::cdr::{get_cdr, get_dtmf_events, list_cdrs};
 use dashboard::{dashboard_events, get_dashboard_stats, get_dashboard_trend};
-use gateways::{create_gateway, delete_gateway, list_gateways, update_gateway};
-use registrations::list_registrations;
-use routes::{create_route, delete_route, list_routes, update_route};
-use sip_cluster::{control_sip_cluster_node, get_sip_cluster_status};
-use system::{get_system_configs, health, prometheus_metrics, ready, update_system_configs};
-use users::{create_user, delete_user, list_users, update_user};
+use resources::gateways::{create_gateway, delete_gateway, list_gateways, update_gateway};
+use resources::registrations::list_registrations;
+use resources::routes::{create_route, delete_route, list_routes, update_route};
+use cluster::sip_cluster::{control_sip_cluster_node, get_sip_cluster_status};
+use system::system::{get_system_configs, health, prometheus_metrics, ready, update_system_configs};
+use resources::users::{create_user, delete_user, list_users, update_user};
 
 /// 应用状态：所有处理器共享的状态。
 #[derive(Clone)]
@@ -113,334 +100,12 @@ pub(crate) struct PageQuery {
     pub export: Option<bool>,
 }
 
-pub(crate) fn normalize_page(query: &PageQuery) -> (i64, i64, i64) {
-    if query.export.unwrap_or(false) {
-        return (1, 100000, 0);
-    }
-    let page = query.page.unwrap_or(1).max(1);
-    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
-    let offset = (page - 1).saturating_mul(page_size);
-    (page, page_size, offset)
-}
-
 #[derive(Debug, Serialize)]
 pub(crate) struct PaginatedResponse<T> {
     pub(crate) items: Vec<T>,
     pub(crate) total: i64,
     pub(crate) page: i64,
     pub(crate) page_size: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ApiError {
-    pub(crate) error: String,
-}
-
-impl ApiError {
-    pub(crate) fn internal(msg: impl Into<String>) -> Self {
-        Self { error: msg.into() }
-    }
-
-    pub(crate) fn unauthorized(msg: impl Into<String>) -> Self {
-        Self { error: msg.into() }
-    }
-
-    pub(crate) fn forbidden(msg: impl Into<String>) -> Self {
-        Self { error: msg.into() }
-    }
-
-    /// 404：依赖 `IntoResponse` 通过 "不存在" 关键字识别状态码
-    pub(crate) fn not_found(msg: impl Into<String>) -> Self {
-        Self { error: msg.into() }
-    }
-
-    /// 400：依赖 `IntoResponse` 通过 "参数无效" 关键字识别状态码
-    pub(crate) fn bad_request(msg: impl Into<String>) -> Self {
-        Self { error: msg.into() }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> axum::response::Response {
-        let is_unauthorized = self.error.contains("用户名或密码错误")
-            || self.error.contains("缺少凭证")
-            || self.error.contains("凭证格式不正确")
-            || self.error.contains("无效 Token");
-
-        let is_forbidden = self.error.contains("越权") || self.error.contains("无权");
-
-        let status = if is_unauthorized {
-            StatusCode::UNAUTHORIZED
-        } else if is_forbidden {
-            StatusCode::FORBIDDEN
-        } else if self.error.contains("参数无效") {
-            StatusCode::BAD_REQUEST
-        } else if self.error.contains("不存在") {
-            StatusCode::NOT_FOUND
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        (status, Json(self)).into_response()
-    }
-}
-
-pub(crate) fn parse_dt(s: &str) -> Option<OffsetDateTime> {
-    OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
-}
-
-/// JWT 认证中间件：验证请求中的 Bearer Token 并检查 RBAC 权限。
-async fn jwt_auth(
-    State(state): State<AppState>,
-    mut req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Result<axum::response::Response, ApiError> {
-    let auth_header = req
-        .headers()
-        .get("authorization")
-        .and_then(|h| h.to_str().ok());
-
-    let Some(auth_str) = auth_header else {
-        return Err(ApiError::unauthorized("缺少凭证".to_string()));
-    };
-
-    if !auth_str.starts_with("Bearer ") {
-        return Err(ApiError::unauthorized("凭证格式不正确".to_string()));
-    }
-
-    let token = &auth_str[7..];
-    let validation = Validation::default();
-
-    match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(&state.jwt_secret),
-        &validation,
-    ) {
-        Ok(token_data) => {
-            let path = req.uri().path();
-            let role = &token_data.claims.role;
-            if !role_allows(role, req.method().as_str(), path) {
-                return Err(ApiError::forbidden(format!(
-                    "越权访问：角色 {role} 无权访问 {path}"
-                )));
-            }
-
-            req.extensions_mut().insert(token_data.claims);
-            Ok(next.run(req).await)
-        }
-        Err(e) => Err(ApiError::unauthorized(format!("无效 Token: {}", e))),
-    }
-}
-
-/// 对审计请求体中的敏感字段做递归脱敏。
-fn sanitize_audit_json(body: &[u8]) -> String {
-    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return "[已省略无法解析的 JSON 请求体]".to_string();
-    };
-    redact_sensitive_json_value(&mut value);
-    serde_json::to_string(&value).unwrap_or_else(|_| "[已省略审计请求体]".to_string())
-}
-
-/// 递归遍历 JSON 对象和数组，将常见凭据字段替换成固定占位符。
-fn redact_sensitive_json_value(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(object) => {
-            for (key, child) in object.iter_mut() {
-                let normalized_key = key.to_ascii_lowercase();
-                if normalized_key.ends_with("password")
-                    || matches!(
-                        normalized_key.as_str(),
-                        "password"
-                            | "passwd"
-                            | "secret"
-                            | "token"
-                            | "access_token"
-                            | "refresh_token"
-                            | "api_key"
-                            | "authorization"
-                            | "ha1"
-                    )
-                {
-                    *child = serde_json::Value::String("[已脱敏]".to_string());
-                } else {
-                    redact_sensitive_json_value(child);
-                }
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                redact_sensitive_json_value(item);
-            }
-        }
-        _ => {}
-    }
-}
-
-async fn audit_log(
-    State(state): State<AppState>,
-    mut req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let method = req.method().clone();
-    let uri = req.uri().clone();
-    let query_params = uri.query().map(|q| q.to_string());
-    let request_id = req
-        .headers()
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let source_ip = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
-    let username = req
-        .extensions()
-        .get::<Claims>()
-        .map(|c| c.sub.clone())
-        .unwrap_or_else(|| "anonymous".to_string());
-    let role = req
-        .extensions()
-        .get::<Claims>()
-        .map(|c| c.role.clone())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    // 仅记录经过脱敏的 JSON 请求体，避免把密码、Token 等凭据写入审计库。
-    let request_body = if matches!(
-        method,
-        axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::PATCH
-    ) {
-        let (parts, body) = req.into_parts();
-        const MAX_BODY_BUFFER_BYTES: usize = 15 * 1024 * 1024; // 允许最大 15MB 图像/附件数据流
-        const MAX_AUDIT_LOG_TEXT_BYTES: usize = 256 * 1024; // 数据库审计记录上限 256KB
-        let content_type = parts
-            .headers
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let body_result = axum::body::to_bytes(body, MAX_BODY_BUFFER_BYTES).await;
-        let body_bytes = match body_result {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                tracing::warn!(%error, request_id = %request_id, "读取请求体失败");
-                axum::body::Bytes::new()
-            }
-        };
-        let body_str = if body_bytes.len() > MAX_AUDIT_LOG_TEXT_BYTES {
-            format!("[请求体包含附件/多模态图片，完整大小 {} 字节，审计日志自动省简]", body_bytes.len())
-        } else if content_type.starts_with("application/json") {
-            sanitize_audit_json(&body_bytes)
-        } else if body_bytes.is_empty() {
-            String::new()
-        } else {
-            format!("[已省略非 JSON 请求体，大小 {} 字节]", body_bytes.len())
-        };
-        req = axum::extract::Request::from_parts(parts, axum::body::Body::from(body_bytes));
-        (!body_str.is_empty()).then_some(body_str)
-    } else {
-        None
-    };
-
-    let response = next.run(req).await;
-    let status = response.status();
-    let store = state.store.clone();
-    let audit_request_id = request_id.clone();
-    let audit_username = username.clone();
-    let audit_role = role.clone();
-    let audit_method = method.to_string();
-    let audit_path = uri.path().to_string();
-    let audit_query_params = query_params.clone();
-    let audit_request_body = request_body.clone();
-    let audit_source_ip = source_ip.clone();
-    tokio::spawn(async move {
-        let input = cdr_core::AuditLogInput {
-            request_id: &audit_request_id,
-            username: &audit_username,
-            role: &audit_role,
-            method: &audit_method,
-            path: &audit_path,
-            query_params: audit_query_params.as_deref(),
-            request_body: audit_request_body.as_deref(),
-            status_code: status.as_u16(),
-            source_ip: audit_source_ip.as_deref(),
-        };
-        if let Err(error) = store.insert_audit_log(&input).await {
-            tracing::warn!(%error, request_id = %audit_request_id, "写入 API 审计日志失败");
-        }
-    });
-
-    tracing::info!(
-        request_id = %request_id,
-        action = %method,
-        path = %uri.path(),
-        operator = %username,
-        role = %role,
-        status = status.as_u16(),
-        "API audit log"
-    );
-    let mut response = response;
-    if let Ok(value) = HeaderValue::from_str(&request_id) {
-        response.headers_mut().insert("X-Request-ID", value);
-    }
-    response
-}
-
-fn validate_runtime_secrets(
-    production: bool,
-    jwt_secret: &str,
-    internal_secret: &str,
-    admin_password: &str,
-    operator_password: &str,
-    financier_password: &str,
-) -> anyhow::Result<()> {
-    validate_runtime_secrets_for_environment(
-        production,
-        jwt_secret,
-        internal_secret,
-        admin_password,
-        operator_password,
-        financier_password,
-    )
-}
-
-fn validate_runtime_secrets_for_environment(
-    production: bool,
-    jwt_secret: &str,
-    internal_secret: &str,
-    admin_password: &str,
-    operator_password: &str,
-    financier_password: &str,
-) -> anyhow::Result<()> {
-    if !production {
-        return Ok(());
-    }
-    if jwt_secret.len() < 32 || jwt_secret.contains("change-in-production") {
-        anyhow::bail!("生产环境 VOS_RS_API_JWT_SECRET 必须是至少 32 字符的随机密钥");
-    }
-    if internal_secret.len() < 24
-        || matches!(
-            internal_secret,
-            "internal-dev-secret" | "compose-internal-secret"
-        )
-    {
-        anyhow::bail!("生产环境 VOS_RS_INTERNAL_SECRET 必须是至少 24 字符的随机密钥");
-    }
-    for (name, value, default) in [
-        ("VOS_RS_ADMIN_PASSWORD", admin_password, "admin"),
-        ("VOS_RS_OPERATOR_PASSWORD", operator_password, "operator"),
-        ("VOS_RS_FINANCIER_PASSWORD", financier_password, "financier"),
-    ] {
-        if value.len() < 12 || value == default || value.ends_with("-change-me") {
-            anyhow::bail!("生产环境 {name} 必须是至少 12 字符的非默认密码");
-        }
-    }
-    Ok(())
 }
 
 #[tokio::main]
@@ -451,95 +116,7 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config_file_path =
-        env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
-    let config_content = std::fs::read_to_string(&config_file_path)
-        .map_err(|error| anyhow::anyhow!("读取配置文件 {config_file_path} 失败: {error}"))?;
-
-    #[derive(serde::Deserialize, Debug, Default)]
-    struct ApiServerConfig {
-        connections: Option<ConnectionsSection>,
-        api_server: Option<ApiServerSection>,
-        sip_edge: Option<SipEdgeConfigSection>,
-    }
-
-    #[derive(serde::Deserialize, Debug, Default, Clone)]
-    struct ConnectionsSection {
-        database: Option<DatabaseSection>,
-        redis: Option<RedisSection>,
-        nats: Option<NatsSection>,
-    }
-
-    #[derive(serde::Deserialize, Debug, Default, Clone)]
-    struct RedisSection {
-        host: Option<String>,
-        port: Option<u16>,
-        password: Option<String>,
-        database: Option<u16>,
-    }
-
-    #[derive(serde::Deserialize, Debug, Default, Clone)]
-    struct DatabaseSection {
-        host: Option<String>,
-        port: Option<u16>,
-        username: Option<String>,
-        password: Option<String>,
-        database: Option<String>,
-        max_connections: Option<u32>,
-    }
-
-    #[derive(serde::Deserialize, Debug, Default, Clone)]
-    struct NatsSection {
-        url: Option<String>,
-    }
-
-    #[derive(serde::Deserialize, Debug, Default)]
-    struct ApiServerSection {
-        network: Option<ApiNetworkSection>,
-        security: Option<ApiSecuritySection>,
-        admin_credentials: Option<AdminCredentialsSection>,
-    }
-
-    #[derive(serde::Deserialize, Debug, Default)]
-    struct ApiNetworkSection {
-        host: Option<String>,
-        port: Option<u16>,
-        allowed_origins: Option<String>,
-    }
-    #[derive(serde::Deserialize, Debug, Default)]
-    struct ApiSecuritySection {
-        jwt_secret: Option<String>,
-        internal_secret: Option<String>,
-    }
-    #[derive(serde::Deserialize, Debug, Default)]
-    struct AdminCredentialsSection {
-        admin_password: Option<String>,
-        operator_password: Option<String>,
-        financier_password: Option<String>,
-    }
-
-    #[derive(serde::Deserialize, Debug, Default)]
-    struct SipEdgeConfigSection {
-        network: Option<SipEdgeNetworkSection>,
-        cluster: Option<SipEdgeClusterSection>,
-        auth: Option<SipEdgeAuthSection>,
-    }
-    #[derive(serde::Deserialize, Debug, Default)]
-    struct SipEdgeNetworkSection {
-        manage_bind: Option<String>,
-    }
-    #[derive(serde::Deserialize, Debug, Default)]
-    struct SipEdgeClusterSection {
-        node_key_prefix: Option<String>,
-        management_url: Option<String>,
-    }
-    #[derive(serde::Deserialize, Debug, Default)]
-    struct SipEdgeAuthSection {
-        realm: Option<String>,
-    }
-
-    let config: ApiServerConfig = serde_yaml::from_str(&config_content)
-        .map_err(|error| anyhow::anyhow!("解析配置文件 {config_file_path} 失败: {error}"))?;
+    let config = config::load_config()?;
     let conn_section = config.connections.unwrap_or_default();
     let db_section = conn_section.database.unwrap_or_default();
     let api_section = config.api_server.unwrap_or_default();
@@ -900,112 +477,4 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
-
-fn config_logging_filter(default: &str) -> String {
-    let path = env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
-        .and_then(|root| {
-            root.get("logging")?
-                .get("filter")?
-                .as_str()
-                .map(str::to_owned)
-        })
-        .filter(|filter| !filter.trim().is_empty())
-        .unwrap_or_else(|| default.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        normalize_page, redact_sensitive_json_value, sanitize_audit_json,
-        validate_runtime_secrets_for_environment, PageQuery,
-    };
-    use serde_json::json;
-
-    #[test]
-    fn audit_json_redacts_nested_credentials() {
-        let mut value = json!({
-            "username": "alice",
-            "password": "secret",
-            "nested": [{"access_token": "token-value"}],
-            "profile": {"api_key": "key-value"}
-        });
-
-        redact_sensitive_json_value(&mut value);
-
-        assert_eq!(value["password"], "[已脱敏]");
-        assert_eq!(value["nested"][0]["access_token"], "[已脱敏]");
-        assert_eq!(value["profile"]["api_key"], "[已脱敏]");
-        assert_eq!(value["username"], "alice");
-    }
-
-    #[test]
-    fn invalid_audit_json_is_not_recorded_as_plaintext() {
-        let result = sanitize_audit_json(br#"password=secret&token=value"#);
-
-        assert_eq!(result, "[已省略无法解析的 JSON 请求体]");
-        assert!(!result.contains("secret"));
-    }
-
-    #[test]
-    fn management_page_parameters_are_bounded() {
-        let query = PageQuery {
-            page: Some(0),
-            page_size: Some(10_000),
-            gateway_type: None,
-            role: None,
-            export: None,
-        };
-
-        assert_eq!(normalize_page(&query), (1, 100, 0));
-    }
-
-    #[test]
-    fn production_rejects_default_runtime_secrets() {
-        let error = validate_runtime_secrets_for_environment(
-            true,
-            "api-jwt-change-in-production",
-            "internal-dev-secret",
-            "admin",
-            "operator",
-            "financier",
-        )
-        .expect_err("production defaults must be rejected");
-
-        assert!(error.to_string().contains("VOS_RS_API_JWT_SECRET"));
-    }
-
-    #[test]
-    fn development_allows_local_runtime_defaults() {
-        assert!(validate_runtime_secrets_for_environment(
-            false,
-            "development",
-            "internal-dev-secret",
-            "admin",
-            "operator",
-            "financier",
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn public_bind_rejects_default_runtime_secrets() {
-        let addr: std::net::SocketAddr = "0.0.0.0:8080".parse().unwrap();
-        let is_public = !addr.ip().is_loopback();
-        assert!(is_public);
-        let production = is_public;
-        
-        let error = super::validate_runtime_secrets(
-            production,
-            "vos-rs-secret-key-change-in-production",
-            "internal-dev-secret",
-            "admin",
-            "operator",
-            "financier",
-        );
-        assert!(error.is_err());
-    }
 }

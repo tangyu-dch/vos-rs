@@ -1,37 +1,39 @@
+//! Copilot 主页面
+//!
+//! 职责：状态编排 + 业务逻辑（会话/消息/SSE/附件）+ 顶层布局骨架。
+//! 渲染拆分至子组件：
+//! - copilot-message.tsx: WelcomePanel / MessageBubble / MessagesLoading
+//! - copilot-input.tsx: ComposerBar / AttachmentChips / AttachedFile 类型
+//! - copilot-preview.tsx: ImageLightbox / CsvPreviewModal
+//! - copilot-sidebar.tsx: SessionSidebar
+//! - copilot-shared.tsx: 类型 / helper / SSE / MarkdownReport 等
+
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Input, Modal, ModalBody, ModalContent, ModalHeader, ScrollShadow, Spinner } from '@heroui/react';
-import {
-  Send, Bot, User, AlertTriangle, Lightbulb, RefreshCw,
-  Download, Trash2, Square, Paperclip, Image as ImageIcon, X, FileText,
-} from 'lucide-react';
+import { Button, ScrollShadow } from '@heroui/react';
+import { Download, RefreshCw, Square, Trash2 } from 'lucide-react';
 import { api } from '@/services/client';
 import { getAccessToken } from '@/services/auth';
 import { message } from '@/utils/toast';
 import { SessionSidebar } from './copilot-sidebar';
 import {
-  CopilotMessageDTO, CopilotSession, DegradedBanner, LlmStateChip, ActiveModelBadge,
-  MarkdownReport, MessageItem, StreamingIndicator, buildExportMarkdown,
-  parseLlmError, parseLlmState, streamChat, toMessageItem,
+  CopilotMessageDTO, CopilotSession, ActiveModelBadge,
+  MessageItem, buildExportMarkdown, streamChat, toMessageItem,
 } from './copilot-shared';
-
-// 预设查询：对齐后端真实工具执行能力（开户/路由/网关/IVR/计费/风控/抓包）
-const PRESETS = [
-  { title: '🔍 诊断最近通话失败', desc: '帮我分析最新的呼叫失败记录并绘制 SIP 信令交互梯形图' },
-  { title: '🪄 杂乱文本智能开户导入', desc: '帮我把这段文本整理并批量导入分机：小王分机 8001 密码 123456，小张分机 8002 密码 888888' },
-  { title: '🚦 前缀路由选路配置', desc: '添加一条号段路由，将前缀 010 开头的呼叫全部路由到网关 gw_main' },
-  { title: '🌐 新增中继网关节点', desc: '新建一个名称为北京中继 (gw_beijing) 的网关，目标 IP 192.168.1.100' },
-  { title: '🌳 客服 IVR 菜单转接', desc: '创建一个客服 IVR 菜单，按键 1 转接分机 8001，按键 2 转接分机 8002' },
-  { title: '💰 计费账户余额充值', desc: '查询当前所有计费账户余额，并给账户 acc_01 充值 1000 元' },
-  { title: '🛡️ 拦截风控规则配置', desc: '针对主叫前缀 9527 创建一条限频风控规则，上限 30 次' },
-  { title: '📞 实时并发通话拆线', desc: '查询当前正在进行的并发通话列表，并定位异常通道' },
-];
-
-const WELCOME_TEXT = '您好！我是 vos-rs 电信级 LLM 智能 Copilot。我拥有**全量软交换系统操控、选路冲突校验与智能排障能力**。您可以让我：分析 SIP 抓包并绘制梯形图、自动开户分机、配置前缀路由、创建 IVR 流程树、充值计费账户及挂断异常通道。\n\n点击下方快捷预设，或直接在输入框描述您的需求。';
+import {
+  WelcomePanel, MessagesLoading, MessageBubble,
+} from './copilot-message';
+import {
+  AttachedFile, AttachmentChips, ComposerBar,
+} from './copilot-input';
+import {
+  ImageLightbox, CsvPreviewModal,
+} from './copilot-preview';
 
 interface SessionListResponse { sessions: CopilotSession[]; }
 interface SessionDetailResponse { session: CopilotSession; messages: CopilotMessageDTO[]; }
 
 export function CopilotPage() {
+  // ============ 核心状态 ============
   const [sessions, setSessions] = useState<CopilotSession[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageItem[]>([]);
@@ -48,16 +50,7 @@ export function CopilotPage() {
   const [previewFile, setPreviewFile] = useState<{ name: string; content: string } | null>(null);
 
   // ============ 附件/图片上传状态 ============
-  const [attachedFiles, setAttachedFiles] = useState<{
-    id: string;
-    file: File;
-    name: string;
-    sizeStr: string;
-    isImage: boolean;
-    previewUrl?: string;
-    textContent?: string;
-    base64Data?: string;
-  }[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const processFiles = useCallback((files: FileList | File[]) => {
@@ -66,7 +59,6 @@ export function CopilotPage() {
       const sizeStr = file.size < 1024 * 1024
         ? `${(file.size / 1024).toFixed(1)} KB`
         : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
-
       const id = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       const reader = new FileReader();
 
@@ -102,7 +94,6 @@ export function CopilotPage() {
 
   // ============ 自动滚动到底部（流式输出 + 新消息）============
   const scrollRef = useRef<HTMLDivElement>(null);
-  // 用户是否贴底（接近底部）：贴底时自动滚，上滑阅读时不打断
   const pinnedToBottomRef = useRef(true);
 
   const handleScroll = useCallback(() => {
@@ -113,14 +104,12 @@ export function CopilotPage() {
     pinnedToBottomRef.current = distance < 80;
   }, []);
 
-  // 消息变化或发送状态变化时，若贴底则平滑滚动到底部
   useEffect(() => {
     if (!pinnedToBottomRef.current) return;
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [messages, sending]);
 
-  // 切换会话时重置贴底状态并立即滚动
   useEffect(() => {
     pinnedToBottomRef.current = true;
     const el = scrollRef.current;
@@ -137,9 +126,7 @@ export function CopilotPage() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchActiveModel();
-  }, [fetchActiveModel]);
+  useEffect(() => { fetchActiveModel(); }, [fetchActiveModel]);
 
   // ============ 中断当前流 ============
   const abortStream = useCallback(() => {
@@ -178,10 +165,9 @@ export function CopilotPage() {
     }
   }, [abortStream]);
 
-  // ============ 新建会话（检查未开始的对话，避免重复创建空会话）============
+  // ============ 新建会话（复用空会话，避免重复创建）============
   const handleCreate = useCallback(async () => {
     abortStream();
-    // 先在本地找未开始的对话（message_count === 0）
     const emptySession = sessions.find((s) => s.message_count === 0);
     if (emptySession) {
       setCurrentId(emptySession.id);
@@ -189,7 +175,6 @@ export function CopilotPage() {
       message.info('已切换到未开始的对话');
       return;
     }
-    // 没有空会话，才创建新的
     try {
       const session = await api.post<CopilotSession>('/copilot/sessions', {});
       setSessions((prev) => [session, ...prev]);
@@ -227,6 +212,12 @@ export function CopilotPage() {
     }
   }, []);
 
+  // ============ 复制报告到剪贴板 ============
+  const handleCopyText = useCallback((text: string) => {
+    navigator.clipboard.writeText(text);
+    message.success('已复制分析报告至剪贴板');
+  }, []);
+
   // ============ 发送消息（SSE 流式 + 打字机渲染）============
   const handleSend = useCallback(async (queryText?: string) => {
     const query = (queryText || inputQuery).trim();
@@ -237,20 +228,16 @@ export function CopilotPage() {
     const attachedTextFiles = attachedFiles
       .filter((f) => !f.isImage && f.textContent)
       .map((f) => ({ name: f.name, sizeStr: f.sizeStr, content: f.textContent }));
-
     const textAppend = attachedFiles
       .filter((f) => !f.isImage && f.textContent)
       .map((f) => `\n\n[📁 附加文件/数据: ${f.name}]\n\`\`\`\n${f.textContent}\n\`\`\``)
       .join('');
-
     const fullQuery = query + textAppend;
     const displayQuery = query || (attachedFiles.length > 0 ? `[发送了 ${attachedFiles.length} 个附件进行分析]` : '');
 
-    // 清空已发送附件与输入框
     setAttachedFiles([]);
     if (!queryText) setInputQuery('');
 
-    // 中断上一个流
     abortStream();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -275,14 +262,12 @@ export function CopilotPage() {
       }
     }
 
-    // 乐观追加用户消息 + 空 bot 消息占位（流式逐字填充）
+    // 乐观追加用户消息 + 空 bot 消息占位
     const userTempId = `tmp-user-${Date.now()}`;
     const botTempId = `tmp-bot-${Date.now()}`;
     const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
     const userMsg: MessageItem = {
-      id: userTempId,
-      sender: 'user',
-      text: displayQuery,
+      id: userTempId, sender: 'user', text: displayQuery,
       images: images.length > 0 ? images : undefined,
       files: attachedTextFiles.length > 0 ? attachedTextFiles : undefined,
       timestamp: ts,
@@ -298,7 +283,7 @@ export function CopilotPage() {
       return;
     }
 
-    // 发送时获取最新激活的模型配置，确保新消息使用新的模型配置
+    // 发送时获取最新激活的模型配置
     let currentModelId = activeModel?.id;
     try {
       const rec = await api.get<{ id: number; provider: string; model: string } | null>('/llm-configs/active');
@@ -312,28 +297,20 @@ export function CopilotPage() {
 
     try {
       await streamChat(
-        url,
-        token,
-        fullQuery,
+        url, token, fullQuery,
         {
           onUserMessage: (msg) => {
             setMessages((prev) => prev.map((m) => (m.id === userTempId ? { ...toMessageItem(msg), images: m.images, files: m.files } : m)));
           },
           onContext: (ctx) => {
-            // LLM 状态信息（梯形图已内嵌到 LLM 回答的 markdown 中，不再单独推送）
             setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
-              ...m,
-              llmEnabled: ctx.llm_enabled,
-              llmStatus: ctx.llm_status,
-              intent: ctx.intent,
+              ...m, llmEnabled: ctx.llm_enabled, llmStatus: ctx.llm_status, intent: ctx.intent,
             } : m)));
           },
           onDelta: (text) => {
-            // 逐字追加（打字机效果）
             setMessages((prev) => prev.map((m) => (m.id === botTempId ? { ...m, text: m.text + text } : m)));
           },
           onDone: (data) => {
-            // 用后端正式 assistant 消息替换临时占位
             setMessages((prev) => prev.map((m) => (m.id === botTempId ? toMessageItem(data.assistant_message) : m)));
             setSessions((prev) => {
               const others = prev.filter((s) => s.id !== data.session.id);
@@ -342,10 +319,8 @@ export function CopilotPage() {
           },
           onError: (error) => {
             setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
-              ...m,
-              text: m.text || `诊断失败：${error}`,
-              llmEnabled: false,
-              llmStatus: m.llmStatus || '调用失败',
+              ...m, text: m.text || `诊断失败：${error}`,
+              llmEnabled: false, llmStatus: m.llmStatus || '调用失败',
             } : m)));
           },
         },
@@ -354,21 +329,18 @@ export function CopilotPage() {
         images.length > 0 ? images : undefined,
       );
     } catch (err) {
-      // 用户主动中断（abort）时保留已有内容，不清空
       if (!controller.signal.aborted) {
         const errorText = err instanceof Error ? err.message : String(err);
         setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
-          ...m,
-          text: m.text || `诊断失败：${errorText}`,
-          llmEnabled: false,
-          llmStatus: '调用失败',
+          ...m, text: m.text || `诊断失败：${errorText}`,
+          llmEnabled: false, llmStatus: '调用失败',
         } : m)));
       }
     } finally {
       setSending(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [abortStream, currentId, inputQuery, sending, sessions]);
+  }, [abortStream, currentId, inputQuery, sending, sessions, attachedFiles, activeModel]);
 
   // ============ 导出报告 ============
   const handleExport = useCallback(() => {
@@ -389,8 +361,8 @@ export function CopilotPage() {
     message.success('已导出 Copilot 诊断分析报告 (Markdown)');
   }, [messages]);
 
+  // ============ 渲染 ============
   const hasMessages = messages.length > 0;
-  // 欢迎页：无消息且不在加载/发送中时显示（新建会话后也会显示）
   const showWelcome = !hasMessages && !loadingMessages && !sending;
 
   return (
@@ -420,32 +392,17 @@ export function CopilotPage() {
             {(hasMessages || sending) && (
               <>
                 {sending && (
-                  <Button
-                    size="sm"
-                    color="danger"
-                    variant="flat"
-                    onPress={abortStream}
-                    startContent={<Square className="w-3 h-3" />}
-                  >
+                  <Button size="sm" color="danger" variant="flat" onPress={abortStream}
+                    startContent={<Square className="w-3 h-3" />}>
                     停止生成
                   </Button>
                 )}
-                <Button
-                  size="sm"
-                  variant="flat"
-                  onPress={handleExport}
-                  isDisabled={sending}
-                  startContent={<Download className="w-3.5 h-3.5" />}
-                >
+                <Button size="sm" variant="flat" onPress={handleExport} isDisabled={sending}
+                  startContent={<Download className="w-3.5 h-3.5" />}>
                   导出报告
                 </Button>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  color="primary"
-                  startContent={<RefreshCw className="w-3.5 h-3.5" />}
-                  onPress={handleCreate}
-                >
+                <Button size="sm" variant="flat" color="primary" onPress={handleCreate}
+                  startContent={<RefreshCw className="w-3.5 h-3.5" />}>
                   新对话
                 </Button>
               </>
@@ -457,365 +414,42 @@ export function CopilotPage() {
         <div className="flex-1 flex flex-col min-h-0 justify-between items-center w-full">
           <ScrollShadow ref={scrollRef} onScroll={handleScroll} className="w-full flex-1 px-4 py-6 space-y-6 overflow-y-auto min-h-0">
             <div className="max-w-[94%] mx-auto w-full space-y-6">
-              {/* 欢迎页（无消息时显示，包括新建会话后）*/}
-              {showWelcome && (
-                <div className="flex flex-col items-center justify-center py-12 w-full">
-                  <div className="w-14 h-14 rounded-2xl bg-primary/15 border border-primary/30 flex items-center justify-center text-primary mb-6 shadow-sm">
-                    <Bot className="w-7 h-7" />
-                  </div>
-                  <h1 className="text-xl font-bold text-foreground text-center mb-8">
-                    有什么我能帮你的吗？
-                  </h1>
-                  <div className="max-w-2xl mx-auto mb-6">
-                    <MarkdownReport content={WELCOME_TEXT} />
-                  </div>
-                  <div className="flex flex-wrap gap-2.5 justify-center max-w-2xl mx-auto">
-                    {PRESETS.map((p, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => handleSend(p.desc)}
-                        className="px-4 py-2 text-xs rounded-full border border-default-200 hover:border-primary hover:bg-primary/10 text-default-600 hover:text-primary transition-all duration-200 shadow-sm font-medium"
-                      >
-                        {p.title}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* 加载消息中 */}
-              {loadingMessages && (
-                <div className="flex items-center justify-center py-12">
-                  <Spinner size="lg" />
-                </div>
-              )}
-
-              {/* 对话消息展示 */}
-              {!loadingMessages && hasMessages && messages.map((m) => {
-                const llmState = parseLlmState(m.llmStatus, m.llmEnabled);
-                const llmError = llmState === 'degraded' ? parseLlmError(m.llmStatus) : '';
-                const isStreaming = m.sender === 'bot' && m.text === '' && sending;
-                return (
-                  <div
-                    key={m.id}
-                    className={`flex gap-4 w-full ${m.sender === 'user' ? 'ml-auto flex-row-reverse max-w-3xl' : 'max-w-full'}`}
-                  >
-                    {/* 头像 */}
-                    <div
-                      className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 font-bold shadow-sm ${
-                        m.sender === 'user'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-primary/10 border border-primary/30 text-primary'
-                      }`}
-                    >
-                      {m.sender === 'user' ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
-                    </div>
-                    <div className={`flex flex-col gap-2.5 flex-1 min-w-0 ${m.sender === 'user' ? 'items-end' : 'items-start'}`}>
-                      {/* 消息气泡 */}
-                      <div
-                        className={`p-4 rounded-2xl text-xs leading-relaxed shadow-sm w-fit max-w-full ${
-                          m.sender === 'user'
-                            ? 'bg-primary text-primary-foreground rounded-tr-none'
-                            : 'bg-content1 text-foreground rounded-tl-none border border-default-200'
-                        }`}
-                      >
-                        <div className={`flex items-center justify-between text-[10px] mb-1.5 font-mono gap-2 ${
-                          m.sender === 'user' ? 'text-primary-foreground/70' : 'text-default-400'
-                        }`}>
-                          <span className="flex items-center gap-2">
-                            <span>{m.sender === 'user' ? 'OPERATOR' : 'COPILOT'}</span>
-                            {m.sender === 'bot' && <LlmStateChip state={llmState} status={m.llmStatus} />}
-                          </span>
-                          <span>{m.timestamp}</span>
-                        </div>
-                        {m.sender === 'user' ? (
-                          <div className="flex flex-col gap-2">
-                            {/* 图片附件微缩图 */}
-                            {m.images && m.images.length > 0 && (
-                              <div className="flex flex-wrap gap-2 max-w-full my-1">
-                                {m.images.map((imgUrl, idx) => (
-                                  <img
-                                    key={idx}
-                                    src={imgUrl}
-                                    alt={`分析识别截图-${idx + 1}`}
-                                    className="max-h-48 max-w-sm rounded-xl border border-primary-foreground/30 shadow-md cursor-pointer hover:opacity-90 hover:scale-[1.02] transition-all object-contain bg-black/20"
-                                    onClick={() => setPreviewImage(imgUrl)}
-                                  />
-                                ))}
-                              </div>
-                            )}
-
-                            {/* CSV / 文本数据文件附件卡片 */}
-                            {m.files && m.files.length > 0 && (
-                              <div className="flex flex-col gap-2 my-1">
-                                {m.files.map((file, idx) => (
-                                  <div
-                                    key={idx}
-                                    className="flex items-center justify-between p-2.5 rounded-xl bg-black/20 border border-primary-foreground/20 text-xs shadow-sm hover:border-primary-foreground/40 transition-colors"
-                                  >
-                                    <div className="flex items-center gap-2 min-w-0">
-                                      <div className="w-8 h-8 rounded-lg bg-primary-foreground/10 flex items-center justify-center shrink-0">
-                                        <FileText className="w-4 h-4 text-primary-foreground" />
-                                      </div>
-                                      <div className="flex flex-col min-w-0">
-                                        <span className="font-bold truncate text-primary-foreground">{file.name}</span>
-                                        <span className="text-[10px] text-primary-foreground/70">{file.sizeStr || '数据文件'}</span>
-                                      </div>
-                                    </div>
-                                    {file.content && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setPreviewFile({ name: file.name, content: file.content as string })}
-                                        className="px-2.5 py-1 rounded-lg bg-primary-foreground/20 hover:bg-primary-foreground/30 text-[11px] font-medium text-primary-foreground transition-colors shrink-0 flex items-center gap-1 cursor-pointer"
-                                      >
-                                        <FileText className="w-3 h-3" /> 预览 CSV 数据
-                                      </button>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            {m.text && <p className="whitespace-pre-wrap font-medium text-xs">{m.text}</p>}
-                          </div>
-                        ) : isStreaming ? (
-                          <StreamingIndicator />
-                        ) : (
-                          <>
-                            <MarkdownReport content={m.text} />
-                            <div className="flex items-center justify-end gap-2 mt-2 pt-1 border-t border-default-100/50 text-[10px] text-default-400">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  navigator.clipboard.writeText(m.text);
-                                  message.success('已复制分析报告至剪贴板');
-                                }}
-                                className="hover:text-primary transition-colors flex items-center gap-1 cursor-pointer"
-                              >
-                                <Download className="w-3 h-3" /> 复制报告
-                              </button>
-                            </div>
-                          </>
-                        )}
-                        {llmState === 'degraded' && <DegradedBanner error={llmError} />}
-                      </div>
-
-                      {/* 根因分析卡片（warning 主题，加深对比度）*/}
-                      {m.rootCause && (
-                        <div className="w-full p-3.5 bg-warning/10 border border-warning/30 rounded-xl text-xs flex flex-col gap-1.5 shadow-sm">
-                          <div className="flex items-center gap-1.5 text-warning font-bold">
-                            <AlertTriangle className="w-4 h-4" />
-                            <span>根因分析 (Root Cause)</span>
-                          </div>
-                          <div className="text-foreground text-[11px] pl-5 leading-relaxed">
-                            <MarkdownReport content={m.rootCause} />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* 建议动作卡片（primary 主题，加深对比度）*/}
-                      {m.suggestedAction && (
-                        <div className="w-full p-3.5 bg-primary/10 border border-primary/30 rounded-xl text-xs flex flex-col gap-1.5 shadow-sm">
-                          <div className="flex items-center gap-1.5 text-primary font-bold">
-                            <Lightbulb className="w-4 h-4" />
-                            <span>建议动作 (Suggested Action)</span>
-                          </div>
-                          <div className="text-foreground text-[11px] pl-5 leading-relaxed">
-                            <MarkdownReport content={m.suggestedAction} />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              {showWelcome && <WelcomePanel onPresetClick={(desc) => handleSend(desc)} />}
+              {loadingMessages && <MessagesLoading />}
+              {!loadingMessages && hasMessages && messages.map((m) => (
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  sending={sending}
+                  onImageClick={setPreviewImage}
+                  onFileClick={setPreviewFile}
+                  onCopyText={handleCopyText}
+                />
+              ))}
             </div>
           </ScrollShadow>
 
-          {/* 底部浮动输入框胶囊（包含附件预览、图片识别与焦点态增强）*/}
-          <div className="w-full px-4 py-4 shrink-0 bg-transparent flex flex-col gap-2">
-            {/* 已附件列表预览 Chip Pills */}
-            {attachedFiles.length > 0 && (
-              <div className="w-full max-w-[94%] mx-auto flex flex-wrap items-center gap-2 px-2">
-                {attachedFiles.map((file) => (
-                  <div
-                    key={file.id}
-                    className="flex items-center gap-1.5 px-2.5 py-1 bg-default-100 dark:bg-default-50/10 border border-default-200 rounded-full text-xs text-foreground shadow-sm transition-all cursor-pointer hover:border-primary/50"
-                    onClick={() => file.previewUrl && setPreviewImage(file.previewUrl)}
-                  >
-                    {file.isImage ? (
-                      file.previewUrl ? (
-                        <img src={file.previewUrl} alt={file.name} className="w-4 h-4 rounded object-cover" />
-                      ) : (
-                        <ImageIcon className="w-3.5 h-3.5 text-primary" />
-                      )
-                    ) : (
-                      <FileText className="w-3.5 h-3.5 text-secondary" />
-                    )}
-                    <span className="max-w-[140px] truncate font-medium">{file.name}</span>
-                    <span className="text-[10px] text-default-400">({file.sizeStr})</span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setAttachedFiles((prev) => prev.filter((f) => f.id !== file.id));
-                      }}
-                      className="hover:text-danger p-0.5 rounded-full transition-colors ml-0.5"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* 隐藏的 File Input 用于激活本地文件选择 */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              className="hidden"
-              multiple
-              accept=".csv,.json,.log,.txt,image/*"
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  processFiles(e.target.files);
-                  e.target.value = '';
-                }
-              }}
-            />
-
-            <div className="w-full max-w-[94%] mx-auto rounded-3xl border-2 border-default-200 hover:border-primary/40 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 bg-content1 shadow-lg p-2 flex items-center gap-2 transition-all duration-200">
-              <Input
-                variant="flat"
-                classNames={{
-                  inputWrapper: 'bg-transparent shadow-none hover:bg-transparent focus-within:bg-transparent',
-                  input: 'text-sm',
-                }}
-                placeholder="询问问题、粘贴图片/日志、或上传 CSV 进行导入排查... (可直接 Ctrl+V / Cmd+V 粘贴截图)"
-                value={inputQuery}
-                onValueChange={setInputQuery}
-                onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())}
-                onPaste={handlePaste}
-                isDisabled={sending}
-                startContent={
-                  <div className="flex items-center gap-1.5 text-default-400 mr-1">
-                    <button
-                      type="button"
-                      title="上传数据/日志文件 (.csv, .json, .txt, .log)"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="p-1 hover:text-primary hover:bg-default-100 rounded-lg transition-colors"
-                    >
-                      <Paperclip className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      title="截图/图片识别异常"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="p-1 hover:text-primary hover:bg-default-100 rounded-lg transition-colors"
-                    >
-                      <ImageIcon className="w-4 h-4" />
-                    </button>
-                  </div>
-                }
-                endContent={
-                  <Button
-                    size="sm"
-                    color="primary"
-                    className="rounded-2xl px-4 text-primary-foreground font-bold"
-                    isLoading={sending}
-                    onPress={() => handleSend()}
-                    startContent={!sending && <Send className="w-3.5 h-3.5" />}
-                  >
-                    发送
-                  </Button>
-                }
-              />
-            </div>
-          </div>
+          {/* 附件预览 Chips + 底部输入框 */}
+          <AttachmentChips
+            files={attachedFiles}
+            onRemove={(id) => setAttachedFiles((prev) => prev.filter((f) => f.id !== id))}
+            onPreviewImage={setPreviewImage}
+          />
+          <ComposerBar
+            inputQuery={inputQuery}
+            setInputQuery={setInputQuery}
+            sending={sending}
+            onSend={() => handleSend()}
+            onPaste={handlePaste}
+            fileInputRef={fileInputRef}
+            onFileSelect={processFiles}
+          />
         </div>
       </div>
 
-      {/* 图片大图预览 Lightbox 弹窗 */}
-      <Modal
-        isOpen={previewImage !== null}
-        onClose={() => setPreviewImage(null)}
-        size="4xl"
-        scrollBehavior="inside"
-        classNames={{
-          backdrop: 'bg-black/80 backdrop-blur-md',
-          base: 'bg-content1/95 border border-default-200 shadow-2xl rounded-2xl',
-        }}
-      >
-        <ModalContent>
-          <ModalHeader className="flex items-center justify-between text-sm font-bold border-b border-default-100">
-            <span>图片大图预览</span>
-          </ModalHeader>
-          <ModalBody className="p-6 flex items-center justify-center min-h-[350px]">
-            {previewImage && (
-              <img
-                src={previewImage}
-                alt="大图预览"
-                className="max-h-[75vh] max-w-full rounded-xl object-contain shadow-2xl border border-default-200"
-              />
-            )}
-          </ModalBody>
-        </ModalContent>
-      </Modal>
-
-      {/* CSV / 文本文件内容表格查看器 Modal */}
-      <Modal
-        isOpen={previewFile !== null}
-        onClose={() => setPreviewFile(null)}
-        size="4xl"
-        scrollBehavior="inside"
-        classNames={{
-          backdrop: 'bg-black/80 backdrop-blur-md',
-          base: 'bg-content1/95 border border-default-200 shadow-2xl rounded-2xl max-h-[85vh]',
-        }}
-      >
-        <ModalContent>
-          <ModalHeader className="flex items-center justify-between text-sm font-bold border-b border-default-100">
-            <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4 text-primary" />
-              <span>文件内容预览: {previewFile?.name}</span>
-            </div>
-          </ModalHeader>
-          <ModalBody className="p-4 overflow-x-auto">
-            {previewFile && (
-              previewFile.name.endsWith('.csv') ? (
-                <div className="w-full overflow-x-auto border border-default-200 rounded-xl">
-                  <table className="w-full text-xs text-left border-collapse">
-                    <thead>
-                      <tr className="bg-default-100 border-b border-default-200 text-foreground font-semibold">
-                        {previewFile.content.split('\n')[0]?.split(',').map((h, i) => (
-                          <th key={i} className="px-3 py-2 border-r border-default-200 last:border-r-0 whitespace-nowrap">
-                            {h.trim().replace(/^"|"$/g, '')}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {previewFile.content.split('\n').slice(1).filter((row) => row.trim().length > 0).map((row, rIdx) => (
-                        <tr key={rIdx} className="border-b border-default-100 hover:bg-default-50/50">
-                          {row.split(',').map((cell, cIdx) => (
-                            <td key={cIdx} className="px-3 py-1.5 border-r border-default-100 last:border-r-0 whitespace-nowrap text-default-600">
-                              {cell.trim().replace(/^"|"$/g, '')}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <pre className="p-4 rounded-xl bg-default-100 text-xs font-mono whitespace-pre-wrap overflow-x-auto text-foreground border border-default-200">
-                  {previewFile.content}
-                </pre>
-              )
-            )}
-          </ModalBody>
-        </ModalContent>
-      </Modal>
+      {/* 预览 Modal */}
+      <ImageLightbox url={previewImage} onClose={() => setPreviewImage(null)} />
+      <CsvPreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
 
       {/* 删除会话的浮动提示（无障碍） */}
       <span className="sr-only">
