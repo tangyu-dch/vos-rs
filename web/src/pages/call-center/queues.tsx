@@ -4,9 +4,9 @@ import {
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Select, SelectItem,
   useDisclosure,
 } from '@heroui/react';
-import { Plus, RefreshCw, Search, Pencil, Trash2, Music, Download } from 'lucide-react';
+import { Plus, RefreshCw, Search, Pencil, Trash2, Music, Download, Users } from 'lucide-react';
 import { api } from '@/services/client';
-import { ErrorState, LoadingState } from '@/components/detail-shell';
+import { ErrorState, LoadingState, PageHeader, EmptyState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
 
 interface QueueForm {
@@ -182,11 +182,33 @@ export default function QueuesPage() {
     { label: '可用分发算法', value: '4 种策略', className: 'text-primary' },
   ];
 
+  // 队列负载概览：按绑定座席数降序，取前 10 条
+  const queueLoad = data
+    .map((q) => ({
+      id: String(q.id || ''),
+      name: String(q.name || q.id || ''),
+      count: Array.isArray(q.agents) ? q.agents.length : 0,
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+  const queueLoadMax = queueLoad.reduce((m, x) => Math.max(m, x.count), 0);
+
   return (
     <div className="flex flex-col gap-5">
+      <Card shadow="sm" className="p-2">
+        <CardBody className="p-4">
+          <PageHeader
+            icon={Users}
+            title="呼叫队列"
+            subtitle="ACD 排队策略与实时负载"
+            statusChip={{ label: '实时', color: 'success', pulse: true }}
+          />
+        </CardBody>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {kpis.map((kpi) => (
-          <Card key={kpi.label}>
+          <Card key={kpi.label} shadow="sm">
             <CardBody className="p-4">
               <div className="text-tiny font-medium text-default-500 mb-1">{kpi.label}</div>
               <div className={`text-3xl font-bold ${kpi.className}`}>{kpi.value}</div>
@@ -194,6 +216,33 @@ export default function QueuesPage() {
           </Card>
         ))}
       </div>
+
+      <Card shadow="sm">
+        <CardBody className="p-4">
+          <h3 className="text-small font-semibold text-foreground mb-3">队列负载概览</h3>
+          {queueLoad.length === 0 || queueLoadMax === 0 ? (
+            <div className="text-tiny text-default-400 py-6 text-center">暂无队列数据</div>
+          ) : (
+            <div className="flex flex-col gap-2.5" aria-label="队列负载概览">
+              {queueLoad.map((q) => {
+                const pct = queueLoadMax > 0 ? (q.count / queueLoadMax) * 100 : 0;
+                return (
+                  <div key={q.id} className="flex items-center gap-3">
+                    <span className="text-tiny text-default-600 truncate w-28 flex-shrink-0" title={q.name}>{q.name}</span>
+                    <div className="flex-1 h-5 bg-default-200 rounded overflow-hidden">
+                      <div
+                        className="h-full bg-primary transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-tiny font-bold text-primary font-mono w-8 text-right flex-shrink-0">{q.count}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardBody>
+      </Card>
 
       {error ? (
         <ErrorState error={error} retry={loadData} />
@@ -252,7 +301,7 @@ export default function QueuesPage() {
               <TableColumn key="agents">绑定座席数</TableColumn>
               <TableColumn key="actions" align="end">操作</TableColumn>
             </TableHeader>
-            <TableBody items={filteredData} emptyContent="暂无呼叫队列数据">
+            <TableBody items={filteredData} emptyContent={<EmptyState icon={Users} title="暂无呼叫队列数据" description="点击「新建队列」添加第一个呼叫队列" />}>
               {(item) => (
                 <TableRow key={item.id}>
                   <TableCell key="id">
@@ -262,7 +311,7 @@ export default function QueuesPage() {
                   <TableCell key="strategy">{getStrategyChip(item.strategy)}</TableCell>
                   <TableCell key="moh_file">
                     <div className="flex items-center gap-1.5 text-default-600 font-mono">
-                      <Music className="w-3.5 h-3.5 text-default-400" />
+                      <Music className="w-4 h-4 text-default-400" />
                       <span>{item.moh_file || 'moh.wav'}</span>
                     </div>
                   </TableCell>
@@ -369,7 +418,7 @@ export default function QueuesPage() {
                 </Select>
               </ModalBody>
               <ModalFooter>
-                <Button variant="light" onPress={onModalClose}>取消</Button>
+                <Button variant="flat" onPress={onModalClose}>取消</Button>
                 <Button color="primary" onPress={handleSave}>保存</Button>
               </ModalFooter>
             </>

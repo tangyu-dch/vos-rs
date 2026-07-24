@@ -6,8 +6,12 @@ import {
   Button, Card, CardBody, Input, Select, SelectItem, Pagination,
   Chip, Switch, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Textarea,
+  Tooltip,
 } from '@heroui/react';
-import { Plus, RefreshCw, Search, Eye, Pencil, Trash2, Download, Upload, FileText, CheckCircle2 } from 'lucide-react';
+import {
+  Plus, RefreshCw, Search, Eye, Pencil, Trash2, Download, Upload, FileText,
+  CheckCircle2, Network, GitBranch, Wallet, PhoneCall, Settings, Cog,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/client';
 import {
@@ -20,6 +24,11 @@ import {
   callDetailText, entityId, valueText, moneyText, durationSecondsText,
 } from '@/pages/shared/format';
 import type { FieldSpec, ResourceSpec, SelectOptionSpec } from '@/pages/shared/types';
+
+// customRowAction.icon 字符串 → Lucide 图标组件映射
+const ROW_ACTION_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  Network, GitBranch, Wallet, PhoneCall, Settings, Cog,
+};
 
 const moneyFields = new Set([
   'balance', 'credit_limit', 'price_per_interval', 'amount', 'balance_after', 'cost',
@@ -557,41 +566,61 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                       <TableCell key="actions">
                         <div className="flex items-center justify-end gap-1">
                           {spec.customRowAction && (
-                            <Button
-                              size="sm"
-                              color={spec.customRowAction.color ?? 'primary'}
-                              variant="flat"
-                              className="font-bold"
-                              onPress={() => spec.customRowAction!.onPress(row)}
-                            >
-                              {spec.customRowAction.label}
-                            </Button>
+                            <Tooltip content={spec.customRowAction.label} placement="top" delay={300}>
+                              <Button
+                                isIconOnly
+                                size="sm"
+                                color={spec.customRowAction.color ?? 'primary'}
+                                variant="flat"
+                                onPress={() => spec.customRowAction!.onPress(row)}
+                                aria-label={spec.customRowAction.label}
+                              >
+                                {(() => {
+                                  const Icon = spec.customRowAction!.icon
+                                    ? ROW_ACTION_ICONS[spec.customRowAction!.icon]
+                                    : undefined;
+                                  return Icon ? <Icon className="w-4 h-4" /> : <Network className="w-4 h-4" />;
+                                })()}
+                              </Button>
+                            </Tooltip>
                           )}
                           {spec.detailPath && (
-                            <Button isIconOnly size="sm" variant="light" onPress={() => navigate(`${spec.detailPath}/${entityId(row, spec.idKey)}`)}>
-                              <Eye className="w-4 h-4 text-default-500" />
-                            </Button>
+                            <Tooltip content="查看详情" placement="top" delay={300}>
+                              <Button isIconOnly size="sm" variant="light" onPress={() => navigate(`${spec.detailPath}/${entityId(row, spec.idKey)}`)} aria-label="查看详情">
+                                <Eye className="w-4 h-4 text-default-500" />
+                              </Button>
+                            </Tooltip>
                           )}
                           {spec.action === 'credit' && (
-                            <Button
-                              size="sm"
-                              variant="flat"
-                              color="primary"
-                              onPress={() => {
-                                setActionIdempotencyKey(crypto.randomUUID());
-                                setActionRow(row);
-                              }}
-                            >充值</Button>
+                            <Tooltip content="充值" placement="top" delay={300}>
+                              <Button
+                                isIconOnly
+                                size="sm"
+                                variant="flat"
+                                color="primary"
+                                onPress={() => {
+                                  setActionIdempotencyKey(crypto.randomUUID());
+                                  setActionRow(row);
+                                }}
+                                aria-label="充值"
+                              >
+                                <Wallet className="w-4 h-4" />
+                              </Button>
+                            </Tooltip>
                           )}
                           {!spec.readOnly && (
-                            <Button isIconOnly size="sm" variant="light" onPress={() => void openForm(row)}>
-                              <Pencil className="w-4 h-4 text-default-500" />
-                            </Button>
+                            <Tooltip content="编辑" placement="top" delay={300}>
+                              <Button isIconOnly size="sm" variant="light" onPress={() => void openForm(row)} aria-label="编辑">
+                                <Pencil className="w-4 h-4 text-default-500" />
+                              </Button>
+                            </Tooltip>
                           )}
                           {!spec.readOnly && (
-                            <Button isIconOnly size="sm" variant="light" color="danger" onPress={() => setConfirmRow(row)}>
-                              <Trash2 className="w-4 h-4 text-danger" />
-                            </Button>
+                            <Tooltip content="删除" placement="top" delay={300}>
+                              <Button isIconOnly size="sm" variant="light" color="danger" onPress={() => setConfirmRow(row)} aria-label="删除">
+                                <Trash2 className="w-4 h-4 text-danger" />
+                              </Button>
+                            </Tooltip>
                           )}
                         </div>
                       </TableCell>,

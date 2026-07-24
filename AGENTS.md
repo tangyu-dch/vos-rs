@@ -94,7 +94,8 @@ vos-rs/
   │   │                          #   upnp, tenant, subscribe
 │   ├── api-server/            # REST API (Axum, 30+ 端点)
 │   │   └── src/               #   main, recording, report, billing, calls, numbers,
-│   │                          #   anti_fraud, metrics
+│   │                          #   anti_fraud, metrics, import, llm_configs, copilot,
+│   │                          #   resources/{ivr_menus,prompts,routes,numbers,users,...}
 │   ├── cdr-worker/            # NATS CDR 消费者 (批量写 PostgreSQL)
 │   │   └── src/               #   main.rs (单文件 392 行)
 │   ├── media-edge/            # 独立媒体节点 (WebRTC/转码/eBPF)
@@ -603,6 +604,17 @@ Response:
 | `/manage/calls/:call_id/terminate` | POST | 强制断开通话 |
 | `/manage/route-preview` | GET | 路由试算 |
 
+#### IVR 音频提示音 (api-server)
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/ivr/prompts` | GET | 列出已上传音频文件 |
+| `/api/v1/ivr/prompts/upload` | POST | 上传音频文件 (multipart, 字段 `file`) |
+| `/api/v1/ivr/prompts/:filename` | GET | 下载/试听音频 (内联, 支持 `<audio>`) |
+| `/api/v1/ivr/prompts/:filename` | DELETE | 删除指定音频文件 |
+
+> 音频文件落盘到 `VOS_RS_PROMPTS_DIR` (默认 `./prompts`) 目录, 支持 wav/mp3/gsm/ogg, 单文件最大 50MB。
+
 ---
 
 ## 9. 安全规范
@@ -833,3 +845,4 @@ VOS_RS_UDP_WORKERS_AUTO=true               # 自适应 worker 数量
 7. [已完成] 路由引擎与 SBC ACL 线性扫描 → **已实现 `PrefixTrie` 与 `IpTrie` 树检索**
 8. [已完成] 缺少实时余额扣减 → **已引入 AtomicI64 CAS 内存预扣减缓存**
 9. [已完成] `api-server` 全量拆分 → **63 个 .rs 文件全部 ≤500 行**
+10. [已完成] IVR 音频提示音文件上传能力 → **新增 `resources/prompts.rs` + 4 个端点**, 前端可通过 multipart 上传 wav/mp3 并通过 `/api/v1/ivr/prompts/:filename` 试听

@@ -91,7 +91,7 @@ export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
 
   return (
     <div className="bg-content1 text-default-600 rounded-medium border border-default-200 p-3" style={{ overflowX: 'auto' }}>
-      <svg width={svgWidth} height={svgHeight} style={{ fontFamily: 'Inter, system-ui, sans-serif', display: 'block', margin: '0 auto', color: 'currentColor' }}>
+      <svg width={svgWidth} height={svgHeight} role="img" aria-label="SIP 信令时序图" style={{ fontFamily: 'Inter, system-ui, sans-serif', display: 'block', margin: '0 auto', color: 'currentColor' }}>
         {PARTIES.map((party, i) => (
           <g key={party}>
             <rect x={COL[i] - 60} y={8} width={120} height={36} rx={8} className={PARTY_COLORS[party]} fill="currentColor" fillOpacity={0.15} stroke="currentColor" strokeWidth={1.5} />

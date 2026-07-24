@@ -1,9 +1,11 @@
 // 路由规则拓扑画布: 基于单条路由规则的字段双向绑定可视化编排
 // 表格字段 (prefix/gateway_id/time_start/time_end/weekdays) ↔ 画布节点配置 双向同步
+// 使用与 IVR 画布统一的蓝图风格设计
 
-import { useMemo } from 'react';
-import { Chip } from '@heroui/react';
-import { RouteCanvas } from './route-canvas';
+import { useMemo, useState } from 'react';
+import { Button, Chip } from '@heroui/react';
+import { CheckCircle2, GitBranch, Info } from 'lucide-react';
+import { autoLayoutNodes, RouteCanvas, RouteNodePalette, RouteNodeInspector } from './route-canvas';
 import {
   genRouteEdgeId,
   type RouteNode, type RouteTopology,
@@ -34,6 +36,7 @@ export function topologyFromRule(rule: RouteRuleFields): RouteTopology {
   const rejectId = `${rule.id}-reject`;
   const hasTime = rule.time_start || rule.time_end;
   const hasCaller = rule.caller_pattern;
+  void hasCaller;
 
   const nodes: RouteNode[] = [
     {
@@ -98,9 +101,6 @@ export function topologyFromRule(rule: RouteRuleFields): RouteTopology {
     { id: genRouteEdgeId(), source: timeId, target: gwId, sourcePort: 'in_window', label: '时段内' },
     { id: genRouteEdgeId(), source: timeId, target: rejectId, sourcePort: 'out_window', label: '时段外' },
   ];
-
-  // 如果有主叫过滤,在 prefix 和 time 之间插入 caller_filter (此处简化: 仅描述,不实际插入)
-  void hasCaller;
 
   return {
     id: `topo-${rule.id}`,
@@ -180,66 +180,96 @@ interface RouteTopologyEditorProps {
 }
 
 export function RouteTopologyEditor({ rule, onChange }: RouteTopologyEditorProps) {
-  const initialTopology = useMemo(() => topologyFromRule(rule), [rule.id]);  // 仅依赖 id,避免每次字段变都重建
+  const initialTopology = useMemo(() => {
+    const raw = topologyFromRule(rule);
+    return {
+      ...raw,
+      nodes: autoLayoutNodes(raw.nodes, raw.edges),
+    };
+  }, [rule.id]);
   return (
-    <div className="flex flex-col gap-3 h-full min-h-0">
-      <div className="flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <Chip size="sm" variant="flat" color="primary">规则: {rule.id}</Chip>
-          <Chip size="sm" variant="flat" color="primary">
-            拖拽节点 / 修改配置将实时回写到表格字段
-          </Chip>
-        </div>
-        <span className="text-xs text-default-400">
-          提示: 修改节点配置后,点击"应用拓扑到表格"按钮,配置将同步至表格字段
-        </span>
-      </div>
-      <RouteCanvasWithSync
-        initialTopology={initialTopology}
-        onApply={(topology) => onChange(ruleFromTopology(topology))}
-      />
-    </div>
+    <RouteCanvasWithSync
+      initialTopology={initialTopology}
+      onApply={(topology) => onChange(ruleFromTopology(topology))}
+      ruleId={rule.id}
+    />
   );
 }
 
-// 内部: 拓扑画布 + "应用"按钮
-import { useState } from 'react';
-import { Button } from '@heroui/react';
-import { CheckCircle2 } from 'lucide-react';
-
+// 内部: 拓扑画布 + 工具栏 + "应用"按钮
 function RouteCanvasWithSync({
   initialTopology,
   onApply,
+  ruleId,
 }: {
   initialTopology: RouteTopology;
   onApply: (t: RouteTopology) => void;
+  ruleId: string;
 }) {
   const [topology, setTopology] = useState<RouteTopology>(initialTopology);
   const [applied, setApplied] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  const selectedNode = topology.nodes.find((n) => n.id === selectedNodeId) ?? null;
+
+  const handleNodeChange = (updated: RouteNode) => {
+    setTopology({
+      ...topology,
+      nodes: topology.nodes.map((n) => (n.id === updated.id ? updated : n)),
+    });
+  };
+
   return (
-    <div className="flex flex-col gap-2 h-full min-h-0">
-      <div className="flex-1 min-h-0">
-        <RouteCanvas topology={topology} onChange={setTopology} />
-      </div>
-      <div className="flex items-center justify-end gap-2 shrink-0">
-        {applied && (
-          <Chip size="sm" color="success" variant="flat" startContent={<CheckCircle2 className="w-3 h-3" />}>
-            已应用,请点击保存使配置生效
+    <div className="flex flex-col gap-3 h-full min-h-0">
+      {/* 顶部工具栏 - 蓝图风格 */}
+      <div className="flex items-center justify-between gap-4 p-3 bg-content1 rounded-xl border border-default-200 shrink-0">
+        <div className="flex items-center gap-3 flex-wrap min-w-0">
+          <GitBranch className="w-5 h-5 text-primary shrink-0" />
+          <Chip size="sm" variant="flat" color="primary" className="font-mono font-bold">
+            {ruleId}
           </Chip>
-        )}
-        <Button
-          size="sm"
-          color="primary"
-          className="font-bold text-white"
-          startContent={<CheckCircle2 className="w-3.5 h-3.5" />}
-          onPress={() => {
-            onApply(topology);
-            setApplied(true);
-            setTimeout(() => setApplied(false), 2000);
-          }}
-        >
-          应用拓扑到表格
-        </Button>
+          <Chip size="sm" variant="flat" color="primary">
+            {topology.nodes.length} 节点 · {topology.edges.length} 连线
+          </Chip>
+          <div className="hidden sm:flex items-center gap-1.5 text-[10px] text-default-400">
+            <Info className="w-3 h-3" />
+            <span>拖拽节点 / 修改配置实时回写表格字段</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {applied && (
+            <Chip size="sm" color="success" variant="flat" startContent={<CheckCircle2 className="w-3 h-3" />}>
+              已应用
+            </Chip>
+          )}
+          <Button
+            size="sm"
+            color="primary"
+            className="font-bold text-white"
+            startContent={<CheckCircle2 className="w-3.5 h-3.5" />}
+            onPress={() => {
+              onApply(topology);
+              setApplied(true);
+              setTimeout(() => setApplied(false), 2000);
+            }}
+          >
+            应用拓扑到表格
+          </Button>
+        </div>
+      </div>
+
+      {/* 三栏布局: 左侧 palette + 中间 canvas + 右侧 inspector */}
+      <div className="flex gap-3 flex-1 min-h-0 h-full">
+        <RouteNodePalette />
+        <div className="flex-1 min-w-0 h-full">
+          <RouteCanvas
+            topology={topology}
+            onChange={setTopology}
+            selectedNodeId={selectedNodeId}
+            onSelectNode={setSelectedNodeId}
+          />
+        </div>
+        <RouteNodeInspector node={selectedNode} onChange={handleNodeChange} />
       </div>
     </div>
   );

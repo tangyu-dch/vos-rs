@@ -268,6 +268,11 @@ async fn main() -> Result<(), AnyError> {
         .ok();
     edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
 
+    // 注入 IVR TTS/ASR 引擎 (基于环境变量惰性配置, 未启用时 tts/asr 均为 None)
+    edge_state.set_voice_engine(Arc::new(
+        sip::handlers::ivr_topology::VoiceEngineManager::from_env(),
+    ));
+
     // 将 Redis 连接注入 EdgeState（用于集群注册状态共享）
     if let Some(redis_conn) = redis_conn_for_state {
         edge_state.set_redis(redis_conn.clone());

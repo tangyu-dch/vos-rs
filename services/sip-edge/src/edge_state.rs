@@ -523,6 +523,9 @@ pub(crate) struct EdgeState {
     pub(crate) call_caller_addrs: dashmap::DashMap<String, std::net::SocketAddr>,
     pub(crate) matched_call_ids: dashmap::DashMap<String, std::time::Instant>,
     pub(crate) self_weak: std::sync::OnceLock<std::sync::Weak<EdgeState>>,
+    /// IVR TTS/ASR 引擎管理器 (惰性初始化, 由 main.rs 启动阶段注入)
+    pub(crate) voice_engine:
+        std::sync::OnceLock<std::sync::Arc<crate::sip::handlers::ivr_topology::VoiceEngineManager>>,
 }
 
 impl EdgeState {
@@ -613,6 +616,7 @@ impl EdgeState {
             sip_flow_tx: std::sync::OnceLock::new(),
             call_caller_addrs: dashmap::DashMap::new(),
             matched_call_ids: dashmap::DashMap::new(),
+            voice_engine: std::sync::OnceLock::new(),
         }
     }
 
@@ -688,6 +692,7 @@ impl EdgeState {
             sip_flow_tx: std::sync::OnceLock::new(),
             call_caller_addrs: dashmap::DashMap::new(),
             matched_call_ids: dashmap::DashMap::new(),
+            voice_engine: std::sync::OnceLock::new(),
         }
     }
 
@@ -707,6 +712,21 @@ impl EdgeState {
 
     pub(crate) fn nats_connection(&self) -> Option<async_nats::Client> {
         self.nats_client.get().cloned()
+    }
+
+    /// 注入 IVR TTS/ASR 引擎管理器 (仅在启动阶段调用一次)。
+    pub(crate) fn set_voice_engine(
+        &self,
+        manager: std::sync::Arc<crate::sip::handlers::ivr_topology::VoiceEngineManager>,
+    ) {
+        let _ = self.voice_engine.set(manager);
+    }
+
+    /// 获取共享的 TTS/ASR 引擎管理器 (未注入时返回 None)。
+    pub(crate) fn voice_engine(
+        &self,
+    ) -> Option<std::sync::Arc<crate::sip::handlers::ivr_topology::VoiceEngineManager>> {
+        self.voice_engine.get().cloned()
     }
 
     pub(crate) fn set_registration_sync(&self, sender: crate::cluster::RegistrationSyncSender) {

@@ -327,6 +327,31 @@ async fn run_ivr_menu_loop(
     }
 }
 
+/// 供 IVR 拓扑引擎复用的转接动作执行入口
+///
+/// 对 [`execute_ivr_action`] 的轻量包装：拓扑引擎不掌握 caller_peer，
+/// 此处使用占位地址转发到既有转接逻辑（`execute_ivr_action` 内部未使用该参数）。
+pub async fn execute_ivr_action_for_topology(
+    edge_state: &EdgeState,
+    edge_config: &EdgeConfig,
+    call_id: &str,
+    a_port: u16,
+    action: &crate::edge_state::IvrAction,
+    template_request: &SipRequest,
+) {
+    let placeholder_peer = std::net::SocketAddr::from(([0u8, 0, 0, 0], 0));
+    execute_ivr_action(
+        edge_state,
+        edge_config,
+        call_id,
+        a_port,
+        action,
+        template_request,
+        placeholder_peer,
+    )
+    .await;
+}
+
 async fn execute_ivr_action(
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,

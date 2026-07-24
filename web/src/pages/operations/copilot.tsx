@@ -9,9 +9,10 @@
 //! - copilot-shared.tsx: 类型 / helper / SSE / MarkdownReport 等
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, ScrollShadow } from '@heroui/react';
-import { Download, RefreshCw, Square, Trash2 } from 'lucide-react';
+import { Button, Card, CardBody, ScrollShadow } from '@heroui/react';
+import { Bot, Download, PanelLeft, Square, SquarePen, Trash2 } from 'lucide-react';
 import { api } from '@/services/client';
+import { PageHeader } from '@/components/detail-shell';
 import { getAccessToken } from '@/services/auth';
 import { message } from '@/utils/toast';
 import { SessionSidebar } from './copilot-sidebar';
@@ -38,6 +39,8 @@ export function CopilotPage() {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // 小屏（< lg）下侧边栏默认隐藏，通过顶部按钮切换为浮层
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
@@ -367,14 +370,30 @@ export function CopilotPage() {
 
   return (
     <div className="h-[calc(100vh-100px)] flex flex-row relative">
-      {/* 左侧：会话列表侧栏 */}
+      {/* 小屏侧边栏浮层展开时的遮罩，点击关闭 */}
+      {mobileSidebarOpen && (
+        <div
+          className="absolute inset-0 bg-black/40 z-30 lg:hidden"
+          onClick={() => setMobileSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* 左侧：会话列表侧栏（小屏默认隐藏，lg+ 始终展示） */}
       <SessionSidebar
         sessions={sessions}
         currentId={currentId}
         loading={loadingSessions}
         collapsed={sidebarCollapsed}
-        onSelect={(id) => { if (id !== currentId) loadSession(id); }}
-        onCreate={handleCreate}
+        mobileOpen={mobileSidebarOpen}
+        onSelect={(id) => {
+          if (id !== currentId) loadSession(id);
+          setMobileSidebarOpen(false);
+        }}
+        onCreate={() => {
+          handleCreate();
+          setMobileSidebarOpen(false);
+        }}
         onDelete={handleDelete}
         onTogglePin={handleTogglePin}
         onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
@@ -383,32 +402,49 @@ export function CopilotPage() {
       {/* 右侧：主聊天区 */}
       <div className="flex-1 flex flex-col min-w-0 bg-content1">
         {/* 顶部固定标题与操作栏 */}
-        <div className="h-16 px-6 border-b border-default-200 flex items-center justify-between shrink-0 bg-content1/50 backdrop-blur-md z-10">
-          <div className="flex items-center gap-3">
-            <span className="text-base font-bold text-foreground">Copilot 智能运维助手</span>
-            <ActiveModelBadge activeModel={activeModel} />
-          </div>
-          <div className="flex gap-2 items-center">
-            {(hasMessages || sending) && (
-              <>
-                {sending && (
-                  <Button size="sm" color="danger" variant="flat" onPress={abortStream}
-                    startContent={<Square className="w-3 h-3" />}>
-                    停止生成
+        <Card shadow="sm" className="p-2 shrink-0 rounded-none">
+          <CardBody className="p-4">
+            <PageHeader
+              icon={Bot}
+              title="Copilot 智能运维助手"
+              subtitle="自然语言抓包排障 · SIP 梯形图自动合成"
+              actions={
+                <>
+                  {/* 小屏：展开会话历史浮层 */}
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="flat"
+                    className="lg:hidden"
+                    onPress={() => setMobileSidebarOpen(true)}
+                    aria-label="显示会话历史"
+                  >
+                    <PanelLeft className="w-4 h-4" />
                   </Button>
-                )}
-                <Button size="sm" variant="flat" onPress={handleExport} isDisabled={sending}
-                  startContent={<Download className="w-3.5 h-3.5" />}>
-                  导出报告
-                </Button>
-                <Button size="sm" variant="flat" color="primary" onPress={handleCreate}
-                  startContent={<RefreshCw className="w-3.5 h-3.5" />}>
-                  新对话
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
+                  <ActiveModelBadge activeModel={activeModel} />
+                  {(hasMessages || sending) && (
+                    <>
+                      {sending && (
+                        <Button size="sm" color="danger" variant="flat" onPress={abortStream}
+                          startContent={<Square className="w-4 h-4" />}>
+                          停止生成
+                        </Button>
+                      )}
+                      <Button size="sm" variant="flat" onPress={handleExport} isDisabled={sending}
+                        startContent={<Download className="w-4 h-4" />}>
+                        导出报告
+                      </Button>
+                      <Button size="sm" variant="flat" color="primary" onPress={handleCreate}
+                        startContent={<SquarePen className="w-4 h-4" />}>
+                        新对话
+                      </Button>
+                    </>
+                  )}
+                </>
+              }
+            />
+          </CardBody>
+        </Card>
 
         {/* 主沉浸聊天区 */}
         <div className="flex-1 flex flex-col min-h-0 justify-between items-center w-full border border-default-200/50 rounded-2xl overflow-hidden bg-content1">

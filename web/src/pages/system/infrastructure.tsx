@@ -131,27 +131,28 @@ export function InfrastructurePage() {
                   <div className="flex items-center gap-2">
                     <Activity className="w-4 h-4 text-primary" />
                     <h3 className="text-sm font-bold text-foreground">中继网关 OPTIONS 探活</h3>
+                    <Chip size="sm" variant="flat" color="warning">示例数据</Chip>
                   </div>
                   <Chip color="success" size="sm" variant="flat">心跳 3s/次</Chip>
                 </div>
                 <div className="flex flex-col gap-2.5">
-                  <div className="flex items-center justify-between p-3 rounded-xl bg-emerald-50/60 border border-emerald-100">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-success/10 border border-success/20">
                     <div className="flex flex-col">
                       <span className="text-xs font-bold text-foreground">Primary Trunk Gateway (落地主中继)</span>
                       <span className="text-[11px] font-mono text-default-500">192.168.1.10:5060 (UDP)</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono font-bold text-emerald-700">RTT: 12ms</span>
+                      <span className="text-xs font-mono font-bold text-success">RTT: 12ms</span>
                       <Chip color="success" size="sm">HEALTHY</Chip>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between p-3 rounded-xl bg-amber-50/60 border border-amber-100">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-warning/10 border border-warning/20">
                     <div className="flex flex-col">
                       <span className="text-xs font-bold text-foreground">Backup Trunk Gateway (备用中继)</span>
                       <span className="text-[11px] font-mono text-default-500">10.0.0.8:5060 (UDP)</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono font-bold text-amber-700">RTT: 45ms (丢包 1.2%)</span>
+                      <span className="text-xs font-mono font-bold text-warning">RTT: 45ms (丢包 1.2%)</span>
                       <Chip color="warning" size="sm" variant="flat">DEGRADED</Chip>
                     </div>
                   </div>
@@ -165,13 +166,14 @@ export function InfrastructurePage() {
                   <div className="flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-primary" />
                     <h3 className="text-sm font-bold text-foreground">媒体质量指标 (QoS & MOS)</h3>
+                    <Chip size="sm" variant="flat" color="warning">示例数据</Chip>
                   </div>
                   <Chip color="primary" size="sm" variant="flat">Opus / G.711</Chip>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="p-3 bg-content2 rounded-xl border border-default-200/60 flex flex-col items-center">
                     <span className="text-[10px] text-default-400">平均 MOS 音质分</span>
-                    <span className="text-xl font-extrabold text-emerald-600 font-mono mt-1">4.38 / 5.0</span>
+                    <span className="text-xl font-extrabold text-success font-mono mt-1">4.38 / 5.0</span>
                     <span className="text-[10px] text-default-400 mt-1">电信级清晰音质</span>
                   </div>
                   <div className="p-3 bg-content2 rounded-xl border border-default-200/60 flex flex-col items-center">

@@ -4,6 +4,7 @@ pub mod call_center;
 pub mod gateways;
 pub mod ivr_menus;
 pub mod numbers;
+pub mod prompts;
 pub mod registrations;
 pub mod routes;
 pub mod users;

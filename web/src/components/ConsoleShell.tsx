@@ -1,13 +1,14 @@
 import { useState, type ReactNode } from 'react';
 import {
-  Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Button, Avatar, Chip,
+  Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection,
+  Button, Avatar, Chip,
   Tooltip, Divider,
   Modal, ModalContent, ModalBody,
 } from '@heroui/react';
 import {
   LayoutDashboard, PhoneCall, Users, BookOpen, GitBranch, GitFork, Bot,
   Grid, Server, ShieldCheck, ShieldAlert, Settings, LogOut, ChevronDown, Menu as MenuIcon, Activity, Cpu,
-  Sun, Moon, ChevronsLeft, ChevronsRight,
+  Sun, Moon, ChevronsLeft, ChevronsRight, User as UserIcon,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
@@ -297,14 +298,31 @@ export default function ConsoleShell({ children }: { children: ReactNode }) {
                     <ChevronDown className="w-3.5 h-3.5 text-default-400 hidden sm:block" />
                   </Button>
                 </DropdownTrigger>
-                <DropdownMenu aria-label="用户菜单" onAction={(key) => key === 'logout' && logout()}>
-                  <DropdownItem key="user" className="h-14 gap-2" isReadOnly>
-                    <p className="text-tiny text-default-400">已登录为</p>
-                    <p className="text-tiny font-semibold text-primary">{session.username}</p>
-                  </DropdownItem>
-                  <DropdownItem key="logout" color="danger" startContent={<LogOut className="w-4 h-4" />}>
-                    退出登录
-                  </DropdownItem>
+                <DropdownMenu aria-label="用户菜单" onAction={(key) => key === 'logout' && logout()} variant="faded">
+                  <DropdownSection aria-label="用户信息" showDivider>
+                    <DropdownItem key="user" isReadOnly className="h-14 gap-2 cursor-default group-data-[hover=true]:bg-transparent">
+                      <div className="flex items-center gap-2.5">
+                        <UserIcon className="w-4 h-4 text-default-400 shrink-0" />
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          <p className="text-tiny text-default-400 leading-tight">已登录为</p>
+                          <p className="text-tiny font-semibold text-primary leading-tight truncate">{session.username}</p>
+                          <p className="text-[10px] text-default-400 leading-tight">{roleLabel(session.role)}</p>
+                        </div>
+                      </div>
+                    </DropdownItem>
+                  </DropdownSection>
+                  <DropdownSection aria-label="账号操作">
+                    <DropdownItem
+                      key="logout"
+                      color="danger"
+                      variant="flat"
+                      description="结束当前会话并返回登录页"
+                      startContent={<LogOut className="w-4 h-4" />}
+                      className="group-data-[hover=true]:bg-danger-100 text-danger font-medium"
+                    >
+                      退出登录
+                    </DropdownItem>
+                  </DropdownSection>
                 </DropdownMenu>
               </Dropdown>
             )}

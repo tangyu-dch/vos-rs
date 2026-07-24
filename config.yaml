@@ -87,7 +87,10 @@ sip_edge:
     node_id: "sip-edge-1"
     router_mode: "direct" # direct | external | native
     advertised_addr: "127.0.0.1:5060"
-    management_url: "http://127.0.0.1:5182"
+    # 集群模式下的管理 API 地址。单节点模式（enabled: false）应留空，
+    # api-server 会自动回退到 sip_edge.network.manage_bind（默认 127.0.0.1:8082）。
+    # 误配为 5182 等无服务端口会导致 /calls/active 等转发接口 502。
+    management_url: ""
     node_key_prefix: "vos_rs:cluster:sip_nodes"
     heartbeat_interval_secs: 3
     node_timeout_secs: 10
@@ -110,7 +113,8 @@ sip_edge:
     stun_server: ""
     upnp_enabled: false
   security:
-    internal_secret: "internal-dev-secret"
+    # 必须与 api_server.security.internal_secret 一致，详见 api_server 段说明
+    internal_secret: "compose-internal-secret"
   auth:
     enabled: false
     users: ""
@@ -186,7 +190,10 @@ api_server:
     allowed_origins: ""
   security:
     jwt_secret: "secret"
-    internal_secret: "sipp-performance-secret"
+    # 必须与 sip-edge 的 sip_edge.security.internal_secret 一致，
+    # api-server 用此生成 X-VOS-Token，sip-edge manage API 用此验证。
+    # 当前 sip-edge 运行在 Docker（config.compose.yaml），其值为 compose-internal-secret。
+    internal_secret: "compose-internal-secret"
   admin_credentials:
     admin_password: "admin"
     operator_password: "operator"

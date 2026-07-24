@@ -79,6 +79,7 @@ pub(crate) struct SipEdgeNetworkSection {
 
 #[derive(Deserialize, Debug, Default)]
 pub(crate) struct SipEdgeClusterSection {
+    pub(crate) enabled: Option<bool>,
     pub(crate) node_key_prefix: Option<String>,
     pub(crate) management_url: Option<String>,
 }

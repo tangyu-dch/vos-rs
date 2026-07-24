@@ -1,5 +1,6 @@
 import { Input, Textarea, Switch, Select, SelectItem } from '@heroui/react';
 import type { IvrNodeType } from './types';
+import { AudioFileUpload } from './AudioFileUpload';
 
 // 通用字段包装
 function Field({
@@ -51,28 +52,24 @@ export function NodeConfigForm({ type, config, onChange }: NodeFormProps) {
               onValueChange={(v) => update('did', v)}
             />
           </Field>
-          <Field label="欢迎语音文件">
-            <Input
-              variant="bordered"
-              size="sm"
-              value={String(config.welcome_prompt ?? 'welcome.wav')}
-              onValueChange={(v) => update('welcome_prompt', v)}
-            />
-          </Field>
+          <AudioFileUpload
+            label="欢迎语音文件"
+            value={String(config.welcome_prompt ?? '')}
+            onChange={(v) => update('welcome_prompt', v)}
+            hint="主叫接入后首先播放的语音"
+          />
         </div>
       );
 
     case 'prompt':
       return (
         <div className="flex flex-col gap-3">
-          <Field label="音频文件名">
-            <Input
-              variant="bordered"
-              size="sm"
-              value={String(config.audio_file ?? 'prompt.wav')}
-              onValueChange={(v) => update('audio_file', v)}
-            />
-          </Field>
+          <AudioFileUpload
+            label="音频文件"
+            value={String(config.audio_file ?? '')}
+            onChange={(v) => update('audio_file', v)}
+            hint="支持 WAV / MP3 / GSM / OGG 格式"
+          />
           <Field label="循环次数">
             <Input
               type="number"
@@ -450,24 +447,24 @@ export function NodeConfigForm({ type, config, onChange }: NodeFormProps) {
 
     case 'voicemail':
       return (
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="最大时长 (秒)">
-            <Input
-              type="number"
-              variant="bordered"
-              size="sm"
-              value={String(config.max_duration_secs ?? 60)}
-              onValueChange={(v) => update('max_duration_secs', Number(v) || 60)}
-            />
-          </Field>
-          <Field label="提示语">
-            <Input
-              variant="bordered"
-              size="sm"
-              value={String(config.prompt ?? '')}
-              onValueChange={(v) => update('prompt', v)}
-            />
-          </Field>
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="最大时长 (秒)">
+              <Input
+                type="number"
+                variant="bordered"
+                size="sm"
+                value={String(config.max_duration_secs ?? 60)}
+                onValueChange={(v) => update('max_duration_secs', Number(v) || 60)}
+              />
+            </Field>
+          </div>
+          <AudioFileUpload
+            label="提示语音"
+            value={String(config.prompt ?? '')}
+            onChange={(v) => update('prompt', v)}
+            hint="引导主叫进行留言的语音提示"
+          />
         </div>
       );
 

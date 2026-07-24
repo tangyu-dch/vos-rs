@@ -12,7 +12,7 @@ import { Save, Play, GitFork, AlertCircle, AlertTriangle, CheckCircle2, ShieldAl
 import { api } from '@/services/client';
 import { ErrorState, LoadingState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
-import { IvrCanvas, NodeInspector, NodePalette } from './ivr-canvas';
+import { autoLayoutNodes, IvrCanvas, NodeInspector, NodePalette } from './ivr-canvas';
 import {
   NODE_CATALOG_MAP, genEdgeId, genNodeId,
   type IvrEdge, type IvrFlow, type IvrNode,
@@ -288,6 +288,8 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
         ? menuEdgeDtos.map(edgeFromDto)
         : flowFromFields(flow).edges;
 
+      const layoutedNodes = autoLayoutNodes(nodes, edges);
+
       setTopology({
         id: String(menu.id ?? flow.id),
         name: String(menu.name ?? flow.name),
@@ -296,7 +298,7 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
         welcome_prompt: menu.welcome_prompt as string | undefined,
         timeout_secs: Number(menu.timeout_secs ?? 30),
         enabled: Boolean(menu.enabled ?? true),
-        nodes,
+        nodes: layoutedNodes,
         edges,
       });
       setIvrName(String(menu.name ?? flow.name));

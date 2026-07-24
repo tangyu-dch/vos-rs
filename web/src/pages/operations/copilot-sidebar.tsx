@@ -18,6 +18,8 @@ export interface SessionSidebarProps {
   currentId: string | null;
   loading: boolean;
   collapsed: boolean;
+  /** 小屏（< lg）下是否展开为浮层。lg+ 始终在文档流内展示。 */
+  mobileOpen: boolean;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onDelete: (id: string) => void;
@@ -26,12 +28,17 @@ export interface SessionSidebarProps {
 }
 
 export function SessionSidebar({
-  sessions, currentId, loading, collapsed,
+  sessions, currentId, loading, collapsed, mobileOpen,
   onSelect, onCreate, onDelete, onTogglePin, onToggleCollapse,
 }: SessionSidebarProps) {
+  // 小屏默认隐藏（hidden lg:flex）；mobileOpen 时以 absolute 浮层形式覆盖主区域，lg+ 回到 static。
+  const responsiveVisibility = mobileOpen
+    ? 'flex absolute inset-y-0 left-0 z-40 shadow-xl lg:static lg:z-auto lg:shadow-none'
+    : 'hidden lg:flex';
+
   if (collapsed) {
     return (
-      <aside className="w-12 shrink-0 border-r border-default-200 bg-content1 flex flex-col items-center py-3 gap-3">
+      <aside className={`w-12 shrink-0 border-r border-default-200 bg-content1 ${responsiveVisibility} flex-col items-center py-3 gap-3`}>
         <Button
           isIconOnly
           size="sm"
@@ -56,7 +63,7 @@ export function SessionSidebar({
   }
 
   return (
-    <aside className="w-64 shrink-0 border-r border-default-200 bg-content1 flex flex-col">
+    <aside className={`w-64 shrink-0 border-r border-default-200 bg-content1 ${responsiveVisibility} flex-col`}>
       {/* 顶部：标题 + 折叠按钮 */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-default-200">
         <div className="flex items-center gap-2 text-sm font-semibold text-foreground">

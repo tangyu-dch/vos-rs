@@ -19,3 +19,9 @@ resolver = "2"
 edition = "2021"
 license = "Proprietary"
 rust-version = "1.89"
+
+[workspace.dependencies]
+# IVR TTS/ASR 引擎 (sherpa-onnx 绑定) - 工作区级别统一版本
+# 注: crates.io 上版本 0.7 不存在 (最新为 0.6.8), 改用 git 依赖
+# 注: sherpa-rs 无 `asr` feature (ASR 默认可用), 仅启用 tts + download-binaries
+sherpa-rs = { git = "https://github.com/thewh1teagle/sherpa-rs", features = ["tts", "download-binaries"] }

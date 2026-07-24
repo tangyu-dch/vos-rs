@@ -16,6 +16,7 @@ pub mod in_dialog;
 pub mod interactive_control;
 pub mod invite;
 pub mod ivr;
+pub mod ivr_topology;
 pub mod message;
 pub mod register;
 

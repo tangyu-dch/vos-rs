@@ -21,3 +21,71 @@ ul, ol, li {
   margin: 0;
   padding: 0;
 }
+
+/* 路由切换淡入过渡：纯 CSS 实现，无额外依赖 */
+@keyframes pageFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-transition {
+  animation: pageFadeIn 0.2s ease-out;
+}
+
+/* Dashboard 模块进入动画：staggered fade-up，由 inline animation-delay 控制顺序 */
+@keyframes dashFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dash-enter {
+  animation: dashFadeUp 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 尊重用户的减少动态偏好，关闭过渡动画 */
+@media (prefers-reduced-motion: reduce) {
+  .page-transition,
+  .dash-enter {
+    animation: none;
+  }
+}
+
+/* 等宽数字：让 KPI 数值不抖动，对齐更整齐 */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* 拓扑画布边线流动动画：让连线有"数据在流动"的视觉反馈 */
+@keyframes flowDash {
+  to { stroke-dashoffset: -16; }
+}
+.edge-flow {
+  stroke-dasharray: 6 4;
+  animation: flowDash 1s linear infinite;
+}
+
+/* 拓扑节点 hover 微抬效果 */
+.topo-node {
+  transition: filter 0.15s ease;
+}
+.topo-node:hover {
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.12));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edge-flow { animation: none; }
+  .topo-node { transition: none; }
+}

@@ -9,7 +9,7 @@ use crate::{
     copilot::history as copilot_history,
     copilot::stream as copilot_stream,
     dashboard, details, llm_configs, recording,
-    resources::{call_center, gateways, ivr_menus, numbers, registrations, routes, users},
+    resources::{call_center, gateways, ivr_menus, numbers, prompts, registrations, routes, users},
     system::{audit, system},
     termination, AppState,
 };
@@ -366,5 +366,11 @@ pub(super) fn ivr_routes() -> Router<AppState> {
             get(ivr_menus::get_menu)
                 .put(ivr_menus::update_menu)
                 .delete(ivr_menus::delete_menu),
+        )
+        .route("/api/v1/ivr/prompts", get(prompts::list_prompts))
+        .route("/api/v1/ivr/prompts/upload", post(prompts::upload_prompt))
+        .route(
+            "/api/v1/ivr/prompts/:filename",
+            get(prompts::get_prompt).delete(prompts::delete_prompt),
         )
 }

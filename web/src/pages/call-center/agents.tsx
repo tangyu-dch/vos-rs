@@ -4,9 +4,9 @@ import {
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Select, SelectItem,
   useDisclosure,
 } from '@heroui/react';
-import { Plus, RefreshCw, Search, Pencil, Trash2, LayoutGrid, List, Download } from 'lucide-react';
+import { Headset, Search, Pencil, Trash2, LayoutGrid, List, Download } from 'lucide-react';
 import { api } from '@/services/client';
-import { ErrorState, LoadingState } from '@/components/detail-shell';
+import { ErrorState, LoadingState, PageHeader, RefreshButton, CreateButton, EmptyState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
 
 interface AgentForm {
@@ -107,6 +107,7 @@ export default function AgentsPage() {
   const totalAgents = data.length;
   const idleCount = data.filter((a) => (a.status || 'idle') === 'idle').length;
   const inCallCount = data.filter((a) => a.status === 'in_call').length;
+  const busyCount = data.filter((a) => a.status === 'busy').length;
   const offlineCount = data.filter((a) => a.status === 'offline').length;
 
   const filteredData = data.filter(
@@ -161,17 +162,108 @@ export default function AgentsPage() {
     { label: '离线', value: offlineCount, className: 'text-default-500' },
   ];
 
+  // 环形图：座席状态分布（自研 SVG，无新增依赖）
+  const statusSegments: Array<{ key: string; label: string; value: number; colorClass: string }> = [
+    { key: 'idle', label: '空闲', value: idleCount, colorClass: 'text-success' },
+    { key: 'in_call', label: '通话中', value: inCallCount, colorClass: 'text-primary' },
+    { key: 'busy', label: '示忙', value: busyCount, colorClass: 'text-warning' },
+    { key: 'offline', label: '离线', value: offlineCount, colorClass: 'text-default-500' },
+  ];
+  const DONUT_R = 50;
+  const DONUT_C = 2 * Math.PI * DONUT_R;
+  let donutCum = 0;
+  const donutSegments = statusSegments.map((seg) => {
+    const length = totalAgents > 0 ? (seg.value / totalAgents) * DONUT_C : 0;
+    const item = { ...seg, length, offset: -donutCum };
+    donutCum += length;
+    return item;
+  });
+
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((kpi) => (
-          <Card key={kpi.label}>
-            <CardBody className="p-4">
-              <div className="text-tiny font-medium text-default-500 mb-1">{kpi.label}</div>
-              <div className={`text-3xl font-bold ${kpi.className}`}>{kpi.value}</div>
-            </CardBody>
-          </Card>
-        ))}
+      <Card shadow="sm" className="p-2">
+        <CardBody className="p-4">
+          <PageHeader
+            icon={Headset}
+            title="座席管理"
+            subtitle="实时座席状态与负载监控"
+            statusChip={{ label: '实时', color: 'success', pulse: true }}
+            actions={
+              <>
+                <RefreshButton isLoading={loading} onPress={loadData} />
+                <CreateButton onPress={openCreate} label="新增座席" />
+              </>
+            }
+          />
+        </CardBody>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {kpis.map((kpi) => (
+            <Card key={kpi.label} shadow="sm">
+              <CardBody className="p-4">
+                <div className="text-tiny font-medium text-default-500 mb-1">{kpi.label}</div>
+                <div className={`text-3xl font-bold ${kpi.className}`}>{kpi.value}</div>
+              </CardBody>
+            </Card>
+          ))}
+        </div>
+        <Card shadow="sm">
+          <CardBody className="p-4">
+            <h3 className="text-small font-semibold text-foreground mb-3">座席状态分布</h3>
+            <div className="flex items-center gap-4">
+              <svg
+                viewBox="0 0 120 120"
+                className="w-28 h-28 flex-shrink-0"
+                role="img"
+                aria-label="座席状态分布环形图"
+              >
+                <circle cx="60" cy="60" r={DONUT_R} fill="none" stroke="currentColor" strokeWidth="14" className="text-default-200" />
+                {totalAgents > 0 && donutSegments.map((seg) => (
+                  <circle
+                    key={seg.key}
+                    cx="60"
+                    cy="60"
+                    r={DONUT_R}
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="14"
+                    className={seg.colorClass}
+                    strokeDasharray={`${seg.length} ${DONUT_C - seg.length}`}
+                    strokeDashoffset={seg.offset}
+                    transform="rotate(-90 60 60)"
+                  />
+                ))}
+                {totalAgents === 0 ? (
+                  <text x="60" y="64" textAnchor="middle" fill="currentColor" className="text-default-400" style={{ fontSize: '11px' }}>暂无数据</text>
+                ) : (
+                  <>
+                    <text x="60" y="56" textAnchor="middle" fill="currentColor" className="text-default-500" style={{ fontSize: '10px' }}>总座席</text>
+                    <text x="60" y="72" textAnchor="middle" fill="currentColor" className="text-foreground" style={{ fontSize: '20px', fontWeight: 700 }}>{totalAgents}</text>
+                  </>
+                )}
+              </svg>
+              <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+                {statusSegments.map((seg) => {
+                  const pct = totalAgents > 0 ? ((seg.value / totalAgents) * 100).toFixed(1) : '0.0';
+                  return (
+                    <div key={seg.key} className="flex items-center justify-between gap-2 text-tiny">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className={`inline-block w-2.5 h-2.5 rounded-sm ${seg.colorClass} bg-current flex-shrink-0`} />
+                        <span className="text-default-600 truncate">{seg.label}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span className={`font-bold ${seg.colorClass}`}>{seg.value}</span>
+                        <span className="text-default-400 font-mono">({pct}%)</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </CardBody>
+        </Card>
       </div>
 
       {error ? (
@@ -199,7 +291,7 @@ export default function AgentsPage() {
                   variant={viewMode === 'grid' ? 'solid' : 'light'}
                   color={viewMode === 'grid' ? 'primary' : 'default'}
                   onPress={() => setViewMode('grid')}
-                  startContent={<LayoutGrid className="w-3.5 h-3.5" />}
+                  startContent={<LayoutGrid className="w-4 h-4" />}
                 >
                   卡片
                 </Button>
@@ -208,7 +300,7 @@ export default function AgentsPage() {
                   variant={viewMode === 'table' ? 'solid' : 'light'}
                   color={viewMode === 'table' ? 'primary' : 'default'}
                   onPress={() => setViewMode('table')}
-                  startContent={<List className="w-3.5 h-3.5" />}
+                  startContent={<List className="w-4 h-4" />}
                 >
                   列表
                 </Button>
@@ -217,29 +309,10 @@ export default function AgentsPage() {
               <Button
                 variant="flat"
                 size="sm"
-                isLoading={loading}
-                onPress={loadData}
-                startContent={<RefreshCw className="w-4 h-4" />}
-              >
-                刷新
-              </Button>
-
-              <Button
-                variant="flat"
-                size="sm"
                 onPress={handleExport}
                 startContent={<Download className="w-4 h-4" />}
               >
                 导出
-              </Button>
-
-              <Button
-                color="primary"
-                size="sm"
-                onPress={openCreate}
-                startContent={<Plus className="w-4 h-4" />}
-              >
-                新增座席
               </Button>
             </div>
           </div>
@@ -253,7 +326,7 @@ export default function AgentsPage() {
                 <TableColumn key="current_call">当前通话</TableColumn>
                 <TableColumn key="actions" align="end">操作</TableColumn>
               </TableHeader>
-              <TableBody items={filteredData} emptyContent="暂无座席数据">
+              <TableBody items={filteredData} emptyContent={<EmptyState icon={Headset} title="暂无座席数据" description="点击「新增座席」添加第一个座席" />}>
                 {(record) => (
                   <TableRow key={record.agent_id}>
                     <TableCell key="name">
@@ -335,7 +408,7 @@ export default function AgentsPage() {
                         size="sm"
                         variant="flat"
                         onPress={() => openEdit(agent)}
-                        startContent={<Pencil className="w-3.5 h-3.5" />}
+                        startContent={<Pencil className="w-4 h-4" />}
                       >
                         编辑
                       </Button>
@@ -343,7 +416,7 @@ export default function AgentsPage() {
                         size="sm"
                         color="danger"
                         variant="light"
-                        startContent={<Trash2 className="w-3.5 h-3.5" />}
+                        startContent={<Trash2 className="w-4 h-4" />}
                         onPress={() => handleDelete(agent.agent_id)}
                       >
                         删除
@@ -408,7 +481,7 @@ export default function AgentsPage() {
                 </Select>
               </ModalBody>
               <ModalFooter>
-                <Button variant="light" onPress={onModalClose}>取消</Button>
+                <Button variant="flat" onPress={onModalClose}>取消</Button>
                 <Button color="primary" onPress={handleSave}>保存</Button>
               </ModalFooter>
             </>

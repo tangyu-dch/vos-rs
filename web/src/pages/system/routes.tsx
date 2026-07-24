@@ -7,7 +7,7 @@ import { useMemo, useState } from 'react';
 import {
   Button, Chip, Input, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
 } from '@heroui/react';
-import { Send, Network } from 'lucide-react';
+import { Send, GitBranch, X } from 'lucide-react';
 import { api } from '@/services/client';
 import { ResourceWorkspace } from '@/pages/shared/resource-workspace';
 import type { ResourceSpec } from '@/pages/shared/types';
@@ -49,9 +49,10 @@ export function RoutesPage() {
         { label: '播放忙音', value: 'play_busy' },
       ], defaultValue: 'next_rule' },
     ],
-    // 每行自定义操作: 拓扑编排按钮
+    // 每行自定义操作: 拓扑编排按钮 (图标按钮 + Tooltip)
     customRowAction: {
       label: '拓扑编排',
+      icon: 'GitBranch',
       color: 'primary',
       onPress: (row: Entity) => {
         const rule: RouteRuleFields = {
@@ -120,12 +121,13 @@ export function RoutesPage() {
         }
       />
 
-      {/* 路由规则拓扑编排 Modal (每条规则独立画布) */}
+      {/* 路由规则拓扑编排 Modal - 蓝图渐变 Banner 头部 (每条规则独立画布) */}
       <Modal
         isOpen={topoRule !== null}
         onOpenChange={(o) => !o && setTopoRule(null)}
         size="full"
         scrollBehavior="inside"
+        hideCloseButton
         classNames={{
           base: 'h-screen max-h-screen w-screen max-w-screen',
           wrapper: 'h-screen max-h-screen',
@@ -134,19 +136,43 @@ export function RoutesPage() {
         <ModalContent className="h-full">
           {() => (
             <>
-              <ModalHeader className="flex items-center gap-2 border-b border-default-200 shrink-0">
-                <Network className="w-5 h-5 text-primary" />
-                <span>路由规则拓扑编排</span>
-                {topoRule && (
-                  <Chip size="sm" variant="flat" color="primary" className="ml-2">
-                    规则: {topoRule.id}
-                  </Chip>
-                )}
-                {Object.keys(pendingChanges).length > 0 && (
-                  <Chip size="sm" variant="flat" color="warning" className="ml-2">
-                    有 {Object.keys(pendingChanges).length} 项变更待保存
-                  </Chip>
-                )}
+              <ModalHeader className="flex flex-col gap-0 p-0 border-b border-default-200 shrink-0 overflow-hidden">
+                {/* 渐变 Banner */}
+                <div className="relative bg-gradient-to-r from-primary/15 via-primary/5 to-transparent px-6 py-4 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center shrink-0">
+                      <GitBranch className="w-5 h-5 text-primary" />
+                    </div>
+                    <div className="flex flex-col gap-0.5 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base font-bold text-foreground">路由规则拓扑编排</span>
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-default-400 px-1.5 py-0.5 rounded bg-content2">Blueprint Editor</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {topoRule && (
+                          <Chip size="sm" variant="flat" color="primary" className="h-5 text-[10px] font-mono">
+                            规则: {topoRule.id}
+                          </Chip>
+                        )}
+                        {Object.keys(pendingChanges).length > 0 && (
+                          <Chip size="sm" variant="flat" color="warning" className="h-5 text-[10px]">
+                            {Object.keys(pendingChanges).length} 项变更待保存
+                          </Chip>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    onPress={() => setTopoRule(null)}
+                    aria-label="关闭"
+                    className="shrink-0"
+                  >
+                    <X className="w-4 h-4 text-default-500" />
+                  </Button>
+                </div>
               </ModalHeader>
               <ModalBody className="flex-1 min-h-0 p-4 overflow-hidden flex flex-col gap-2">
                 {topoRule && (
@@ -201,7 +227,7 @@ export function RoutesPage() {
               <div className="mt-2 flex flex-col gap-3 p-4 rounded-2xl bg-content2 border border-default-200">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span className="w-2 h-2 rounded-full bg-success" />
                     匹配节点拓扑链 (Route Topology Graph)
                   </h4>
                   <Chip size="sm" color="success" variant="flat">匹配成功</Chip>

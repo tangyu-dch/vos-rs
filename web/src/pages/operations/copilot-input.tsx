@@ -39,7 +39,7 @@ export interface AttachmentChipsProps {
 export function AttachmentChips({ files, onRemove, onPreviewImage }: AttachmentChipsProps) {
   if (files.length === 0) return null;
   return (
-    <div className="w-full max-w-[94%] mx-auto flex flex-wrap items-center gap-2 px-2">
+    <div className="w-full max-w-full lg:max-w-[94%] mx-auto flex flex-wrap items-center gap-2 px-2">
       {files.map((file) => (
         <div
           key={file.id}
@@ -106,7 +106,7 @@ export function ComposerBar({
         }}
       />
 
-      <div className="w-full max-w-[94%] mx-auto rounded-3xl border-2 border-default-200 hover:border-primary/40 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 bg-content1 shadow-lg p-2 flex items-center gap-2 transition-all duration-200">
+      <div className="w-full max-w-full lg:max-w-[94%] mx-auto rounded-3xl border-2 border-default-200 hover:border-primary/40 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 bg-content1 shadow-lg p-2 flex items-center gap-2 transition-all duration-200">
         <Input
           variant="flat"
           classNames={{

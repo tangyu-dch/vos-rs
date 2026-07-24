@@ -44,3 +44,4 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"                                                  # ICE credential 随机生成
+sherpa-rs = { git = "https://github.com/thewh1teagle/sherpa-rs", features = ["tts", "download-binaries"] } # IVR TTS/ASR 引擎 (sherpa-onnx 绑定; ASR 默认可用无需 feature)

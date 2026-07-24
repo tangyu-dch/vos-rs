@@ -235,23 +235,38 @@ async fn main() -> anyhow::Result<()> {
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "vos_rs:cluster:sip_nodes".to_string());
-    let sip_manage_base = cluster_section
-        .management_url
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            format!(
-                "http://{}",
-                sip_edge_section
-                    .network
-                    .unwrap_or_default()
-                    .manage_bind
-                    .unwrap_or_else(|| "127.0.0.1:8082".to_string())
-            )
-        });
+    // 仅在集群模式启用且 management_url 非空时使用集群管理地址；
+    // 单节点模式（enabled=false）应回退到 sip_edge.network.manage_bind，
+    // 避免 management_url 误配死端口导致 /calls/active 等转发接口 502。
+    let cluster_enabled = cluster_section.enabled.unwrap_or(false);
+    let sip_manage_base = if cluster_enabled {
+        cluster_section
+            .management_url
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                format!(
+                    "http://{}",
+                    sip_edge_section
+                        .network
+                        .unwrap_or_default()
+                        .manage_bind
+                        .unwrap_or_else(|| "127.0.0.1:8082".to_string())
+                )
+            })
+    } else {
+        format!(
+            "http://{}",
+            sip_edge_section
+                .network
+                .unwrap_or_default()
+                .manage_bind
+                .unwrap_or_else(|| "127.0.0.1:8082".to_string())
+        )
+    };
 
     let internal_client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(1))
-        .timeout(std::time::Duration::from_secs(3))
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(5))
         .build()?;
 
     // LLM 专用 HTTP 客户端：大模型推理响应较慢，超时设为 90s，支持环境变量/系统代理与自适应 DNS。

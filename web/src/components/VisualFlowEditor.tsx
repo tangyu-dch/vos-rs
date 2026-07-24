@@ -249,6 +249,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                   key={idx}
                   draggable
                   onDragStart={() => handleDragStart(item)}
+                  aria-label={`节点：${item.title}`}
                   className={`p-3 rounded-xl border ${item.color} cursor-grab active:cursor-grabbing hover:shadow-md transition-all flex items-center gap-3 bg-content1/80 backdrop-blur-xs`}
                 >
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-content1 shadow-2xs shrink-0">
@@ -274,11 +275,13 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={handleDrop}
+          role="application"
+          aria-label="IVR 流程可视化画板"
           className="flex-1 p-6 bg-content2/70 rounded-2xl border-2 border-dashed border-primary/60 dark:border-primary/50 overflow-y-auto relative flex flex-col gap-6"
         >
           <div className="text-[11px] text-default-400 font-mono flex items-center justify-between pb-2 border-b border-default-200/60">
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
               <span>Multi-level Tree Interactive Canvas (可随意拖放添加节点)</span>
             </div>
             <span className="text-[10px] text-primary font-semibold">支持多级展开与分支路径</span>
@@ -293,6 +296,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                   <Card
                     isPressable
                     onPress={() => setSelectedNodeId(node.id)}
+                    aria-label={`节点：${node.title}`}
                     className={`border-2 transition-all ${
                       isSelected
                         ? 'border-primary shadow-lg scale-[1.01] bg-content1'
@@ -424,7 +428,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                   />
 
                   {selectedNode.audioFileName && (
-                    <div className="mt-1 flex items-center gap-1.5 text-[11px] text-emerald-600 font-semibold">
+                    <div className="mt-1 flex items-center gap-1.5 text-[11px] text-success font-semibold">
                       <Check className="w-3.5 h-3.5" />
                       <span>已加载: {selectedNode.audioFileName}</span>
                     </div>

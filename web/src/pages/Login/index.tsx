@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react';
-import { Card, CardBody, Input, Button, Chip } from '@heroui/react';
-import { User, Lock, ShieldCheck, ArrowRight, Sparkles } from 'lucide-react';
+import { Card, CardBody, Input, Button, Chip, Tooltip } from '@heroui/react';
+import { User, Lock, ShieldCheck, ArrowRight, Sparkles, Sun, Moon } from 'lucide-react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
+import { useTheme } from '@/theme/ThemeContext';
 
 export default function Login() {
   const { session, login } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin');
   const [error, setError] = useState('');
@@ -34,7 +36,31 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-content1">
+    <div className="relative min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-content1">
+      {/* 右上角主题切换按钮 (固定定位, 全屏可见) */}
+      <div className="fixed top-4 right-4 z-50">
+        <Tooltip
+          content={theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
+          placement="bottom-end"
+          delay={200}
+        >
+          <Button
+            isIconOnly
+            size="sm"
+            variant="flat"
+            onPress={toggleTheme}
+            aria-label={theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
+            className="bg-content1/80 backdrop-blur-md border border-default-200 hover:bg-content2"
+          >
+            {theme === 'dark' ? (
+              <Sun className="w-4 h-4 text-warning" />
+            ) : (
+              <Moon className="w-4 h-4 text-primary" />
+            )}
+          </Button>
+        </Tooltip>
+      </div>
+
       {/* 左侧：品牌介绍区 */}
       <div className="relative hidden lg:flex lg:col-span-7 flex-col justify-between p-16 bg-content2 overflow-hidden">
         <div className="relative z-10 flex items-center gap-3">

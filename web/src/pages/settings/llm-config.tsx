@@ -4,16 +4,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button, Card, CardBody, Chip, Input, Modal, ModalBody, ModalContent,
-  ModalFooter, ModalHeader, Select, SelectItem, Spinner,
+  ModalFooter, ModalHeader, Select, SelectItem,
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Pagination,
   Tooltip,
 } from '@heroui/react';
 import {
-  Plus, RefreshCw, Trash2, CheckCircle2, Pencil, ExternalLink, Cpu, Search,
+  Trash2, CheckCircle2, Pencil, ExternalLink, Cpu, Search,
 } from 'lucide-react';
 import { api } from '@/services/client';
 import { message } from '@/utils/toast';
-import { ErrorState } from '@/components/detail-shell';
+import {
+  ErrorState, LoadingState, PageHeader, RefreshButton, CreateButton, EmptyState, useRefreshState,
+} from '@/components/detail-shell';
 import {
   LLM_PROVIDER_PRESETS, findPreset, maskApiKey,
   type LlmConfigRecord, type UpsertLlmConfigInput,
@@ -28,7 +30,7 @@ const PAGE_SIZE = 10;
 export function LlmConfigPage() {
   const [configs, setConfigs] = useState<LlmConfigRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const { isRefreshing, setIsRefreshing } = useRefreshState();
   const [error, setError] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -152,11 +154,7 @@ export function LlmConfigPage() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <LoadingState minHeight={400} />;
   }
   if (error) {
     return <ErrorState error={error} retry={load} />;
@@ -167,25 +165,21 @@ export function LlmConfigPage() {
   return (
     <div className="flex flex-col gap-5 w-full">
       {/* 页头 */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="min-w-0">
-          <h1 className="text-base font-bold flex items-center gap-2">
-            <Cpu className="w-5 h-5 text-primary" />
-            LLM 配置管理
-          </h1>
-          <p className="text-sm text-default-500 mt-1">
-            管理大模型厂商配置，Copilot 运行时使用当前启用的模型进行智能分析。切换模型无需重启服务。
-          </p>
-        </div>
-        <div className="flex gap-2 shrink-0">
-          <Button variant="flat" size="sm" startContent={<RefreshCw className="w-3.5 h-3.5" />} onClick={() => void load(true)}>
-            刷新
-          </Button>
-          <Button color="primary" size="sm" startContent={<Plus className="w-3.5 h-3.5" />} onClick={openCreate}>
-            新建配置
-          </Button>
-        </div>
-      </div>
+      <Card shadow="sm" className="p-2">
+        <CardBody className="p-4 flex flex-col gap-4">
+          <PageHeader
+            icon={Cpu}
+            title="大模型厂商配置"
+            subtitle="管理大模型厂商配置，Copilot 运行时使用当前启用的模型进行智能分析。切换模型无需重启服务。"
+            actions={
+              <>
+                <RefreshButton isLoading={isRefreshing} onPress={() => void load(true)} />
+                <CreateButton onPress={openCreate} label="新建配置" />
+              </>
+            }
+          />
+        </CardBody>
+      </Card>
 
       {/* Table 卡片 */}
       <Card shadow="sm" className="w-full">
@@ -200,7 +194,7 @@ export function LlmConfigPage() {
               placeholder="搜索名称 / 厂商 / 模型"
               value={searchKey}
               onValueChange={setSearchKey}
-              startContent={<Search className="w-3.5 h-3.5 text-default-400" />}
+              startContent={<Search className="w-4 h-4 text-default-400" />}
             />
             <span className="text-tiny text-default-400">
               共 {filtered.length} 条{searchKey ? `（已过滤，原 ${configs.length} 条）` : ''}
@@ -243,7 +237,13 @@ export function LlmConfigPage() {
             <TableBody
               items={paged}
               className={isRefreshing ? 'opacity-50 transition-opacity duration-300' : 'transition-opacity duration-300'}
-              emptyContent={searchKey ? '没有匹配的配置' : '暂无 LLM 配置，点击「新建配置」添加第一个大模型厂商'}
+              emptyContent={
+                searchKey ? (
+                  <EmptyState icon={Cpu} title="没有匹配的配置" description="尝试更换搜索关键词" />
+                ) : (
+                  <EmptyState icon={Cpu} title="暂无 LLM 配置" description="点击「新建配置」添加第一个大模型厂商" />
+                )
+              }
             >
               {(cfg) => {
                 const preset = findPreset(cfg.provider);
@@ -298,7 +298,7 @@ export function LlmConfigPage() {
                             aria-label="编辑"
                             onClick={() => openEdit(cfg)}
                           >
-                            <Pencil className="w-3.5 h-3.5" />
+                            <Pencil className="w-4 h-4" />
                           </Button>
                         </Tooltip>
                         <Tooltip content="删除" placement="top" color="danger">
@@ -310,7 +310,7 @@ export function LlmConfigPage() {
                             aria-label="删除"
                             onClick={() => setConfirmDeleteId(cfg.id)}
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-4 h-4" />
                           </Button>
                         </Tooltip>
                       </div>

@@ -326,9 +326,10 @@ impl PostgresCdrStore {
             today_canceled_calls: canceled,
             today_failed_calls: failed,
             answer_rate,
-            avg_mos,
-            avg_loss_rate: avg_loss,
-            avg_jitter_ms: avg_jitter,
+            // 无通话数据时返回 0.0 而非 null，前端 KPI 卡片可正常展示"0.00"
+            avg_mos: Some(avg_mos.unwrap_or(0.0)),
+            avg_loss_rate: Some(avg_loss.unwrap_or(0.0)),
+            avg_jitter_ms: Some(avg_jitter.unwrap_or(0.0)),
             registered_users: reg_row,
             active_gateways: gw_row,
         })
