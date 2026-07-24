@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Button, Card, CardBody, Chip, Table, TableHeader, TableColumn, TableBody, TableRow, TableCell,
 } from '@heroui/react';
-import { RefreshCw, Eye, PhoneOff, Activity, Download } from 'lucide-react';
+import { RefreshCw, Eye, PhoneOff, Activity, Download, PhoneCall } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/client';
 import { useAuth } from '@/auth/AuthContext';
@@ -22,6 +22,7 @@ import { callDetailText, entityId, valueText } from '@/pages/shared/format';
 export function ActiveCallsPage() {
   const [rows, setRows] = useState<Entity[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [confirmRow, setConfirmRow] = useState<Entity | null>(null);
   const [traceCallId, setTraceCallId] = useState<string | null>(null);
@@ -30,8 +31,9 @@ export function ActiveCallsPage() {
   const { session } = useAuth();
   const isVisible = usePageVisibility();
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (silent) setIsRefreshing(true);
+    else setLoading(true);
     setError('');
     try {
       setRows(await api.get<Entity[]>('/calls/active'));
@@ -39,13 +41,14 @@ export function ActiveCallsPage() {
       setError(e instanceof Error ? e.message : '加载失败');
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
     if (!isVisible) return;
     void load();
-    const timer = window.setInterval(load, 10000);
+    const timer = window.setInterval(() => void load(true), 10000);
     return () => window.clearInterval(timer);
   }, [load, isVisible]);
 
@@ -98,7 +101,7 @@ export function ActiveCallsPage() {
             <p className="text-tiny text-default-500">实时查看正在建立与通话中的会话，支持强拆挂断与 SIP 事务分析</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="flat" size="sm" isLoading={loading} onPress={load} startContent={<RefreshCw className="w-4 h-4" />}>
+            <Button variant="flat" size="sm" isLoading={loading} onPress={() => void load()} startContent={<RefreshCw className="w-4 h-4" />}>
               刷新
             </Button>
             <Button variant="flat" size="sm" onPress={handleExport} startContent={<Download className="w-4 h-4" />}>
@@ -122,9 +125,10 @@ export function ActiveCallsPage() {
             </TableHeader>
             <TableBody
               items={rows}
+              className={isRefreshing ? 'opacity-50 transition-opacity duration-300' : 'transition-opacity duration-300'}
               emptyContent={
                 <div className="flex flex-col items-center justify-center p-8 gap-4">
-                  <div className="text-default-400 text-3xl">📞</div>
+                  <PhoneCall className="w-8 h-8 text-default-400" />
                   <div className="text-center">
                     <p className="text-sm font-semibold text-foreground">当前无活跃通话</p>
                     <p className="text-xs text-default-400 mt-1">系统处于空闲/待机状态，建立通话后将在此实时展示信令流</p>

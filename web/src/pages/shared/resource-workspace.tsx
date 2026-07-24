@@ -527,7 +527,7 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                 items={visibleRows}
                 emptyContent={
                   <div className="flex flex-col items-center justify-center p-8 gap-4">
-                    <div className="text-default-400 text-3xl">🔍</div>
+                    <Search className="w-8 h-8 text-default-400" />
                     <div className="text-center">
                       <p className="text-sm font-semibold text-foreground">没有找到匹配的数据</p>
                       <p className="text-xs text-default-400 mt-1">请尝试调整您的搜索关键字或状态筛选条件</p>

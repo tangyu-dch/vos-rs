@@ -46,7 +46,7 @@ const PALETTE_ITEMS: PaletteItem[] = [
     title: '多级语音提示 (Prompt)',
     subtitle: '支持语音上传与按键多级分支',
     icon: Volume2,
-    color: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30',
+    color: 'bg-primary/10 text-primary border-primary/30',
     defaultConfig: { timeout: '10' }
   },
   {
@@ -54,7 +54,7 @@ const PALETTE_ITEMS: PaletteItem[] = [
     title: '转人工坐席队列',
     subtitle: '分配给客服组 (Support)',
     icon: Network,
-    color: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30',
+    color: 'bg-warning/10 text-warning border-warning/30',
     defaultConfig: { queue_id: 'queue-support-01' }
   },
   {
@@ -62,7 +62,7 @@ const PALETTE_ITEMS: PaletteItem[] = [
     title: '外线中继转接',
     subtitle: '转接至手机/PSTN网关',
     icon: PhoneForwarded,
-    color: 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30',
+    color: 'bg-danger/10 text-danger border-danger/30',
     defaultConfig: { trunk_id: 'gw-telecom-trunk', target_number: '13800138000' }
   }
 ];
@@ -219,27 +219,27 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
   const renderEditorContent = () => (
     <div className="flex flex-col gap-4">
       {/* 顶栏控制条 */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+      <div className="flex items-center justify-between pb-3 border-b border-default-200">
         <div className="flex items-center gap-2">
           <span className="w-2.5 h-2.5 rounded-full bg-primary animate-ping" />
-          <h3 className="text-sm font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+          <h3 className="text-sm font-extrabold text-foreground flex items-center gap-2">
             <span>多级嵌套 IVR 拖拽树状画布 (Multi-level Tree Flow Canvas)</span>
             <Chip size="sm" color="primary" variant="flat">真正多级分支 + 音频拖拽上传试听</Chip>
           </h3>
         </div>
         <Button size="sm" variant="flat" isIconOnly onPress={onClose}>
-          <X className="w-4 h-4 text-slate-500" />
+          <X className="w-4 h-4 text-default-500" />
         </Button>
       </div>
 
       <div className="flex flex-col lg:flex-row gap-4 h-[650px]">
         {/* 1. 左侧可拖拽组件面板 (Palette) */}
-        <div className="w-full lg:w-72 p-4 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex flex-col gap-3 shrink-0">
-          <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
+        <div className="w-full lg:w-72 p-4 bg-content2 rounded-2xl border border-default-200/80 flex flex-col gap-3 shrink-0">
+          <div className="flex items-center gap-2 pb-2 border-b border-default-200">
             <Layers className="w-4 h-4 text-primary" />
-            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">IVR 组件库 (可拖拽源)</span>
+            <span className="text-xs font-bold text-foreground">IVR 组件库 (可拖拽源)</span>
           </div>
-          <p className="text-[11px] text-slate-500">按住下方卡片拖拽入中间画布，可快速生成支持多级 DTMF 按键分支的 IVR 树节点：</p>
+          <p className="text-[11px] text-default-500">按住下方卡片拖拽入中间画布，可快速生成支持多级 DTMF 按键分支的 IVR 树节点：</p>
 
           <div className="flex flex-col gap-2.5 overflow-y-auto pr-1">
             {PALETTE_ITEMS.map((item, idx) => {
@@ -249,16 +249,16 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                   key={idx}
                   draggable
                   onDragStart={() => handleDragStart(item)}
-                  className={`p-3 rounded-xl border ${item.color} cursor-grab active:cursor-grabbing hover:shadow-md transition-all flex items-center gap-3 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xs`}
+                  className={`p-3 rounded-xl border ${item.color} cursor-grab active:cursor-grabbing hover:shadow-md transition-all flex items-center gap-3 bg-content1/80 backdrop-blur-xs`}
                 >
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-white dark:bg-slate-800 shadow-2xs shrink-0">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-content1 shadow-2xs shrink-0">
                     <IconComponent className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0">
-                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{item.title}</span>
-                    <span className="text-[10px] text-slate-500 truncate">{item.subtitle}</span>
+                    <span className="text-xs font-bold text-foreground truncate">{item.title}</span>
+                    <span className="text-[10px] text-default-500 truncate">{item.subtitle}</span>
                   </div>
-                  <Move className="w-3.5 h-3.5 ml-auto text-slate-400 shrink-0" />
+                  <Move className="w-3.5 h-3.5 ml-auto text-default-400 shrink-0" />
                 </div>
               );
             })}
@@ -274,9 +274,9 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={handleDrop}
-          className="flex-1 p-6 bg-slate-100/70 dark:bg-slate-900/60 rounded-2xl border-2 border-dashed border-primary/60 dark:border-primary/50 overflow-y-auto relative flex flex-col gap-6"
+          className="flex-1 p-6 bg-content2/70 rounded-2xl border-2 border-dashed border-primary/60 dark:border-primary/50 overflow-y-auto relative flex flex-col gap-6"
         >
-          <div className="text-[11px] text-slate-400 font-mono flex items-center justify-between pb-2 border-b border-slate-200/60 dark:border-slate-800">
+          <div className="text-[11px] text-default-400 font-mono flex items-center justify-between pb-2 border-b border-default-200/60">
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span>Multi-level Tree Interactive Canvas (可随意拖放添加节点)</span>
@@ -295,8 +295,8 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                     onPress={() => setSelectedNodeId(node.id)}
                     className={`border-2 transition-all ${
                       isSelected
-                        ? 'border-primary shadow-lg scale-[1.01] bg-white dark:bg-slate-900'
-                        : 'border-slate-200/80 dark:border-slate-800 hover:border-primary/60 bg-white/90 dark:bg-slate-900/90'
+                        ? 'border-primary shadow-lg scale-[1.01] bg-content1'
+                        : 'border-default-200/80 hover:border-primary/60 bg-content1/90'
                     }`}
                   >
                     <CardBody className="p-4 flex flex-col gap-3">
@@ -306,8 +306,8 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                             {node.type === 'start' ? <Play className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                           </div>
                           <div>
-                            <h4 className="text-xs font-extrabold text-slate-800 dark:text-slate-100">{node.title}</h4>
-                            <p className="text-[11px] text-slate-500">{node.subtitle}</p>
+                            <h4 className="text-xs font-extrabold text-foreground">{node.title}</h4>
+                            <p className="text-[11px] text-default-500">{node.subtitle}</p>
                           </div>
                         </div>
 
@@ -332,11 +332,11 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
 
                       {/* 音频文件状态与在线试听 */}
                       {node.type === 'prompt' && (
-                        <div className="p-2.5 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200/60 dark:border-slate-800 flex flex-col gap-2">
+                        <div className="p-2.5 bg-content2 rounded-xl border border-default-200/60 flex flex-col gap-2">
                           <div className="flex items-center justify-between text-[11px]">
-                            <span className="text-slate-500 flex items-center gap-1">
-                              <Music className="w-3.5 h-3.5 text-blue-500" />
-                              音频挂载: <strong className="text-slate-700 dark:text-slate-200">{node.audioFileName || '未选择音频文件'}</strong>
+                            <span className="text-default-500 flex items-center gap-1">
+                              <Music className="w-3.5 h-3.5 text-primary" />
+                              音频挂载: <strong className="text-foreground">{node.audioFileName || '未选择音频文件'}</strong>
                             </span>
                             {node.audioUrl && <Chip size="sm" color="success" variant="dot">可试听</Chip>}
                           </div>
@@ -348,8 +348,8 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
 
                       {/* 多级按键分支展示 (Branch Tree Children) */}
                       {node.branches.length > 0 && (
-                        <div className="flex flex-col gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-                          <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
+                        <div className="flex flex-col gap-2 pt-2 border-t border-default-200">
+                          <span className="text-[10px] font-bold text-default-400 flex items-center gap-1">
                             <GitBranch className="w-3 h-3 text-primary" />
                             下级多级分支列表 (Multi-level Branches):
                           </span>
@@ -366,8 +366,8 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
                                     按键 [{b.dtmfKey}]
                                   </Chip>
                                   <div className="flex flex-col">
-                                    <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{b.label}</span>
-                                    <span className="text-[10px] text-slate-400">→ {b.targetTitle}</span>
+                                    <span className="text-xs font-bold text-foreground">{b.label}</span>
+                                    <span className="text-[10px] text-default-400">→ {b.targetTitle}</span>
                                   </div>
                                 </div>
 
@@ -394,33 +394,33 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
         </div>
 
         {/* 3. 右侧节点与音频属性 Inspector */}
-        <div className="w-full lg:w-80 p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex flex-col gap-4 shrink-0 overflow-y-auto">
-          <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
+        <div className="w-full lg:w-80 p-4 bg-content1 rounded-2xl border border-default-200/80 flex flex-col gap-4 shrink-0 overflow-y-auto">
+          <div className="flex items-center gap-2 pb-2 border-b border-default-200">
             <Settings className="w-4 h-4 text-primary" />
-            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">节点与音频属性 (Inspector)</span>
+            <span className="text-xs font-bold text-foreground">节点与音频属性 (Inspector)</span>
           </div>
 
           {selectedNode ? (
             <div className="flex flex-col gap-4">
-              <div className="p-3 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200/60 dark:border-slate-800">
-                <span className="text-[10px] text-slate-400 font-mono">SELECTED NODE: {selectedNode.id}</span>
-                <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-1">{selectedNode.title}</h4>
+              <div className="p-3 bg-content2 rounded-xl border border-default-200/60">
+                <span className="text-[10px] text-default-400 font-mono">SELECTED NODE: {selectedNode.id}</span>
+                <h4 className="text-xs font-bold text-foreground mt-1">{selectedNode.title}</h4>
               </div>
 
               {/* 核心：真实音频文件拖拽上传区域 */}
               {selectedNode.type === 'prompt' && (
-                <div className="flex flex-col gap-2 p-3 bg-blue-500/5 dark:bg-blue-950/20 rounded-xl border border-blue-500/20">
-                  <label className="text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                <div className="flex flex-col gap-2 p-3 bg-primary/5 rounded-xl border border-primary/20">
+                  <label className="text-xs font-bold text-primary flex items-center gap-1.5">
                     <Upload className="w-3.5 h-3.5" />
                     <span>上传本地语音音频文件 (.wav/.mp3)</span>
                   </label>
-                  <p className="text-[10px] text-slate-500">上传后支持在中间画布直接在线试听播放</p>
+                  <p className="text-[10px] text-default-500">上传后支持在中间画布直接在线试听播放</p>
 
                   <input
                     type="file"
                     accept="audio/*"
                     onChange={(e) => handleFileUpload(e, selectedNode.id)}
-                    className="text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+                    className="text-xs text-default-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-primary file:text-white hover:file:bg-primary cursor-pointer"
                   />
 
                   {selectedNode.audioFileName && (
@@ -444,7 +444,7 @@ export function VisualFlowEditor({ isOpen = true, onClose }: VisualFlowEditorPro
               />
             </div>
           ) : (
-            <div className="text-center py-10 text-xs text-slate-400">请在画布点击选中节点配置参数与上传音频</div>
+            <div className="text-center py-10 text-xs text-default-400">请在画布点击选中节点配置参数与上传音频</div>
           )}
         </div>
       </div>

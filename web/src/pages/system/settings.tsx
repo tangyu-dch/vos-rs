@@ -184,7 +184,7 @@ export function SettingsPage() {
                     return (
                       <div key={field.key} className={`flex flex-col gap-1.5 ${field.fullWidth ? 'sm:col-span-2' : ''}`}>
                         <div className="flex items-center justify-between gap-2 text-small">
-                          <span className="font-semibold text-default-700">{field.label}</span>
+                          <span className="font-semibold text-foreground">{field.label}</span>
                         </div>
 
                         {field.kind === 'boolean' ? (

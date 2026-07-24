@@ -137,8 +137,8 @@ export function InfrastructurePage() {
                 <div className="flex flex-col gap-2.5">
                   <div className="flex items-center justify-between p-3 rounded-xl bg-emerald-50/60 border border-emerald-100">
                     <div className="flex flex-col">
-                      <span className="text-xs font-bold text-slate-800">Primary Trunk Gateway (落地主中继)</span>
-                      <span className="text-[11px] font-mono text-slate-500">192.168.1.10:5060 (UDP)</span>
+                      <span className="text-xs font-bold text-foreground">Primary Trunk Gateway (落地主中继)</span>
+                      <span className="text-[11px] font-mono text-default-500">192.168.1.10:5060 (UDP)</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-mono font-bold text-emerald-700">RTT: 12ms</span>
@@ -147,8 +147,8 @@ export function InfrastructurePage() {
                   </div>
                   <div className="flex items-center justify-between p-3 rounded-xl bg-amber-50/60 border border-amber-100">
                     <div className="flex flex-col">
-                      <span className="text-xs font-bold text-slate-800">Backup Trunk Gateway (备用中继)</span>
-                      <span className="text-[11px] font-mono text-slate-500">10.0.0.8:5060 (UDP)</span>
+                      <span className="text-xs font-bold text-foreground">Backup Trunk Gateway (备用中继)</span>
+                      <span className="text-[11px] font-mono text-default-500">10.0.0.8:5060 (UDP)</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-mono font-bold text-amber-700">RTT: 45ms (丢包 1.2%)</span>
@@ -169,15 +169,15 @@ export function InfrastructurePage() {
                   <Chip color="primary" size="sm" variant="flat">Opus / G.711</Chip>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60 flex flex-col items-center">
-                    <span className="text-[10px] text-slate-400">平均 MOS 音质分</span>
+                  <div className="p-3 bg-content2 rounded-xl border border-default-200/60 flex flex-col items-center">
+                    <span className="text-[10px] text-default-400">平均 MOS 音质分</span>
                     <span className="text-xl font-extrabold text-emerald-600 font-mono mt-1">4.38 / 5.0</span>
-                    <span className="text-[10px] text-slate-400 mt-1">电信级清晰音质</span>
+                    <span className="text-[10px] text-default-400 mt-1">电信级清晰音质</span>
                   </div>
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60 flex flex-col items-center">
-                    <span className="text-[10px] text-slate-400">Jitter 抖动缓冲区</span>
+                  <div className="p-3 bg-content2 rounded-xl border border-default-200/60 flex flex-col items-center">
+                    <span className="text-[10px] text-default-400">Jitter 抖动缓冲区</span>
                     <span className="text-xl font-extrabold text-primary font-mono mt-1">15 ms</span>
-                    <span className="text-[10px] text-slate-400 mt-1">自适应缓冲机制</span>
+                    <span className="text-[10px] text-default-400 mt-1">自适应缓冲机制</span>
                   </div>
                 </div>
               </CardBody>

@@ -41,8 +41,8 @@ export interface WelcomePanelProps {
 export function WelcomePanel({ onPresetClick }: WelcomePanelProps) {
   return (
     <div className="flex flex-col items-center justify-center py-12 w-full">
-      <div className="w-14 h-14 rounded-2xl bg-primary/15 border border-primary/30 flex items-center justify-center text-primary mb-6 shadow-sm">
-        <Bot className="w-7 h-7" />
+      <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/30 flex items-center justify-center text-primary mb-6 shadow-lg shadow-primary/10">
+        <Bot className="w-10 h-10" />
       </div>
       <h1 className="text-xl font-bold text-foreground text-center mb-8">
         有什么我能帮你的吗？
@@ -55,7 +55,7 @@ export function WelcomePanel({ onPresetClick }: WelcomePanelProps) {
           <button
             key={idx}
             onClick={() => onPresetClick(p.desc)}
-            className="px-4 py-2 text-xs rounded-full border border-default-200 hover:border-primary hover:bg-primary/10 text-default-600 hover:text-primary transition-all duration-200 shadow-sm font-medium"
+            className="px-4 py-2 min-h-[40px] text-xs rounded-full border border-default-200 hover:border-primary hover:bg-primary/10 text-default-600 hover:text-primary transition-all duration-200 shadow-sm font-medium"
           >
             {p.title}
           </button>

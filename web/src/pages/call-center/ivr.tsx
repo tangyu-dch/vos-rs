@@ -49,7 +49,7 @@ export default function IvrPage() {
         }}
       >
         <ModalContent className="h-full">
-          <ModalHeader className="flex items-center gap-2 border-b border-default-200 dark:border-slate-800 shrink-0">
+          <ModalHeader className="flex items-center gap-2 border-b border-default-200 shrink-0">
             <Network className="w-5 h-5 text-primary" />
             <span>IVR 拓扑编排</span>
             {topoIvr && (

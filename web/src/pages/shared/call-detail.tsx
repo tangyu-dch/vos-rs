@@ -21,7 +21,7 @@ export interface SipFlowEvent {
 const PARTIES = ['UAC', 'B2BUA', 'UAS'] as const;
 type Party = typeof PARTIES[number];
 const PARTY_LABELS: Record<Party, string> = { UAC: '主叫 (UAC)', B2BUA: 'vos-rs (B2BUA)', UAS: '落地中继 (UAS)' };
-const PARTY_COLORS: Record<Party, string> = { UAC: '#4f8ef7', B2BUA: '#22c55e', UAS: '#f59e0b' };
+const PARTY_COLORS: Record<Party, string> = { UAC: 'text-primary', B2BUA: 'text-success', UAS: 'text-warning' };
 
 function directionToParties(direction: string): [Party, Party] {
   const map: Record<string, [Party, Party]> = {
@@ -34,11 +34,11 @@ function directionToParties(direction: string): [Party, Party] {
 }
 
 function msgColor(msg: string): string {
-  if (/^INVITE|^ACK|^BYE|^CANCEL/.test(msg)) return '#4f8ef7';
-  if (/^100|^180/.test(msg)) return '#94a3b8';
-  if (/^200/.test(msg)) return '#22c55e';
-  if (/^4|^5|^6/.test(msg)) return '#ef4444';
-  return '#a78bfa';
+  if (/^INVITE|^ACK|^BYE|^CANCEL/.test(msg)) return 'text-primary';
+  if (/^100|^180/.test(msg)) return 'text-default-400';
+  if (/^200/.test(msg)) return 'text-success';
+  if (/^4|^5|^6/.test(msg)) return 'text-danger';
+  return 'text-default-500';
 }
 
 function parseSDP(rawMessage: string | undefined) {
@@ -94,13 +94,13 @@ export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
       <svg width={svgWidth} height={svgHeight} style={{ fontFamily: 'Inter, system-ui, sans-serif', display: 'block', margin: '0 auto', color: 'currentColor' }}>
         {PARTIES.map((party, i) => (
           <g key={party}>
-            <rect x={COL[i] - 60} y={8} width={120} height={36} rx={8} fill={PARTY_COLORS[party]} fillOpacity={0.15} stroke={PARTY_COLORS[party]} strokeWidth={1.5} />
-            <text x={COL[i]} y={30} textAnchor="middle" fill={PARTY_COLORS[party]} fontSize={13} fontWeight={600}>{PARTY_LABELS[party]}</text>
+            <rect x={COL[i] - 60} y={8} width={120} height={36} rx={8} className={PARTY_COLORS[party]} fill="currentColor" fillOpacity={0.15} stroke="currentColor" strokeWidth={1.5} />
+            <text x={COL[i]} y={30} textAnchor="middle" className={PARTY_COLORS[party]} fill="currentColor" fontSize={13} fontWeight={600}>{PARTY_LABELS[party]}</text>
           </g>
         ))}
 
         {PARTIES.map((party, i) => (
-          <line key={`line-${party}`} x1={COL[i]} y1={HEADER_H} x2={COL[i]} y2={svgHeight - 8} stroke={PARTY_COLORS[party]} strokeWidth={1} strokeOpacity={0.3} strokeDasharray="4 3" />
+          <line key={`line-${party}`} x1={COL[i]} y1={HEADER_H} x2={COL[i]} y2={svgHeight - 8} className={PARTY_COLORS[party]} stroke="currentColor" strokeWidth={1} strokeOpacity={0.3} strokeDasharray="4 3" />
         ))}
 
         {events.map((event, idx) => {
@@ -126,9 +126,9 @@ export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
               onClick={() => { if (hasRaw) setSelectedEvent(event); }}
             >
               <text x={12} y={y + 4} fontSize={10} fill="currentColor" fillOpacity={0.7} textAnchor="start">+{event.offset_ms}ms</text>
-              <line x1={lineX1} y1={y} x2={lineX2} y2={y} stroke={color} strokeWidth={2} />
-              <polygon points={`${arrowTip},${y} ${lineX2},${ay1} ${lineX2},${ay2}`} fill={color} />
-              <text x={midX} y={y - 7} textAnchor="middle" fontSize={12} fontWeight={600} fill={color}>{event.message}</text>
+              <line x1={lineX1} y1={y} x2={lineX2} y2={y} className={color} stroke="currentColor" strokeWidth={2} />
+              <polygon points={`${arrowTip},${y} ${lineX2},${ay1} ${lineX2},${ay2}`} className={color} fill="currentColor" />
+              <text x={midX} y={y - 7} textAnchor="middle" fontSize={12} fontWeight={600} className={color} fill="currentColor">{event.message}</text>
               {event.note && <text x={midX} y={y + 16} textAnchor="middle" fontSize={10} fill="currentColor" fillOpacity={0.6}>{event.note}</text>}
             </g>
           );

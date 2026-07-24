@@ -366,7 +366,7 @@ export function CopilotPage() {
   const showWelcome = !hasMessages && !loadingMessages && !sending;
 
   return (
-    <div className="h-[calc(100vh-100px)] flex flex-row relative bg-transparent">
+    <div className="h-[calc(100vh-100px)] flex flex-row relative">
       {/* 左侧：会话列表侧栏 */}
       <SessionSidebar
         sessions={sessions}
@@ -381,11 +381,11 @@ export function CopilotPage() {
       />
 
       {/* 右侧：主聊天区 */}
-      <div className="flex-1 flex flex-col min-w-0 bg-background">
+      <div className="flex-1 flex flex-col min-w-0 bg-content1">
         {/* 顶部固定标题与操作栏 */}
-        <div className="h-14 px-6 border-b border-default-200 flex items-center justify-between shrink-0 bg-content1/50 backdrop-blur-md z-10">
+        <div className="h-16 px-6 border-b border-default-200 flex items-center justify-between shrink-0 bg-content1/50 backdrop-blur-md z-10">
           <div className="flex items-center gap-3">
-            <span className="text-sm font-bold text-foreground">Copilot 智能运维助手</span>
+            <span className="text-base font-bold text-foreground">Copilot 智能运维助手</span>
             <ActiveModelBadge activeModel={activeModel} />
           </div>
           <div className="flex gap-2 items-center">
@@ -411,7 +411,7 @@ export function CopilotPage() {
         </div>
 
         {/* 主沉浸聊天区 */}
-        <div className="flex-1 flex flex-col min-h-0 justify-between items-center w-full">
+        <div className="flex-1 flex flex-col min-h-0 justify-between items-center w-full border border-default-200/50 rounded-2xl overflow-hidden bg-content1">
           <ScrollShadow ref={scrollRef} onScroll={handleScroll} className="w-full flex-1 px-4 py-6 space-y-6 overflow-y-auto min-h-0">
             <div className="max-w-[94%] mx-auto w-full space-y-6">
               {showWelcome && <WelcomePanel onPresetClick={(desc) => handleSend(desc)} />}

@@ -37,6 +37,21 @@ function useElementWidth<T extends HTMLElement>(fallback: number) {
   return { ref, width };
 }
 
+/** KPI 卡片迷你趋势线：数据少于 2 个点时不渲染 */
+function Sparkline({ data, color = 'stroke-primary' }: { data: number[]; color?: string }) {
+  if (data.length < 2) return null;
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data, 0);
+  const range = max - min || 1;
+  const w = 80, h = 24;
+  const points = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`).join(' ');
+  return (
+    <svg width={w} height={h} className="overflow-visible">
+      <polyline points={points} fill="none" className={`${color} transition-all duration-500 ease-out`} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export interface HourlyTrendItem {
   hour: string;
   total_calls: number;
@@ -158,7 +173,7 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
               <div className="relative" ref={chartRef}>
                 <svg
                   viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-                  className="w-full overflow-visible cursor-crosshair"
+                  className="w-full overflow-visible cursor-crosshair text-primary"
                   style={{ height: `${chartHeight}px` }}
                   onMouseMove={handleMouseMove}
                   onMouseLeave={handleMouseLeave}
@@ -167,18 +182,23 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
                   <line x1="0" y1={chartHeight} x2={chartWidth} y2={chartHeight} className="stroke-default-200" strokeWidth="1" />
                   <line x1="0" y1={chartHeight / 2} x2={chartWidth} y2={chartHeight / 2} className="stroke-default-100" strokeDasharray="3 3" />
 
-                  {/* 呼叫总量渐变填充 */}
+                  {/* Y 轴刻度：0 / max/2 / max，参考 NodeTrafficSection 写法 */}
+                  <text x="4" y={chartHeight - 4} className="fill-default-400 text-[10px] font-mono">0</text>
+                  <text x="4" y={chartHeight / 2 + 14} className="fill-default-400 text-[10px] font-mono">{Math.round(maxVal / 2)}</text>
+                  <text x="4" y={16} className="fill-default-400 text-[10px] font-mono">{Math.round(maxVal)}</text>
+
+                  {/* 呼叫总量渐变填充 - currentColor 继承父 SVG text-primary，避免硬编码 hex */}
                   <defs>
                     <linearGradient id="totalGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.25" />
-                      <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.0" />
+                      <stop offset="0%" stopColor="currentColor" stopOpacity="0.25" />
+                      <stop offset="100%" stopColor="currentColor" stopOpacity="0.0" />
                     </linearGradient>
                   </defs>
                   <polygon points={areaTotal} fill="url(#totalGradient)" />
 
-                  {/* 趋势折线 */}
-                  <polyline fill="none" className="stroke-primary" strokeWidth="2.5" points={pointsTotal} />
-                  <polyline fill="none" className="stroke-success" strokeWidth="2" strokeDasharray="4 2" points={pointsAnswered} />
+                  {/* 趋势折线 - 加 transition 让数据更新时有平滑过渡 */}
+                  <polyline fill="none" className="stroke-primary transition-all duration-500 ease-out" strokeWidth="2.5" points={pointsTotal} />
+                  <polyline fill="none" className="stroke-success transition-all duration-500 ease-out" strokeWidth="2" strokeDasharray="4 2" points={pointsAnswered} />
 
                   {/* 数据节点点阵 */}
                   {displayData.map((d, idx) => {
@@ -207,7 +227,7 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
                 {/* 浮动提示框 Tooltip */}
                 {hoveredIdx !== null && hoveredData && (
                   <div 
-                    className="absolute z-50 pointer-events-none bg-background/95 dark:bg-slate-900/95 backdrop-blur shadow-lg border border-default-200 p-2.5 rounded-lg text-tiny font-mono flex flex-col gap-1 w-44"
+                    className="absolute z-50 pointer-events-none bg-background/95 backdrop-blur shadow-lg border border-default-200 p-2.5 rounded-lg text-tiny font-mono flex flex-col gap-1 w-44"
                     style={{
                       left: `${Math.min(Math.max((hoveredX / chartWidth) * 100, 5), 75)}%`,
                       top: '10px'
@@ -261,6 +281,35 @@ function HourlyTrendsSection({ trends }: { trends?: HourlyTrendItem[] }) {
   );
 }
 
+/** MOS 半圆仪表盘：score 1.0-4.5 映射到 0-180 度 */
+function MosGauge({ score }: { score: number }) {
+  // score 1.0-4.5 映射到 0-180 度
+  const clampedScore = Math.max(1, Math.min(4.5, score));
+  const angle = ((clampedScore - 1) / 3.5) * 180;
+  // SVG fallback hex，主题色通过 mosLabel/Chip 在外部表达
+  const color = clampedScore >= 4.0 ? '#10b981' : clampedScore >= 3.5 ? '#f59e0b' : '#ef4444';
+  // 半圆弧长 ≈ π * r = π * 50 ≈ 157
+  const arcLength = 157;
+  return (
+    <svg width={120} height={70} viewBox="0 0 120 70" className="shrink-0">
+      {/* 背景弧 */}
+      <path d="M 10 60 A 50 50 0 0 1 110 60" fill="none" stroke="currentColor" strokeWidth={8} className="text-default-200" />
+      {/* 数值弧 */}
+      <path
+        d="M 10 60 A 50 50 0 0 1 110 60"
+        fill="none"
+        stroke={color}
+        strokeWidth={8}
+        strokeDasharray={`${(angle / 180) * arcLength} ${arcLength}`}
+        strokeLinecap="round"
+        className="transition-all duration-500 ease-out"
+      />
+      {/* 数值文本 */}
+      <text x={60} y={50} textAnchor="middle" className="fill-foreground text-lg font-bold font-mono">{clampedScore.toFixed(2)}</text>
+    </svg>
+  );
+}
+
 /** MOS 语音质量与媒体 QoS 监控（含零数据降级） */
 function MosQualitySection({ data }: { data: Summary }) {
   const hasMos = data.avg_mos !== undefined && data.avg_mos > 0;
@@ -306,12 +355,13 @@ function MosQualitySection({ data }: { data: Summary }) {
         ) : (
           /* 正常 MOS 仪表盘 */
           <div className="flex flex-col gap-3">
-            <div className="p-3 bg-content2 rounded-xl flex items-center justify-between">
-              <div>
+            <div className="p-3 bg-content2 rounded-xl flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-1">
                 <div className="text-tiny text-default-500 font-medium">平均 MOS 分数</div>
                 <div className="text-2xl font-bold text-success font-mono mt-0.5">{mosScore.toFixed(2)} / 5.00</div>
+                <div className="text-[10px] text-default-400 font-medium">{mosLabel}</div>
               </div>
-              <Award className="w-8 h-8 text-success opacity-80" />
+              <MosGauge score={mosScore} />
             </div>
 
             <div className="grid grid-cols-3 gap-2">
@@ -416,6 +466,8 @@ function NodeTrafficSection() {
 
   // 悬停状态
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  // 图例点击切换可见性
+  const [hiddenNodes, setHiddenNodes] = useState<Set<string>>(new Set());
   // 必须在所有 early return 之前调用，避免违反 Hooks 规则
   const chartHeight = 180;
   const { ref: chartRef, width: chartWidth } = useElementWidth<HTMLDivElement>(800);
@@ -459,20 +511,24 @@ function NodeTrafficSection() {
     100
   );
 
-  const colors: Record<string, { stroke: string; fill: string; dot: string; text: string }> = {
-    'sip-edge-01': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-blue-500', text: 'text-blue-500' },
-    'sip-edge-standalone': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-blue-500', text: 'text-blue-500' },
-    'media-node-01': { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.1)', dot: 'bg-emerald-500', text: 'text-emerald-500' },
-    'local-media': { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.1)', dot: 'bg-emerald-500', text: 'text-emerald-500' },
-    'default-1': { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-primary', text: 'text-primary' },
-    'default-2': { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.1)', dot: 'bg-amber-500', text: 'text-amber-500' },
+  // 使用 HeroUI 语义色 token (bg-primary / bg-success / bg-warning)，hex 仅作 SVG stroke fallback
+  const NODE_COLORS: Array<{ stroke: string; fill: string; dot: string; text: string }> = [
+    { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.1)', dot: 'bg-primary', text: 'text-primary' },    // SVG fallback, theme via className
+    { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.1)', dot: 'bg-success', text: 'text-success' },   // SVG fallback, theme via className
+    { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.1)', dot: 'bg-warning', text: 'text-warning' },   // SVG fallback, theme via className
+  ];
+  // 已知节点 ID 到语义色索引的映射，保证同名节点跨渲染颜色稳定
+  const NODE_COLOR_MAP: Record<string, number> = {
+    'sip-edge-01': 0,
+    'sip-edge-standalone': 0,
+    'media-node-01': 1,
+    'local-media': 1,
   };
 
   const getNodeColor = (id: string, index: number) => {
-    if (colors[id]) return colors[id];
-    const keys = ['default-1', 'default-2'];
-    const key = keys[index % keys.length];
-    return colors[key];
+    const mappedIdx = NODE_COLOR_MAP[id];
+    const idx = mappedIdx !== undefined ? mappedIdx : index;
+    return NODE_COLORS[idx % NODE_COLORS.length];
   };
 
   const formatKbps = (kbps: number) => {
@@ -548,8 +604,18 @@ function NodeTrafficSection() {
               {filteredData.map((node, idx) => {
                 const c = getNodeColor(node.node_id, idx);
                 const latestKbps = node.series[node.series.length - 1]?.kbps || 0;
+                const isHidden = hiddenNodes.has(node.node_id);
                 return (
-                  <div key={node.node_id} className="flex items-center gap-2 bg-content2/40 px-2 py-1 rounded">
+                  <div
+                    key={node.node_id}
+                    onClick={() => setHiddenNodes(prev => {
+                      const next = new Set(prev);
+                      if (next.has(node.node_id)) next.delete(node.node_id);
+                      else next.add(node.node_id);
+                      return next;
+                    })}
+                    className={`flex items-center gap-2 bg-content2/40 px-2 py-1 rounded cursor-pointer select-none transition-opacity ${isHidden ? 'opacity-30' : ''}`}
+                  >
                     <span className={`w-2 h-2 rounded-full ${c.dot}`} />
                     <span className="font-mono font-semibold text-foreground">{node.node_id}</span>
                     <span className="text-default-400">({node.node_type === 'sip' ? 'SIP' : 'RTP'})</span>
@@ -578,9 +644,9 @@ function NodeTrafficSection() {
                     <text x="5" y={chartHeight * 0.5 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.5))}/s</text>
                     <text x="5" y={chartHeight * 0.75 - 5} className="fill-default-400 text-[9px] font-mono">{formatKbps(Math.round(maxVal * 0.25))}/s</text>
 
-                    {filteredData.map((node, nodeIdx) => {
+                    {filteredData.filter(d => !hiddenNodes.has(d.node_id)).map((node, nodeIdx) => {
                       const c = getNodeColor(node.node_id, nodeIdx);
-                      
+
                       const points = node.series.map((item, idx) => {
                         const x = (idx / (node.series.length - 1)) * chartWidth;
                         const y = chartHeight - (item.kbps / maxVal) * (chartHeight - 30);
@@ -589,13 +655,14 @@ function NodeTrafficSection() {
 
                       return (
                         <g key={node.node_id}>
-                          <polyline 
-                            fill="none" 
-                            stroke={c.stroke} 
-                            strokeWidth="2.5" 
+                          <polyline
+                            fill="none"
+                            stroke={c.stroke}
+                            strokeWidth="2.5"
                             strokeLinecap="round"
                             strokeLinejoin="round"
-                            points={points} 
+                            points={points}
+                            className="transition-all duration-500 ease-out"
                             style={{ filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.08))' }}
                           />
                           {node.series.map((item, idx) => {
@@ -603,13 +670,13 @@ function NodeTrafficSection() {
                             const y = chartHeight - (item.kbps / maxVal) * (chartHeight - 30);
                             if (idx % 3 !== 0 && idx !== node.series.length - 1) return null;
                             return (
-                              <circle 
-                                key={idx} 
-                                cx={x} 
-                                cy={y} 
-                                r="3.5" 
+                              <circle
+                                key={idx}
+                                cx={x}
+                                cy={y}
+                                r="3.5"
                                 fill={c.stroke}
-                                className="stroke-white dark:stroke-slate-900" 
+                                className="stroke-background"
                                 strokeWidth="1.5"
                               />
                             );
@@ -635,7 +702,7 @@ function NodeTrafficSection() {
                   {/* 浮动提示框 Tooltip */}
                   {hoveredIdx !== null && hoveredTime && (
                     <div 
-                      className="absolute z-50 pointer-events-none bg-background/95 dark:bg-slate-900/95 backdrop-blur shadow-lg border border-default-200 p-2.5 rounded-lg text-tiny font-mono flex flex-col gap-1 w-52"
+                      className="absolute z-50 pointer-events-none bg-background/95 backdrop-blur shadow-lg border border-default-200 p-2.5 rounded-lg text-tiny font-mono flex flex-col gap-1 w-52"
                       style={{
                         left: `${Math.min(Math.max((hoveredX / chartWidth) * 100, 5), 72)}%`,
                         top: '10px'
@@ -644,7 +711,7 @@ function NodeTrafficSection() {
                       <div className="font-bold border-b border-default-200 pb-1 mb-1 text-foreground text-center">
                         采样时刻：{hoveredTime}
                       </div>
-                      {filteredData.map((node, nodeIdx) => {
+                      {filteredData.filter(d => !hiddenNodes.has(d.node_id)).map((node, nodeIdx) => {
                         const c = getNodeColor(node.node_id, nodeIdx);
                         const val = node.series[hoveredIdx]?.kbps || 0;
                         return (
@@ -918,10 +985,21 @@ export function DashboardPage() {
     return () => clearInterval(timer);
   }, [load]);
 
-  const metrics: Array<{ label: string; value: string; valueClassName: string; icon: ReactNode }> = [
+  // 从 24h 趋势派生 KPI sparkline 数据；若无趋势数据则不渲染 sparkline
+  const totalCallsTrend = data.hourly_trends?.map(t => t.total_calls);
+  const asrTrend = data.hourly_trends?.map(t => t.total_calls > 0 ? (t.answered_calls / t.total_calls) * 100 : 0);
+
+  const metrics: Array<{ label: string; value: string; valueClassName: string; icon: ReactNode; trend?: number[]; sparkColor?: string }> = [
     { label: '活跃通话', value: valueText(data.active_calls), valueClassName: 'text-success', icon: <Activity className="w-4 h-4 text-success" /> },
-    { label: '今日呼叫', value: valueText(data.today_total_calls), valueClassName: 'text-primary', icon: <PhoneCall className="w-4 h-4 text-primary" /> },
-    { label: '接通率 (ASR)', value: data.answer_rate === undefined ? '—' : `${(data.answer_rate * 100).toFixed(3)}%`, valueClassName: 'text-primary', icon: <Sparkles className="w-4 h-4 text-primary" /> },
+    {
+      label: '今日呼叫', value: valueText(data.today_total_calls), valueClassName: 'text-primary', icon: <PhoneCall className="w-4 h-4 text-primary" />,
+      trend: totalCallsTrend, sparkColor: 'stroke-primary',
+    },
+    {
+      label: '接通率 (ASR)', value: data.answer_rate === undefined ? '—' : `${(data.answer_rate * 100).toFixed(3)}%`,
+      valueClassName: 'text-primary', icon: <Sparkles className="w-4 h-4 text-primary" />,
+      trend: asrTrend, sparkColor: 'stroke-primary',
+    },
     { label: '平均 MOS 评分', value: data.avg_mos !== undefined && data.avg_mos > 0 ? `${data.avg_mos.toFixed(2)}` : '—', valueClassName: 'text-warning', icon: <Award className="w-4 h-4 text-warning" /> },
     { label: '在线分机', value: valueText(data.registered_users), valueClassName: 'text-success', icon: <Users className="w-4 h-4 text-success" /> },
     { label: '可用中继', value: valueText(data.active_gateways), valueClassName: 'text-primary', icon: <Server className="w-4 h-4 text-primary" /> },
@@ -973,6 +1051,9 @@ export function DashboardPage() {
                       <div className={`text-2xl font-bold tracking-tight font-mono ${m.valueClassName}`}>
                         {m.value}
                       </div>
+                      {m.trend && m.trend.length >= 2 && (
+                        <Sparkline data={m.trend} color={m.sparkColor} />
+                      )}
                     </CardBody>
                   </Card>
                 ))}

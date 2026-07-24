@@ -185,7 +185,7 @@ export default function ConsoleShell({ children }: { children: ReactNode }) {
   const sidebarHeader = (hidden: boolean) => (
     <div className={`h-16 border-b border-default-100 flex items-center shrink-0 ${hidden ? 'px-2' : 'px-5'}`}>
       <div className="flex items-center gap-3 overflow-hidden">
-        <div className="w-9 h-9 rounded-medium bg-primary flex items-center justify-center font-black text-foreground text-xl shrink-0">
+        <div className="w-9 h-9 rounded-medium bg-primary flex items-center justify-center font-black text-background text-xl shrink-0">
           V
         </div>
         {!hidden && (

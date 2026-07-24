@@ -6,6 +6,7 @@ import {
   Button, Card, CardBody, Chip, Input, Modal, ModalBody, ModalContent,
   ModalFooter, ModalHeader, Select, SelectItem, Spinner,
   Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Pagination,
+  Tooltip,
 } from '@heroui/react';
 import {
   Plus, RefreshCw, Trash2, CheckCircle2, Pencil, ExternalLink, Cpu, Search,
@@ -27,6 +28,7 @@ const PAGE_SIZE = 10;
 export function LlmConfigPage() {
   const [configs, setConfigs] = useState<LlmConfigRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -38,8 +40,9 @@ export function LlmConfigPage() {
   const [searchKey, setSearchKey] = useState('');
   const [page, setPage] = useState(1);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (silent) setIsRefreshing(true);
+    else setLoading(true);
     setError('');
     try {
       const list = await api.get<LlmConfigRecord[]>('/llm-configs');
@@ -48,10 +51,11 @@ export function LlmConfigPage() {
       setError(e instanceof Error ? e.message : '加载失败');
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   // 客户端过滤：按名称/厂商/模型 模糊匹配（大小写不敏感）
   const filtered = useMemo(() => {
@@ -118,7 +122,7 @@ export function LlmConfigPage() {
         message.success('配置已创建');
       }
       setModalOpen(false);
-      await load();
+      await load(true);
     } catch (e) {
       message.error(e instanceof Error ? e.message : '保存失败');
     } finally {
@@ -130,7 +134,7 @@ export function LlmConfigPage() {
     try {
       await api.post<LlmConfigRecord>(`/llm-configs/${id}/activate`);
       message.success('已切换为当前启用模型');
-      await load();
+      await load(true);
     } catch (e) {
       message.error(e instanceof Error ? e.message : '启用失败');
     }
@@ -141,7 +145,7 @@ export function LlmConfigPage() {
       await api.delete(`/llm-configs/${id}`);
       message.success('配置已删除');
       setConfirmDeleteId(null);
-      await load();
+      await load(true);
     } catch (e) {
       message.error(e instanceof Error ? e.message : '删除失败');
     }
@@ -165,7 +169,7 @@ export function LlmConfigPage() {
       {/* 页头 */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold flex items-center gap-2">
+          <h1 className="text-base font-bold flex items-center gap-2">
             <Cpu className="w-5 h-5 text-primary" />
             LLM 配置管理
           </h1>
@@ -174,7 +178,7 @@ export function LlmConfigPage() {
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
-          <Button variant="flat" size="sm" startContent={<RefreshCw className="w-3.5 h-3.5" />} onClick={load}>
+          <Button variant="flat" size="sm" startContent={<RefreshCw className="w-3.5 h-3.5" />} onClick={() => void load(true)}>
             刷新
           </Button>
           <Button color="primary" size="sm" startContent={<Plus className="w-3.5 h-3.5" />} onClick={openCreate}>
@@ -238,6 +242,7 @@ export function LlmConfigPage() {
             </TableHeader>
             <TableBody
               items={paged}
+              className={isRefreshing ? 'opacity-50 transition-opacity duration-300' : 'transition-opacity duration-300'}
               emptyContent={searchKey ? '没有匹配的配置' : '暂无 LLM 配置，点击「新建配置」添加第一个大模型厂商'}
             >
               {(cfg) => {
@@ -285,25 +290,29 @@ export function LlmConfigPage() {
                             启用
                           </Button>
                         )}
-                        <Button
-                          isIconOnly
-                          size="sm"
-                          variant="flat"
-                          aria-label="编辑"
-                          onClick={() => openEdit(cfg)}
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </Button>
-                        <Button
-                          isIconOnly
-                          size="sm"
-                          variant="flat"
-                          color="danger"
-                          aria-label="删除"
-                          onClick={() => setConfirmDeleteId(cfg.id)}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
+                        <Tooltip content="编辑" placement="top">
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            variant="light"
+                            aria-label="编辑"
+                            onClick={() => openEdit(cfg)}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content="删除" placement="top" color="danger">
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            variant="light"
+                            color="danger"
+                            aria-label="删除"
+                            onClick={() => setConfirmDeleteId(cfg.id)}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </Tooltip>
                       </div>
                     </TableCell>
                   </TableRow>
