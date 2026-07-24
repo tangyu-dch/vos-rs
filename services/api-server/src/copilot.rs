@@ -466,7 +466,7 @@ impl<'a> TelecomCopilotEngine<'a> {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("HTTP 请求失败: {e}"))?;
+            .map_err(|e| format!("HTTP 请求失败 (无法连接目标域名 {}, 请检查网络/代理/APIKey): {e}", llm.base_url))?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();

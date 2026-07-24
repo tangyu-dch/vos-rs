@@ -668,12 +668,11 @@ async fn main() -> anyhow::Result<()> {
         .timeout(std::time::Duration::from_secs(3))
         .build()?;
 
-    // LLM 专用 HTTP 客户端：大模型推理响应较慢，需要长超时（60s），且不应影响 sip-edge 短连接管理调用。
-    // 注意：智谱等国内 LLM 服务直连更稳定，禁用系统代理避免本地代理（如 Clash）不稳定导致请求失败。
+    // LLM 专用 HTTP 客户端：大模型推理响应较慢，超时设为 90s，支持环境变量/系统代理与自适应 DNS。
     let llm_client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(60))
-        .no_proxy()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(90))
+        .user_agent("vos-rs/1.0")
         .no_gzip()
         .no_deflate()
         .no_brotli()
