@@ -465,29 +465,30 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
         {inPorts.map((port) => {
           const { x, y } = portOffset(node, port.id, 'in');
           return (
-            <g key={`in-${port.id}`}>
-              <circle cx={x} cy={y} r={PORT_R + 2} className="fill-content1 stroke-default-300" strokeWidth={1.5} />
-              <circle cx={x} cy={y} r={PORT_R - 2} className="fill-default-400" />
+            <g key={`in-${port.id}`} transform={`translate(${x}, ${y})`}>
+              <circle cx={0} cy={0} r={PORT_R + 2} className="fill-content1 stroke-default-300" strokeWidth={1.5} />
+              <circle cx={0} cy={0} r={PORT_R - 2} className="fill-default-400" />
             </g>
           );
         })}
 
-        {/* 输出端口（独立可拖拽连线锚点，按按键区分，不再挤压） */}
+        {/* 输出端口（独立可拖拽连线锚点） */}
         {outPorts.map((port) => {
           const { x, y } = portOffset(node, port.id, 'out');
           return (
             <g
               key={`out-${port.id}`}
+              transform={`translate(${x}, ${y})`}
               className="cursor-crosshair group/port"
               onMouseDown={(e) => startEdgeDrag(e, node.id, port.id)}
             >
               {/* 放大热区响应点击与拖拽 */}
-              <circle cx={x} cy={y} r={PORT_R + 4} className="fill-primary/0 hover:fill-primary/20 transition-all" />
+              <circle cx={0} cy={0} r={PORT_R + 6} className="fill-transparent" />
               <circle
-                cx={x}
-                cy={y}
+                cx={0}
+                cy={0}
                 r={PORT_R}
-                className="fill-primary stroke-content1 group-hover/port:scale-125 transition-transform shadow-sm"
+                className="fill-primary stroke-content1 group-hover/port:fill-primary-400 transition-colors shadow-sm"
                 strokeWidth={2}
               />
             </g>
