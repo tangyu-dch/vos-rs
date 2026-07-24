@@ -60,7 +60,7 @@
 ```
 vos-rs/
 ├── AGENTS.md                  # 本文件，AI 指南
-├── Cargo.toml                 # Workspace 根 (8 members)
+├── Cargo.toml                 # Workspace 根 (11 members)
 ├── README.md                  # 项目说明
 ├── DEPLOY.md                  # 部署指南
 ├── WEB_GUIDE.md               # Web 管理界面指南
@@ -69,7 +69,7 @@ vos-rs/
 ├── docker-compose.yml
 ├── .env / .env.production
 │
-├── crates/                    # 6 个协议/业务库 crate
+├── crates/                    # 7 个协议/业务库 crate
 │   ├── sip-core/              # SIP 消息解析 (零外部依赖)
 │   │   └── src/               #   error, header, message, method, uri
 │   ├── rtp-core/              # RTP/RTCP 协议 (零外部依赖)
@@ -79,11 +79,13 @@ vos-rs/
 │   ├── call-core/             # 呼叫控制 + 路由 + CDR 生成
 │   │   └── src/               #   call, cdr, error, manager, routing
 │   ├── cdr-core/              # CDR 存储 (PostgreSQL) + 数据模型
-│   │   └── src/               #   lib.rs (单文件 1838 行)
-│   └── storage-core/          # 录音存储抽象 (Local/OSS/Dual)
-│       └── src/               #   config, local, oss
+│   │   └── src/               #   models, schema, store, termination_models, termination_schema, utils
+│   ├── storage-core/          # 录音存储抽象 (Local/OSS/Dual)
+│   │   └── src/               #   config, local, oss
+│   └── media-core/            # 媒体处理抽象层 (conference/recording/metrics/g711/dtmf)
+│       └── src/               #   conference, recording, metrics, g711, dtmf
 │
-  ├── services/                  # 3 个服务二进制
+  ├── services/                  # 5 个服务二进制
   │   ├── sip-edge/              # SIP B2BUA 核心 (已拆分重构)
   │   │   └── src/               #   main.rs (入口，已重构瘦身), cdr, routing, rules, utils,
   │   │                          #   media, auth, dialog, transaction, outbound, registrar,
@@ -93,8 +95,10 @@ vos-rs/
 │   ├── api-server/            # REST API (Axum, 30+ 端点)
 │   │   └── src/               #   main, recording, report, billing, calls, numbers,
 │   │                          #   anti_fraud, metrics
-│   └── cdr-worker/            # NATS CDR 消费者 (批量写 PostgreSQL)
-│       └── src/               #   main.rs (单文件 392 行)
+│   ├── cdr-worker/            # NATS CDR 消费者 (批量写 PostgreSQL)
+│   │   └── src/               #   main.rs (单文件 392 行)
+│   ├── media-edge/            # 独立媒体节点 (WebRTC/转码/eBPF)
+│   └── sip-router/            # 分布式信令路由代理
 │
 ├── web/                       # React 管理界面 (Vite + TypeScript, 14 页面)
 ├── docs/                      # 文档目录
@@ -194,7 +198,8 @@ vos-rs/
 | Trunk 状态 | Arc<Vec<Arc<TrunkState>>> | AtomicBool/AtomicU32 | 读多写少 |
 | 路由表 | Arc<RwLock<RouteTable>> | std::sync::RwLock | 极少写 |
 | CDR 缓存 | Mutex<Vec<CallCdr>> | std::sync::Mutex | 低频写 |
-| SBC RateLimiter | Mutex<HashMap<IpAddr, TokenBucket>> | std::sync::Mutex | 需优化 |
+| SBC RateLimiter | DashMap<IpAddr, TokenBucket> | DashMap 分片锁 | 已改为 DashMap 分片并发令牌桶 |
+| 录音写入 | tokio::sync::mpsc::Sender<RecordingChunk> | Tokio MPSC Channel | 已重构为 Tokio MPSC Channel + 独立 Task 磁盘 I/O 隔离 |
 | Registration | tokio::sync::Mutex<RegistrationStore> | tokio::sync::Mutex | 异步感知 |
 
 ---
@@ -270,7 +275,7 @@ async fn bad_process(&self) -> Result<(), Error> {
 }
 ```
 
-**特别注意**：录音模块 (`media.rs`) 当前使用 `std::sync::Mutex` + 同步文件 I/O，这违反了异步编程规范，必须重构为 async channel-based 方案。
+**特别注意**：录音模块 (`media.rs`) 已重构为 Tokio MPSC Channel + 独立 Task 磁盘 I/O 隔离方案，不再使用 `std::sync::Mutex` + 同步 I/O。
 
 ### 5.5 注释规范
 
@@ -648,7 +653,7 @@ Response:
 
 - **禁止在热路径上分配大对象或频繁堆分配**（RTP 收发 loop、SIP 解析）
 - **禁止 N+1 查询**（使用 JOIN 或批量查询）
-- **禁止在 async 上下文中使用 std::sync::Mutex + 同步 I/O**（录音模块违规！）
+- **禁止在 async 上下文中使用 std::sync::Mutex + 同步 I/O**
 - 数据库必须有索引覆盖常用查询
 - 大批量操作必须分批处理（batch size <= 1000）
 - 缓存必须设置 TTL，防止内存膨胀
@@ -657,12 +662,13 @@ Response:
 
 | 瓶颈 | 严重级别 | 位置 | 说明 |
 |------|---------|------|------|
-| 录音 sync I/O | 🔴 高 | `media.rs:629-639` | std::fs::File 在 Mutex 内同步写，阻塞 tokio runtime |
-| SBC RateLimiter 单 Mutex | 🔴 高 | `sbc.rs:88,106` | 高 CPS 下所有 SIP 收包串行化 |
+| 录音 sync I/O | [已优化] | `media.rs` | 已重构为 Tokio MPSC Channel + 独立 Task 磁盘 I/O 隔离 |
+| SBC RateLimiter 单 Mutex | [已优化] | `sbc.rs` | 已改为 DashMap 分片并发令牌桶 |
 | RTP 每包 6-8 次 DashMap 锁 | 🟡 中 | `media.rs:1403-1476` | 高 pps 下 cache line bouncing |
 | RTP 解析每包 Vec alloc | [已优化] | `rtp-core/packet.rs:85,115` | 已下沉并引入有界 BufferPool 机制 |
 | SIP 解析非零拷贝 | 🟡 中 | `sip-core/message.rs:62` | String::from_utf8_lossy + .to_string() |
-| main.rs 9401 行 | [已完成] | `sip-edge/main.rs` | **已重构拆分**为 cdr/routing/rules/utils 等子模块 |
+| main.rs 9401 行 | [已完成] | `sip-edge/main.rs` | **已重构拆分**为 20+ 子模块 |
+| `api-server` 大文件 | [已完成] | `api-server/src/` | 全部拆分至 ≤500 行 |
 
 ---
 
@@ -702,6 +708,7 @@ Response:
 8. **测试目录**：`crates/*/tests/`（集成测试）、各模块内 `#[cfg(test)]`（单元测试）
 9. **SIPp 测试**：`tools/sipp/`（端到端 SIP 场景）
 10. **架构文档**：`docs/VOS_RS_ARCHITECTURE_ANALYSIS.md`（详细架构分析）
+11. **api-server 拆分**：已全量拆分至 copilot/resources/billing/system/cluster/termination/v1 等子目录，63 个文件均 ≤500 行
 
 ---
 
@@ -818,10 +825,11 @@ VOS_RS_UDP_WORKERS_AUTO=true               # 自适应 worker 数量
 ### 已知技术债务（需逐步解决）
 
 1. [已完成] `sip-edge/src/main.rs` 9401 行 → **已拆分为多个子模块**
-2. `cdr-core/src/lib.rs` 1838 行 → 需拆分为 db、models、cdr 子模块
-3. 录音模块使用 `std::sync::Mutex` + sync I/O → 需改为 async
-4. SBC RateLimiter 使用单 Mutex → 需改为 DashMap 分片
+2. [已完成] `cdr-core/src/lib.rs` 1838 行 → **已拆分为 models/schema/store/termination_models/termination_schema/utils 子模块**
+3. [已完成] 录音模块使用 `std::sync::Mutex` + sync I/O → **已改为 Tokio Channel + Task 隔离**
+4. [已完成] SBC RateLimiter 使用单 Mutex → **已改为 DashMap 分片**
 5. [已完成] RTP 解析无 buffer pool → **已下沉并引入有界 `BufferPool`**
-6. SIP 解析非零拷贝 → 需引入借用生命周期
+6. [已完成] SIP 解析非零拷贝 → **已引入 zero_copy 模块（基于 Rust 生命周期借用）**
 7. [已完成] 路由引擎与 SBC ACL 线性扫描 → **已实现 `PrefixTrie` 与 `IpTrie` 树检索**
-8. 缺少实时余额扣减 → 需引入 AtomicI64 CAS 缓存
+8. [已完成] 缺少实时余额扣减 → **已引入 AtomicI64 CAS 内存预扣减缓存**
+9. [已完成] `api-server` 全量拆分 → **63 个 .rs 文件全部 ≤500 行**

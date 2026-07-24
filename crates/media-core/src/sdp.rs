@@ -139,9 +139,7 @@ fn try_fast_rewrite_inner(input: &str, endpoint: &RtpEndpoint) -> Option<(Vec<u8
                 .get(7..)
                 .and_then(|rest| rest.split_whitespace().nth(1))
                 .map(str::to_string);
-            if in_audio_section {
-                original_addr = parsed_addr;
-            } else if original_addr.is_none() {
+            if in_audio_section || original_addr.is_none() {
                 original_addr = parsed_addr;
             }
             if in_audio_section || (!found_audio_m && !session_c_rewritten) {

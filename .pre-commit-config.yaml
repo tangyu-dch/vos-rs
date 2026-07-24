@@ -1,0 +1,38 @@
+# vos-rs Pre-commit Hook 配置
+# 每次 `git commit` 时自动触发质量校验，拦截代码规范问题与隐藏 bug
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        description: 自动格式化 Rust 代码
+        entry: cargo fmt -- --check
+        language: system
+        types: [rust]
+
+      - id: cargo-clippy
+        name: cargo clippy
+        description: 运行 Rust 静态检查工具 Clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-test
+        name: cargo test
+        description: 运行单元测试集
+        entry: cargo test --workspace
+        language: system
+        types: [rust]
+        pass_filenames: false

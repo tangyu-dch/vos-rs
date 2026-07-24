@@ -1,8 +1,8 @@
 pub mod anti_fraud;
 pub mod audit;
 pub mod billing;
-pub mod copilot;
 pub mod cdr;
+pub mod copilot;
 pub mod gateway;
 pub mod llm_config;
 pub mod number;

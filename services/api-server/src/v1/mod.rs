@@ -54,10 +54,9 @@ async fn handle_copilot_chat(
     State(state): State<crate::AppState>,
     Json(payload): Json<CopilotRequest>,
 ) -> Result<Json<copilot::CopilotChatResponse>, crate::ApiError> {
-    let active_llm = match crate::llm_configs::get_llm_config_from_redis(&state, payload.model_id).await {
-        Some(rec) => Some(copilot::LlmConfig::from(rec)),
-        None => None,
-    };
+    let active_llm = crate::llm_configs::get_llm_config_from_redis(&state, payload.model_id)
+        .await
+        .map(copilot::LlmConfig::from);
     let engine = copilot::TelecomCopilotEngine::new(&state, active_llm);
     let response = engine.analyze(&payload.query, None).await;
     Ok(Json(response))

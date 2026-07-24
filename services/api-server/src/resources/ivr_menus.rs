@@ -217,7 +217,10 @@ async fn save_menu(pool: &sqlx::PgPool, payload: &IvrMenu) -> Result<(), ApiErro
     let nodes_json = serde_json::to_value(&payload.nodes).unwrap_or(JsonValue::Array(vec![]));
     let edges_json = serde_json::to_value(&payload.edges).unwrap_or(JsonValue::Array(vec![]));
 
-    let mut tx = pool.begin().await.map_err(|e| ApiError::internal(format!("开启事务失败: {e}")))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal(format!("开启事务失败: {e}")))?;
 
     sqlx::query(
         "INSERT INTO ivr_menus (id, name, description, did, welcome_prompt, timeout_secs, enabled, nodes, edges) \
@@ -273,7 +276,9 @@ async fn save_menu(pool: &sqlx::PgPool, payload: &IvrMenu) -> Result<(), ApiErro
         .map_err(|e| ApiError::internal(format!("保存 IVR 映射失败: {e}")))?;
     }
 
-    tx.commit().await.map_err(|e| ApiError::internal(format!("提交 IVR 事务失败: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal(format!("提交 IVR 事务失败: {e}")))?;
     Ok(())
 }
 

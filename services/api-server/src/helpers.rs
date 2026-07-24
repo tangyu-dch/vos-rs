@@ -85,7 +85,9 @@ pub(crate) fn config_logging_filter(default: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_page, validate_runtime_secrets, validate_runtime_secrets_for_environment};
+    use super::{
+        normalize_page, validate_runtime_secrets, validate_runtime_secrets_for_environment,
+    };
     use crate::PageQuery;
 
     #[test]
@@ -147,4 +149,3 @@ mod tests {
         assert!(error.is_err());
     }
 }
-

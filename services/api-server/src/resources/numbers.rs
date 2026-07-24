@@ -45,7 +45,16 @@ pub async fn list_numbers(
     .map_err(err)?;
 
     if query.export.unwrap_or(false) {
-        let headers = vec!["号码", "关联分机", "落地中继", "呼叫方向", "最大并发", "当前并发", "状态", "创建时间"];
+        let headers = vec![
+            "号码",
+            "关联分机",
+            "落地中继",
+            "呼叫方向",
+            "最大并发",
+            "当前并发",
+            "状态",
+            "创建时间",
+        ];
         let mut rows = Vec::new();
         for item in items {
             rows.push(vec![
@@ -53,13 +62,21 @@ pub async fn list_numbers(
                 item.username.clone().unwrap_or_default(),
                 item.owner_egress_trunk_id.clone().unwrap_or_default(),
                 item.direction.clone().unwrap_or_else(|| "both".to_string()),
-                item.max_concurrent.map(|c| c.to_string()).unwrap_or_default(),
-                item.current_concurrent.map(|c| c.to_string()).unwrap_or_default(),
+                item.max_concurrent
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
+                item.current_concurrent
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
                 item.status.clone(),
                 item.created_at.map(|t| t.to_string()).unwrap_or_default(),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("numbers.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "numbers.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -68,7 +85,8 @@ pub async fn list_numbers(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub async fn create_number(

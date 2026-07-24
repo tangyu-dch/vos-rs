@@ -294,10 +294,11 @@ impl PostgresCdrStore {
             )
             .bind(today_start)
             .fetch_one(&self.pool),
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sip_registrations WHERE expires_at > now()")
-                .fetch_one(&self.pool),
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sip_gateways")
-                .fetch_one(&self.pool),
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM sip_registrations WHERE expires_at > now()"
+            )
+            .fetch_one(&self.pool),
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sip_gateways").fetch_one(&self.pool),
         );
 
         let row = row_res?;
@@ -363,7 +364,7 @@ impl PostgresCdrStore {
         &self,
     ) -> Result<(u64, u64, std::collections::HashMap<String, u64>), sqlx::Error> {
         let day_ago = time::OffsetDateTime::now_utc() - time::Duration::hours(24);
-        
+
         let (blocked_res, auth_res, rows_res) = futures::join!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM call_cdrs WHERE started_at >= $1 AND (failure_reason LIKE '%Anti-Fraud%' OR failure_reason LIKE '%Limit%' OR failure_reason LIKE '%ACL%')"

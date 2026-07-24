@@ -32,6 +32,25 @@ a=rtpmap:8 PCMA/8000
 a=sendrecv                   ← 收发模式
 ```
 
+## 架构图
+
+### SDP Offer / Answer 协商时序
+
+主叫在 INVITE 中携带 SDP Offer 列出支持的编码，被叫在 200 OK 中回 SDP Answer 选定编码，双方据此建立 RTP 流。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 主叫 A
+    participant Edge as sip-edge
+    participant B as 被叫 B
+    A->>Edge: INVITE + SDP Offer<br/>(PCMU / PCMA / Opus)
+    Edge->>B: INVITE + SDP Offer
+    B-->>Edge: 200 OK + SDP Answer<br/>(选定 PCMU/8000)
+    Edge-->>A: 200 OK + SDP Answer
+    Note over A,B: 协商完成，双方按 PCMU 编码收发 RTP
+```
+
 ## 在项目中的位置
 
 ```

@@ -39,6 +39,25 @@ VOS_RS_RECORDING_ENABLED=true
 VOS_RS_RECORDING_DIR=/data/recordings
 ```
 
+## 架构图
+
+### 三后端存储架构
+
+上层录音模块只面向 `StorageBackend` trait，由 `StorageConfig.kind` 决定实际写入路径，切换存储介质无需改动业务代码。
+
+```mermaid
+flowchart TD
+    A[sip-edge 录音模块] --> B[StorageBackend trait]
+    B --> C{config.kind}
+    C -->|local| D[LocalStorage<br/>写本地文件系统]
+    C -->|oss| E[OssStorage<br/>阿里云 OSS]
+    C -->|dual| F[DualStorage<br/>双写]
+    F --> D
+    F --> E
+    D --> G[(本地磁盘<br/>/data/recordings)]
+    E --> H[(OSS Bucket)]
+```
+
 ## 在项目中的位置
 
 ```

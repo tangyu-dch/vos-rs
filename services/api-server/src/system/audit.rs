@@ -36,8 +36,16 @@ pub async fn list_audit_logs(
 
     if query.export.unwrap_or(false) {
         let headers = vec![
-            "ID", "请求 ID", "操作员", "角色", "请求方法", "路径", 
-            "请求参数", "状态码", "源 IP", "操作时间"
+            "ID",
+            "请求 ID",
+            "操作员",
+            "角色",
+            "请求方法",
+            "路径",
+            "请求参数",
+            "状态码",
+            "源 IP",
+            "操作时间",
         ];
         let mut rows = Vec::new();
         for item in items {
@@ -54,7 +62,11 @@ pub async fn list_audit_logs(
                 item.created_at.map(|t| t.to_string()).unwrap_or_default(),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("audit_logs.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "audit_logs.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -63,5 +75,6 @@ pub async fn list_audit_logs(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }

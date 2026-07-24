@@ -5,8 +5,8 @@ use prometheus_client::metrics::histogram::{exponential_buckets, Histogram};
 use prometheus_client::registry::Registry;
 use std::sync::OnceLock;
 
-mod snapshots;
 mod rtcp;
+mod snapshots;
 pub use snapshots::{CdrMetricsSnapshot, MediaMetricsSnapshot};
 
 #[allow(dead_code)]

@@ -40,7 +40,11 @@ pub async fn list_users(
                 item.created_at.map(|t| t.to_string()).unwrap_or_default(),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("sip_users.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "sip_users.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -49,7 +53,8 @@ pub async fn list_users(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub async fn create_user(

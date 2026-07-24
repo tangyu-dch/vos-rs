@@ -480,7 +480,11 @@ pub(crate) async fn warm_hot_path_redis_cache(
     }
     for rate in rates {
         pipeline
-            .hset("vos_rs:billing:rates", &rate.prefix, rate.rate_per_minute.to_string())
+            .hset(
+                "vos_rs:billing:rates",
+                &rate.prefix,
+                rate.rate_per_minute.to_string(),
+            )
             .ignore()
             .hset(
                 "vos_rs:billing:intervals",

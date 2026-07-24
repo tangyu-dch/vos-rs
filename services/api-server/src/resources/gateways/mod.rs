@@ -173,13 +173,23 @@ pub async fn list_gateways(
 
     if query.export.unwrap_or(false) {
         let headers = vec![
-            "中继标识", "中继类型", "认证方式/对端地址", "注册用户", "最大并发",
-            "启用状态", "传输协议", "内部端口"
+            "中继标识",
+            "中继类型",
+            "认证方式/对端地址",
+            "注册用户",
+            "最大并发",
+            "启用状态",
+            "传输协议",
+            "内部端口",
         ];
         let mut rows = Vec::new();
         for item in items {
             let role = item.role.as_deref().unwrap_or("egress");
-            let role_name = if role == "access" { "接入中继" } else { "落地中继" };
+            let role_name = if role == "access" {
+                "接入中继"
+            } else {
+                "落地中继"
+            };
             let auth_or_host = if role == "access" {
                 match item.access_auth_mode.as_deref().unwrap_or("ip_allowlist") {
                     "digest_register" => "注册认证",
@@ -189,7 +199,11 @@ pub async fn list_gateways(
             } else {
                 &item.host
             };
-            let enabled_str = if item.enabled.unwrap_or(true) { "启用" } else { "停用" };
+            let enabled_str = if item.enabled.unwrap_or(true) {
+                "启用"
+            } else {
+                "停用"
+            };
             rows.push(vec![
                 item.id.clone(),
                 role_name.to_string(),
@@ -201,7 +215,11 @@ pub async fn list_gateways(
                 item.port.map(|p| p.to_string()).unwrap_or_default(),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("gateways.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "gateways.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -210,7 +228,8 @@ pub async fn list_gateways(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub async fn delete_gateway(

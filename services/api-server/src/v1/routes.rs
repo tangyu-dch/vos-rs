@@ -11,8 +11,7 @@ use crate::{
     dashboard, details, llm_configs, recording,
     resources::{call_center, gateways, ivr_menus, numbers, registrations, routes, users},
     system::{audit, system},
-    termination,
-    AppState,
+    termination, AppState,
 };
 
 use super::handle_copilot_chat;
@@ -306,7 +305,10 @@ pub(super) fn security_routes() -> Router<AppState> {
             "/api/v1/llm-configs/:id",
             put(llm_configs::update_llm_config).delete(llm_configs::delete_llm_config),
         )
-        .route("/api/v1/llm-configs/:id/activate", post(llm_configs::activate_llm_config))
+        .route(
+            "/api/v1/llm-configs/:id/activate",
+            post(llm_configs::activate_llm_config),
+        )
 }
 
 pub(super) fn infrastructure_routes() -> Router<AppState> {

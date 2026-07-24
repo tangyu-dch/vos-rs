@@ -37,7 +37,13 @@ pub async fn list_registrations(
     })?;
 
     if query.export.unwrap_or(false) {
-        let headers = vec!["AOR(用户标识)", "联系地址", "接收地址", "过期时间", "更新时间"];
+        let headers = vec![
+            "AOR(用户标识)",
+            "联系地址",
+            "接收地址",
+            "过期时间",
+            "更新时间",
+        ];
         let mut rows = Vec::new();
         for item in items {
             rows.push(vec![
@@ -48,7 +54,11 @@ pub async fn list_registrations(
                 item.updated_at.map(|t| t.to_string()).unwrap_or_default(),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("registrations.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "registrations.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -57,5 +67,6 @@ pub async fn list_registrations(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }

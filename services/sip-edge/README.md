@@ -70,32 +70,71 @@
 | `/manage/route-preview` | GET | 路由试算（输入号码看走哪条线） |
 | `/metrics` | GET | Prometheus 指标 |
 
-## 配置
+## 架构图
 
-主要配置项（`config.yaml` 或环境变量）：
+### B2BUA 信令流时序图
 
-```yaml
-sip:
-  bind: 0.0.0.0:5060              # SIP 监听
-  advertised_addr: 1.2.3.4:5060   # 对外通告地址
-  tls_bind: 0.0.0.0:5061          # TLS 监听
-rtp:
-  advertised_addr: 1.2.3.4
-  port_min: 40000
-  port_max: 40100
-recording:
-  enabled: false
-  dir: target/recordings
-auth:
-  enabled: true
-  realm: vos-rs
-sbc:
-  allow: 192.168.1.0/24
-  limit_capacity: 100
-  limit_fill_rate: 10
+```mermaid
+sequenceDiagram
+    participant U as 用户软电话
+    participant E as sip-edge (B2BUA)
+    participant R as 路由引擎
+    participant G as 运营商中继
+
+    U->>E: INVITE (主叫号码 + SDP)
+    E->>R: 查路由表 (最长前缀匹配)
+    R-->>E: 命中中继 + 改写规则
+    E->>G: INVITE (改写后 SDP)
+    G-->>E: 100 Trying
+    G-->>E: 183 Session Progress
+    E-->>U: 183 Session Progress
+    G-->>E: 200 OK
+    E-->>U: 200 OK (含 RTP 中继地址)
+    U->>E: ACK
+    E->>G: ACK
+    Note over U,G: 通话建立，RTP 双向中继
 ```
 
-完整配置见 [../../docs/development/ENV_VARS.md](../../docs/development/ENV_VARS.md)。
+### 媒体中继架构图
+
+```mermaid
+flowchart LR
+    subgraph 信令面
+        U[用户软电话] -- SIP --> S[sip-edge]
+        S -- SIP --> G[运营商中继]
+    end
+    subgraph 媒体面
+        S -- 端口分配 --> M[RTP 中继]
+        M -- 对称 RTP --> U
+        M -- 对称 RTP --> G
+    end
+    subgraph 旁路
+        M -- 录音 --> F[(storage-core)]
+        M -- DTMF --> D[事件流]
+        S -- CDR 事件 --> N[(NATS)]
+    end
+```
+
+## 配置
+
+主要配置项通过 `VOS_RS_` 前缀环境变量提供（完整列表见 [../../docs/development/ENV_VARS.md](../../docs/development/ENV_VARS.md)，生产模板见 `deploy/docker/docker-compose.env.example` 与仓库根 `.env.production`）：
+
+| 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `VOS_RS_SIP_BIND` | `0.0.0.0:5060` | SIP 监听地址 |
+| `VOS_RS_SIP_ADVERTISED_ADDR` | `1.2.3.4:5060` | 对外通告地址 |
+| `VOS_RS_SIP_TLS_BIND` | `0.0.0.0:5061` | TLS 监听地址（可选） |
+| `VOS_RS_RTP_ADVERTISED_ADDR` | `1.2.3.4` | RTP 对外地址 |
+| `VOS_RS_RTP_PORT_MIN` / `VOS_RS_RTP_PORT_MAX` | `40000` / `40100` | RTP 端口范围 |
+| `VOS_RS_RECORDING_ENABLED` | `false` | 录音开关 |
+| `VOS_RS_RECORDING_DIR` | `target/recordings` | 录音目录 |
+| `VOS_RS_AUTH_ENABLED` | `true` | SIP Digest Auth |
+| `VOS_RS_AUTH_REALM` | `vos-rs` | Digest Auth Realm |
+| `VOS_RS_SBC_ALLOW` | `192.168.1.0/24` | IP 白名单 (CIDR) |
+| `VOS_RS_SBC_LIMIT_CAPACITY` | `100` | 令牌桶容量 |
+| `VOS_RS_SBC_LIMIT_FILL_RATE` | `10` | 令牌填充速率 |
+
+> 不再使用 `config.yaml`；如需统一注入，建议通过 `.env` 文件或容器编排系统注入环境变量。
 
 ## 运行
 

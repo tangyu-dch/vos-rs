@@ -51,6 +51,66 @@
 | `extension_groups` | 分机组 |
 | `did_destinations` | DID 目的地 |
 
+## 架构图
+
+### 核心表关系（ER 图）
+
+下图展示 8 张核心表的关联：用户与注册绑定、路由指向网关、账户关联费率并为话单扣费、IVR 菜单独立存储拓扑。
+
+```mermaid
+erDiagram
+    sip_users ||--o{ sip_registrations : "注册绑定"
+    sip_routes }o--|| sip_gateways : "出局网关"
+    sip_users ||--o{ call_cdrs : "主叫话单"
+    billing_accounts ||--o{ billing_rates : "适用费率"
+    billing_accounts ||--o{ call_cdrs : "扣费记账"
+    sip_users {
+        bigint id PK
+        text username
+        text domain
+    }
+    sip_gateways {
+        bigint id PK
+        text name
+        inet sip_proxy
+        int priority
+    }
+    sip_routes {
+        bigint id PK
+        text prefix
+        bigint gateway_id FK
+        int priority
+    }
+    call_cdrs {
+        bigint id PK
+        text call_id
+        bigint caller_id FK
+        bigint account_id FK
+        numeric duration
+        numeric cost
+    }
+    billing_accounts {
+        bigint id PK
+        text name
+        bigint balance
+    }
+    billing_rates {
+        bigint id PK
+        text prefix
+        numeric rate
+    }
+    sip_registrations {
+        bigint id PK
+        bigint user_id FK
+        text contact
+    }
+    ivr_menus {
+        bigint id PK
+        text name
+        jsonb topology
+    }
+```
+
 ## 在项目中的位置
 
 ```

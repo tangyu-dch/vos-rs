@@ -93,7 +93,7 @@ pub fn build_non_2xx_response_ack(
         .get("cseq")
         .and_then(|value| value.as_str().split_whitespace().next())
         .unwrap_or("1");
-    
+
     // Extract the top Via header to copy it, keeping the original branch parameter
     let via = response
         .headers

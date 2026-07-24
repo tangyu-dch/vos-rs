@@ -1,0 +1,47 @@
+# vos-rs 开发测试环境 Docker Compose 配置
+# 使用方法: docker compose -f docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vos-rs-dev-postgres
+    environment:
+      POSTGRES_USER: vos_rs
+      POSTGRES_PASSWORD: vos_rs_dev_pass
+      POSTGRES_DB: vos_rs
+    ports:
+      - "5432:5432"
+    volumes:
+      - vos_rs_dev_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vos_rs"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: vos-rs-dev-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: vos-rs-dev-nats
+    command: ["--js", "--store_dir", "/data", "--port", "4222", "--http_port", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+volumes:
+  vos_rs_dev_pg:

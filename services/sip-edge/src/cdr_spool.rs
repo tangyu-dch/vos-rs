@@ -302,7 +302,11 @@ fn read_spool_file(path: &Path) -> std::io::Result<Vec<CallCdr>> {
                 cdrs.push(cdr);
             }
             Err(e) => {
-                tracing::warn!("解析 spool CDR 行失败，移入 .corrupt 文件: {}, 错误: {}", trimmed, e);
+                tracing::warn!(
+                    "解析 spool CDR 行失败，移入 .corrupt 文件: {}, 错误: {}",
+                    trimmed,
+                    e
+                );
                 let corrupt_path = path.with_extension("jsonl.corrupt");
                 let c_file = match &mut corrupt_file {
                     Some(f) => f,
@@ -488,12 +492,13 @@ mod tests {
         std::fs::create_dir_all(&directory).expect("create spool directory");
         let replay_path = directory.join("replay-corrupt.jsonl");
         std::fs::write(&replay_path, b"not-json\n").expect("write corrupt segment");
-        
+
         let cdrs = read_spool_file(&replay_path).expect("read spool file");
         assert!(cdrs.is_empty());
         assert!(replay_path.with_extension("jsonl.corrupt").exists());
 
-        let corrupt_content = std::fs::read_to_string(replay_path.with_extension("jsonl.corrupt")).unwrap();
+        let corrupt_content =
+            std::fs::read_to_string(replay_path.with_extension("jsonl.corrupt")).unwrap();
         assert_eq!(corrupt_content, "not-json\n");
 
         std::fs::remove_dir_all(directory).expect("remove temp spool");
@@ -504,12 +509,12 @@ mod tests {
         let directory = temp_spool_dir();
         std::fs::create_dir_all(&directory).expect("create spool directory");
         let replay_path = directory.join("replay-mixed.jsonl");
-        
+
         let valid_cdr_1 = test_cdr("valid-1");
         let valid_json_1 = serde_json::to_string(&valid_cdr_1).unwrap();
         let valid_cdr_2 = test_cdr("valid-2");
         let valid_json_2 = serde_json::to_string(&valid_cdr_2).unwrap();
-        
+
         let file_content = format!("{}\nnot-json-line\n{}\n", valid_json_1, valid_json_2);
         std::fs::write(&replay_path, file_content.as_bytes()).expect("write mixed segment");
 

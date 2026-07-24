@@ -150,7 +150,10 @@ pub(crate) async fn audit_log(
             }
         };
         let body_str = if body_bytes.len() > MAX_AUDIT_LOG_TEXT_BYTES {
-            format!("[请求体包含附件/多模态图片，完整大小 {} 字节，审计日志自动省简]", body_bytes.len())
+            format!(
+                "[请求体包含附件/多模态图片，完整大小 {} 字节，审计日志自动省简]",
+                body_bytes.len()
+            )
         } else if content_type.starts_with("application/json") {
             sanitize_audit_json(&body_bytes)
         } else if body_bytes.is_empty() {
@@ -238,4 +241,3 @@ mod tests {
         assert!(!result.contains("secret"));
     }
 }
-

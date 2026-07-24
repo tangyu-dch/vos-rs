@@ -44,11 +44,11 @@ mod termination_models;
 mod termination_schema;
 mod utils;
 
+/// 重新导出 CdrAuditSnapshot，供下游（如 api-server copilot）构造 CdrEvent 时使用。
+pub use call_core::CdrAuditSnapshot;
 pub use models::*;
 pub use termination_models::*;
 pub use utils::current_hhmm;
-/// 重新导出 CdrAuditSnapshot，供下游（如 api-server copilot）构造 CdrEvent 时使用。
-pub use call_core::CdrAuditSnapshot;
 // Copilot 历史会话相关类型，供 api-server 直接使用
 pub use store::copilot::{AppendCopilotMessageInput, CopilotMessage, CopilotSession};
 pub use store::llm_config::{LlmConfigRecord, UpsertLlmConfigInput};
@@ -83,12 +83,8 @@ impl PostgresCdrStore {
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query(CREATE_CDR_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(MIGRATE_CDR_AUDIT_SQL)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(CREATE_CDR_TABLE_SQL).execute(&mut *tx).await?;
+        sqlx::query(MIGRATE_CDR_AUDIT_SQL).execute(&mut *tx).await?;
         sqlx::query(CREATE_CALL_ID_INDEX_SQL)
             .execute(&mut *tx)
             .await?;

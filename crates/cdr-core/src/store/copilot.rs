@@ -178,14 +178,12 @@ impl PostgresCdrStore {
         id: &str,
         operator: &str,
     ) -> Result<bool, sqlx::Error> {
-        let affected = sqlx::query(
-            "DELETE FROM copilot_sessions WHERE id = $1 AND operator = $2",
-        )
-        .bind(id)
-        .bind(operator)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        let affected = sqlx::query("DELETE FROM copilot_sessions WHERE id = $1 AND operator = $2")
+            .bind(id)
+            .bind(operator)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
         Ok(affected > 0)
     }
 

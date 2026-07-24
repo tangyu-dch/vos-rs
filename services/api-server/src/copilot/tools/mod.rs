@@ -13,7 +13,7 @@ mod network;
 use serde_json::json;
 
 use super::{
-    generate_ascii_ladder, CopilotIntent, Payload, TelecomCopilotEngine, push_section, truncate,
+    generate_ascii_ladder, push_section, truncate, CopilotIntent, Payload, TelecomCopilotEngine,
 };
 
 #[allow(dead_code)]
@@ -86,33 +86,78 @@ impl<'a> TelecomCopilotEngine<'a> {
         report.push_str("# 🛠️ 本地诊断与结构化遥测报告\n\n");
         report.push_str(&format!("- **用户查询指令**：`{}`\n", query));
         report.push_str(&format!("- **系统意图识别**：`{:?}`\n", intent));
-        report.push_str(&format!("- **数据生成时间**：`{}`\n\n", payload.generated_at));
+        report.push_str(&format!(
+            "- **数据生成时间**：`{}`\n\n",
+            payload.generated_at
+        ));
 
         if let Some(stats) = &payload.dashboard_stats {
             report.push_str("## 📊 软交换集群核心指标\n\n");
             report.push_str("| 监控指标 | 当前数值 | 运行状态 | 指标解读 |\n");
             report.push_str("| :--- | :--- | :---: | :--- |\n");
 
-            let calls_str = format!("{} 次 (应答: {}, 取消: {}, 失败: {})", stats.today_total_calls, stats.today_answered_calls, stats.today_canceled_calls, stats.today_failed_calls);
-            report.push_str(&format!("| **今日通话总数** | {} | 🟢 正常 | 今日平台承载呼叫总量 |\n", calls_str));
+            let calls_str = format!(
+                "{} 次 (应答: {}, 取消: {}, 失败: {})",
+                stats.today_total_calls,
+                stats.today_answered_calls,
+                stats.today_canceled_calls,
+                stats.today_failed_calls
+            );
+            report.push_str(&format!(
+                "| **今日通话总数** | {} | 🟢 正常 | 今日平台承载呼叫总量 |\n",
+                calls_str
+            ));
 
-            let asr_status = if stats.answer_rate >= 0.85 { "🟢 优秀" } else if stats.answer_rate >= 0.60 { "🟡 一般" } else { "🔴 异常" };
-            report.push_str(&format!("| **呼叫接通率 (ASR)** | {:.2}% | {} | 平台整体接通比例 |\n", stats.answer_rate * 100.0, asr_status));
+            let asr_status = if stats.answer_rate >= 0.85 {
+                "🟢 优秀"
+            } else if stats.answer_rate >= 0.60 {
+                "🟡 一般"
+            } else {
+                "🔴 异常"
+            };
+            report.push_str(&format!(
+                "| **呼叫接通率 (ASR)** | {:.2}% | {} | 平台整体接通比例 |\n",
+                stats.answer_rate * 100.0,
+                asr_status
+            ));
 
-            report.push_str(&format!("| **在线分机 / 活跃网关** | {} / {} | 🟢 在线 | 终端注册与中继链路活跃数 |\n", stats.registered_users, stats.active_gateways));
+            report.push_str(&format!(
+                "| **在线分机 / 活跃网关** | {} / {} | 🟢 在线 | 终端注册与中继链路活跃数 |\n",
+                stats.registered_users, stats.active_gateways
+            ));
 
             let mos_val = stats.avg_mos.unwrap_or(4.4);
-            let mos_status = if mos_val >= 4.0 { "🟢 极佳" } else if mos_val >= 3.0 { "🟡 一般" } else { "🔴 差" };
-            report.push_str(&format!("| **平均通话质量 (MOS)** | {:.2} / 5 | {} | RTP 语音传输主观质量评分 |\n", mos_val, mos_status));
+            let mos_status = if mos_val >= 4.0 {
+                "🟢 极佳"
+            } else if mos_val >= 3.0 {
+                "🟡 一般"
+            } else {
+                "🔴 差"
+            };
+            report.push_str(&format!(
+                "| **平均通话质量 (MOS)** | {:.2} / 5 | {} | RTP 语音传输主观质量评分 |\n",
+                mos_val, mos_status
+            ));
 
             let loss_val = stats.avg_loss_rate.unwrap_or(0.0);
-            let loss_status = if loss_val < 0.01 { "🟢 极低" } else if loss_val < 0.05 { "🟡 轻微" } else { "🔴 严重" };
-            report.push_str(&format!("| **媒体流平均丢包率** | {:.2}% | {} | 网络抖动丢包比例 |\n\n", loss_val * 100.0, loss_status));
+            let loss_status = if loss_val < 0.01 {
+                "🟢 极低"
+            } else if loss_val < 0.05 {
+                "🟡 轻微"
+            } else {
+                "🔴 严重"
+            };
+            report.push_str(&format!(
+                "| **媒体流平均丢包率** | {:.2}% | {} | 网络抖动丢包比例 |\n\n",
+                loss_val * 100.0,
+                loss_status
+            ));
         }
 
         if !payload.recent_failed_cdrs.is_empty() {
             report.push_str("## 🚨 异常释放呼叫列表 (Top 10)\n\n");
-            report.push_str("| 呼叫 ID | 主叫号码 | 被叫号码 | 呼叫状态 | 挂断响应码 | 失败原因 |\n");
+            report
+                .push_str("| 呼叫 ID | 主叫号码 | 被叫号码 | 呼叫状态 | 挂断响应码 | 失败原因 |\n");
             report.push_str("| :--- | :--- | :--- | :---: | :---: | :--- |\n");
             for cdr in &payload.recent_failed_cdrs {
                 report.push_str(&format!(
@@ -121,7 +166,9 @@ impl<'a> TelecomCopilotEngine<'a> {
                     cdr.caller.as_deref().unwrap_or("-"),
                     cdr.callee.as_deref().unwrap_or("-"),
                     cdr.status,
-                    cdr.failure_status_code.map(|c| c.to_string()).unwrap_or_else(|| "-".to_string()),
+                    cdr.failure_status_code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
                     cdr.failure_reason.as_deref().unwrap_or("-"),
                 ));
             }
@@ -157,17 +204,34 @@ impl<'a> TelecomCopilotEngine<'a> {
             report.push_str(&format!("```text\n{ascii}```\n\n"));
         }
 
-        push_section(&mut report, "🔑 SIP 在线注册状态", &payload.registrations, |r| {
-            format!("- **分机地址 (AOR)**: `{}` | **联系人地址**: `{}` | **过期时间**: `{}`\n", r.aor, r.contact_uri, r.expires_at)
-        });
-        push_section(&mut report, "💳 计费账户余额", &payload.billing_accounts, |a| {
-            format!(
-                "- **账户名称**: `{}` | **余额**: `{} {}` | **信用额度**: `{}`\n",
-                a.username, a.balance, a.currency, a.credit_limit
-            )
-        });
-        push_section(&mut report, "🌐 对接网关配置", &payload.gateways, |g| {
-            format!(
+        push_section(
+            &mut report,
+            "🔑 SIP 在线注册状态",
+            &payload.registrations,
+            |r| {
+                format!(
+                    "- **分机地址 (AOR)**: `{}` | **联系人地址**: `{}` | **过期时间**: `{}`\n",
+                    r.aor, r.contact_uri, r.expires_at
+                )
+            },
+        );
+        push_section(
+            &mut report,
+            "💳 计费账户余额",
+            &payload.billing_accounts,
+            |a| {
+                format!(
+                    "- **账户名称**: `{}` | **余额**: `{} {}` | **信用额度**: `{}`\n",
+                    a.username, a.balance, a.currency, a.credit_limit
+                )
+            },
+        );
+        push_section(
+            &mut report,
+            "🌐 对接网关配置",
+            &payload.gateways,
+            |g| {
+                format!(
                 "- **网关 ID**: `{}` | **中继地址**: `{}:{}` | **网关类型**: `{:?}` | **网关角色**: `{:?}`\n",
                 g.id,
                 g.host,
@@ -175,10 +239,14 @@ impl<'a> TelecomCopilotEngine<'a> {
                 g.gateway_type,
                 g.role
             )
-        });
+            },
+        );
 
         if !payload.active_calls.is_empty() {
-            report.push_str(&format!("## 📞 当前活跃通话 ({})\n\n", payload.active_calls.len()));
+            report.push_str(&format!(
+                "## 📞 当前活跃通话 ({})\n\n",
+                payload.active_calls.len()
+            ));
             for c in payload.active_calls.iter().take(10) {
                 report.push_str(&format!("- `{}`\n", c));
             }

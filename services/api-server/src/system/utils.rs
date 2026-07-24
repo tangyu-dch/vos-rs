@@ -39,14 +39,21 @@ pub fn to_csv_response(filename: &str, headers: &[&str], rows: &[Vec<String>]) -
 
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/csv; charset=utf-8"))
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/csv; charset=utf-8"),
+        )
         .header(
             header::CONTENT_DISPOSITION,
             HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
-                .unwrap_or_else(|_| HeaderValue::from_static("attachment; filename=\"export.csv\"")),
+                .unwrap_or_else(|_| {
+                    HeaderValue::from_static("attachment; filename=\"export.csv\"")
+                }),
         )
         .body(Body::from(csv_data))
-        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to generate CSV").into_response())
+        .unwrap_or_else(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to generate CSV").into_response()
+        })
 }
 
 pub fn parse_csv(content: &str) -> Vec<Vec<String>> {

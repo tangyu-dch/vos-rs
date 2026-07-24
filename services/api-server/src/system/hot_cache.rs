@@ -56,7 +56,11 @@ pub(crate) async fn rebuild_billing_rates(state: &AppState) -> Result<(), ApiErr
         .ignore();
     for rate in rates {
         pipeline
-            .hset(BILLING_RATES_KEY, &rate.prefix, rate.rate_per_minute.to_string())
+            .hset(
+                BILLING_RATES_KEY,
+                &rate.prefix,
+                rate.rate_per_minute.to_string(),
+            )
             .ignore()
             .hset(
                 BILLING_INTERVALS_KEY,
@@ -64,7 +68,11 @@ pub(crate) async fn rebuild_billing_rates(state: &AppState) -> Result<(), ApiErr
                 rate.billing_interval_secs,
             )
             .ignore()
-            .hset(BILLING_PRICES_KEY, &rate.prefix, rate.price_per_interval.to_string())
+            .hset(
+                BILLING_PRICES_KEY,
+                &rate.prefix,
+                rate.price_per_interval.to_string(),
+            )
             .ignore();
     }
     pipeline

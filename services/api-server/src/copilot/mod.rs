@@ -142,7 +142,11 @@ impl<'a> TelecomCopilotEngine<'a> {
     }
 
     /// 分析自然语言问题：意图识别 → 真实数据采集 → SIP 梯形图重建 → 可选 LLM 调用。
-    pub async fn analyze(&self, query: &str, history: Option<&[cdr_core::CopilotMessage]>) -> CopilotChatResponse {
+    pub async fn analyze(
+        &self,
+        query: &str,
+        history: Option<&[cdr_core::CopilotMessage]>,
+    ) -> CopilotChatResponse {
         let intent = Self::classify_intent(query);
         let payload = self.collect_payload(query, intent).await;
         let steps = Self::build_ladder_steps(&payload);
@@ -156,12 +160,20 @@ impl<'a> TelecomCopilotEngine<'a> {
                         text,
                         String::new(),
                         String::new(),
-                        format!("LLM 已启用 (provider={}, model={})", llm.provider, llm.model),
+                        format!(
+                            "LLM 已启用 (provider={}, model={})",
+                            llm.provider, llm.model
+                        ),
                     ),
                     Err(error) => {
                         tracing::warn!(%error, "LLM 调用失败，回退到结构化报告");
                         let (r, rc, sa) = Self::build_fallback_report(query, intent, &payload);
-                        (r, rc, sa, format!("LLM 调用失败：{error}；以下为结构化真实业务数据"))
+                        (
+                            r,
+                            rc,
+                            sa,
+                            format!("LLM 调用失败：{error}；以下为结构化真实业务数据"),
+                        )
                     }
                 }
             }
@@ -192,7 +204,11 @@ impl<'a> TelecomCopilotEngine<'a> {
     /// 基于关键词识别用户意图（中英文混合）
     pub fn classify_intent(query: &str) -> CopilotIntent {
         let q = query.to_lowercase();
-        if q.contains("梯形图") || q.contains("ladder") || q.contains("sip flow") || q.contains("信令") {
+        if q.contains("梯形图")
+            || q.contains("ladder")
+            || q.contains("sip flow")
+            || q.contains("信令")
+        {
             return CopilotIntent::SipLadder;
         }
         if q.contains("挂断")
@@ -215,13 +231,22 @@ impl<'a> TelecomCopilotEngine<'a> {
         {
             return CopilotIntent::CallFailure;
         }
-        if q.contains("注册") || q.contains("register") || q.contains("分机") || q.contains("extension") {
+        if q.contains("注册")
+            || q.contains("register")
+            || q.contains("分机")
+            || q.contains("extension")
+        {
             return CopilotIntent::Registration;
         }
-        if q.contains("计费") || q.contains("余额") || q.contains("billing") || q.contains("balance") {
+        if q.contains("计费")
+            || q.contains("余额")
+            || q.contains("billing")
+            || q.contains("balance")
+        {
             return CopilotIntent::Billing;
         }
-        if q.contains("网关") || q.contains("中继") || q.contains("gateway") || q.contains("trunk") {
+        if q.contains("网关") || q.contains("中继") || q.contains("gateway") || q.contains("trunk")
+        {
             return CopilotIntent::Gateway;
         }
         if q.contains("cps")
@@ -340,16 +365,11 @@ impl<'a> TelecomCopilotEngine<'a> {
         history: Option<&[cdr_core::CopilotMessage]>,
     ) -> Result<String, String> {
         let llm = self.llm.as_ref().ok_or("LLM 未配置")?;
-        let url = format!(
-            "{}/chat/completions",
-            llm.base_url.trim_end_matches('/')
-        );
-        let mut messages = vec![
-            json!({
-                "role": "system",
-                "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）以及可调用的工具（Tools），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答与工具调用要求：\n1. **智能数据整理与格式清洗 (AI Reformatting)**：当用户以不规整的自然语言、微信聊天文本、非标准表格或杂乱文本粘贴数据（如分机开户、网关列表、路由规则、资费表等）要求导入时，你必须发挥 AI 智能分析能力，提取出其中的有效字段，将其整理清洗为标准的 CSV 结构文本（如分机: `username,password`，网关: `id,name,ip_address,port`，路由: `id,prefix,gateway_id,priority`，资费: `prefix,rate_per_minute`），然后将清洗好的 CSV 文本传入对应的导入工具 (`vos_import_extensions`, `vos_import_gateways`, `vos_import_routes`, `vos_import_rates`) 进行精准执行！并在回复中向用户展示你清洗好的标准表格明细。\n2. **智能冲突与重复检测**：在进行路由创建、分机开户、网关绑定或 IVR 配置时，如工具返回了 `conflict: true` 冲突警告或目标关联不存在（如路由的目标网关不存在、DID 重复绑定、分机号重复等），必须在回复中明确指出具体的冲突点与原因，并主动给出可替代的解决建议方案（例如建议更换 ID、先创建网关、或使用不同的前缀）。\n3. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析与处理报告 (Report)：结合数据对当前系统状态、业务配置或数据导入/导出结果进行专业解读。\n   - ## 🔍 数据清洗与整理明细 (Cleaned Records)：展示提取清洗后的标准结构表格。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引。\n4. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流。"
-            })
-        ];
+        let url = format!("{}/chat/completions", llm.base_url.trim_end_matches('/'));
+        let mut messages = vec![json!({
+            "role": "system",
+            "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）以及可调用的工具（Tools），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答与工具调用要求：\n1. **智能数据整理与格式清洗 (AI Reformatting)**：当用户以不规整的自然语言、微信聊天文本、非标准表格或杂乱文本粘贴数据（如分机开户、网关列表、路由规则、资费表等）要求导入时，你必须发挥 AI 智能分析能力，提取出其中的有效字段，将其整理清洗为标准的 CSV 结构文本（如分机: `username,password`，网关: `id,name,ip_address,port`，路由: `id,prefix,gateway_id,priority`，资费: `prefix,rate_per_minute`），然后将清洗好的 CSV 文本传入对应的导入工具 (`vos_import_extensions`, `vos_import_gateways`, `vos_import_routes`, `vos_import_rates`) 进行精准执行！并在回复中向用户展示你清洗好的标准表格明细。\n2. **智能冲突与重复检测**：在进行路由创建、分机开户、网关绑定或 IVR 配置时，如工具返回了 `conflict: true` 冲突警告或目标关联不存在（如路由的目标网关不存在、DID 重复绑定、分机号重复等），必须在回复中明确指出具体的冲突点与原因，并主动给出可替代的解决建议方案（例如建议更换 ID、先创建网关、或使用不同的前缀）。\n3. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析与处理报告 (Report)：结合数据对当前系统状态、业务配置或数据导入/导出结果进行专业解读。\n   - ## 🔍 数据清洗与整理明细 (Cleaned Records)：展示提取清洗后的标准结构表格。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引。\n4. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流。"
+        })];
 
         if let Some(hist) = history {
             // 排除最后一条（那是当前最新的消息，我们需要它带上当前最新的 telemetry payload 数据进行分析）
@@ -381,7 +401,12 @@ impl<'a> TelecomCopilotEngine<'a> {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("HTTP 请求失败 (无法连接目标域名 {}, 请检查网络/代理/APIKey): {e}", llm.base_url))?;
+            .map_err(|e| {
+                format!(
+                    "HTTP 请求失败 (无法连接目标域名 {}, 请检查网络/代理/APIKey): {e}",
+                    llm.base_url
+                )
+            })?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -401,7 +426,12 @@ impl<'a> TelecomCopilotEngine<'a> {
     }
 }
 
-pub(crate) fn push_section<T>(out: &mut String, title: &str, items: &[T], render: impl Fn(&T) -> String) {
+pub(crate) fn push_section<T>(
+    out: &mut String,
+    title: &str,
+    items: &[T],
+    render: impl Fn(&T) -> String,
+) {
     if items.is_empty() {
         return;
     }

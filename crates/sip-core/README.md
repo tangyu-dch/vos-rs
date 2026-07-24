@@ -19,6 +19,31 @@
 | **URI 解析** | `sip:` / `sips:` URI 解析，含 user / host / port / params |
 | **Method 类型** | 强类型 `Method` 枚举，避免字符串拼写错误 |
 
+## 架构图
+
+### INVITE 三次握手时序
+
+`sip-core` 负责把下图中每一条 SIP 文本消息解析为强类型结构体，交给 `sip-edge` 推进事务状态机。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UAC as 主叫 UAC
+    participant Edge as sip-edge (B2BUA)
+    participant UAS as 被叫 UAS
+    UAC->>Edge: INVITE (含 SDP offer)
+    Edge->>UAS: INVITE (改写 SDP / 拓扑隐藏)
+    UAS-->>Edge: 100 Trying
+    Edge-->>UAC: 100 Trying
+    UAS-->>Edge: 180 Ringing
+    Edge-->>UAC: 180 Ringing
+    UAS-->>Edge: 200 OK (含 SDP answer)
+    Edge-->>UAC: 200 OK (改写 SDP)
+    UAC->>Edge: ACK
+    Edge->>UAS: ACK
+    Note over UAC,UAS: 三次握手完成，开始 RTP 媒体流
+```
+
 ## 在项目中的位置
 
 ```

@@ -81,10 +81,11 @@ impl PostgresCdrStore {
     ) -> Result<LlmConfigRecord, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         // 若当前无 active 配置，新建的自动启用
-        let has_active: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM llm_configs WHERE is_active = true)")
-            .fetch_one(&mut *tx)
-            .await?
-            .get(0);
+        let has_active: bool =
+            sqlx::query("SELECT EXISTS(SELECT 1 FROM llm_configs WHERE is_active = true)")
+                .fetch_one(&mut *tx)
+                .await?
+                .get(0);
         let record = sqlx::query_as::<_, LlmConfigRecord>(
             "INSERT INTO llm_configs (name, provider, api_key, base_url, model, temperature, is_active) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
@@ -153,7 +154,10 @@ impl PostgresCdrStore {
     }
 
     /// 启用指定 LLM 配置（事务内先将所有配置设为 inactive，再将目标设为 active）。
-    pub async fn activate_llm_config(&self, id: i64) -> Result<Option<LlmConfigRecord>, sqlx::Error> {
+    pub async fn activate_llm_config(
+        &self,
+        id: i64,
+    ) -> Result<Option<LlmConfigRecord>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         let affected = sqlx::query("UPDATE llm_configs SET is_active=false WHERE is_active=true")
             .execute(&mut *tx)

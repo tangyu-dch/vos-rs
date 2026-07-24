@@ -196,17 +196,23 @@ pub async fn export_cdrs_csv(
          COALESCE(mos::text,''), COALESCE(dtmf_digits,''), \
          COALESCE(caller_rtcp_rtt_ms::text,''), COALESCE(caller_rtcp_jitter_ms::text,''), \
          COALESCE(caller_rtcp_loss_rate::text,'') \
-         FROM call_cdrs WHERE started_at >= $1 AND started_at <= $2"
+         FROM call_cdrs WHERE started_at >= $1 AND started_at <= $2",
     );
 
     if let Some(ref caller) = q.caller {
         if !caller.is_empty() {
-            query.push_str(&format!(" AND caller LIKE '%{}%'", caller.replace('\'', "")));
+            query.push_str(&format!(
+                " AND caller LIKE '%{}%'",
+                caller.replace('\'', "")
+            ));
         }
     }
     if let Some(ref callee) = q.callee {
         if !callee.is_empty() {
-            query.push_str(&format!(" AND callee LIKE '%{}%'", callee.replace('\'', "")));
+            query.push_str(&format!(
+                " AND callee LIKE '%{}%'",
+                callee.replace('\'', "")
+            ));
         }
     }
     if let Some(ref status) = q.status {

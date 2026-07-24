@@ -10,7 +10,10 @@ impl<'a> TelecomCopilotEngine<'a> {
         match self.state.store.list_users().await {
             Ok(users) => {
                 let filtered: Vec<_> = if let Some(u) = username {
-                    users.into_iter().filter(|user| user.username.contains(u)).collect()
+                    users
+                        .into_iter()
+                        .filter(|user| user.username.contains(u))
+                        .collect()
                 } else {
                     users
                 };
@@ -26,11 +29,12 @@ impl<'a> TelecomCopilotEngine<'a> {
         if username.is_empty() || password.is_empty() {
             return json!({ "success": false, "error": "分机账号 username 和密码 password 不能为空" });
         }
-        let ext_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_users WHERE username = $1)")
-            .bind(username)
-            .fetch_one(self.state.store.pool())
-            .await
-            .unwrap_or(false);
+        let ext_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_users WHERE username = $1)")
+                .bind(username)
+                .fetch_one(self.state.store.pool())
+                .await
+                .unwrap_or(false);
         if ext_exists {
             return json!({
                 "success": false,
@@ -38,8 +42,18 @@ impl<'a> TelecomCopilotEngine<'a> {
                 "error": format!("分机账号 `{}` 已存在，不能重复创建。", username)
             });
         }
-        let realm = self.state.store.get_system_config("auth_realm").await.ok().flatten().unwrap_or_else(|| "vos-rs".into());
-        let ha1 = format!("{:x}", md5::compute(format!("{username}:{realm}:{password}").as_bytes()));
+        let realm = self
+            .state
+            .store
+            .get_system_config("auth_realm")
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "vos-rs".into());
+        let ha1 = format!(
+            "{:x}",
+            md5::compute(format!("{username}:{realm}:{password}").as_bytes())
+        );
         match self.state.store.insert_user(username, &ha1).await {
             Ok(_) => {
                 let _ = crate::system::hot_cache::set_auth_user(self.state, username, &ha1).await;
@@ -68,19 +82,21 @@ impl<'a> TelecomCopilotEngine<'a> {
         let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let did = args.get("did").and_then(|v| v.as_str()).unwrap_or("");
-        let welcome_prompt = args.get("welcome_prompt").and_then(|v| v.as_str()).unwrap_or("");
+        let welcome_prompt = args
+            .get("welcome_prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if id.is_empty() || name.is_empty() {
             return json!({ "success": false, "error": "IVR 菜单 ID 和名称不能为空" });
         }
         if !did.is_empty() {
-            let dup_did: Option<(String, String)> = sqlx::query_as(
-                "SELECT id, name FROM ivr_menus WHERE did = $1 AND id != $2"
-            )
-            .bind(did)
-            .bind(id)
-            .fetch_optional(self.state.store.pool())
-            .await
-            .unwrap_or(None);
+            let dup_did: Option<(String, String)> =
+                sqlx::query_as("SELECT id, name FROM ivr_menus WHERE did = $1 AND id != $2")
+                    .bind(did)
+                    .bind(id)
+                    .fetch_optional(self.state.store.pool())
+                    .await
+                    .unwrap_or(None);
 
             if let Some((dup_id, dup_name)) = dup_did {
                 return json!({
@@ -103,7 +119,9 @@ impl<'a> TelecomCopilotEngine<'a> {
         .execute(self.state.store.pool())
         .await;
         match res {
-            Ok(_) => json!({ "success": true, "message": format!("IVR 菜单 `{}` ({}) 创建成功", name, id) }),
+            Ok(_) => {
+                json!({ "success": true, "message": format!("IVR 菜单 `{}` ({}) 创建成功", name, id) })
+            }
             Err(e) => json!({ "success": false, "error": e.to_string() }),
         }
     }
@@ -117,15 +135,15 @@ impl<'a> TelecomCopilotEngine<'a> {
         }
         let node_id = format!("node_{key}");
         let new_node = json!({ "id": node_id, "dtmf": key, "action": action });
-        let res = sqlx::query(
-            "UPDATE ivr_menus SET nodes = nodes || $1::jsonb WHERE id = $2"
-        )
-        .bind(json!([new_node]))
-        .bind(id)
-        .execute(self.state.store.pool())
-        .await;
+        let res = sqlx::query("UPDATE ivr_menus SET nodes = nodes || $1::jsonb WHERE id = $2")
+            .bind(json!([new_node]))
+            .bind(id)
+            .execute(self.state.store.pool())
+            .await;
         match res {
-            Ok(r) if r.rows_affected() > 0 => json!({ "success": true, "message": format!("IVR {} 成功新增按键 [{}] -> 动作 [{}]", id, key, action) }),
+            Ok(r) if r.rows_affected() > 0 => {
+                json!({ "success": true, "message": format!("IVR {} 成功新增按键 [{}] -> 动作 [{}]", id, key, action) })
+            }
             Ok(_) => json!({ "success": false, "error": format!("IVR 菜单 {} 不存在", id) }),
             Err(e) => json!({ "success": false, "error": e.to_string() }),
         }
@@ -133,9 +151,14 @@ impl<'a> TelecomCopilotEngine<'a> {
 
     pub(crate) async fn tool_delete_ivr_menu(&self, args: &Value) -> Value {
         let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        let res = sqlx::query("DELETE FROM ivr_menus WHERE id = $1").bind(id).execute(self.state.store.pool()).await;
+        let res = sqlx::query("DELETE FROM ivr_menus WHERE id = $1")
+            .bind(id)
+            .execute(self.state.store.pool())
+            .await;
         match res {
-            Ok(r) if r.rows_affected() > 0 => json!({ "success": true, "message": format!("IVR 菜单 {} 已成功删除", id) }),
+            Ok(r) if r.rows_affected() > 0 => {
+                json!({ "success": true, "message": format!("IVR 菜单 {} 已成功删除", id) })
+            }
             Ok(_) => json!({ "success": false, "error": format!("IVR 菜单 {} 不存在", id) }),
             Err(e) => json!({ "error": e.to_string() }),
         }

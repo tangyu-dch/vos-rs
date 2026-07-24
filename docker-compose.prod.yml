@@ -1,0 +1,76 @@
+# vos-rs 生产环境 Docker Compose 配置（带资源限制、就绪探针与重启策略）
+# 使用方法: docker compose -f docker-compose.prod.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vos-rs-prod-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vos_rs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Required production DB password}
+      POSTGRES_DB: ${POSTGRES_DB:-vos_rs}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "5432:5432"
+    volumes:
+      - vos_rs_prod_pg:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vos_rs}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: vos-rs-prod-redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Required production Redis password}"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - vos_rs_prod_redis:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: vos-rs-prod-nats
+    restart: always
+    command: ["--js", "--store_dir", "/data", "--port", "4222", "--http_port", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - vos_rs_prod_nats:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  vos_rs_prod_pg:
+  vos_rs_prod_redis:
+  vos_rs_prod_nats:

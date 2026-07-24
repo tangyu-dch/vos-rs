@@ -106,7 +106,9 @@ pub fn ladder_from_cdr(cdr: &CdrEvent) -> Vec<SipLadderStep> {
 /// 动态渲染 ASCII 格式的 SIP 交互梯形图 (Call Ladder Diagram)
 pub fn generate_ascii_ladder(steps: &[SipLadderStep]) -> String {
     let mut out = String::new();
-    out.push_str("   [ Caller (UAC) ]            [ sip-edge B2BUA ]            [ Gateway (UAS) ]\n");
+    out.push_str(
+        "   [ Caller (UAC) ]            [ sip-edge B2BUA ]            [ Gateway (UAS) ]\n",
+    );
     out.push_str("          |                            |                            |\n");
 
     for s in steps {

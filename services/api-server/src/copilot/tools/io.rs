@@ -11,24 +11,57 @@ impl<'a> TelecomCopilotEngine<'a> {
         let caller = args.get("caller").and_then(|v| v.as_str()).unwrap_or("");
         let callee = args.get("callee").and_then(|v| v.as_str()).unwrap_or("");
         let status = args.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        let start_time = args.get("start_time").and_then(|v| v.as_str()).unwrap_or("");
+        let start_time = args
+            .get("start_time")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let end_time = args.get("end_time").and_then(|v| v.as_str()).unwrap_or("");
 
-        let (cdrs, total) = self.state.store.list_cdrs(
-            1, 5,
-            if status.is_empty() { None } else { Some(status) },
-            None,
-            if caller.is_empty() { None } else { Some(caller) },
-            if callee.is_empty() { None } else { Some(callee) },
-            None, None, None
-        ).await.unwrap_or((vec![], 0));
+        let (cdrs, total) = self
+            .state
+            .store
+            .list_cdrs(
+                1,
+                5,
+                if status.is_empty() {
+                    None
+                } else {
+                    Some(status)
+                },
+                None,
+                if caller.is_empty() {
+                    None
+                } else {
+                    Some(caller)
+                },
+                if callee.is_empty() {
+                    None
+                } else {
+                    Some(callee)
+                },
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap_or((vec![], 0));
 
         let mut download_url = "/api/v1/reports/export?limit=5000".to_string();
-        if !caller.is_empty() { download_url.push_str(&format!("&caller={}", urlencoding_str(caller))); }
-        if !callee.is_empty() { download_url.push_str(&format!("&callee={}", urlencoding_str(callee))); }
-        if !status.is_empty() { download_url.push_str(&format!("&status={}", urlencoding_str(status))); }
-        if !start_time.is_empty() { download_url.push_str(&format!("&start_time={}", urlencoding_str(start_time))); }
-        if !end_time.is_empty() { download_url.push_str(&format!("&end_time={}", urlencoding_str(end_time))); }
+        if !caller.is_empty() {
+            download_url.push_str(&format!("&caller={}", urlencoding_str(caller)));
+        }
+        if !callee.is_empty() {
+            download_url.push_str(&format!("&callee={}", urlencoding_str(callee)));
+        }
+        if !status.is_empty() {
+            download_url.push_str(&format!("&status={}", urlencoding_str(status)));
+        }
+        if !start_time.is_empty() {
+            download_url.push_str(&format!("&start_time={}", urlencoding_str(start_time)));
+        }
+        if !end_time.is_empty() {
+            download_url.push_str(&format!("&end_time={}", urlencoding_str(end_time)));
+        }
 
         json!({
             "success": true,
@@ -86,29 +119,44 @@ impl<'a> TelecomCopilotEngine<'a> {
     }
 
     pub(crate) async fn tool_import_extensions(&self, args: &Value) -> Value {
-        let content = args.get("content").or_else(|| args.get("csv_content")).and_then(|v| v.as_str()).unwrap_or("");
+        let content = args
+            .get("content")
+            .or_else(|| args.get("csv_content"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if content.is_empty() {
             return json!({ "success": false, "error": "导入内容不能为空" });
         }
         let rows = crate::system::utils::parse_csv(content);
-        let realm = self.state.store.get_system_config("auth_realm").await.ok().flatten().unwrap_or_else(|| "vos-rs".into());
+        let realm = self
+            .state
+            .store
+            .get_system_config("auth_realm")
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "vos-rs".into());
         let mut imported = 0;
         let mut skipped = 0;
         let mut errors = vec![];
 
         for row in rows {
-            if row.len() < 2 || row[0].eq_ignore_ascii_case("username") || row[0].contains("分机") {
+            if row.len() < 2 || row[0].eq_ignore_ascii_case("username") || row[0].contains("分机")
+            {
                 continue;
             }
             let username = row[0].trim();
             let password = row[1].trim();
-            if username.is_empty() || password.is_empty() { continue; }
+            if username.is_empty() || password.is_empty() {
+                continue;
+            }
 
-            let ext_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_users WHERE username = $1)")
-                .bind(username)
-                .fetch_one(self.state.store.pool())
-                .await
-                .unwrap_or(false);
+            let ext_exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_users WHERE username = $1)")
+                    .bind(username)
+                    .fetch_one(self.state.store.pool())
+                    .await
+                    .unwrap_or(false);
 
             if ext_exists {
                 skipped += 1;
@@ -116,10 +164,14 @@ impl<'a> TelecomCopilotEngine<'a> {
                 continue;
             }
 
-            let ha1 = format!("{:x}", md5::compute(format!("{username}:{realm}:{password}").as_bytes()));
+            let ha1 = format!(
+                "{:x}",
+                md5::compute(format!("{username}:{realm}:{password}").as_bytes())
+            );
             match self.state.store.insert_user(username, &ha1).await {
                 Ok(_) => {
-                    let _ = crate::system::hot_cache::set_auth_user(self.state, username, &ha1).await;
+                    let _ =
+                        crate::system::hot_cache::set_auth_user(self.state, username, &ha1).await;
                     imported += 1;
                 }
                 Err(e) => {
@@ -138,7 +190,11 @@ impl<'a> TelecomCopilotEngine<'a> {
     }
 
     pub(crate) async fn tool_import_gateways(&self, args: &Value) -> Value {
-        let content = args.get("content").or_else(|| args.get("csv_content")).and_then(|v| v.as_str()).unwrap_or("");
+        let content = args
+            .get("content")
+            .or_else(|| args.get("csv_content"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if content.is_empty() {
             return json!({ "success": false, "error": "导入内容不能为空" });
         }
@@ -154,9 +210,14 @@ impl<'a> TelecomCopilotEngine<'a> {
             let id = row[0].trim();
             let name = row[1].trim();
             let ip = row[2].trim();
-            let port: i32 = row.get(3).and_then(|p| p.trim().parse().ok()).unwrap_or(5060);
+            let port: i32 = row
+                .get(3)
+                .and_then(|p| p.trim().parse().ok())
+                .unwrap_or(5060);
 
-            if id.is_empty() || name.is_empty() || ip.is_empty() { continue; }
+            if id.is_empty() || name.is_empty() || ip.is_empty() {
+                continue;
+            }
 
             let res = sqlx::query(
                 "INSERT INTO sip_gateways (id, name, ip_address, port, enabled) VALUES ($1, $2, $3, $4, true) \
@@ -187,7 +248,11 @@ impl<'a> TelecomCopilotEngine<'a> {
     }
 
     pub(crate) async fn tool_import_routes(&self, args: &Value) -> Value {
-        let content = args.get("content").or_else(|| args.get("csv_content")).and_then(|v| v.as_str()).unwrap_or("");
+        let content = args
+            .get("content")
+            .or_else(|| args.get("csv_content"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if content.is_empty() {
             return json!({ "success": false, "error": "导入内容不能为空" });
         }
@@ -205,13 +270,16 @@ impl<'a> TelecomCopilotEngine<'a> {
             let gw_id = row[2].trim();
             let priority: i32 = row.get(3).and_then(|p| p.trim().parse().ok()).unwrap_or(1);
 
-            if id.is_empty() || prefix.is_empty() || gw_id.is_empty() { continue; }
+            if id.is_empty() || prefix.is_empty() || gw_id.is_empty() {
+                continue;
+            }
 
-            let gw_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_gateways WHERE id = $1)")
-                .bind(gw_id)
-                .fetch_one(self.state.store.pool())
-                .await
-                .unwrap_or(false);
+            let gw_exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sip_gateways WHERE id = $1)")
+                    .bind(gw_id)
+                    .fetch_one(self.state.store.pool())
+                    .await
+                    .unwrap_or(false);
 
             if !gw_exists {
                 skipped += 1;
@@ -249,7 +317,11 @@ impl<'a> TelecomCopilotEngine<'a> {
     }
 
     pub(crate) async fn tool_import_rates(&self, args: &Value) -> Value {
-        let content = args.get("content").or_else(|| args.get("csv_content")).and_then(|v| v.as_str()).unwrap_or("");
+        let content = args
+            .get("content")
+            .or_else(|| args.get("csv_content"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if content.is_empty() {
             return json!({ "success": false, "error": "导入内容不能为空" });
         }
@@ -266,7 +338,12 @@ impl<'a> TelecomCopilotEngine<'a> {
             let id = format!("rate_{}", prefix);
 
             let dec = Decimal::from_f64_retain(rate_val).unwrap_or_default();
-            match self.state.store.upsert_rate(&id, prefix, dec, 60, dec, Some("由 Copilot 批量导入")).await {
+            match self
+                .state
+                .store
+                .upsert_rate(&id, prefix, dec, 60, dec, Some("由 Copilot 批量导入"))
+                .await
+            {
                 Ok(_) => imported += 1,
                 Err(_) => skipped += 1,
             }

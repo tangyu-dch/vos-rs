@@ -82,7 +82,14 @@ pub(crate) async fn list_queues(
     }
 
     if q.export.unwrap_or(false) {
-        let headers = vec!["队列 ID", "队列名称", "分配策略", "MOH 背景音乐文件", "最大排队等待超时(秒)", "绑定座席数"];
+        let headers = vec![
+            "队列 ID",
+            "队列名称",
+            "分配策略",
+            "MOH 背景音乐文件",
+            "最大排队等待超时(秒)",
+            "绑定座席数",
+        ];
         let mut rows = Vec::new();
         for item in items {
             let strat = match item.strategy.as_deref().unwrap_or("longest_idle") {
@@ -91,9 +98,19 @@ pub(crate) async fn list_queues(
                 "random" => "随机 (Random)",
                 _ => "最长空闲优先 (Longest Idle)",
             };
-            let moh = item.moh_file.clone().unwrap_or_else(|| "moh.wav".to_string());
-            let max_wait = item.max_wait_secs.map(|s| format!("{s}s")).unwrap_or_else(|| "300s".to_string());
-            let agent_count = item.agents.as_ref().map(|a| format!("{} 个座席", a.len())).unwrap_or_else(|| "0 个座席".to_string());
+            let moh = item
+                .moh_file
+                .clone()
+                .unwrap_or_else(|| "moh.wav".to_string());
+            let max_wait = item
+                .max_wait_secs
+                .map(|s| format!("{s}s"))
+                .unwrap_or_else(|| "300s".to_string());
+            let agent_count = item
+                .agents
+                .as_ref()
+                .map(|a| format!("{} 个座席", a.len()))
+                .unwrap_or_else(|| "0 个座席".to_string());
             rows.push(vec![
                 item.id.clone(),
                 item.name.clone(),
@@ -103,7 +120,11 @@ pub(crate) async fn list_queues(
                 agent_count,
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("queues.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "queues.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -113,7 +134,8 @@ pub(crate) async fn list_queues(
         total,
         page: 1,
         page_size: 20,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub(crate) async fn create_queue(
@@ -125,7 +147,10 @@ pub(crate) async fn create_queue(
     let moh_file = payload.moh_file.as_deref().unwrap_or("moh.wav");
     let max_wait_secs = payload.max_wait_secs.unwrap_or(300);
 
-    let mut tx = pool.begin().await.map_err(|e| ApiError::internal(format!("开启队列事务失败: {e}")))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal(format!("开启队列事务失败: {e}")))?;
 
     sqlx::query(
         "INSERT INTO call_queues (id, name, strategy, moh_file, max_wait_secs) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name = $2, strategy = $3, moh_file = $4, max_wait_secs = $5"
@@ -156,7 +181,9 @@ pub(crate) async fn create_queue(
         }
     }
 
-    tx.commit().await.map_err(|e| ApiError::internal(format!("提交队列事务失败: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal(format!("提交队列事务失败: {e}")))?;
 
     Ok((StatusCode::CREATED, Json(payload)))
 }
@@ -228,10 +255,16 @@ pub(crate) async fn list_agents(
                 item.agent_id.clone(),
                 format!("sip:{}", item.extension),
                 status_str.to_string(),
-                item.current_call.clone().unwrap_or_else(|| "无通话".to_string()),
+                item.current_call
+                    .clone()
+                    .unwrap_or_else(|| "无通话".to_string()),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("agents.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "agents.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -241,7 +274,8 @@ pub(crate) async fn list_agents(
         total,
         page: 1,
         page_size: 20,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub(crate) async fn create_agent(

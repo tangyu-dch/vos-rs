@@ -135,7 +135,13 @@ pub async fn list_rates(
     .map_err(err)?;
 
     if query.export.unwrap_or(false) {
-        let headers = vec!["费率标识", "前缀号码", "每分钟费率", "计费周期(秒)", "单周期价格"];
+        let headers = vec![
+            "费率标识",
+            "前缀号码",
+            "每分钟费率",
+            "计费周期(秒)",
+            "单周期价格",
+        ];
         let mut rows = Vec::new();
         for item in items {
             rows.push(vec![
@@ -146,7 +152,11 @@ pub async fn list_rates(
                 item.price_per_interval.to_string(),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("rates.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "rates.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -155,7 +165,8 @@ pub async fn list_rates(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub async fn create_rate(
@@ -255,7 +266,11 @@ pub async fn list_accounts(
                 item.created_at.map(|t| t.to_string()).unwrap_or_default(),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("accounts.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "accounts.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -264,7 +279,8 @@ pub async fn list_accounts(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub async fn credit_account(
@@ -299,7 +315,8 @@ pub async fn credit_account(
         }
     };
     if applied {
-        if let Err(error) = crate::system::hot_cache::set_billing_balance(&state, &username, balance).await
+        if let Err(error) =
+            crate::system::hot_cache::set_billing_balance(&state, &username, balance).await
         {
             tracing::warn!(
                 %username,
@@ -334,8 +351,16 @@ pub async fn list_ledger(
 
     if q.export.unwrap_or(false) {
         let headers = vec![
-            "流水号", "呼叫 ID", "账户名", "通话时长(ms)", "费率/分钟", 
-            "计费周期(秒)", "周期单价", "扣费金额", "期后余额", "创建时间"
+            "流水号",
+            "呼叫 ID",
+            "账户名",
+            "通话时长(ms)",
+            "费率/分钟",
+            "计费周期(秒)",
+            "周期单价",
+            "扣费金额",
+            "期后余额",
+            "创建时间",
         ];
         let mut rows = Vec::new();
         for item in items {
@@ -352,7 +377,11 @@ pub async fn list_ledger(
                 item.created_at.map(|t| t.to_string()).unwrap_or_default(),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("ledger.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "ledger.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -361,7 +390,8 @@ pub async fn list_ledger(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub async fn reconcile(
@@ -427,7 +457,8 @@ mod tests {
             resolve_rate(Some(Decimal::new(25, 2)), None, None).unwrap(),
             (60, Decimal::new(25, 2), Decimal::new(25, 2))
         );
-        let (interval, price, equivalent) = resolve_rate(None, Some(6), Some(Decimal::new(5, 2))).unwrap();
+        let (interval, price, equivalent) =
+            resolve_rate(None, Some(6), Some(Decimal::new(5, 2))).unwrap();
         assert_eq!((interval, price), (6, Decimal::new(5, 2)));
         assert_eq!(equivalent, Decimal::new(5, 1)); // 0.5
         assert!(resolve_rate(None, Some(6), Some(Decimal::new(501, 4))).is_err());

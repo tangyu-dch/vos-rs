@@ -720,7 +720,9 @@ pub(crate) async fn dispatch_response(
         if !gateway_id.is_empty() {
             if sip_response.status_code >= 200 && sip_response.status_code <= 299 {
                 edge_state.gateway_health.record_success(&gateway_id);
-            } else if sip_response.status_code == 408 || (sip_response.status_code >= 500 && sip_response.status_code <= 599) {
+            } else if sip_response.status_code == 408
+                || (sip_response.status_code >= 500 && sip_response.status_code <= 599)
+            {
                 edge_state.gateway_health.record_failure(&gateway_id);
             }
 

@@ -35,6 +35,33 @@ RTP（Real-time Transport Protocol）承载实际的语音流，RTCP（RTP Contr
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
+## 架构图
+
+### RTP 包结构
+
+```mermaid
+flowchart LR
+    A["RTP 头部"] --> A1["V/P/X/CC<br/>版本·填充·扩展·CSRC数"]
+    A --> A2["M/PT/Seq<br/>标记·载荷类型·序号"]
+    A --> A3["Timestamp<br/>时间戳"]
+    A --> A4["SSRC<br/>同步源标识"]
+    A --> A5["CSRC 列表<br/>可选"]
+    A2 --> B["RTP Payload 载荷"]
+```
+
+### BufferPool 工作机制
+
+收发热路径通过有界缓冲池复用预分配内存，避免每包 `Vec` 分配，池满时触发背压保护。
+
+```mermaid
+flowchart LR
+    A["收包线程"] -->|借出 buffer| B["BufferPool<br/>有界缓冲池"]
+    B --> C["预分配缓冲区"]
+    C -->|零拷贝解析| D["RtpPacket"]
+    D -->|归还复用| B
+    B -->|池满| E["背压保护<br/>丢弃/拒绝"]
+```
+
 ## 在项目中的位置
 
 ```

@@ -10,14 +10,28 @@ pub async fn health() -> &'static str {
     "OK"
 }
 
-/// 就绪探针：进程存活不代表数据库可用，只有依赖检查通过才返回 200。
-pub async fn ready(State(state): State<AppState>) -> StatusCode {
-    match state.store.ping().await {
-        Ok(()) => StatusCode::OK,
+/// 就绪探针：进程存活不代表数据库可用，只有底层依赖检查全部通过才返回 200。
+pub async fn ready(State(state): State<AppState>) -> impl IntoResponse {
+    let db_status = match state.store.ping().await {
+        Ok(()) => "ok",
         Err(error) => {
-            tracing::warn!(%error, "API 就绪检查失败");
-            StatusCode::SERVICE_UNAVAILABLE
+            tracing::warn!(%error, "API 就绪检查: 数据库未就绪");
+            "error"
         }
+    };
+
+    let is_ready = db_status == "ok";
+    let body = serde_json::json!({
+        "status": if is_ready { "ok" } else { "degraded" },
+        "components": {
+            "database": db_status,
+        }
+    });
+
+    if is_ready {
+        (StatusCode::OK, axum::Json(body))
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body))
     }
 }
 

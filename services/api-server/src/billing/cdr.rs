@@ -28,7 +28,10 @@ pub async fn list_cdrs(
     let (page, page_size) = if query.export.unwrap_or(false) {
         (1, 100000)
     } else {
-        (query.page.unwrap_or(1), query.page_size.unwrap_or(20).min(100))
+        (
+            query.page.unwrap_or(1),
+            query.page_size.unwrap_or(20).min(100),
+        )
     };
 
     let start = query.start_time.as_deref().and_then(parse_dt);
@@ -54,8 +57,17 @@ pub async fn list_cdrs(
 
     if query.export.unwrap_or(false) {
         let headers = vec![
-            "通话 ID", "主叫号码", "被叫号码", "状态", "呼叫开始时间", "应答时间", 
-            "结束时间", "通话时长(毫秒)", "计费时长(毫秒)", "失败代码", "失败原因"
+            "通话 ID",
+            "主叫号码",
+            "被叫号码",
+            "状态",
+            "呼叫开始时间",
+            "应答时间",
+            "结束时间",
+            "通话时长(毫秒)",
+            "计费时长(毫秒)",
+            "失败代码",
+            "失败原因",
         ];
         let mut rows = Vec::new();
         for item in items {
@@ -65,15 +77,21 @@ pub async fn list_cdrs(
                 item.callee.clone().unwrap_or_default(),
                 item.status.clone(),
                 item.started_at_ms.to_string(),
-                item.answered_at_ms.map(|t| t.to_string()).unwrap_or_default(),
+                item.answered_at_ms
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
                 item.ended_at_ms.to_string(),
                 item.duration_ms.to_string(),
                 item.billable_duration_ms.to_string(),
-                item.failure_status_code.map(|c| c.to_string()).unwrap_or_default(),
+                item.failure_status_code
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
                 item.failure_reason.clone().unwrap_or_default(),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("cdrs.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "cdrs.csv", &headers, &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -82,7 +100,8 @@ pub async fn list_cdrs(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub async fn get_cdr(

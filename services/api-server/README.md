@@ -57,6 +57,48 @@ web/ (前端) ──HTTP──→ api-server ──SQL──→ PostgreSQL
 
 `api-server` 主要依赖 `cdr-core` 做数据持久化，是 Web 控制台和外部系统的统一入口。
 
+## 架构图
+
+### API 模块依赖图
+
+```mermaid
+flowchart TB
+    A[axum Router] --> V1[v1.rs 路由总入口]
+    V1 --> Auth[auth.rs JWT 中间件]
+    V1 --> Res[resources 业务模块]
+    V1 --> Bil[billing 计费]
+    V1 --> Sys[system 系统]
+    V1 --> Cls[cluster 集群]
+    V1 --> Cop[copilot AI 助手]
+    Res --> Hot[hot_cache Redis]
+    Res --> Cdr[(cdr-core PostgreSQL)]
+    Cls --> SE[sip-edge 管理 API]
+    Cls --> ME[media-edge 管理 API]
+```
+
+### JWT 鉴权流程图
+
+```mermaid
+sequenceDiagram
+    participant C as 前端/客户端
+    participant A as api-server
+    participant R as Redis 缓存
+    participant D as PostgreSQL
+
+    C->>A: POST /api/v1/auth/login (账号+密码)
+    A->>D: 校验账号密码
+    D-->>A: 用户信息 + 角色
+    A->>A: 签发 JWT (含角色)
+    A-->>C: { token, expires_in }
+    C->>A: GET /api/v1/users (Header: Bearer)
+    A->>A: 校验签名 + 过期时间
+    A->>R: 查询热点缓存
+    R-->>A: 命中/未命中
+    A->>D: 查询 (未命中时)
+    D-->>A: 数据
+    A-->>C: 统一响应格式
+```
+
 ## 模块结构
 
 | 模块 | 职责 |

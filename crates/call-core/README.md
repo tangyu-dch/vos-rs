@@ -37,6 +37,42 @@
 7. 时间窗过滤 (time_start/time_end)
 ```
 
+## 架构图
+
+### 呼叫状态机迁移
+
+一通呼叫从收到 INVITE 起进入 `Initiated`，经路由 / 振铃到 `Established`，最终由 BYE / CANCEL / 超时进入 `Terminated`。
+
+```mermaid
+stateDiagram-v2
+    [*] --> Initiated: 收到 INVITE
+    Initiated --> Trying: 路由匹配成功
+    Trying --> Ringing: 收到 180
+    Ringing --> Established: 收到 200 OK
+    Trying --> Established: 收到 200 OK
+    Established --> Terminated: BYE / CANCEL / 超时
+    Initiated --> Terminated: 路由失败 / 拒呼
+    Ringing --> Terminated: CANCEL
+    Terminated --> [*]
+```
+
+### 路由决策流程
+
+```mermaid
+flowchart TD
+    A["收到 INVITE"] --> B["主叫号码改写"]
+    B --> C["最长前缀匹配"]
+    C --> D{有候选路由?}
+    D -->|否| E["404 Not Found"]
+    D -->|是| F["优先级 + 成本排序"]
+    F --> G["健康状态过滤"]
+    G --> H["容量检查"]
+    H --> I{可用网关?}
+    I -->|否| J["Failover 下一候选"]
+    I -->|是| K["发起出局 INVITE"]
+    J --> F
+```
+
 ## 在项目中的位置
 
 ```

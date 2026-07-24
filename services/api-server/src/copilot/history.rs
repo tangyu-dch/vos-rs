@@ -191,7 +191,9 @@ pub async fn delete_session(
     if !deleted {
         return Err(ApiError::not_found("会话不存在".to_string()));
     }
-    Ok(Json(serde_json::json!({ "deleted": true, "session_id": session_id })))
+    Ok(Json(
+        serde_json::json!({ "deleted": true, "session_id": session_id }),
+    ))
 }
 
 /// 在会话内发消息：落库用户消息 → 调用引擎分析 → 落库 assistant 回答 → 返回。
@@ -237,19 +239,18 @@ pub async fn chat_in_session(
 
     // 3) 调用引擎分析（真实业务数据采集 + LLM 调用 + 回退结构化报告）
     // 运行时从 Redis 读取当前启用的 LLM 配置
-    let active_llm = match crate::llm_configs::get_llm_config_from_redis(&state, payload.model_id).await {
-        Some(rec) => Some(crate::copilot::LlmConfig::from(rec)),
-        None => None,
-    };
+    let active_llm = crate::llm_configs::get_llm_config_from_redis(&state, payload.model_id)
+        .await
+        .map(crate::copilot::LlmConfig::from);
     let engine = TelecomCopilotEngine::new(&state, active_llm);
-    
+
     // 获取当前会话上下文（包含刚插入的最新消息）
     let history = state
         .store
         .list_copilot_messages(&session_id, 11)
         .await
         .unwrap_or_default();
-        
+
     let analysis = engine.analyze(query, Some(&history)).await;
     let intent_str = TelecomCopilotEngine::classify_intent(query).as_str();
 

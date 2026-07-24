@@ -132,7 +132,16 @@ pub async fn list_routes(
     })?;
 
     if query.export.unwrap_or(false) {
-        let headers = vec!["路由标识", "号码前缀", "优先级", "目标网关", "呼叫成本", "随机权重", "开始时间", "结束时间"];
+        let headers = vec![
+            "路由标识",
+            "号码前缀",
+            "优先级",
+            "目标网关",
+            "呼叫成本",
+            "随机权重",
+            "开始时间",
+            "结束时间",
+        ];
         let mut rows = Vec::new();
         for item in items {
             rows.push(vec![
@@ -142,11 +151,17 @@ pub async fn list_routes(
                 item.gateway_id.clone(),
                 item.cost.to_string(),
                 item.weight.to_string(),
-                item.time_start.clone().unwrap_or_else(|| "00:00".to_string()),
+                item.time_start
+                    .clone()
+                    .unwrap_or_else(|| "00:00".to_string()),
                 item.time_end.clone().unwrap_or_else(|| "23:59".to_string()),
             ]);
         }
-        return Ok(crate::system::utils::to_csv_response("routes.csv", &headers, &rows));
+        return Ok(crate::system::utils::to_csv_response(
+            "routes.csv",
+            &headers,
+            &rows,
+        ));
     }
 
     use axum::response::IntoResponse;
@@ -155,7 +170,8 @@ pub async fn list_routes(
         total,
         page,
         page_size,
-    }).into_response())
+    })
+    .into_response())
 }
 
 pub async fn create_route(

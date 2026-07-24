@@ -4,11 +4,11 @@
 //!
 
 // 子目录模块
+mod billing;
+mod cluster;
 mod copilot;
 mod resources;
-mod billing;
 mod system;
-mod cluster;
 mod termination;
 
 // 顶层模块
@@ -17,15 +17,17 @@ mod dashboard;
 mod details;
 mod error;
 mod helpers;
+mod import;
 mod llm_configs;
 mod middleware;
 mod recording;
-mod import;
 mod v1;
 
 // 重导出迁移后的公共 API，保持 `crate::ApiError` 等旧路径继续可用。
 pub(crate) use error::ApiError;
-pub(crate) use helpers::{config_logging_filter, normalize_page, parse_dt, validate_runtime_secrets};
+pub(crate) use helpers::{
+    config_logging_filter, normalize_page, parse_dt, validate_runtime_secrets,
+};
 pub(crate) use middleware::{audit_log, jwt_auth};
 
 use axum::{
@@ -44,27 +46,31 @@ use billing::billing::{
     create_rate, credit_account, delete_rate, list_accounts, list_ledger, list_rates,
     reconcile as billing_reconcile, update_rate,
 };
-use cluster::calls::{list_active, media_metrics, route_preview, terminate_call as calls_terminate};
-use cdr_core::PostgresCdrStore;
-use cluster::media_cluster::{get_media_cluster, update_media_cluster};
-use resources::numbers::{create_number, delete_number, list_numbers, update_number};
-use recording::get_recording_audio;
 use billing::report::{export_cdrs_csv, get_report_summary};
+use cdr_core::PostgresCdrStore;
+use cluster::calls::{
+    list_active, media_metrics, route_preview, terminate_call as calls_terminate,
+};
+use cluster::media_cluster::{get_media_cluster, update_media_cluster};
+use recording::get_recording_audio;
+use resources::numbers::{create_number, delete_number, list_numbers, update_number};
 
 use billing::anti_fraud::{
     create_anti_fraud_rule, delete_anti_fraud_rule, list_anti_fraud_config, list_anti_fraud_rules,
     update_anti_fraud_config, update_anti_fraud_rule,
 };
-use system::audit::list_audit_logs;
-use system::auth::login;
 use billing::cdr::{get_cdr, get_dtmf_events, list_cdrs};
+use cluster::sip_cluster::{control_sip_cluster_node, get_sip_cluster_status};
 use dashboard::{dashboard_events, get_dashboard_stats, get_dashboard_trend};
 use resources::gateways::{create_gateway, delete_gateway, list_gateways, update_gateway};
 use resources::registrations::list_registrations;
 use resources::routes::{create_route, delete_route, list_routes, update_route};
-use cluster::sip_cluster::{control_sip_cluster_node, get_sip_cluster_status};
-use system::system::{get_system_configs, health, prometheus_metrics, ready, update_system_configs};
 use resources::users::{create_user, delete_user, list_users, update_user};
+use system::audit::list_audit_logs;
+use system::auth::login;
+use system::system::{
+    get_system_configs, health, prometheus_metrics, ready, update_system_configs,
+};
 
 /// 应用状态：所有处理器共享的状态。
 #[derive(Clone)]
@@ -287,18 +293,18 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "127.0.0.1".to_string());
     let port: u16 = api_network.port.unwrap_or(8080);
     let addr_str = format!("{}:{}", host, port);
-    let addr: std::net::SocketAddr = addr_str
-        .parse()
-        .or_else(|_| {
-            use std::net::ToSocketAddrs;
-            addr_str.to_socket_addrs()
-                .ok()
-                .and_then(|mut addrs| addrs.next())
-                .ok_or_else(|| anyhow::anyhow!("无法解析 API 服务器绑定地址: {}", addr_str))
-        })?;
+    let addr: std::net::SocketAddr = addr_str.parse().or_else(|_| {
+        use std::net::ToSocketAddrs;
+        addr_str
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.next())
+            .ok_or_else(|| anyhow::anyhow!("无法解析 API 服务器绑定地址: {}", addr_str))
+    })?;
 
     let is_public = !addr.ip().is_loopback();
-    let production = env::var("VOS_RS_ENV").is_ok_and(|value| value.eq_ignore_ascii_case("production"))
+    let production = env::var("VOS_RS_ENV")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("production"))
         || is_public;
 
     validate_runtime_secrets(
@@ -325,7 +331,9 @@ async fn main() -> anyhow::Result<()> {
         redis_client,
         sip_node_key_prefix,
         sip_auth_realm,
-        active_calls_cache: crate::dashboard::ActiveCallsCache::new(std::time::Duration::from_secs(2)),
+        active_calls_cache: crate::dashboard::ActiveCallsCache::new(
+            std::time::Duration::from_secs(2),
+        ),
         llm_client,
     };
 
@@ -405,7 +413,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/users/:username", put(update_user).delete(delete_user))
         .route("/api/users/import", post(import::import_users))
-        .route("/api/users/import-template", get(import::import_users_template))
+        .route(
+            "/api/users/import-template",
+            get(import::import_users_template),
+        )
         .route("/api/gateways", get(list_gateways).post(create_gateway))
         .route(
             "/api/gateways/:id",
@@ -414,7 +425,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/routes", get(list_routes).post(create_route))
         .route("/api/routes/:id", put(update_route).delete(delete_route))
         .route("/api/routes/import", post(import::import_routes))
-        .route("/api/routes/import-template", get(import::import_routes_template))
+        .route(
+            "/api/routes/import-template",
+            get(import::import_routes_template),
+        )
         .route("/api/registrations", get(list_registrations))
         .route("/api/recordings/:call_id/audio", get(get_recording_audio))
         .route("/api/reports/summary", get(get_report_summary))
@@ -422,7 +436,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/rates", get(list_rates).post(create_rate))
         .route("/api/rates/:id", put(update_rate).delete(delete_rate))
         .route("/api/rates/import", post(import::import_rates))
-        .route("/api/rates/import-template", get(import::import_rates_template))
+        .route(
+            "/api/rates/import-template",
+            get(import::import_rates_template),
+        )
         .route("/api/accounts", get(list_accounts))
         .route("/api/accounts/:username/credit", post(credit_account))
         .route("/api/ledger", get(list_ledger))
@@ -437,7 +454,10 @@ async fn main() -> anyhow::Result<()> {
             put(update_number).delete(delete_number),
         )
         .route("/api/numbers/import", post(import::import_numbers))
-        .route("/api/numbers/import-template", get(import::import_numbers_template))
+        .route(
+            "/api/numbers/import-template",
+            get(import::import_numbers_template),
+        )
         .route(
             "/api/anti-fraud/rules",
             get(list_anti_fraud_rules).post(create_anti_fraud_rule),
@@ -469,7 +489,9 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http());
 
     // Spawn background traffic telemetry loop to periodically report node traffic to Redis
-    tokio::spawn(crate::dashboard::start_traffic_telemetry_loop(state.clone()));
+    tokio::spawn(crate::dashboard::start_traffic_telemetry_loop(
+        state.clone(),
+    ));
 
     tracing::info!("API server listening on {}", addr);
 

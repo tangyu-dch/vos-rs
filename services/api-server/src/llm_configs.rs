@@ -48,10 +48,10 @@ pub async fn create_llm_config(
         .create_llm_config(&input)
         .await
         .map_err(|e| ApiError::internal(format!("创建 LLM 配置失败: {e}")))?;
-    
+
     // 同步更新 Redis 缓存
     rebuild_llm_configs_in_redis(&state).await?;
-    
+
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -68,10 +68,10 @@ pub async fn update_llm_config(
         .await
         .map_err(|e| ApiError::internal(format!("更新 LLM 配置失败: {e}")))?
         .ok_or_else(|| ApiError::not_found("LLM 配置不存在".to_string()))?;
-    
+
     // 同步更新 Redis 缓存
     rebuild_llm_configs_in_redis(&state).await?;
-    
+
     Ok(Json(record))
 }
 
@@ -105,31 +105,31 @@ pub async fn activate_llm_config(
         .await
         .map_err(|e| ApiError::internal(format!("启用 LLM 配置失败: {e}")))?
         .ok_or_else(|| ApiError::not_found("LLM 配置不存在".to_string()))?;
-    
+
     // 同步更新 Redis 缓存
     rebuild_llm_configs_in_redis(&state).await?;
-    
+
     Ok(Json(record))
 }
 
 /// 从数据库重建 Redis 缓存中的所有 LLM 配置
 pub async fn rebuild_llm_configs_in_redis(state: &AppState) -> Result<(), ApiError> {
     let mut conn = state.redis_client.clone();
-    
+
     // 1. 从 DB 中查询所有配置
     let list = state
         .store
         .list_llm_configs()
         .await
         .map_err(|e| ApiError::internal(format!("查询 LLM 配置列表失败: {e}")))?;
-    
+
     // 2. 清空 Redis 中旧的 key
     let _: () = redis::cmd("DEL")
         .arg("vos_rs:llm_configs")
         .query_async(&mut conn)
         .await
         .unwrap_or(());
-        
+
     let _: () = redis::cmd("DEL")
         .arg("vos_rs:active_llm_config")
         .query_async(&mut conn)
@@ -140,7 +140,7 @@ pub async fn rebuild_llm_configs_in_redis(state: &AppState) -> Result<(), ApiErr
     for rec in list {
         let json_str = serde_json::to_string(&rec)
             .map_err(|e| ApiError::internal(format!("序列化 LLM 配置失败: {e}")))?;
-        
+
         let _: () = redis::cmd("HSET")
             .arg("vos_rs:llm_configs")
             .arg(rec.id.to_string())
@@ -158,7 +158,7 @@ pub async fn rebuild_llm_configs_in_redis(state: &AppState) -> Result<(), ApiErr
                 .map_err(|e| ApiError::internal(format!("写入 active Redis 失败: {e}")))?;
         }
     }
-    
+
     Ok(())
 }
 
@@ -168,7 +168,7 @@ pub async fn get_llm_config_from_redis(
     model_id: Option<i64>,
 ) -> Option<LlmConfigRecord> {
     let mut conn = state.redis_client.clone();
-    
+
     if let Some(id) = model_id {
         // 尝试从 Redis Hash 获取特定 ID
         let json_opt: Option<String> = redis::cmd("HGET")
@@ -177,13 +177,13 @@ pub async fn get_llm_config_from_redis(
             .query_async(&mut conn)
             .await
             .unwrap_or(None);
-            
+
         if let Some(json_str) = json_opt {
             if let Ok(rec) = serde_json::from_str::<LlmConfigRecord>(&json_str) {
                 return Some(rec);
             }
         }
-        
+
         // 缓存未命中时回退到 DB 查询
         if let Ok(Some(rec)) = state.store.get_llm_config(id).await {
             // 顺便回填 Redis 缓存
@@ -204,13 +204,13 @@ pub async fn get_llm_config_from_redis(
             .query_async(&mut conn)
             .await
             .unwrap_or(None);
-            
+
         if let Some(json_str) = json_opt {
             if let Ok(rec) = serde_json::from_str::<LlmConfigRecord>(&json_str) {
                 return Some(rec);
             }
         }
-        
+
         // 缓存未命中时回退到 DB 查询
         if let Ok(Some(rec)) = state.store.get_active_llm_config().await {
             // 顺便回填 Redis 缓存
@@ -245,7 +245,9 @@ fn validate_input(input: &UpsertLlmConfigInput) -> Result<(), ApiError> {
         return Err(ApiError::bad_request("模型名称不能为空".to_string()));
     }
     if !(0.0..=2.0).contains(&input.temperature) {
-        return Err(ApiError::bad_request("temperature 必须在 0.0 ~ 2.0 之间".to_string()));
+        return Err(ApiError::bad_request(
+            "temperature 必须在 0.0 ~ 2.0 之间".to_string(),
+        ));
     }
     Ok(())
 }

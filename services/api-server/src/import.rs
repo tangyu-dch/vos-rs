@@ -1,17 +1,24 @@
+use crate::{ApiError, AppState};
 use axum::{
     extract::{Multipart, State},
     response::IntoResponse,
     Json,
 };
-use serde_json::{json, Value};
 use rust_decimal::prelude::FromStr;
-use crate::{ApiError, AppState};
+use serde_json::{json, Value};
 
 async fn get_csv_content(mut multipart: Multipart) -> Result<String, ApiError> {
-    while let Some(field) = multipart.next_field().await.map_err(|e| ApiError::internal(e.to_string()))? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    {
         let name = field.name().unwrap_or_default().to_string();
         if name == "file" {
-            let bytes = field.bytes().await.map_err(|e| ApiError::internal(e.to_string()))?;
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
             let content = String::from_utf8(bytes.to_vec())
                 .map_err(|e| ApiError::internal(format!("CSV 不是有效的 UTF-8 编码: {e}")))?;
             return Ok(content);
@@ -53,19 +60,28 @@ pub async fn import_users(
 
     let realm = get_digest_realm(&state).await?;
     let pool = state.store.pool();
-    let mut tx = pool.begin().await.map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut imported = 0;
     let mut hot_cache_updates = Vec::new();
 
     for (idx, row) in parsed.iter().skip(1).enumerate() {
         if row.len() < 2 {
-            return Err(ApiError::internal(format!("第 {} 行格式错误：缺少密码列", idx + 2)));
+            return Err(ApiError::internal(format!(
+                "第 {} 行格式错误：缺少密码列",
+                idx + 2
+            )));
         }
         let username = row[0].trim();
         let password = row[1].trim();
         if username.is_empty() || password.is_empty() {
-            return Err(ApiError::internal(format!("第 {} 行包含空分机号或密码", idx + 2)));
+            return Err(ApiError::internal(format!(
+                "第 {} 行包含空分机号或密码",
+                idx + 2
+            )));
         }
 
         let ha1 = format!(
@@ -84,7 +100,9 @@ pub async fn import_users(
         imported += 1;
     }
 
-    tx.commit().await.map_err(|e| ApiError::internal(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // 同步写入 Redis 缓存
     for (username, ha1) in hot_cache_updates {
@@ -99,7 +117,14 @@ pub async fn import_users(
 pub async fn import_numbers_template() -> impl IntoResponse {
     crate::system::utils::to_csv_response(
         "numbers_import_template.csv",
-        &["号码", "关联分机", "落地中继", "呼叫方向", "最大并发", "状态"],
+        &[
+            "号码",
+            "关联分机",
+            "落地中继",
+            "呼叫方向",
+            "最大并发",
+            "状态",
+        ],
         &[vec![
             "13800138000".to_string(),
             "8001".to_string(),
@@ -122,13 +147,19 @@ pub async fn import_numbers(
     }
 
     let pool = state.store.pool();
-    let mut tx = pool.begin().await.map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut imported = 0;
 
     for (idx, row) in parsed.iter().skip(1).enumerate() {
         if row.len() < 6 {
-            return Err(ApiError::internal(format!("第 {} 行格式错误：需要包含 6 个字段", idx + 2)));
+            return Err(ApiError::internal(format!(
+                "第 {} 行格式错误：需要包含 6 个字段",
+                idx + 2
+            )));
         }
         let number = row[0].trim();
         let username = row[1].trim();
@@ -138,12 +169,27 @@ pub async fn import_numbers(
         let status = row[5].trim();
 
         if number.is_empty() || status.is_empty() {
-            return Err(ApiError::internal(format!("第 {} 行包含空号码或空状态", idx + 2)));
+            return Err(ApiError::internal(format!(
+                "第 {} 行包含空号码或空状态",
+                idx + 2
+            )));
         }
 
-        let username_opt = if username.is_empty() { None } else { Some(username) };
-        let gw_opt = if gateway_id.is_empty() { None } else { Some(gateway_id) };
-        let dir_opt = if direction.is_empty() { None } else { Some(direction) };
+        let username_opt = if username.is_empty() {
+            None
+        } else {
+            Some(username)
+        };
+        let gw_opt = if gateway_id.is_empty() {
+            None
+        } else {
+            Some(gateway_id)
+        };
+        let dir_opt = if direction.is_empty() {
+            None
+        } else {
+            Some(direction)
+        };
         let max_concurrent = max_concurrent_str.parse::<i32>().ok();
 
         sqlx::query(
@@ -167,7 +213,9 @@ pub async fn import_numbers(
         imported += 1;
     }
 
-    tx.commit().await.map_err(|e| ApiError::internal(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // 通知 sip-edge 重新加载路由
     crate::resources::routes::publish_route_reload(&state.nats_client).await;
@@ -180,7 +228,13 @@ pub async fn import_numbers(
 pub async fn import_rates_template() -> impl IntoResponse {
     crate::system::utils::to_csv_response(
         "rates_import_template.csv",
-        &["费率标识", "前缀号码", "每分钟费率", "计费周期(秒)", "单周期价格"],
+        &[
+            "费率标识",
+            "前缀号码",
+            "每分钟费率",
+            "计费周期(秒)",
+            "单周期价格",
+        ],
         &[vec![
             "cn-rate".to_string(),
             "86".to_string(),
@@ -202,13 +256,19 @@ pub async fn import_rates(
     }
 
     let pool = state.store.pool();
-    let mut tx = pool.begin().await.map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut imported = 0;
 
     for (idx, row) in parsed.iter().skip(1).enumerate() {
         if row.len() < 5 {
-            return Err(ApiError::internal(format!("第 {} 行格式错误：需要包含 5 个字段", idx + 2)));
+            return Err(ApiError::internal(format!(
+                "第 {} 行格式错误：需要包含 5 个字段",
+                idx + 2
+            )));
         }
         let id = row[0].trim();
         let prefix = row[1].trim();
@@ -217,15 +277,29 @@ pub async fn import_rates(
         let price_str = row[4].trim();
 
         if id.is_empty() || prefix.is_empty() {
-            return Err(ApiError::internal(format!("第 {} 行包含空标识或空前缀", idx + 2)));
+            return Err(ApiError::internal(format!(
+                "第 {} 行包含空标识或空前缀",
+                idx + 2
+            )));
         }
 
-        let rate = rust_decimal::Decimal::from_str(rate_str)
-            .map_err(|_| ApiError::internal(format!("第 {} 行费率数值无效: {}", idx + 2, rate_str)))?;
-        let interval = interval_str.parse::<i32>()
-            .map_err(|_| ApiError::internal(format!("第 {} 行计费周期数值无效: {}", idx + 2, interval_str)))?;
-        let price = rust_decimal::Decimal::from_str(price_str)
-            .map_err(|_| ApiError::internal(format!("第 {} 行单周期价格数值无效: {}", idx + 2, price_str)))?;
+        let rate = rust_decimal::Decimal::from_str(rate_str).map_err(|_| {
+            ApiError::internal(format!("第 {} 行费率数值无效: {}", idx + 2, rate_str))
+        })?;
+        let interval = interval_str.parse::<i32>().map_err(|_| {
+            ApiError::internal(format!(
+                "第 {} 行计费周期数值无效: {}",
+                idx + 2,
+                interval_str
+            ))
+        })?;
+        let price = rust_decimal::Decimal::from_str(price_str).map_err(|_| {
+            ApiError::internal(format!(
+                "第 {} 行单周期价格数值无效: {}",
+                idx + 2,
+                price_str
+            ))
+        })?;
 
         sqlx::query(
             "INSERT INTO billing_rates (id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description) VALUES ($1,$2,$3,$4,$5,$6) \
@@ -244,7 +318,9 @@ pub async fn import_rates(
         imported += 1;
     }
 
-    tx.commit().await.map_err(|e| ApiError::internal(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // 预热/刷新内存中的费率配置
     let _ = crate::system::hot_cache::rebuild_billing_rates(&state).await;
@@ -257,7 +333,16 @@ pub async fn import_rates(
 pub async fn import_routes_template() -> impl IntoResponse {
     crate::system::utils::to_csv_response(
         "routes_import_template.csv",
-        &["路由标识", "号码前缀", "优先级", "目标网关", "每呼叫成本", "权重", "生效时间(开始)", "生效时间(结束)"],
+        &[
+            "路由标识",
+            "号码前缀",
+            "优先级",
+            "目标网关",
+            "每呼叫成本",
+            "权重",
+            "生效时间(开始)",
+            "生效时间(结束)",
+        ],
         &[vec![
             "to-carrier-a".to_string(),
             "86".to_string(),
@@ -282,13 +367,19 @@ pub async fn import_routes(
     }
 
     let pool = state.store.pool();
-    let mut tx = pool.begin().await.map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut imported = 0;
 
     for (idx, row) in parsed.iter().skip(1).enumerate() {
         if row.len() < 8 {
-            return Err(ApiError::internal(format!("第 {} 行格式错误：需要包含 8 个字段", idx + 2)));
+            return Err(ApiError::internal(format!(
+                "第 {} 行格式错误：需要包含 8 个字段",
+                idx + 2
+            )));
         }
         let id = row[0].trim();
         let prefix = row[1].trim();
@@ -300,18 +391,32 @@ pub async fn import_routes(
         let time_end = row[7].trim();
 
         if id.is_empty() || prefix.is_empty() || gateway_id.is_empty() {
-            return Err(ApiError::internal(format!("第 {} 行包含空标识、空前缀或空网关", idx + 2)));
+            return Err(ApiError::internal(format!(
+                "第 {} 行包含空标识、空前缀或空网关",
+                idx + 2
+            )));
         }
 
-        let priority = priority_str.parse::<i32>()
-            .map_err(|_| ApiError::internal(format!("第 {} 行优先级数值无效: {}", idx + 2, priority_str)))?;
-        let cost = f64::from_str(cost_str)
-            .map_err(|_| ApiError::internal(format!("第 {} 行呼叫成本数值无效: {}", idx + 2, cost_str)))?;
-        let weight = weight_str.parse::<i32>()
-            .map_err(|_| ApiError::internal(format!("第 {} 行权重数值无效: {}", idx + 2, weight_str)))?;
+        let priority = priority_str.parse::<i32>().map_err(|_| {
+            ApiError::internal(format!("第 {} 行优先级数值无效: {}", idx + 2, priority_str))
+        })?;
+        let cost = f64::from_str(cost_str).map_err(|_| {
+            ApiError::internal(format!("第 {} 行呼叫成本数值无效: {}", idx + 2, cost_str))
+        })?;
+        let weight = weight_str.parse::<i32>().map_err(|_| {
+            ApiError::internal(format!("第 {} 行权重数值无效: {}", idx + 2, weight_str))
+        })?;
 
-        let start_opt = if time_start.is_empty() { None } else { Some(time_start) };
-        let end_opt = if time_end.is_empty() { None } else { Some(time_end) };
+        let start_opt = if time_start.is_empty() {
+            None
+        } else {
+            Some(time_start)
+        };
+        let end_opt = if time_end.is_empty() {
+            None
+        } else {
+            Some(time_end)
+        };
 
         sqlx::query(
             "INSERT INTO sip_routes (id, prefix, priority, gateway_id, cost, weight, time_start, time_end, topology) \
@@ -341,7 +446,9 @@ pub async fn import_routes(
         imported += 1;
     }
 
-    tx.commit().await.map_err(|e| ApiError::internal(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // 通知 sip-edge 重新加载路由
     crate::resources::routes::publish_route_reload(&state.nats_client).await;

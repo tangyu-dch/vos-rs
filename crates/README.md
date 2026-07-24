@@ -26,6 +26,7 @@
 | [`rtp-core`](./rtp-core/) | 协议库 | RTP/RTCP 协议实现（零外部依赖） | 无 |
 | [`sdp-core`](./sdp-core/) | 协议库 | SDP 协议解析（零外部依赖） | 无 |
 | [`call-core`](./call-core/) | 业务库 | 呼叫控制 + 路由 + 计费 + ACD | `sip-core` |
+| [`media-core`](./media-core/) | 媒体库 | 媒体面算法（混音/转码/录音/DTMF/质量监控） | `rtp-core`、`sdp-core` |
 | [`cdr-core`](./cdr-core/) | 数据库 | PostgreSQL 持久化 + schema 迁移 | 无（sqlx） |
 | [`storage-core`](./storage-core/) | 存储抽象 | 录音文件本地/OSS/双写存储 | 无（async_trait） |
 
@@ -60,6 +61,30 @@
 └──────────────────────────────────────────────────────────┘
 ```
 
+### 7 个 crate 依赖关系（mermaid）
+
+下图补充展示含 `media-core` 的 7 个 crate 依赖关系：协议层零依赖，业务/媒体层依赖协议层，持久化层独立。
+
+```mermaid
+flowchart TD
+    subgraph P["协议层（零外部依赖）"]
+        SIP["sip-core<br/>SIP 解析"]
+        RTP["rtp-core<br/>RTP/RTCP"]
+        SDP["sdp-core<br/>SDP 解析"]
+    end
+    subgraph B["业务与媒体层"]
+        CALL["call-core<br/>路由/计费/ACD"]
+        MEDIA["media-core<br/>混音/转码/录音"]
+    end
+    subgraph D["持久化层"]
+        CDR["cdr-core<br/>PostgreSQL"]
+        STO["storage-core<br/>本地/OSS"]
+    end
+    CALL --> SIP
+    MEDIA --> RTP
+    MEDIA --> SDP
+```
+
 ## 分层职责
 
 ### 1. 协议层（零外部依赖，纯 Rust）
@@ -78,9 +103,17 @@
 | :--- | :--- |
 | `call-core` | 呼叫状态机 + 路由引擎 + 实时计费 + ACD 队列 + CDR 生成 |
 
-**特点**：依赖 `sip-core`（用到 SIP 方法/URI 类型），但**不依赖**任何 I/O 或数据库——纯业务逻辑，便于单元测试。
+**特点**：依赖 `sip-core`（用到 SIP 方法/URI 类型），但**不依赖**任何 I/O 或数据库——纯业务逻辑，便于单元测试 mock。
 
-### 3. 持久化层
+### 3. 媒体层
+
+| Crate | 职责 |
+| :--- | :--- |
+| `media-core` | 混音 / 转码 / 录音 / DTMF / 质量监控（MOS） |
+
+**特点**：依赖 `rtp-core` 与 `sdp-core`，自身不做网络 I/O，只提供媒体算法，供 `sip-edge` 与未来 `media-edge` 共享。
+
+### 4. 持久化层
 
 | Crate | 职责 |
 | :--- | :--- |
@@ -99,6 +132,7 @@ sip-edge (B2BUA + 媒体中继)
 ├── rtp-core      ← RTP 收发 + DTMF + 录音
 ├── sdp-core      ← SDP 协商 + NAT 改写
 ├── call-core     ← 路由 + 计费 + ACD
+├── media-core    ← 混音/转码/录音算法
 ├── cdr-core      ← 配置查询 + CDR 写入
 └── storage-core  ← 录音文件存储
 
