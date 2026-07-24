@@ -11,7 +11,7 @@ use tracing::warn;
 impl PostgresCdrStore {
     pub async fn list_rates(&self) -> Result<Vec<BillingRate>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description, created_at FROM billing_rates \
+            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, created_at FROM billing_rates \
              ORDER BY length(prefix) DESC, prefix",
         )
         .fetch_all(&self.pool)
@@ -38,7 +38,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<BillingRate>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description, created_at \
+            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, created_at \
               FROM billing_rates ORDER BY length(prefix) DESC, prefix LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -102,7 +102,7 @@ impl PostgresCdrStore {
     // ===== 计费：账户 =====
     pub async fn list_accounts(&self) -> Result<Vec<BillingAccount>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT username, balance, credit_limit, currency, created_at FROM billing_accounts ORDER BY username",
+            "SELECT username, CAST(balance AS NUMERIC), CAST(credit_limit AS NUMERIC), currency, created_at FROM billing_accounts ORDER BY username",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -126,7 +126,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<BillingAccount>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT username, balance, credit_limit, currency, created_at FROM billing_accounts \
+            "SELECT username, CAST(balance AS NUMERIC), CAST(credit_limit AS NUMERIC), currency, created_at FROM billing_accounts \
              ORDER BY username LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -166,7 +166,7 @@ impl PostgresCdrStore {
             .await?;
 
         let existing: Option<(String, Decimal, Decimal)> = sqlx::query_as(
-            "SELECT username, amount, balance_after \
+            "SELECT username, CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC) \
              FROM billing_credits WHERE idempotency_key = $1",
         )
         .bind(idempotency_key)
@@ -183,7 +183,7 @@ impl PostgresCdrStore {
         let balance: Decimal = sqlx::query_scalar(
             "INSERT INTO billing_accounts (username, balance) VALUES ($1, $2) \
              ON CONFLICT (username) DO UPDATE SET balance = billing_accounts.balance + $2 \
-             RETURNING balance",
+             RETURNING CAST(balance AS NUMERIC)",
         )
         .bind(username)
         .bind(amount)
@@ -211,7 +211,7 @@ impl PostgresCdrStore {
         callee: &str,
     ) -> Result<(bool, Decimal, Decimal), sqlx::Error> {
         let balance: Decimal = sqlx::query_scalar(
-            "SELECT COALESCE(balance, 0.0) FROM billing_accounts WHERE username=$1",
+            "SELECT COALESCE(CAST(balance AS NUMERIC), 0.0) FROM billing_accounts WHERE username=$1",
         )
         .bind(username)
         .fetch_optional(&self.pool)
@@ -219,7 +219,7 @@ impl PostgresCdrStore {
         .unwrap_or(Decimal::ZERO);
 
         let rate: Decimal = sqlx::query_scalar(
-            "SELECT COALESCE(rate_per_minute, 0.0) FROM billing_rates \
+            "SELECT COALESCE(CAST(rate_per_minute AS NUMERIC), 0.0) FROM billing_rates \
               WHERE $2 LIKE prefix || '%' ORDER BY length(prefix) DESC LIMIT 1",
         )
         .bind(username)
@@ -316,7 +316,7 @@ impl PostgresCdrStore {
     ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
         let rows = if let Some(u) = username {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
                   FROM billing_ledger WHERE username=$1 ORDER BY created_at DESC LIMIT 500",
             )
             .bind(u)
@@ -324,7 +324,7 @@ impl PostgresCdrStore {
             .await?
         } else {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
                   FROM billing_ledger ORDER BY created_at DESC LIMIT 500",
             )
             .fetch_all(&self.pool)
@@ -357,7 +357,7 @@ impl PostgresCdrStore {
     ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
         let rows = if let Some(username) = username {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
                   FROM billing_ledger WHERE username = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
             )
             .bind(username)
@@ -367,7 +367,7 @@ impl PostgresCdrStore {
             .await?
         } else {
             sqlx::query(
-                "SELECT id, call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after, created_at \
+                "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
                   FROM billing_ledger ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
             )
             .bind(limit)
