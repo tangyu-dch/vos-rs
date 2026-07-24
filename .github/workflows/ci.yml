@@ -33,6 +33,12 @@ jobs:
       - name: Run Unit & Integration Tests
         run: cargo test --workspace
 
+      - name: Security Audit (cargo-audit)
+        uses: rustsec/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
       - name: Build Workspace
         run: cargo build --workspace --verbose
 
