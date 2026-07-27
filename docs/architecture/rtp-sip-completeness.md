@@ -72,14 +72,16 @@
 - 呼入 Digest 认证与安全动态 Nonce 生命周期管理及 Nc 防重放滑动窗口保护。
 - SBC 安全防御控制（IP ACL、令牌桶 CPS 速率限制、活跃呼叫并发限制）。
 - Path 与 Service-Route 路由机制支持。
+- 对话分叉（forking）与并行响铃：`edge_state::fork_dialogs` 支持同一 session 下多条 B-leg，赢家确认后自动 CANCEL 其他分支。
+- 基础拓扑隐藏：出站 INVITE 覆写 Call-ID、清理 Via/Record-Route 头，对上游屏蔽 B2BUA 内部拓扑。
 
 未完成：
 
-- 对话的分叉（forking）以及早期对话管理。
+- 早期对话管理（forking 已实现，见 `sip/handlers/invite/outbound/dispatch.rs::fork_outbound_invites` 与 `edge_state/models.rs::fork_dialogs`，支持并行响铃与失败分支自动 CANCEL）。
 - 基于 Redis 存储共享的分布式注册、对话、事务及速率限制计数状态（集群高可用）。
 - 活动呼叫的 HA 副本同步与重启恢复。
 - SUBSCRIBE/NOTIFY 事件包。
-- 拓扑隐藏与除 Path/Service-Route 以外的高级代理。
+- 高级代理路由（基础拓扑隐藏已实现，见 `sip/outbound/invite.rs` 的 Call-ID 覆写与 Via 清理；Path/Service-Route 路由机制也已支持）。
 - 多租户域策略和每账户授权。
 - 呼叫、注册关系、事务、RTP 中继和 CDR 的高可用（HA）集群。
 

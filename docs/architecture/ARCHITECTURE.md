@@ -72,12 +72,13 @@
     │◀── 200 OK ──────────────│◀── 200 OK ───────────────│  (CDR生成)
 ```
 
-**关键代码路径**：
-- INVITE 入站处理：`services/sip-edge/src/sip/handlers/invite.rs` → 路由选择 → 拓扑隐藏映射登记 → 转发到网关
+**关键代码路径**（B2BUA session_id 主键模型，详见 [B2BUA_SESSION_MODEL.md](./B2BUA_SESSION_MODEL.md)）：
+- INVITE 入站处理：`services/sip-edge/src/sip/handlers/invite/mod.rs` → 路由选择 → 拓扑隐藏映射登记 → 转发到网关
 - 路由选择：`crates/call-core/src/routing/table.rs` → `PrefixTrie` 前缀匹配树 → LCR + 加权负载均衡
-- 拓扑隐藏：`services/sip-edge/src/sip/outbound.rs` (出站 Call-ID 覆写) & `services/sip-edge/src/sip/response.rs` (入站响应还原)
-- 200 OK 处理：`services/sip-edge/src/sip/handlers/in_dialog.rs` → SDP 重写 → RTP 中继建立 → 录音开始
-- BYE 处理：`services/sip-edge/src/sip/handlers/in_dialog.rs` → CDR 生成 → 录音停止
+- 拓扑隐藏：`services/sip-edge/src/sip/outbound/` (出站 Call-ID 覆写) & `services/sip-edge/src/sip/dispatcher/response/` (入站响应还原)
+- 200 OK 处理：`services/sip-edge/src/sip/dispatcher/response/` → SDP 重写 → RTP 中继建立 → 录音开始
+- BYE 处理：`services/sip-edge/src/sip/handlers/in_dialog/bye.rs` → CDR 生成 → 录音停止
+- 会话状态：`services/sip-edge/src/edge_state/session.rs` → `CallSessionStore` 双索引（session_id ↔ Call-ID）
 
 
 ### 2.2 来电流程（入站呼叫）
@@ -109,8 +110,8 @@
 |------|------|----------|
 | 消息解析 | **零拷贝 (Zero-Copy) 语法解析器**（通过携带生命周期的借用类型直接引用 UDP 原始缓冲区，全面消除高并发下的 String/Vec 堆内存分配与 GC 压力） | VOS 内部高性能解析 |
 | 多线程调度 | **多线程哈希会话调度**（Tokio 亲和度绑定；按 Call-ID 进行哈希路由投递至特定 Worker，消除多线程竞争） | VOS epoll 多线程同等能力 |
-| 事务管理 | `transaction.rs` — RFC 3261 定时器 | VOS 同 |
-| 重传处理 | `main.rs` — 500ms T1 定时器 | VOS 同 |
+| 事务管理 | `sip/transaction/` — RFC 3261 定时器（INVITE/Non-INVITE 客户端/服务端事务状态机） | VOS 同 |
+| 重传处理 | `sip/transaction/server.rs` — 500ms T1 定时器 + Timer J 重传保护 | VOS 同 |
 
 **不合理之处已解决**：
 - ⚠️ 曾使用的单线程 UDP 环在极小 CPS 下产生瓶颈，已通过**基于 Call-ID 哈希的多线程 Tokio Worker 调度**与**零拷贝解析**彻底重构完成，实测吞吐性能飙升。

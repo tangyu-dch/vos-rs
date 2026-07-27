@@ -57,16 +57,16 @@
 
 | 模块 | 路径 | 行数 | 职责 |
 |------|------|------|------|
-| sip-core | `crates/sip-core/` | ~2000 | SIP 消息解析 (Request/Response/HeaderMap/SipUri) |
-| rtp-core | `crates/rtp-core/` | ~1500 | RTP/RTCP 协议 (RtpPacket, RtcpPacket, TelephoneEvent) |
-| sdp-core | `crates/sdp-core/` | ~800 | SDP 解析 (SessionDescription, RtpEndpoint) |
-| call-core | `crates/call-core/` | ~1200 | 呼叫状态机、路由(LCR)、CDR 生成、网关健康追踪 |
-| cdr-core | `crates/cdr-core/` | ~1800 | CDR 存储(PostgreSQL)、数据模型、DTMF 事件 |
-| storage-core | `crates/storage-core/` | ~600 | 录音存储抽象 (Local/OSS/Dual) |
-| sip-edge | `services/sip-edge/` | ~12000 | SIP B2BUA 核心 (已重构 main.rs 并拆分为子模块) |
-| api-server | `services/api-server/` | ~560 | REST API (Axum) |
-| cdr-worker | `services/cdr-worker/` | ~200 | NATS CDR 消费者 |
-| web | `web/` | ~15000 | React 管理界面 |
+| sip-core | `crates/sip-core/` | ~1300 | SIP 消息解析 (Request/Response/HeaderMap/SipUri) |
+| rtp-core | `crates/rtp-core/` | ~2100 | RTP/RTCP 协议 (RtpPacket, RtcpPacket, TelephoneEvent) |
+| sdp-core | `crates/sdp-core/` | ~1100 | SDP 解析 (SessionDescription, RtpEndpoint) |
+| call-core | `crates/call-core/` | ~6700 | 呼叫状态机、路由(LCR)、CDR 生成、网关健康追踪 |
+| cdr-core | `crates/cdr-core/` | ~5300 | CDR 存储(PostgreSQL)、数据模型、DTMF 事件 |
+| storage-core | `crates/storage-core/` | ~1000 | 录音存储抽象 (Local/OSS/Dual) |
+| sip-edge | `services/sip-edge/` | ~40000 | SIP B2BUA 核心 (已全量拆分为 20+ 子模块) |
+| api-server | `services/api-server/` | ~15000 | REST API (Axum, 63 个文件全量拆分) |
+| cdr-worker | `services/cdr-worker/` | ~450 | NATS CDR 消费者 |
+| web | `web/` | ~17000 | React 管理界面 (Vite + TypeScript) |
 
 ---
 
@@ -74,7 +74,7 @@
 
 ### 2.1 INVITE 处理 (呼入)
 
-**源文件**: `services/sip-edge/src/sip/handlers/invite.rs`
+**源文件**: `services/sip-edge/src/sip/handlers/invite/mod.rs`（session_id 生成入口，详见 [B2BUA_SESSION_MODEL.md](./B2BUA_SESSION_MODEL.md)）
 
 ```
 1. 收到 INVITE
@@ -93,28 +93,28 @@
 ```
 
 **关键数据结构**:
-- `InboundTransaction`: 存储每通呼叫的双侧状态 (caller/gateway)
-- `DialogLeg`: Caller 或 Gateway 侧
+- `InboundTransaction`: 存储每通呼叫的双侧状态 (caller/gateway)，以 session_id 为主键
+- `B2buaDialogPair`: Caller 与 Gateway 双腿对话状态
+- `CallSessionStore`: 双索引结构（session_id ↔ Call-ID），支持 A/B/transfer/fork 任一 leg 查询
 
 ### 2.2 200 OK 处理 (应答)
 
-**源文件**: `services/sip-edge/src/sip/handlers/in_dialog.rs`
+**源文件**: `services/sip-edge/src/sip/dispatcher/response/`（响应分发器，按 session_id 索引会话）
 
 ```
 1. 收到 200 OK (来自网关或注册用户)
-2. 查找对应的 InboundTransaction
-3. 如果是外部 Call-ID → 转换为内部 Call-ID
-4. 解析 SDP Answer → 更新媒体端点
-5. 配对 RTP 中继端口 (caller ↔ gateway)
-6. 启动录音 (如果启用)
-7. 解析 Session-Expires → 存储到 transaction
-8. 转发 200 OK 给呼叫方
-9. 发送 ACK 给网关
+2. 通过 Call-ID 查 dialog_index → session_id → InboundTransaction
+3. 解析 SDP Answer → 更新媒体端点
+4. 配对 RTP 中继端口 (caller ↔ gateway)，以 session_id 为键
+5. 启动录音 (如果启用)，录音文件按 session_id 命名
+6. 解析 Session-Expires → 存储到 transaction
+7. 转发 200 OK 给呼叫方
+8. 发送 ACK 给网关
 ```
 
 ### 2.3 BYE 处理
 
-**源文件**: `services/sip-edge/src/sip/handlers/in_dialog.rs`
+**源文件**: `services/sip-edge/src/sip/handlers/in_dialog/bye.rs`
 
 ```
 1. 收到 BYE (任意一侧)
@@ -129,7 +129,7 @@
 
 ### 2.4 CANCEL 处理
 
-**源文件**: `services/sip-edge/src/sip/handlers/in_dialog.rs`
+**源文件**: `services/sip-edge/src/sip/handlers/in_dialog/bye.rs`
 
 ```
 1. 收到 CANCEL (呼叫方超时)
@@ -157,7 +157,7 @@
 
 ### 2.6 REFER 处理 (呼叫转接)
 
-**源文件**: `services/sip-edge/src/sip/handlers/in_dialog.rs`
+**源文件**: `services/sip-edge/src/sip/handlers/in_dialog/refer.rs`
 
 ```
 1. 收到 REFER (盲转)

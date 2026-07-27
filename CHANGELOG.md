@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Security Hardening**: Added `.env.example` and `.env.production` templates; added `scripts/gen-tls-certs.sh` for one-click self-signed TLS certificates generation; sanitized S3 credentials in `config.yaml`.
 - **Environment Management**: Added `docker-compose.dev.yml` and `docker-compose.prod.yml` with cgroups resource limits and health probes.
 - **Readiness Probes**: Enhanced `/ready` HTTP endpoint on `api-server` to return structured JSON component status (PostgreSQL connection pool status).
-- **Engineering Quality**: Added `.pre-commit-config.yaml` and `scripts/install-hooks.sh` to enforce static analysis before commits.
+- **Engineering Quality**: Added `.pre-commit-config.yaml` to enforce static analysis before commits.
 - **Copilot Multimodal Improvements**: Added persistent `images TEXT[]` array storage to PostgreSQL `copilot_messages` schema, Lightbox image preview modal, and interactive CSV Table Data Viewer Modal.
 
 ### Fixed

@@ -103,16 +103,30 @@ vos-rs/
 │
 ├── web/                       # React 管理界面 (Vite + TypeScript, 14 页面)
 ├── docs/                      # 文档目录
+│   ├── README.md              # 文档索引
 │   ├── architecture/          # 架构与对比设计
 │   │   ├── ARCHITECTURE.md
+│   │   ├── B2BUA_SESSION_MODEL.md          # B2BUA session_id 主键模型
 │   │   ├── VOS_RS_ARCHITECTURE_ANALYSIS.md
-│   │   └── rtp-sip-completeness.md
+│   │   ├── rtp-sip-completeness.md
+│   │   ├── NATS_VCI_COMMAND_DESIGN.md      # VCI 2.0 NATS 命令规范
+│   │   ├── TRUNK_CALLER_TERMINATION_DESIGN.md
+│   │   ├── TRUNK_FLOWCHART.md
+│   │   └── VOS_RS_BUSINESS_GAPS_REQUIREMENTS.md
 │   ├── deployment/            # 部署指南
-│   │   └── DEPLOY.md
+│   │   ├── DEPLOY.md
+│   │   ├── CLUSTER_DEPLOYMENT.md
+│   │   └── OS_KERNEL_TUNING.md
 │   ├── development/           # 开发与环境配置
-│   │   └── ENV_VARS.md
+│   │   ├── ENV_VARS.md
+│   │   ├── AI_PLUGIN_INTEGRATION_GUIDE.md
+│   │   ├── FRONTEND_OPTIMIZATION.md
+│   │   ├── PERFORMANCE_BENCHMARK.md
+│   │   ├── SIPP_BUSINESS_SCENARIOS.md
+│   │   └── WEBHOOKS.md
 │   └── user-guide/            # 用户操作指南
-│       └── WEB_GUIDE.md
+│       ├── WEB_GUIDE.md
+│       └── ROUTING_TRUNK_GUIDE.md
 ├── scripts/                   # SQL 迁移 + 开发脚本
 ├── tools/                     # SIPp 测试工具
 ├── deploy/                    # 部署配置
@@ -193,7 +207,7 @@ vos-rs/
 
 | 层级 | 数据结构 | 锁类型 | 说明 |
 |------|---------|--------|------|
-| SIP Dialogs | DashMap<CallId, Arc<InboundTransaction>> | DashMap 分段锁 | 读多写少 |
+| SIP Dialogs | CallSessionStore (DashMap<session_id, InboundTransaction> + DashMap<Call-ID, session_id>) | DashMap 分段锁 | 双索引：session_id 主键 + Call-ID 反向索引（A/B/transfer/fork 多腿） |
 | RTP Sessions | DashMap<u16, SocketAddr> 等 6 个 DashMap | DashMap 分段锁 | per-port 状态 |
 | Media Inner | Arc<Mutex<MediaRelayStateInner>> | std::sync::Mutex | 端口分配 |
 | Trunk 状态 | Arc<Vec<Arc<TrunkState>>> | AtomicBool/AtomicU32 | 读多写少 |
@@ -714,8 +728,8 @@ Response:
 2. **协议解析层**：`crates/sip-core/`、`crates/sdp-core/`（零外部依赖）、`crates/rtp-core/`（轻量依赖：SRTP 加密原语）
 3. **业务逻辑层**：`crates/call-core/`（呼叫状态机、路由、CDR）
 4. **数据存储层**：`crates/cdr-core/`（PostgreSQL CRUD + 数据模型）
-5. **媒体处理**：`services/sip-edge/src/media.rs`（RTP relay + 录音）
-6. **安全模块**：`services/sip-edge/src/sbc.rs`、`auth.rs`、`anti_fraud.rs`
+5. **媒体处理**：`services/sip-edge/src/media/`（RTP relay + 录音 + DTMF，按 session_id 索引）
+6. **安全模块**：`services/sip-edge/src/sbc.rs`、`services/sip-edge/src/sip/auth.rs`、`services/sip-edge/src/security/`
 7. **环境变量**：所有配置通过 `VOS_RS_` 前缀环境变量，见 `.env.example`
 8. **测试目录**：`crates/*/tests/`（集成测试）、各模块内 `#[cfg(test)]`（单元测试）
 9. **SIPp 测试**：`tools/sipp/`（端到端 SIP 场景）
@@ -811,14 +825,30 @@ VOS_RS_UDP_WORKERS_AUTO=true               # 自适应 worker 数量
 
 ## 14. 文档
 
+> 完整索引见 [`docs/README.md`](docs/README.md)
+
 | 文档 | 位置 | 说明 |
 |------|------|------|
+| 文档索引 | `docs/README.md` | 全部文档导航 |
+| 架构设计 | `docs/architecture/ARCHITECTURE.md` | 系统架构、模块关系、关键代码路径 |
+| B2BUA 会话模型 | `docs/architecture/B2BUA_SESSION_MODEL.md` | session_id 主键模型（A/B-leg 统一索引） |
 | 架构分析 | `docs/architecture/VOS_RS_ARCHITECTURE_ANALYSIS.md` | 完整架构分析 + VOS 对比 |
-| 架构设计 | `docs/architecture/ARCHITECTURE.md` | 系统架构、模块关系 |
-| 环境变量 | `docs/development/ENV_VARS.md` | 配置项参考 |
-| SIP/RTP 完整性 | `docs/architecture/rtp-sip-completeness.md` | 功能覆盖度 |
+| SIP/RTP 完整性 | `docs/architecture/rtp-sip-completeness.md` | 协议覆盖度 + 性能基线 |
+| NATS VCI 设计 | `docs/architecture/NATS_VCI_COMMAND_DESIGN.md` | VCI 2.0 命令规范 |
+| 中继设计 | `docs/architecture/TRUNK_CALLER_TERMINATION_DESIGN.md` | 接入认证、号码池、落地决策 |
+| 中继流程图 | `docs/architecture/TRUNK_FLOWCHART.md` | 中继选路流程图 |
+| 业务需求 PRD | `docs/architecture/VOS_RS_BUSINESS_GAPS_REQUIREMENTS.md` | 业务缺失与后续开发需求 |
+| 配置参考 | `docs/development/ENV_VARS.md` | `config.yaml` 架构与环境变量 |
+| AI 插件指南 | `docs/development/AI_PLUGIN_INTEGRATION_GUIDE.md` | AI 语音插件二进制流协议 |
+| 前端优化 | `docs/development/FRONTEND_OPTIMIZATION.md` | HeroUI v2 + Tailwind v4 重构记录 |
+| 性能压测 | `docs/development/PERFORMANCE_BENCHMARK.md` | SIP 信令与媒体压测报告 |
+| SIPp 业务用例 | `docs/development/SIPP_BUSINESS_SCENARIOS.md` | 中继与号码业务验证 |
+| Webhook 协议 | `docs/development/WEBHOOKS.md` | 呼叫事件 Webhook 协议 |
 | 部署指南 | `docs/deployment/DEPLOY.md` | Docker Compose + 手动部署 |
+| 集群部署 | `docs/deployment/CLUSTER_DEPLOYMENT.md` | 多节点 + 共享状态 |
+| 内核调优 | `docs/deployment/OS_KERNEL_TUNING.md` | 操作系统与内核参数 |
 | Web 界面指南 | `docs/user-guide/WEB_GUIDE.md` | 管理界面使用说明 |
+| 路由中继指南 | `docs/user-guide/ROUTING_TRUNK_GUIDE.md` | 中继与路由管理配置 |
 
 
 ---

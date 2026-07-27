@@ -20,7 +20,7 @@ echo " 校验范围："
 echo "   - 保留中继 (sip_gateways, egress_groups, trunk_ip_rules)"
 echo "   - 保留号码 (number_inventory, did_destinations, caller_pools)"
 echo "   - 保留账号 (billing_accounts, billing_rates, system_configs)"
-echo "   - 保留分机 (sip_extensions, sip_users, call_queues, ivr_menus)"
+echo "   - 保留分机 (sip_users, call_queues, ivr_menus, call_agents)"
 echo "   - 清空 CDR、DTMF、SIP 抓包、注册状态、流水明细、风控事件"
 echo "===================================================="
 
