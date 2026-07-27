@@ -1,6 +1,6 @@
 use super::*;
 use crate::cluster::{MediaClusterConfig, MediaNodeConfig, MediaNodeType};
-use crate::media::metrics::RtcpQualityWindow;
+use crate::media::metrics::{RtcpQualitySnapshot, RtcpQualityWindow};
 use crate::media::recording::{decode_pcma, decode_pcmu, RecordingPool};
 use crate::media::sdp::{is_sdp_body, parse_sdp_rtp_endpoint, rewrite_sdp_body};
 use crate::media::utils::rtt_millis_from_compact_ntp;

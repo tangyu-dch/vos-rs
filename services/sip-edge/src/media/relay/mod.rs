@@ -1,15 +1,14 @@
 use cdr_core::DtmfEventRecord;
 use dashmap::DashMap;
-use rtp_core::{RtpPacketView, SrtpError};
+use rtp_core::RtpPacketView;
 use sdp_core::RtpEndpoint;
 use std::{
     collections::{HashMap, HashSet},
-    io,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use tokio::{net::UdpSocket, task::JoinHandle};
+use tokio::net::UdpSocket;
 use tracing::{debug, warn};
 
 // Import custom media modules
@@ -20,7 +19,7 @@ use crate::media::cluster::{MediaNodePool, MediaNodeRuntime};
 pub use crate::media::config::{MediaConfig, DEFAULT_RTP_PORT_MIN};
 pub use crate::media::crypto::MediaCryptoSession;
 pub use crate::media::dtmf::DtmfState;
-pub use crate::media::metrics::{MediaRelayMetrics, RtcpQualitySnapshot, RtpReceiveStats};
+pub use crate::media::metrics::{MediaRelayMetrics, RtpReceiveStats};
 pub use crate::media::recording::{MediaError, RecordingLeg, RecordingPool};
 use crate::media::sdp::socket_addr_for_endpoint;
 pub use crate::media::utils::unix_timestamp_millis;
@@ -35,7 +34,7 @@ mod state;
 mod stream;
 
 pub(crate) use listener::relay_media_port;
-#[allow(unused_imports)]
+#[cfg(test)]
 pub use listener::spawn_rtp_relay_listeners;
 use path::{FastPathCounters, RelayPath};
 

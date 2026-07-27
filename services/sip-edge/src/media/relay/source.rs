@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use crate::media::metrics::RtcpQualitySnapshot;
 
 impl MediaRelayState {
     pub fn target_for_port(&self, relay_port: u16) -> Option<SocketAddr> {
@@ -22,13 +24,6 @@ impl MediaRelayState {
             .get(&relay_port)
             .map(|entry| *entry)
             .unwrap_or_default()
-    }
-
-    #[allow(dead_code)]
-    pub fn record_rtcp_reports_for_test(&self, relay_port: u16, quality: RtcpQualitySnapshot) {
-        self.record_metric(relay_port, |metrics| {
-            metrics.rtcp_quality = quality;
-        });
     }
 
     pub fn metrics_totals(&self) -> MediaRelayMetrics {
@@ -168,6 +163,13 @@ impl MediaRelayState {
                 );
             }
             metrics.rtcp_quality_degraded = degraded;
+        });
+    }
+
+    #[cfg(test)]
+    pub fn record_rtcp_reports_for_test(&self, relay_port: u16, quality: RtcpQualitySnapshot) {
+        self.record_metric(relay_port, |metrics| {
+            metrics.rtcp_quality = quality;
         });
     }
 }

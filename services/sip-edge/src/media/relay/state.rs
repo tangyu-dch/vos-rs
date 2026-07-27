@@ -14,7 +14,7 @@ impl MediaRelayState {
         let conference_manager = Arc::new(crate::media::conference::ConferenceManager::new());
         crate::media::conference::start_mixer_loop(Arc::clone(&conference_manager));
 
-        let relay = Self {
+        Self {
             mode: MediaRelayMode::Local,
             targets: Arc::new(DashMap::new()),
             peer_ports: Arc::new(DashMap::new()),
@@ -52,9 +52,7 @@ impl MediaRelayState {
             monitors: Arc::new(DashMap::new()),
             buffer_pool: Arc::new(pool::PacketBufferPool::new(MEDIA_PACKET_POOL_CAPACITY)),
             storage,
-        };
-
-        relay
+        }
     }
 
     /// 请求 media-edge 在指定端口启用 ICE-Lite、DTLS 与 SRTP。
@@ -347,21 +345,6 @@ impl MediaRelayState {
             }
         }
         self.mark_relay_features_changed(relay_port);
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn register_srtp_session(
-        &self,
-        relay_port: u16,
-        suite: &str,
-        key_params: &str,
-        ssrc: u32,
-    ) -> Result<(), SrtpError> {
-        let session = MediaCryptoSession::from_sdes(suite, key_params, ssrc)?;
-        self.crypto_sessions
-            .insert(relay_port, Arc::new(tokio::sync::Mutex::new(session)));
-        self.mark_port_and_peer_features_changed(relay_port);
-        Ok(())
     }
 
     pub(crate) fn register_srtp_offer(&self, relay_port: u16, suite: &str, key_params: &str) {
