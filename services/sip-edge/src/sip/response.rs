@@ -28,7 +28,11 @@ use call_core::{
 use sip_core::{HeaderMap, Method, SipRequest, SipResponse, SipUri};
 
 const SERVER_HEADER: &str = "VOS-RS sip-edge/0.1";
-const EDGE_TAG: &str = "vosrs-edge";
+/// Edge 在 caller leg 上使用的本地 tag，用于 To 头自动填充与 in-dialog 请求校验。
+///
+/// 该常量同时被 `append_to_header`（自动填充 To tag）与 `EdgeState::remember_inbound_invite`
+/// （初始化 `DialogLegState::local_tag`）引用，确保两条路径产生一致的 To tag。
+pub(crate) const EDGE_TAG: &str = "vosrs-edge";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestHandling {
@@ -462,6 +466,17 @@ fn append_to_header(response: &mut String, headers: &HeaderMap, status_code: u16
     }
 }
 
+pub fn patch_via_rport_and_received(via: &str, peer: Option<SocketAddr>) -> String {
+    if let Ok(mut via_hdr) = sip_core::ViaHeader::parse(via) {
+        if let Some(peer) = peer {
+            via_hdr.apply_rfc3581(peer.ip(), peer.port());
+        }
+        via_hdr.to_string()
+    } else {
+        via.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{accepted_202_for_request, build_response, response_for_request_with_health};
@@ -541,16 +556,5 @@ mod tests {
         assert!(response.starts_with("SIP/2.0 202 Accepted\r\n"));
         assert!(response.contains("CSeq: 3 REFER\r\n"));
         assert!(response.contains("Content-Length: 0\r\n\r\n"));
-    }
-}
-
-pub fn patch_via_rport_and_received(via: &str, peer: Option<SocketAddr>) -> String {
-    if let Ok(mut via_hdr) = sip_core::ViaHeader::parse(via) {
-        if let Some(peer) = peer {
-            via_hdr.apply_rfc3581(peer.ip(), peer.port());
-        }
-        via_hdr.to_string()
-    } else {
-        via.to_string()
     }
 }

@@ -1,6 +1,5 @@
 use crate::config::EdgeConfig;
 use crate::edge_state::{AccessIpRule, EdgeState};
-use crate::security::rules::refresh_anti_fraud_rules;
 use crate::security::sbc::IpNet;
 use call_core::{
     CallSource, CallerNumberDirectory, CallerPoolStrategy, OutboundPolicyDirectory, Route,
@@ -8,7 +7,6 @@ use call_core::{
     RuntimeEgressPolicy, RuntimeSourcePolicy,
 };
 use cdr_core::PostgresCdrStore;
-use futures::StreamExt;
 use sip_core::SipUri;
 use std::collections::HashMap;
 use std::io;
@@ -397,41 +395,6 @@ fn route_time_is_active(
         // A window such as 22:00-06:00 crosses midnight.
         now >= start || now <= end
     }
-}
-
-pub(crate) fn spawn_route_reload_listener(
-    nats_url: String,
-    edge_state: Arc<EdgeState>,
-    db_store: Option<PostgresCdrStore>,
-) {
-    tokio::spawn(async move {
-        let Ok(client) = async_nats::connect(&nats_url).await else {
-            warn!("路由重载器无法连接到 NATS");
-            return;
-        };
-
-        let Ok(mut subscriber) = client.subscribe("vos_rs.routing.reload").await else {
-            warn!("路由重载器无法订阅 NATS 主题");
-            return;
-        };
-
-        info!("已成功启动动态路由热加载监听协程");
-        while let Some(_msg) = subscriber.next().await {
-            info!("收到路由热加载 NATS 广播通知，正在从数据库刷新路由...");
-            if let Some(ref db) = db_store {
-                match reload_routes_from_database(&edge_state, db).await {
-                    Ok(()) => {
-                        refresh_anti_fraud_rules(&edge_state).await;
-                        if let Err(error) = warm_hot_path_redis_cache(&edge_state, Some(db)).await {
-                            warn!(%error, "路由热加载后刷新认证与计费缓存失败");
-                        }
-                        info!("动态路由热重载成功，已加载最新路由表数据！");
-                    }
-                    Err(e) => warn!("热加载路由失败: {}", e),
-                }
-            }
-        }
-    });
 }
 
 pub(crate) async fn warm_hot_path_redis_cache(

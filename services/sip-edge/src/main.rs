@@ -222,6 +222,18 @@ async fn main() -> Result<(), AnyError> {
         .ok();
     edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
 
+    if let Some(nats_url) = edge_config.nats_url.as_deref() {
+        match async_nats::connect(nats_url).await {
+            Ok(nats_client) => {
+                edge_state.set_nats(nats_client);
+                info!(%nats_url, "NATS 客户端连接成功，注册同步与 VCI 通知通道已就绪");
+            }
+            Err(e) => {
+                warn!(error = %e, %nats_url, "NATS 客户端连接失败，注册同步与 VCI 通知将不可用");
+            }
+        }
+    }
+
     edge_state.set_voice_engine(Arc::new(
         sip::handlers::ivr_topology::VoiceEngineManager::from_env(),
     ));
@@ -411,6 +423,11 @@ async fn main() -> Result<(), AnyError> {
             Arc::clone(&edge_config),
         );
     }
+    spawn_session_timer_watchdog(
+        Arc::clone(&edge_state),
+        Arc::clone(&socket),
+        Arc::clone(&edge_config),
+    );
     if edge_config.dynamic_config_enabled && edge_config.database_routes_enabled {
         if let Some(ref db) = db_store {
             spawn_periodic_route_refresh(Arc::clone(&edge_state), db.clone());

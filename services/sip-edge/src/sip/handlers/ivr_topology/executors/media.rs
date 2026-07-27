@@ -108,12 +108,32 @@ fn start_recording_or_error(
     a_port: u16,
     media_config: &crate::media::MediaConfig,
 ) -> NodeExecuteResult {
-    match edge_state.media_relay.start_call_recording(
-        &context.call_id,
-        a_port,
-        a_port,
-        media_config,
-    ) {
+    // media_relay.start_call_recording 的第一参数需要 B2BUA session_id
+    // (内部 dtmf_accumulators / dtmf_event_log 按 session_id 索引),
+    // 因此先通过 wire Call-ID 查找 transaction 取出 session_id。
+    let session_id = match edge_state
+        .inbound_transactions
+        .get(&context.call_id)
+        .map(|t| t.session_id.clone())
+    {
+        Some(id) => id,
+        None => {
+            warn!(
+                call_id = %context.call_id,
+                "IVR record 节点启动录音失败: 未找到对应 transaction, 无法获取 session_id"
+            );
+            return NodeExecuteResult::Error {
+                message: format!(
+                    "启动录音失败: 未找到 session_id (call_id={})",
+                    context.call_id
+                ),
+            };
+        }
+    };
+    match edge_state
+        .media_relay
+        .start_call_recording(&session_id, a_port, a_port, media_config)
+    {
         Ok(_) => {
             info!(call_id = %context.call_id, node_id = %context.current_node_id.as_deref().unwrap_or(""), "IVR record 节点录音已启动");
             NodeExecuteResult::Continue {

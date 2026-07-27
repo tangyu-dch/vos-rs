@@ -178,7 +178,7 @@ async fn test_condition_executor_operators() {
         config: json!({ "variable": "status", "operator": "eq", "value": "ACTIVE" }),
         position: Some(Position { x: 0.0, y: 0.0 }),
     };
-    let res = flow::execute_condition(&node_eq, &mut ctx);
+    let res = flow::execute_condition(&node_eq, &ctx);
     match res {
         NodeExecuteResult::Continue { port } => assert_eq!(port, "match"),
         _ => panic!("Expected Continue port match"),
@@ -193,7 +193,7 @@ async fn test_condition_executor_operators() {
         config: json!({ "variable": "score", "operator": "gt", "value": "90" }),
         position: Some(Position { x: 0.0, y: 0.0 }),
     };
-    let res_gt = flow::execute_condition(&node_gt, &mut ctx);
+    let res_gt = flow::execute_condition(&node_gt, &ctx);
     match res_gt {
         NodeExecuteResult::Continue { port } => assert_eq!(port, "match"),
         _ => panic!("Expected Continue port match"),
@@ -208,7 +208,7 @@ async fn test_condition_executor_operators() {
         config: json!({ "variable": "phone", "operator": "contains", "value": "0013" }),
         position: Some(Position { x: 0.0, y: 0.0 }),
     };
-    let res_contains = flow::execute_condition(&node_contains, &mut ctx);
+    let res_contains = flow::execute_condition(&node_contains, &ctx);
     match res_contains {
         NodeExecuteResult::Continue { port } => assert_eq!(port, "match"),
         _ => panic!("Expected Continue port match"),
@@ -319,7 +319,7 @@ async fn test_basic_executors_start_prompt_hangup() {
 
 #[tokio::test]
 async fn test_route_and_media_executors() {
-    let mut ctx = IvrExecutionContext::new(
+    let ctx = IvrExecutionContext::new(
         "call-media".to_string(),
         "1001".to_string(),
         "8888".to_string(),
@@ -334,7 +334,7 @@ async fn test_route_and_media_executors() {
         config: json!({ "target": "8001", "target_type": "extension" }),
         position: Some(Position { x: 0.0, y: 0.0 }),
     };
-    match flow::execute_route(&node_route, &mut ctx) {
+    match flow::execute_route(&node_route, &ctx) {
         NodeExecuteResult::Transfer {
             target,
             transfer_type,
@@ -354,7 +354,7 @@ async fn test_route_and_media_executors() {
         config: json!({ "target": "queue-support", "target_type": "queue" }),
         position: Some(Position { x: 0.0, y: 0.0 }),
     };
-    match media::execute_transfer(&node_transfer, &mut ctx) {
+    match media::execute_transfer(&node_transfer, &ctx) {
         NodeExecuteResult::Transfer {
             target,
             transfer_type,

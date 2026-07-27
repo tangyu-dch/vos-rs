@@ -1,8 +1,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 
-use futures::StreamExt;
 use serde::Deserialize;
 use sip_core::SipUri;
 use tracing::{error, info, warn};
@@ -109,8 +107,6 @@ pub struct CallCommand {
     pub action: CommandAction,
 }
 
-const PARKED_CALL_TTL: Duration = Duration::from_secs(120);
-
 fn finalize_vci_hangup(edge_state: &EdgeState, call_id: &str, termination_reason: &str) {
     let call_id_value = call_core::CallId::new(call_id.to_string());
     if edge_state
@@ -121,70 +117,6 @@ fn finalize_vci_hangup(edge_state: &EdgeState, call_id: &str, termination_reason
     } else {
         crate::resource_lease::release(edge_state, &call_id_value);
     }
-}
-
-pub async fn start_command_listener(
-    edge_state: Arc<EdgeState>,
-    edge_config: Arc<crate::config::EdgeConfig>,
-    nats: async_nats::Client,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let subject = edge_config.webhooks.control_command_subject.clone();
-    info!(subject = %subject, "Starting NATS VCI command listener");
-
-    let parked_cleanup_state = Arc::clone(&edge_state);
-    let parked_cleanup_config = Arc::clone(&edge_config);
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            let now = std::time::Instant::now();
-            let mut expired = Vec::new();
-            for entry in parked_cleanup_state.parked_calls.iter() {
-                if now.duration_since(entry.value().created_at) > PARKED_CALL_TTL {
-                    expired.push(entry.key().clone());
-                }
-            }
-            for call_id in expired {
-                if let Some((_, parked)) = parked_cleanup_state.parked_calls.remove(&call_id) {
-                    info!(call_id = %call_id, "expired parked call cleaned up");
-                    parked_cleanup_state
-                        .media_relay
-                        .clear_target(parked.caller_relay_port);
-                    if let Some(socket) = parked_cleanup_state.get_socket() {
-                        let timeout_resp = response::build_response_with_owned_headers(
-                            &parked.invite_request,
-                            408,
-                            "Request Timeout",
-                            &[],
-                            "",
-                        );
-                        let dg = PendingDatagram::new(parked.peer_addr.to_string(), timeout_resp);
-                        let _ = parked_cleanup_state
-                            .send_sip_datagram(dg, &socket, &parked_cleanup_config)
-                            .await;
-                    }
-                }
-            }
-        }
-    });
-
-    let mut subscriber = nats.subscribe(subject).await?;
-
-    while let Some(message) = subscriber.next().await {
-        let edge_state_clone = Arc::clone(&edge_state);
-        let edge_config_clone = Arc::clone(&edge_config);
-
-        tokio::spawn(async move {
-            if let Ok(command) = serde_json::from_slice::<CallCommand>(&message.payload) {
-                handle_command(command, &edge_state_clone, &edge_config_clone).await;
-            } else {
-                warn!("failed to deserialize CallCommand from NATS payload");
-            }
-        });
-    }
-
-    Ok(())
 }
 
 pub async fn handle_command(
@@ -278,7 +210,6 @@ pub async fn handle_command(
                     .as_ref()
                     .and_then(|sdp| sdp.original_endpoint.clone()),
                 rewritten_sdp.as_ref().map(|sdp| sdp.relay_endpoint.clone()),
-                false,
                 params.timeout_secs,
             );
 
@@ -659,7 +590,6 @@ pub async fn handle_command(
                     .unwrap(),
                     client_ep,
                     Some(local_ep.clone()),
-                    false,
                     None,
                 );
                 if let Some(mut tx) = edge_state.inbound_transactions.get_mut(&call_id) {
@@ -847,22 +777,11 @@ pub async fn handle_command(
             let tx = crate::edge_state::InboundTransaction {
                 session_id,
                 dialogs,
-                peer: "local-originate".to_string(),
-                outbound_peer: Some(target_uri.clone()),
-                outbound_uri,
-                inbound_from_tag: Some(format!("originate-{}", call_id)),
-                inbound_to_tag: None,
-                last_inbound_cseq: Some(1),
-                last_outbound_cseq: Some(1),
+                original_request: None,
                 caller_rtp: None,
                 gateway_relay_rtp: None,
                 gateway_rtp: None,
                 caller_relay_rtp: Some(caller_relay_rtp),
-                original_request: None,
-                inbound_route_set: Vec::new(),
-                outbound_route_set: Vec::new(),
-                caller_contact: None,
-                callee_contact: None,
                 session_expires: None,
                 session_refresher: None,
                 last_session_refresh: None,
@@ -870,7 +789,6 @@ pub async fn handle_command(
                 gateway_100rel: false,
                 refer_subscription: None,
                 transfer_dialog: None,
-                callee_behind_nat: false,
                 fork_dialogs: Default::default(),
                 max_duration_secs: None,
                 established_at: Some(std::time::Instant::now()),
@@ -879,7 +797,7 @@ pub async fn handle_command(
                 )),
             };
 
-            edge_state.inbound_transactions.insert(call_id.clone(), tx);
+            edge_state.inbound_transactions.insert(tx);
 
             let branch = format!("z9hG4bK-originate-{}", call_id);
             let sdp_len = sdp_offer.len();
@@ -1029,7 +947,6 @@ mod tests {
                 invite_request: request,
                 peer_addr: peer,
                 caller_relay_port: 40000,
-                created_at: std::time::Instant::now(),
             },
         );
 
@@ -1064,7 +981,6 @@ mod tests {
                 invite_request: request,
                 peer_addr: peer,
                 caller_relay_port: 40001,
-                created_at: std::time::Instant::now(),
             },
         );
 

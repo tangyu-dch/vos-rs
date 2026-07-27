@@ -119,49 +119,28 @@ pub(crate) async fn handle_out_of_dialog_message(
     };
 
     {
-        edge_state.inbound_transactions.insert(
-            call_id.clone(),
-            InboundTransaction {
-                session_id,
-                dialogs: dialogs.clone(),
-                peer: peer.to_string(),
-                outbound_peer: target_contact.as_ref().map(|c| c.received_from.clone()),
-                outbound_uri: outbound_uri.clone(),
-                inbound_from_tag: request
-                    .headers
-                    .get("from")
-                    .and_then(|v| crate::sip::dialog::tag_param(v.as_str())),
-                inbound_to_tag: None,
-                last_inbound_cseq: request
-                    .headers
-                    .get("cseq")
-                    .and_then(|v| crate::sip::dialog::cseq_number(v.as_str())),
-                last_outbound_cseq: None,
-                caller_rtp: None,
-                gateway_relay_rtp: None,
-                gateway_rtp: None,
-                caller_relay_rtp: None,
-                original_request: Some(Arc::new(request.clone())),
-                inbound_route_set: caller_route_set,
-                outbound_route_set: Vec::new(),
-                caller_contact: None,
-                callee_contact: None,
-                session_expires: None,
-                session_refresher: None,
-                last_session_refresh: None,
-                prack_rseq: 0,
-                gateway_100rel: false,
-                refer_subscription: None,
-                transfer_dialog: None,
-                callee_behind_nat: target_contact.is_some(),
-                fork_dialogs: Default::default(),
-                max_duration_secs: None,
-                established_at: None,
-                invite_response_order: Arc::new(tokio::sync::Mutex::new(
-                    crate::edge_state::InviteResponseOrder::default(),
-                )),
-            },
-        );
+        edge_state.inbound_transactions.insert(InboundTransaction {
+            session_id,
+            dialogs: dialogs.clone(),
+            original_request: Some(Arc::new(request.clone())),
+            caller_rtp: None,
+            gateway_relay_rtp: None,
+            gateway_rtp: None,
+            caller_relay_rtp: None,
+            session_expires: None,
+            session_refresher: None,
+            last_session_refresh: None,
+            prack_rseq: 0,
+            gateway_100rel: false,
+            refer_subscription: None,
+            transfer_dialog: None,
+            fork_dialogs: Default::default(),
+            max_duration_secs: None,
+            established_at: None,
+            invite_response_order: Arc::new(tokio::sync::Mutex::new(
+                crate::edge_state::InviteResponseOrder::default(),
+            )),
+        });
     }
 
     let outbound_bytes = outbound::build_b2bua_in_dialog_request(

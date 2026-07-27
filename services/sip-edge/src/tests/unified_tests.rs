@@ -326,6 +326,21 @@ fn caller_local_tag(edge_state: &EdgeState, call_id: &str) -> String {
         .clone()
 }
 
+/// Computes the NOTIFY CSeq that the REFER handler will use for the caller leg.
+///
+/// Mirrors `sip/handlers/in_dialog.rs` which builds the initial NOTIFY with
+/// `caller.local_cseq + 50`.
+fn caller_notify_cseq(edge_state: &EdgeState, call_id: &str) -> u32 {
+    edge_state
+        .inbound_transactions
+        .get(call_id)
+        .expect("B2BUA session must exist")
+        .dialogs
+        .caller
+        .local_cseq
+        + 50
+}
+
 fn gateway_dialog(edge_state: &EdgeState, call_id: &str) -> (String, String) {
     let transaction = edge_state
         .inbound_transactions
@@ -757,8 +772,6 @@ async fn test_invite_did_routing_to_ivr() {
         lock.insert(
             "menu-1".to_string(),
             crate::edge_state::IvrMenu {
-                id: "menu-1".to_string(),
-                name: "Welcome Menu".to_string(),
                 welcome_prompt: "welcome.wav".to_string(),
                 timeout_secs: 5,
                 actions: HashMap::from([(
@@ -832,7 +845,7 @@ async fn replies_to_invite_with_trying_and_dispatches_outbound_invite() {
     assert!(!response.contains("To: <sip:13800138000@example.com>;tag="));
 
     let outbound_invite = datagram_text(&datagrams[1]);
-    assert_eq!(datagrams[1].target, "198.51.100.20:5060");
+    assert_eq!(datagrams[1].target, "gw1.example.com:5060");
     assert!(outbound_invite
         .starts_with("INVITE sip:13800138000@gw1.example.com:5060;transport=udp SIP/2.0\r\n"));
     assert!(outbound_invite.contains("Via: SIP/2.0/UDP edge.example.com:5060;branch="));
@@ -2303,7 +2316,7 @@ async fn test_record_route_and_route_propagation() {
 
     let datagrams = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
     assert_eq!(datagrams.len(), 2);
-    assert_eq!(datagrams[1].target, "198.51.100.20:5060");
+    assert_eq!(datagrams[1].target, "gw1.example.com:5060");
     let invite_out = datagram_text(&datagrams[1]);
     assert!(!invite_out.contains("Record-Route:"));
     let caller_to_tag = caller_local_tag(&edge_state, call_id);
@@ -3226,14 +3239,13 @@ async fn test_nat_traversal_in_dialog_callee_override() {
     )
     .await;
 
-    // Verify the B-leg peer NAT target and callee_behind_nat flag are registered.
+    // Verify the B-leg peer NAT target is registered.
     {
         let tx = edge_state.inbound_transactions.get(call_id).unwrap();
         assert_eq!(
             tx.dialogs.gateway.peer.as_deref(),
             Some("198.51.100.20:5070")
         );
-        assert!(tx.callee_behind_nat);
     }
 
     // 4. Caller sends BYE to callee
@@ -4578,17 +4590,18 @@ async fn inbound_refer_gets_accepted_and_notify_progress() {
     send_invite(&edge_state, "invite-refer@example.com").await;
     send_gateway_ok(&edge_state, "invite-refer@example.com").await;
 
-    let refer = concat!(
-        "REFER sip:13800138000@example.com SIP/2.0\r\n",
-        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-refer\r\n",
-        "Max-Forwards: 70\r\n",
-        "From: <sip:1001@example.com>;tag=from-tag\r\n",
-        "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-        "Call-ID: invite-refer@example.com\r\n",
-        "CSeq: 2 REFER\r\n",
-        "Refer-To: <sip:1002@example.com>\r\n",
-        "Content-Length: 0\r\n",
-        "\r\n"
+    let local_tag = caller_local_tag(&edge_state, "invite-refer@example.com");
+    let notify_cseq = caller_notify_cseq(&edge_state, "invite-refer@example.com");
+    let refer = format!(
+        "REFER sip:13800138000@example.com SIP/2.0\r\n\
+         Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-refer\r\n\
+         Max-Forwards: 70\r\n\
+         From: <sip:1001@example.com>;tag=from-tag\r\n\
+         To: <sip:13800138000@example.com>;tag={local_tag}\r\n\
+         Call-ID: invite-refer@example.com\r\n\
+         CSeq: 2 REFER\r\n\
+         Refer-To: <sip:1002@example.com>\r\n\
+         Content-Length: 0\r\n\r\n"
     );
 
     let datagrams = handle_datagram(refer.as_bytes(), peer(), &edge_state, &edge_config()).await;
@@ -4604,10 +4617,12 @@ async fn inbound_refer_gets_accepted_and_notify_progress() {
 
     let notify = datagram_text(&datagrams[1]);
     assert!(notify.starts_with("NOTIFY sip:1001@example.com SIP/2.0\r\n"));
-    assert!(notify.contains("From: <sip:13800138000@example.com>;tag=gw-tag\r\n"));
+    assert!(notify.contains(&format!(
+        "From: <sip:13800138000@example.com>;tag={local_tag}\r\n"
+    )));
     assert!(notify.contains("To: <sip:1001@example.com>;tag=from-tag\r\n"));
     assert!(notify.contains("Call-ID: invite-refer@example.com\r\n"));
-    assert!(notify.contains("CSeq: 52 NOTIFY\r\n"));
+    assert!(notify.contains(&format!("CSeq: {notify_cseq} NOTIFY\r\n")));
     assert!(notify.contains("Event: refer\r\n"));
     assert!(notify.contains("Subscription-State: active;expires=60\r\n"));
     assert!(notify.contains("Content-Type: message/sipfrag;version=2.0\r\n"));
@@ -4624,18 +4639,19 @@ async fn gateway_refer_gets_accepted_notify_and_forwarded_to_caller() {
     send_invite(&edge_state, "invite-gateway-refer@example.com").await;
     send_gateway_ok(&edge_state, "invite-gateway-refer@example.com").await;
 
-    let refer = concat!(
-        "REFER sip:1001@example.com SIP/2.0\r\n",
-        "Via: SIP/2.0/UDP 198.51.100.20:5060;branch=z9hG4bK-gw-refer\r\n",
-        "Max-Forwards: 70\r\n",
-        "From: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-        "To: <sip:1001@example.com>;tag=from-tag\r\n",
-        "Call-ID: invite-gateway-refer@example.com\r\n",
-        "CSeq: 2 REFER\r\n",
-        "Refer-To: <sip:1003@example.com>\r\n",
-        "Referred-By: <sip:13800138000@example.com>\r\n",
-        "Content-Length: 0\r\n",
-        "\r\n"
+    let (gateway_call_id, gateway_local_tag) =
+        gateway_dialog(&edge_state, "invite-gateway-refer@example.com");
+    let refer = format!(
+        "REFER sip:1001@example.com SIP/2.0\r\n\
+         Via: SIP/2.0/UDP 198.51.100.20:5060;branch=z9hG4bK-gw-refer\r\n\
+         Max-Forwards: 70\r\n\
+         From: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+         To: <sip:1001@example.com>;tag={gateway_local_tag}\r\n\
+         Call-ID: {gateway_call_id}\r\n\
+         CSeq: 2 REFER\r\n\
+         Refer-To: <sip:1003@example.com>\r\n\
+         Referred-By: <sip:13800138000@example.com>\r\n\
+         Content-Length: 0\r\n\r\n"
     );
 
     let datagrams = handle_datagram(
@@ -4657,7 +4673,9 @@ async fn gateway_refer_gets_accepted_notify_and_forwarded_to_caller() {
 
     let notify = datagram_text(&datagrams[1]);
     assert!(notify.starts_with("NOTIFY sip:13800138000@example.com SIP/2.0\r\n"));
-    assert!(notify.contains("From: <sip:1001@example.com>;tag=from-tag\r\n"));
+    assert!(notify.contains(&format!(
+        "From: <sip:1001@example.com>;tag={gateway_local_tag}\r\n"
+    )));
     assert!(notify.contains("To: <sip:13800138000@example.com>;tag=gw-tag\r\n"));
     assert!(notify.contains("Event: refer\r\n"));
     assert!(notify.ends_with("SIP/2.0 100 Trying\r\n"));
@@ -4688,8 +4706,9 @@ async fn test_refer_local_transfer_lifecycle() {
 
     // 2. Gateway responds 200 OK
     let answer_sdp = "v=0\r\no=- 0 0 IN IP4 198.51.100.20\r\ns=-\r\nc=IN IP4 198.51.100.20\r\nt=0 0\r\nm=audio 49200 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n";
+    let (gateway_call_id, gateway_local_tag) = gateway_dialog(&edge_state, call_id);
     let ok_200 = format!(
-            "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-inv-001\r\nFrom: <sip:1001@example.com>;tag=from-tag\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {call_id}\r\nCSeq: 1 INVITE\r\nContact: <sip:13800138000@gw1.example.com:5060>\r\nContent-Type: application/sdp\r\nContent-Length: {len}\r\n\r\n{answer_sdp}",
+            "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-inv-001\r\nFrom: <sip:1001@example.com>;tag={gateway_local_tag}\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {gateway_call_id}\r\nCSeq: 1 INVITE\r\nContact: <sip:13800138000@gw1.example.com:5060>\r\nContent-Type: application/sdp\r\nContent-Length: {len}\r\n\r\n{answer_sdp}",
             len = answer_sdp.len()
         );
     handle_datagram(
@@ -4706,7 +4725,7 @@ async fn test_refer_local_transfer_lifecycle() {
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-ref-001\r\n\
              Max-Forwards: 70\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag=vosrs-edge\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 2 REFER\r\n\
              Refer-To: <sip:1002@example.com>\r\n\
@@ -4791,15 +4810,19 @@ async fn test_refer_local_transfer_lifecycle() {
     )
     .await;
 
-    // Should return 2 datagrams:
-    // [0] NOTIFY (200 OK) to referrer
-    // [1] BYE to referrer
-    assert_eq!(ok_datagrams.len(), 2);
-    let notify_ok = datagram_text(&ok_datagrams[0]);
+    // Should return 3 datagrams:
+    // [0] ACK (success) to target C
+    // [1] NOTIFY (200 OK) to referrer
+    // [2] BYE to referrer
+    assert_eq!(ok_datagrams.len(), 3);
+    let ack = datagram_text(&ok_datagrams[0]);
+    assert!(ack.starts_with("ACK "));
+
+    let notify_ok = datagram_text(&ok_datagrams[1]);
     assert!(notify_ok.contains("SIP/2.0 200 OK\r\n"));
     assert!(notify_ok.contains("Subscription-State: terminated;reason=noresource\r\n"));
 
-    let bye = datagram_text(&ok_datagrams[1]);
+    let bye = datagram_text(&ok_datagrams[2]);
     assert!(bye.starts_with("BYE "));
 
     // Verify media bridging
@@ -4849,8 +4872,9 @@ async fn test_refer_transfer_failure_rollback() {
 
     // 2. Gateway responds 200 OK
     let answer_sdp = "v=0\r\no=- 0 0 IN IP4 198.51.100.20\r\ns=-\r\nc=IN IP4 198.51.100.20\r\nt=0 0\r\nm=audio 49200 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n";
+    let (gateway_call_id, gateway_local_tag) = gateway_dialog(&edge_state, call_id);
     let ok_200 = format!(
-            "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-inv-002\r\nFrom: <sip:1001@example.com>;tag=from-tag\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {call_id}\r\nCSeq: 1 INVITE\r\nContact: <sip:13800138000@gw1.example.com:5060>\r\nContent-Type: application/sdp\r\nContent-Length: {len}\r\n\r\n{answer_sdp}",
+            "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-inv-002\r\nFrom: <sip:1001@example.com>;tag={gateway_local_tag}\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {gateway_call_id}\r\nCSeq: 1 INVITE\r\nContact: <sip:13800138000@gw1.example.com:5060>\r\nContent-Type: application/sdp\r\nContent-Length: {len}\r\n\r\n{answer_sdp}",
             len = answer_sdp.len()
         );
     handle_datagram(
@@ -4886,7 +4910,7 @@ async fn test_refer_transfer_failure_rollback() {
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-ref-002\r\n\
              Max-Forwards: 70\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag=vosrs-edge\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 2 REFER\r\n\
              Refer-To: <sip:1002@example.com>\r\n\
@@ -4928,9 +4952,14 @@ async fn test_refer_transfer_failure_rollback() {
     )
     .await;
 
-    // Should return 1 datagram: NOTIFY (486 Busy Here) to referrer with Subscription-State: terminated
-    assert_eq!(err_datagrams.len(), 1);
-    let notify_err = datagram_text(&err_datagrams[0]);
+    // Should return 2 datagrams:
+    // [0] ACK (non-2xx) to target C
+    // [1] NOTIFY (486 Busy Here) to referrer with Subscription-State: terminated
+    assert_eq!(err_datagrams.len(), 2);
+    let ack = datagram_text(&err_datagrams[0]);
+    assert!(ack.starts_with("ACK "));
+
+    let notify_err = datagram_text(&err_datagrams[1]);
     assert!(notify_err.contains("SIP/2.0 486 Busy Here\r\n"));
     assert!(notify_err.contains("Subscription-State: terminated;reason=noresource\r\n"));
 
@@ -4973,8 +5002,9 @@ async fn test_refer_attended_transfer_lifecycle() {
     .await;
 
     let answer_sdp = "v=0\r\no=- 0 0 IN IP4 198.51.100.20\r\ns=-\r\nc=IN IP4 198.51.100.20\r\nt=0 0\r\nm=audio 49200 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n";
+    let (gateway_call_id, gateway_local_tag) = gateway_dialog(&edge_state, call_id);
     let ok_200 = format!(
-            "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-inv-att\r\nFrom: <sip:1001@example.com>;tag=from-tag\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {call_id}\r\nCSeq: 1 INVITE\r\nContact: <sip:13800138000@gw1.example.com:5060>\r\nContent-Type: application/sdp\r\nContent-Length: {len}\r\n\r\n{answer_sdp}",
+            "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-inv-att\r\nFrom: <sip:1001@example.com>;tag={gateway_local_tag}\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {gateway_call_id}\r\nCSeq: 1 INVITE\r\nContact: <sip:13800138000@gw1.example.com:5060>\r\nContent-Type: application/sdp\r\nContent-Length: {len}\r\n\r\n{answer_sdp}",
             len = answer_sdp.len()
         );
     handle_datagram(
@@ -4990,7 +5020,7 @@ async fn test_refer_attended_transfer_lifecycle() {
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-ref-att\r\n\
              Max-Forwards: 70\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag=vosrs-edge\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 2 REFER\r\n\
              Refer-To: <sip:1002@example.com?Replaces=replaced-call-id%3Bto-tag%3Dxyz%3Bfrom-tag%3Dabc>\r\n\
@@ -5034,8 +5064,14 @@ async fn test_refer_attended_transfer_lifecycle() {
     )
     .await;
 
-    assert_eq!(err_datagrams.len(), 1);
-    let notify_err = datagram_text(&err_datagrams[0]);
+    // Should return 2 datagrams:
+    // [0] ACK (non-2xx) to target C
+    // [1] NOTIFY (486 Busy Here) to referrer
+    assert_eq!(err_datagrams.len(), 2);
+    let ack = datagram_text(&err_datagrams[0]);
+    assert!(ack.starts_with("ACK "));
+
+    let notify_err = datagram_text(&err_datagrams[1]);
     assert!(notify_err.contains("SIP/2.0 486 Busy Here\r\n"));
 
     let tx = edge_state.inbound_transactions.get(call_id).unwrap();

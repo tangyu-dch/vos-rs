@@ -326,10 +326,6 @@ impl RegistrationStore {
         }
     }
 
-    pub fn invalidate_cache(&mut self, aor: &str) {
-        self.bindings.remove(aor);
-    }
-
     async fn prune_expired(&mut self, now: SystemTime, db_store: Option<&PostgresCdrStore>) {
         if let Some(db) = db_store {
             let _ = db.prune_expired_registrations().await;

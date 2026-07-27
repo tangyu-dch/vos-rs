@@ -60,8 +60,6 @@ pub(crate) async fn reload_number_routes(
         menus_map.insert(
             record.id.clone(),
             crate::edge_state::IvrMenu {
-                id: record.id,
-                name: record.name,
                 welcome_prompt: record.welcome_prompt,
                 timeout_secs: record.timeout_secs,
                 actions: menu_actions,

@@ -41,9 +41,7 @@ pub(crate) async fn dispatch_request(
         if let Some(ack_key) = InviteAckKey::from_request(&request) {
             if let Some(tx) = edge_state.take_invite_ack_transaction(&ack_key) {
                 debug!(?ack_key, "ACK matched INVITE server transaction");
-                let _ = tx
-                    .send(transaction::ServerTransactionEvent::Ack(request.clone()))
-                    .await;
+                let _ = tx.send(transaction::ServerTransactionEvent::Ack).await;
             } else {
                 warn!(%peer, ?ack_key, "received ACK without a matching INVITE server transaction");
             }
@@ -246,7 +244,6 @@ mod tests {
             "sip:1001@127.0.0.1:5090".parse().unwrap(),
             None,
             None,
-            false,
             None,
         );
         let key = RequestTransactionKey::from_request(&invite, invite_peer).unwrap();
@@ -259,7 +256,7 @@ mod tests {
             .await
             .expect("ACK event timeout")
             .expect("ACK event channel closed");
-        assert!(matches!(event, ServerTransactionEvent::Ack(_)));
+        assert!(matches!(event, ServerTransactionEvent::Ack));
         assert!(state.server_transactions.is_empty());
         assert!(
             datagrams.is_empty(),

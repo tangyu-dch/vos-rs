@@ -42,7 +42,6 @@ pub(crate) mod sip_flow;
 pub(crate) mod transaction;
 
 pub(crate) use auth::{AuthConfig, AuthDecision};
-pub(crate) use dialog::DialogValidationError;
 pub(crate) use dispatcher::handle_datagram;
 pub(crate) use transaction::{ClientTransactionKey, InviteAckKey, RequestTransactionKey};
 pub(crate) mod utils;

@@ -114,7 +114,6 @@ pub(crate) async fn handle_ivr_locally(
         request.uri.clone(),
         Some(client_ep),
         Some(a_relay_endpoint.clone()),
-        false,
         Some(3600),
     );
 
@@ -258,6 +257,7 @@ fn spawn_topology_execution(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_ivr_menu_loop(
     edge_state: Arc<EdgeState>,
     edge_config: Arc<EdgeConfig>,
@@ -692,22 +692,11 @@ mod tests {
                 SipUri::from_str("sip:13800138000@example.com").unwrap(),
                 "127.0.0.1:5060",
             ),
-            peer: "127.0.0.1:5060".to_string(),
-            outbound_peer: None,
-            outbound_uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
-            inbound_from_tag: None,
-            inbound_to_tag: None,
-            last_inbound_cseq: None,
-            last_outbound_cseq: None,
+            original_request: None,
             caller_rtp: None,
             gateway_relay_rtp: None,
             gateway_rtp: None,
             caller_relay_rtp: None,
-            original_request: None,
-            inbound_route_set: vec![],
-            outbound_route_set: vec![],
-            caller_contact: None,
-            callee_contact: None,
             session_expires: None,
             session_refresher: None,
             last_session_refresh: None,
@@ -715,7 +704,6 @@ mod tests {
             gateway_100rel: false,
             refer_subscription: None,
             transfer_dialog: None,
-            callee_behind_nat: false,
             fork_dialogs: Default::default(),
             max_duration_secs: None,
             established_at: None,
@@ -723,9 +711,7 @@ mod tests {
                 crate::edge_state::InviteResponseOrder::default(),
             )),
         };
-        edge_state
-            .inbound_transactions
-            .insert("test-call-id-123".to_string(), dummy_transaction);
+        edge_state.inbound_transactions.insert(dummy_transaction);
 
         let action = IvrAction {
             action_type: "pstn".to_string(),
@@ -814,8 +800,6 @@ mod tests {
         let edge_state = Arc::new(EdgeState::new(call_manager));
 
         let menu1 = crate::edge_state::IvrMenu {
-            id: "menu1".to_string(),
-            name: "Menu 1".to_string(),
             welcome_prompt: "prompt1.wav".to_string(),
             timeout_secs: 1,
             actions: {
@@ -835,8 +819,6 @@ mod tests {
         };
 
         let menu2 = crate::edge_state::IvrMenu {
-            id: "menu2".to_string(),
-            name: "Menu 2".to_string(),
             welcome_prompt: "prompt2.wav".to_string(),
             timeout_secs: 1,
             actions: {
@@ -866,47 +848,32 @@ mod tests {
             .unwrap()
             .insert("menu2".to_string(), menu2.clone());
 
-        edge_state.inbound_transactions.insert(
-            "test-call-id-retry".to_string(),
-            InboundTransaction {
-                session_id: "test-session-retry".to_string(),
-                dialogs: crate::edge_state::B2buaDialogPair::placeholder(
-                    "test-call-id-retry",
-                    SipUri::from_str("sip:13800138000@example.com").unwrap(),
-                    "127.0.0.1:5060",
-                ),
-                peer: "127.0.0.1:5060".to_string(),
-                outbound_peer: None,
-                outbound_uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
-                inbound_from_tag: None,
-                inbound_to_tag: None,
-                last_inbound_cseq: None,
-                last_outbound_cseq: None,
-                caller_rtp: None,
-                gateway_relay_rtp: None,
-                gateway_rtp: None,
-                caller_relay_rtp: None,
-                original_request: None,
-                inbound_route_set: vec![],
-                outbound_route_set: vec![],
-                caller_contact: None,
-                callee_contact: None,
-                session_expires: None,
-                session_refresher: None,
-                last_session_refresh: None,
-                prack_rseq: 0,
-                gateway_100rel: false,
-                refer_subscription: None,
-                transfer_dialog: None,
-                callee_behind_nat: false,
-                fork_dialogs: Default::default(),
-                max_duration_secs: None,
-                established_at: None,
-                invite_response_order: Arc::new(tokio::sync::Mutex::new(
-                    crate::edge_state::InviteResponseOrder::default(),
-                )),
-            },
-        );
+        edge_state.inbound_transactions.insert(InboundTransaction {
+            session_id: "test-session-retry".to_string(),
+            dialogs: crate::edge_state::B2buaDialogPair::placeholder(
+                "test-call-id-retry",
+                SipUri::from_str("sip:13800138000@example.com").unwrap(),
+                "127.0.0.1:5060",
+            ),
+            original_request: None,
+            caller_rtp: None,
+            gateway_relay_rtp: None,
+            gateway_rtp: None,
+            caller_relay_rtp: None,
+            session_expires: None,
+            session_refresher: None,
+            last_session_refresh: None,
+            prack_rseq: 0,
+            gateway_100rel: false,
+            refer_subscription: None,
+            transfer_dialog: None,
+            fork_dialogs: Default::default(),
+            max_duration_secs: None,
+            established_at: None,
+            invite_response_order: Arc::new(tokio::sync::Mutex::new(
+                crate::edge_state::InviteResponseOrder::default(),
+            )),
+        });
 
         let template_request = SipRequest {
             method: Method::Invite,
