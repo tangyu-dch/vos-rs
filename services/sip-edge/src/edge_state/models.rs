@@ -82,25 +82,11 @@ impl SipDatagramKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct InviteResponseOrder {
     pub(crate) cseq: Option<u32>,
-    pub(crate) provisional_sent: bool,
     pub(crate) final_response_seen: bool,
     pub(crate) final_response_send_started: bool,
-    pub(crate) final_response_sent: bool,
-}
-
-impl Default for InviteResponseOrder {
-    fn default() -> Self {
-        Self {
-            cseq: None,
-            provisional_sent: false,
-            final_response_seen: false,
-            final_response_send_started: false,
-            final_response_sent: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -185,16 +171,8 @@ impl B2buaDialogPair {
 pub(crate) struct InboundTransaction {
     pub(crate) session_id: String,
     pub(crate) dialogs: B2buaDialogPair,
-    // Compatibility projection for non-dialog business modules. SIP dialog handling must use
-    // `dialogs`; these fields will be removed after the remaining IVR/management callers migrate.
-    pub(crate) peer: String,
-    pub(crate) outbound_peer: Option<String>,
+    /// 原始 INVITE 请求模板，用于后续响应构建与 CDR 记录。
     pub(crate) original_request: Option<Arc<SipRequest>>,
-    pub(crate) inbound_route_set: Vec<String>,
-    pub(crate) outbound_route_set: Vec<String>,
-    pub(crate) caller_contact: Option<SipUri>,
-    pub(crate) callee_contact: Option<SipUri>,
-    pub(crate) outbound_uri: SipUri,
     pub(crate) caller_rtp: Option<RtpEndpoint>,
     pub(crate) caller_relay_rtp: Option<RtpEndpoint>,
     pub(crate) gateway_relay_rtp: Option<RtpEndpoint>,
@@ -204,14 +182,8 @@ pub(crate) struct InboundTransaction {
     pub(crate) last_session_refresh: Option<Instant>,
     pub(crate) gateway_100rel: bool,
     pub(crate) prack_rseq: u32,
-    pub(crate) last_inbound_cseq: Option<u32>,
-    pub(crate) last_outbound_cseq: Option<u32>,
-    pub(crate) inbound_from_tag: Option<String>,
-    pub(crate) inbound_to_tag: Option<String>,
     pub(crate) refer_subscription: Option<crate::edge_state::ReferSubscription>,
     pub(crate) transfer_dialog: Option<TransferDialogState>,
-    #[allow(dead_code)]
-    pub(crate) callee_behind_nat: bool,
     pub(crate) fork_dialogs: HashMap<String, ForkDialogState>,
     pub(crate) max_duration_secs: Option<u32>,
     pub(crate) established_at: Option<Instant>,
@@ -226,14 +198,8 @@ pub(crate) struct CallSessionStore {
 }
 
 impl CallSessionStore {
-    pub(crate) fn insert(
-        &self,
-        compatibility_key: String,
-        transaction: InboundTransaction,
-    ) -> Option<InboundTransaction> {
+    pub(crate) fn insert(&self, transaction: InboundTransaction) -> Option<InboundTransaction> {
         let session_id = transaction.session_id.clone();
-        self.dialog_index
-            .insert(compatibility_key, session_id.clone());
         self.index_dialog(&session_id, &transaction.dialogs.caller.call_id);
         self.index_dialog(&session_id, &transaction.dialogs.gateway.call_id);
         if let Some(transfer) = &transaction.transfer_dialog {
