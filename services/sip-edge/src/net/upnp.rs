@@ -183,27 +183,6 @@ pub fn add_port_mapping(
     soap_request(gw, "AddPortMapping", &body)
 }
 
-/// Remove a port mapping from the UPnP gateway.
-#[allow(dead_code)]
-pub fn remove_port_mapping(gw: &UpnpGateway, external_port: u16, protocol: &str) -> bool {
-    let body = format!(
-        r#"<?xml version="1.0"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
-            s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-  <s:Body>
-    <u:DeletePortMapping xmlns:u="{}">
-      <NewRemoteHost></NewRemoteHost>
-      <NewExternalPort>{}</NewExternalPort>
-      <NewProtocol>{}</NewProtocol>
-    </u:DeletePortMapping>
-  </s:Body>
-</s:Envelope>"#,
-        gw.service_type, external_port, protocol,
-    );
-
-    soap_request(gw, "DeletePortMapping", &body)
-}
-
 /// Get the external IP address from the UPnP gateway.
 pub fn get_external_ip(gw: &UpnpGateway) -> Option<String> {
     let body = r#"<?xml version="1.0"?>
