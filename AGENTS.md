@@ -72,7 +72,7 @@ vos-rs/
 ├── crates/                    # 7 个协议/业务库 crate
 │   ├── sip-core/              # SIP 消息解析 (零外部依赖)
 │   │   └── src/               #   error, header, message, method, uri
-│   ├── rtp-core/              # RTP/RTCP 协议 (零外部依赖)
+│   ├── rtp-core/              # RTP/RTCP 协议 (轻量依赖：SRTP 加密原语)
 │   │   └── src/               #   error, packet, payload, rtcp, telephone_event, srtp
 │   ├── sdp-core/              # SDP 解析 (零外部依赖)
 │   │   └── src/               #   error, session
@@ -679,8 +679,8 @@ Response:
 | RTP 每包 6-8 次 DashMap 锁 | 🟡 中 | `media.rs:1403-1476` | 高 pps 下 cache line bouncing |
 | RTP 解析每包 Vec alloc | [已优化] | `rtp-core/packet.rs:85,115` | 已下沉并引入有界 BufferPool 机制 |
 | SIP 解析非零拷贝 | 🟡 中 | `sip-core/message.rs:62` | String::from_utf8_lossy + .to_string() |
-| main.rs 9401 行 | [已完成] | `sip-edge/main.rs` | **已重构拆分**为 20+ 子模块 |
-| `api-server` 大文件 | [已完成] | `api-server/src/` | 全部拆分至 ≤500 行 |
+| main.rs 9401 行 | [已完成] | `sip-edge/main.rs` | **已重构拆分**为 20+ 子模块（当前 540 行） |
+| `api-server` 大文件 | [已完成] | `api-server/src/` | 拆分至 65 个 .rs 文件，其中 `system/system.rs` (560)、`copilot/mod.rs` (525)、`main.rs` (521) 略超 500 行，待持续优化 |
 
 ---
 
@@ -711,7 +711,7 @@ Response:
 当 AI 阅读本项目代码时，请注意：
 
 1. **入口点**：`services/sip-edge/src/main.rs`（已进行子模块拆分瘦身）
-2. **协议解析层**：`crates/sip-core/`、`crates/rtp-core/`、`crates/sdp-core/`（零外部依赖）
+2. **协议解析层**：`crates/sip-core/`、`crates/sdp-core/`（零外部依赖）、`crates/rtp-core/`（轻量依赖：SRTP 加密原语）
 3. **业务逻辑层**：`crates/call-core/`（呼叫状态机、路由、CDR）
 4. **数据存储层**：`crates/cdr-core/`（PostgreSQL CRUD + 数据模型）
 5. **媒体处理**：`services/sip-edge/src/media.rs`（RTP relay + 录音）
@@ -720,7 +720,7 @@ Response:
 8. **测试目录**：`crates/*/tests/`（集成测试）、各模块内 `#[cfg(test)]`（单元测试）
 9. **SIPp 测试**：`tools/sipp/`（端到端 SIP 场景）
 10. **架构文档**：`docs/VOS_RS_ARCHITECTURE_ANALYSIS.md`（详细架构分析）
-11. **api-server 拆分**：已全量拆分至 copilot/resources/billing/system/cluster/termination/v1 等子目录，63 个文件均 ≤500 行
+11. **api-server 拆分**：已全量拆分至 copilot/resources/billing/system/cluster/termination/v1 等子目录，65 个 .rs 文件，其中 `system/system.rs` (560)、`copilot/mod.rs` (525)、`main.rs` (521) 3 个文件略超 500 行，待持续优化
 
 ---
 
@@ -836,7 +836,7 @@ VOS_RS_UDP_WORKERS_AUTO=true               # 自适应 worker 数量
 
 ### 已知技术债务（需逐步解决）
 
-1. [已完成] `sip-edge/src/main.rs` 9401 行 → **已拆分为多个子模块**
+1. [已完成] `sip-edge/src/main.rs` 9401 行 → **已拆分为多个子模块**（当前 540 行）
 2. [已完成] `cdr-core/src/lib.rs` 1838 行 → **已拆分为 models/schema/store/termination_models/termination_schema/utils 子模块**
 3. [已完成] 录音模块使用 `std::sync::Mutex` + sync I/O → **已改为 Tokio Channel + Task 隔离**
 4. [已完成] SBC RateLimiter 使用单 Mutex → **已改为 DashMap 分片**
@@ -844,5 +844,5 @@ VOS_RS_UDP_WORKERS_AUTO=true               # 自适应 worker 数量
 6. [已完成] SIP 解析非零拷贝 → **已引入 zero_copy 模块（基于 Rust 生命周期借用）**
 7. [已完成] 路由引擎与 SBC ACL 线性扫描 → **已实现 `PrefixTrie` 与 `IpTrie` 树检索**
 8. [已完成] 缺少实时余额扣减 → **已引入 AtomicI64 CAS 内存预扣减缓存**
-9. [已完成] `api-server` 全量拆分 → **63 个 .rs 文件全部 ≤500 行**
+9. [已完成] `api-server` 全量拆分 → **65 个 .rs 文件，其中 `system/system.rs` (560)、`copilot/mod.rs` (525)、`main.rs` (521) 3 个文件略超 500 行，待持续优化**
 10. [已完成] IVR 音频提示音文件上传能力 → **新增 `resources/prompts.rs` + 4 个端点**, 前端可通过 multipart 上传 wav/mp3 并通过 `/api/v1/ivr/prompts/:filename` 试听

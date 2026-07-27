@@ -159,24 +159,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_router_config_uses_shared_redis() {
+    fn test_parse_router_config_uses_shared_redis() -> Result<(), Box<dyn std::error::Error>> {
         let root: RootConfig = serde_yaml::from_str(
             "connections:\n  redis:\n    host: redis\n    port: 6380\nsip_router:\n  udp_bind: 0.0.0.0:5070\n",
-        )
-        .expect("config should parse");
-        assert_eq!(
-            root.connections
-                .expect("connections")
-                .redis
-                .expect("redis")
-                .host
-                .as_deref(),
-            Some("redis")
-        );
-        assert_eq!(
-            root.sip_router.expect("router").udp_bind.as_deref(),
-            Some("0.0.0.0:5070")
-        );
+        )?;
+        let connections = root.connections.ok_or("missing connections section")?;
+        let redis = connections.redis.ok_or("missing redis section")?;
+        assert_eq!(redis.host.as_deref(), Some("redis"));
+        let router = root.sip_router.ok_or("missing sip_router section")?;
+        assert_eq!(router.udp_bind.as_deref(), Some("0.0.0.0:5070"));
+        Ok(())
     }
 
     #[test]

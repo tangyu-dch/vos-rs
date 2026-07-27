@@ -80,7 +80,7 @@ pub struct CopilotChatResponse {
 }
 
 /// 用户查询意图分类（用于选择性采集数据）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CopilotIntent {
     CallFailure,
@@ -89,13 +89,8 @@ pub enum CopilotIntent {
     Registration,
     Billing,
     Gateway,
+    #[default]
     General,
-}
-
-impl Default for CopilotIntent {
-    fn default() -> Self {
-        Self::General
-    }
 }
 
 impl CopilotIntent {
