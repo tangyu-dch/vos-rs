@@ -1,45 +1,15 @@
 use super::health::GatewayHealthTracker;
+use super::trie::PrefixTrieNode;
 use super::types::{Route, SelectedRoute};
+use super::webhook::{WebhookRouteAction, WebhookRouteResponse, WebhookRouter};
 use crate::{CallError, CallResult};
 use sip_core::SipUri;
-
-#[derive(Debug, Clone, Default, PartialEq)]
-struct PrefixTrieNode {
-    routes: Vec<Route>,
-    children: std::collections::HashMap<char, PrefixTrieNode>,
-}
-
-impl PrefixTrieNode {
-    fn insert(&mut self, prefix: &str, route: Route) {
-        let mut current = self;
-        for c in prefix.chars() {
-            current = current.children.entry(c).or_default();
-        }
-        current.routes.push(route);
-    }
-
-    fn query(&self, destination: &str, out: &mut Vec<Route>) {
-        let mut current = self;
-        for route in &current.routes {
-            out.push(route.clone());
-        }
-        for c in destination.chars() {
-            if let Some(next) = current.children.get(&c) {
-                current = next;
-                for route in &current.routes {
-                    out.push(route.clone());
-                }
-            } else {
-                break;
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RouteTable {
     routes: Vec<Route>,
     trie: PrefixTrieNode,
+    webhook_router: WebhookRouter,
 }
 
 fn weighted_shuffle(mut items: Vec<&Route>) -> Vec<&Route> {
@@ -74,7 +44,25 @@ impl RouteTable {
         for route in &routes {
             trie.insert(&route.prefix, route.clone());
         }
-        Self { routes, trie }
+        Self {
+            routes,
+            trie,
+            webhook_router: WebhookRouter::default(),
+        }
+    }
+
+    pub fn with_webhook_router(routes: Vec<Route>, webhook_router: WebhookRouter) -> Self {
+        let mut table = Self::new(routes);
+        table.webhook_router = webhook_router;
+        table
+    }
+
+    pub fn set_webhook_router(&mut self, webhook_router: WebhookRouter) {
+        self.webhook_router = webhook_router;
+    }
+
+    pub fn webhook_router(&self) -> &WebhookRouter {
+        &self.webhook_router
     }
 
     pub fn clear(&mut self) {
@@ -101,70 +89,7 @@ impl RouteTable {
     }
 
     pub fn select_candidates(&self, destination_uri: &SipUri) -> CallResult<Vec<SelectedRoute>> {
-        let destination = destination_uri
-            .user
-            .as_deref()
-            .ok_or(CallError::InvalidDestinationUri)?;
-
-        let mut matched_buffer = Vec::new();
-        self.trie.query(destination, &mut matched_buffer);
-
-        if matched_buffer.is_empty() {
-            return Err(CallError::NoRouteForDestination(destination.to_string()));
-        }
-
-        let mut matching_routes: Vec<&Route> = matched_buffer.iter().collect();
-
-        matching_routes.sort_by(|left, right| {
-            right
-                .prefix
-                .len()
-                .cmp(&left.prefix.len())
-                .then_with(|| right.priority.cmp(&left.priority))
-                .then_with(|| {
-                    left.cost
-                        .partial_cmp(&right.cost)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| right.endpoint_priority.cmp(&left.endpoint_priority))
-        });
-
-        let mut grouped_routes = Vec::new();
-        let mut current_group = Vec::new();
-
-        for route in matching_routes {
-            if current_group.is_empty() {
-                current_group.push(route);
-            } else {
-                let first = current_group[0];
-                let is_equivalent = first.prefix.len() == route.prefix.len()
-                    && first.priority == route.priority
-                    && (first.cost - route.cost).abs() < 1e-9
-                    && first.endpoint_priority == route.endpoint_priority;
-                if is_equivalent {
-                    current_group.push(route);
-                } else {
-                    grouped_routes.push(weighted_shuffle(current_group));
-                    current_group = vec![route];
-                }
-            }
-        }
-        if !current_group.is_empty() {
-            grouped_routes.push(weighted_shuffle(current_group));
-        }
-
-        let final_routes: Vec<&Route> = grouped_routes.into_iter().flatten().collect();
-
-        let mut candidates = Vec::with_capacity(final_routes.len());
-        for route in final_routes {
-            candidates.push(SelectedRoute {
-                route_id: route.id.clone(),
-                target: route.target.clone(),
-                outbound_uri: route.target.outbound_uri_for(destination_uri)?,
-            });
-        }
-
-        Ok(candidates)
+        self.select_candidates_for_direction(destination_uri, "both")
     }
 
     pub fn select_candidates_for_direction(
@@ -241,6 +166,25 @@ impl RouteTable {
         Ok(candidates)
     }
 
+    pub fn select_candidates_with_webhook(
+        &self,
+        destination_uri: &SipUri,
+        webhook_response: Option<&WebhookRouteResponse>,
+        call_direction: Option<&str>,
+    ) -> CallResult<Vec<SelectedRoute>> {
+        if let Some(resp) = webhook_response {
+            if resp.action != WebhookRouteAction::FallbackToLcr {
+                return self.webhook_router.evaluate_response(destination_uri, resp);
+            }
+        }
+
+        if let Some(dir) = call_direction {
+            self.select_candidates_for_direction(destination_uri, dir)
+        } else {
+            self.select_candidates(destination_uri)
+        }
+    }
+
     pub fn select_healthy_candidates(
         &self,
         destination_uri: &SipUri,
@@ -263,7 +207,6 @@ impl RouteTable {
             .collect();
 
         if available.is_empty() {
-            warn_all_gateways_unhealthy(&all_candidates);
             return Err(CallError::GatewayUnavailable(
                 destination_uri
                     .user
@@ -307,8 +250,4 @@ impl RouteTable {
     pub fn is_empty(&self) -> bool {
         self.routes.is_empty()
     }
-}
-
-fn warn_all_gateways_unhealthy(candidates: &[SelectedRoute]) {
-    let _ = candidates;
 }

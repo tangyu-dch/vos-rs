@@ -282,8 +282,18 @@ impl RegistrationStore {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<String>>();
-
                 let expires_at = now + Duration::from_secs(u64::from(expires));
+                let binding = RegistrationBinding {
+                    uri: uri.clone(),
+                    received_from: peer,
+                    expires_at,
+                    path: path.clone(),
+                };
+                self.bindings
+                    .entry(aor.to_string())
+                    .or_default()
+                    .insert(uri.clone(), binding);
+
                 if let Some(db) = db_store {
                     let since_epoch = expires_at
                         .duration_since(SystemTime::UNIX_EPOCH)
@@ -294,17 +304,6 @@ impl RegistrationStore {
                     let _ = db
                         .upsert_registration(aor, &uri, &peer.to_string(), offset_dt, &path)
                         .await;
-                } else {
-                    let binding = RegistrationBinding {
-                        uri: uri.clone(),
-                        received_from: peer,
-                        expires_at,
-                        path,
-                    };
-                    self.bindings
-                        .entry(aor.to_string())
-                        .or_default()
-                        .insert(uri, binding);
                 }
                 let msg = RegistrationInvalidateMsg {
                     aor: aor.to_string(),
@@ -431,7 +430,7 @@ fn split_contact_uri_and_params(raw: &str) -> Option<(&str, &str)> {
     }
 }
 
-fn parse_uri_from_header(raw: &str) -> Option<SipUri> {
+pub(crate) fn parse_uri_from_header(raw: &str) -> Option<SipUri> {
     let value = raw.trim();
     let uri_raw = if let Some(start) = value.find('<') {
         let end = value[start + 1..].find('>')? + start + 1;

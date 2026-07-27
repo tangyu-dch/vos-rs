@@ -13,6 +13,7 @@ pub(crate) mod resource_lease;
 pub(crate) mod routing;
 pub(crate) mod security;
 pub(crate) mod sip;
+pub(crate) mod startup;
 pub(crate) mod timers;
 mod webhook_delivery;
 mod webhooks;
@@ -20,11 +21,14 @@ mod webhooks;
 pub(crate) use cdr::{cdr_sinks_from_config, flush_cdr_batch_with_retry_and_spool};
 pub(crate) use number_routing::{reload_number_routes, spawn_number_route_refresh};
 pub(crate) use routing::{
-    parse_gateway_target, reload_routes_from_database, route_table_from_config,
-    spawn_periodic_route_refresh, spawn_route_reload_listener, warm_hot_path_redis_cache,
+    route_table_from_config, spawn_periodic_route_refresh, warm_hot_path_redis_cache,
 };
-pub(crate) use security::rules::refresh_anti_fraud_rules;
+pub(crate) use sip::client_transaction::spawn_client_transaction_retransmission;
 pub(crate) use sip::extract_call_id_fast;
+pub(crate) use startup::{
+    config_logging_filter, init_tracing, seed_database_defaults, validate_bootstrap_config,
+    validate_runtime_security,
+};
 
 // Re-export for backward compatibility with inline module references
 #[allow(unused_imports)]
@@ -56,14 +60,14 @@ pub(crate) use sip::{AuthDecision, ClientTransactionKey, RequestTransactionKey};
 
 #[allow(unused_imports)]
 pub(crate) use timers::{
-    calculate_mos_for_legs, spawn_client_transaction_retransmission,
-    spawn_gateway_health_probe_loop, spawn_nat_keepalive_loop, spawn_session_timer_watchdog,
+    calculate_mos_for_legs, spawn_gateway_health_probe_loop, spawn_nat_keepalive_loop,
+    spawn_session_timer_watchdog,
 };
 
 use call_core::CallManager;
 use config::EdgeConfig;
 use media::MediaRelayState;
-use net::{create_tls_acceptor, BufferPool, PooledBuffer, Transport};
+use net::{BufferPool, PooledBuffer, Transport};
 use sip_core::{parse_message, Method, SipMessageBorrow};
 use std::{
     net::SocketAddr,
@@ -72,54 +76,8 @@ use std::{
 };
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
-use tracing_subscriber::EnvFilter;
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
-
-fn validate_bootstrap_config() -> Result<(), AnyError> {
-    let path = std::env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
-    let content = std::fs::read_to_string(&path)
-        .map_err(|error| std::io::Error::other(format!("读取配置文件 {path} 失败: {error}")))?;
-    serde_yaml::from_str::<serde_yaml::Value>(&content)
-        .map_err(|error| std::io::Error::other(format!("解析配置文件 {path} 失败: {error}")))?;
-    Ok(())
-}
-
-fn validate_runtime_security(config: &EdgeConfig) -> Result<(), AnyError> {
-    let production =
-        std::env::var("VOS_RS_ENV").is_ok_and(|value| value.eq_ignore_ascii_case("production"));
-    validate_runtime_security_for_environment(config, production)
-}
-
-fn validate_runtime_security_for_environment(
-    config: &EdgeConfig,
-    production: bool,
-) -> Result<(), AnyError> {
-    if !production {
-        return Ok(());
-    }
-    if config.internal_secret.len() < 24
-        || matches!(
-            config.internal_secret.as_str(),
-            "internal-dev-secret" | "compose-internal-secret"
-        )
-    {
-        return Err(std::io::Error::other(
-            "生产环境 VOS_RS_INTERNAL_SECRET 必须是至少 24 字符的随机密钥",
-        )
-        .into());
-    }
-    if config.auth.secret_key.len() < 24 || config.auth.secret_key.contains("change-me") {
-        return Err(std::io::Error::other(
-            "生产环境 SIP Digest secret_key 必须是至少 24 字符的随机密钥",
-        )
-        .into());
-    }
-    if config.tls_insecure_skip_verify || config.tls_allow_test_certificate {
-        return Err(std::io::Error::other("生产环境禁止跳过 TLS 校验或启用测试证书").into());
-    }
-    Ok(())
-}
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), AnyError> {
@@ -133,7 +91,6 @@ async fn main() -> Result<(), AnyError> {
         warn!("no outbound route configured; INVITE requests will receive 404");
     }
 
-    // 先用 bootstrap 的 db url 连接数据库以运行 migration 结构
     let cdr_sinks = match cdr_sinks_from_config(&edge_config).await {
         Ok(sinks) => sinks,
         Err(e) => {
@@ -149,7 +106,6 @@ async fn main() -> Result<(), AnyError> {
         );
     }
 
-    // 检查并强制校验 Redis 连接
     let redis_url = edge_config
         .redis_url
         .clone()
@@ -171,7 +127,6 @@ async fn main() -> Result<(), AnyError> {
     };
     info!("Redis 存储连接成功 (必须要求)");
 
-    // 运行数据库配置覆盖：系统配置加载
     if edge_config.dynamic_config_enabled {
         if let Some(ref db) = db_store {
             edge_config.override_from_db(db).await;
@@ -186,23 +141,22 @@ async fn main() -> Result<(), AnyError> {
         edge_config.auth.secret_key = secret;
     }
     validate_runtime_security(&edge_config)?;
-    // 动态配置可能替换媒体节点池，必须在创建监听和媒体状态前再次校验。
     edge_config.validate_cluster()?;
 
-    // STUN: discover public address for media relay if configured
     if let Some(stun_server) = edge_config.stun_server.clone() {
         if !stun_server.is_empty() {
             net::run_stun_discovery(&stun_server, &mut edge_config).await;
         }
     }
 
-    // UPnP: auto-discover router and add port mappings if enabled
     if edge_config.upnp_enabled {
         net::run_upnp_port_mapping(&bind_addr, &edge_config);
     }
 
-    // Wrap EdgeConfig in Arc — all mutations done, now read-only shared access
     let edge_config = Arc::new(edge_config);
+    let socket = Arc::new(UdpSocket::bind(&bind_addr).await?);
+    let socket_addr = socket.local_addr()?;
+    info!("SIP Edge UDP Listening on {}", socket_addr);
 
     let storage_config = storage_core::StorageConfig::from_env();
     let storage = match storage_core::create_storage(&storage_config).await {
@@ -224,7 +178,6 @@ async fn main() -> Result<(), AnyError> {
     );
     let cdr_sinks = std::sync::Arc::new(cdr_sinks);
 
-    // 使用有界队列防止数据库/NATS 故障时 CDR 无限堆积。
     let cdr_queue_capacity = edge_config.cdr_queue_capacity;
     let cdr_persistence_enabled = edge_config.cdr_persistence_enabled;
     let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
@@ -262,18 +215,17 @@ async fn main() -> Result<(), AnyError> {
         db_store.clone(),
         &edge_config,
     ));
+    edge_state.set_socket(Arc::clone(&socket));
     edge_state
         .cdr_pipeline_metrics
         .set(cdr_pipeline_metrics)
         .ok();
     edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
 
-    // 注入 IVR TTS/ASR 引擎 (基于环境变量惰性配置, 未启用时 tts/asr 均为 None)
     edge_state.set_voice_engine(Arc::new(
         sip::handlers::ivr_topology::VoiceEngineManager::from_env(),
     ));
 
-    // 将 Redis 连接注入 EdgeState（用于集群注册状态共享）
     if let Some(redis_conn) = redis_conn_for_state {
         edge_state.set_redis(redis_conn.clone());
         edge_state.set_registration_sync(cluster::start_registration_sync(redis_conn));
@@ -290,16 +242,12 @@ async fn main() -> Result<(), AnyError> {
             db.clone(),
             edge_config.nats_url.clone(),
         );
+        seed_database_defaults(db, &edge_config).await?;
     }
 
-    // Start background task to capture SIP packet trace flow (SipFlow)
-    let sip_flow_tx = sip::sip_flow::SipFlowWriter::start(
-        Arc::clone(&edge_state),
-        10000, // queue capacity
-    );
+    let sip_flow_tx = sip::sip_flow::SipFlowWriter::start(Arc::clone(&edge_state), 10000);
     edge_state.sip_flow_tx.set(sip_flow_tx).ok();
 
-    // Start background task to flush CDRs in batches (every 100ms or 100 entries)
     let cdr_sinks_bg = Arc::clone(&cdr_sinks);
     let cdr_spool_bg = cdr_spool.clone();
     let (cdr_shutdown_tx, mut cdr_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -343,312 +291,19 @@ async fn main() -> Result<(), AnyError> {
     });
     cdr_spool::spawn_replay_loop(cdr_spool, Arc::clone(&cdr_sinks));
 
-    // 启动管理 API（活跃呼叫查询 / 强制拆线）
     let manage_addr = edge_config.manage_bind.clone();
     {
         let manage_state = Arc::clone(&edge_state);
         let addr = manage_addr.clone();
         let internal_secret = edge_config.internal_secret.clone();
+        let advertised_addr = edge_config.advertised_addr.clone();
         tokio::spawn(async move {
-            manage::serve(addr, manage_state, internal_secret).await;
+            manage::serve(addr, manage_state, internal_secret, advertised_addr).await;
         });
     }
 
-    if let Some(db) = &db_store {
-        let has_users = sqlx::query("SELECT 1 FROM sip_users LIMIT 1")
-            .fetch_optional(db.pool())
-            .await?
-            .is_some();
-        if !has_users {
-            if let Some(raw_users) = edge_config.bootstrap_auth_users.as_deref() {
-                for entry in raw_users.split(',') {
-                    let entry = entry.trim();
-                    if let Some((username, password)) =
-                        entry.split_once(':').or_else(|| entry.split_once('='))
-                    {
-                        let username = username.trim();
-                        let password = password.trim();
-                        if !username.is_empty() {
-                            db.insert_user(username, password).await?;
-                            info!(username, "seeded SIP user into database");
-                        }
-                    }
-                }
-            }
-        }
-
-        if edge_config.database_routes_enabled {
-            let has_gateways = sqlx::query("SELECT 1 FROM sip_gateways LIMIT 1")
-                .fetch_optional(db.pool())
-                .await?
-                .is_some();
-            let has_routes = sqlx::query("SELECT 1 FROM sip_routes LIMIT 1")
-                .fetch_optional(db.pool())
-                .await?
-                .is_some();
-            if !has_gateways {
-                if !edge_config.default_gateway.trim().is_empty() {
-                    let raw_gateway = &edge_config.default_gateway;
-                    let raw_gateway = raw_gateway.trim();
-                    if !raw_gateway.is_empty() {
-                        if let Ok(target) = parse_gateway_target("default", raw_gateway) {
-                            db.insert_gateway("default", &target.host, target.port, "udp")
-                                .await?;
-                            db.insert_route("default", "", 100, "default").await?;
-                            info!(
-                                gateway = raw_gateway,
-                                "seeded default gateway and route into database"
-                            );
-                        }
-                    }
-                }
-            } else if !has_routes && !edge_config.default_gateway.trim().is_empty() {
-                db.insert_route("default", "", 100, "default").await?;
-                info!("seeded default route into database (gateway already exists)");
-            }
-
-            match reload_routes_from_database(&edge_state, db).await {
-                Ok(()) => info!("loaded routes from database"),
-                Err(e) => warn!(%e, "failed to load routes from database"),
-            }
-
-            if let Some(ref nats_url) = edge_config.nats_url {
-                spawn_route_reload_listener(
-                    nats_url.clone(),
-                    Arc::clone(&edge_state),
-                    db_store.clone(),
-                );
-            }
-
-            if edge_config.gateway_health_checks_enabled {
-                match db.load_gateway_health_list().await {
-                    Ok(health_list) => {
-                        let health = &edge_state.gateway_health;
-                        for (
-                            gw_id,
-                            open,
-                            failures,
-                            _state,
-                            last_failure_at,
-                            half_open_successes,
-                            _last_probe_at,
-                            active_calls,
-                        ) in health_list
-                        {
-                            let last_failure_sys = last_failure_at.map(|dt| {
-                                std::time::UNIX_EPOCH
-                                    + std::time::Duration::from_secs(dt.unix_timestamp() as u64)
-                            });
-                            health.restore_state(
-                                &gw_id,
-                                open,
-                                failures,
-                                last_failure_sys,
-                                half_open_successes,
-                                active_calls,
-                            );
-                        }
-                        info!("loaded and restored gateway health states from database");
-                    }
-                    Err(error) => {
-                        warn!(%error, "failed to load gateway health states from database")
-                    }
-                }
-            }
-        } else {
-            info!("database route loading disabled; using config.yaml routing table");
-        }
-
-        refresh_anti_fraud_rules(&edge_state).await;
-    }
-
-    let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(&bind_addr).await?);
-
-    // Increase UDP buffers for high CPS; the kernel may cap them via rmem_max/wmem_max.
-    #[cfg(unix)]
-    {
-        use std::os::unix::io::AsRawFd;
-        let fd = socket.as_raw_fd();
-        let receive_buffer = edge_config.udp_receive_buffer_bytes.min(i32::MAX as usize) as i32;
-        let send_buffer = edge_config.udp_send_buffer_bytes.min(i32::MAX as usize) as i32;
-        unsafe {
-            libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_RCVBUF,
-                &receive_buffer as *const i32 as *const libc::c_void,
-                std::mem::size_of::<i32>() as libc::socklen_t,
-            );
-            libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_SNDBUF,
-                &send_buffer as *const i32 as *const libc::c_void,
-                std::mem::size_of::<i32>() as libc::socklen_t,
-            );
-        }
-    }
-
-    edge_state.set_socket(Arc::clone(&socket));
-    info!(%bind_addr, "sip-edge UDP listener started");
-
-    if let Some(ref nats_url) = edge_config.nats_url {
-        let nats_url_clone = nats_url.clone();
-        let edge_state_clone = Arc::clone(&edge_state);
-        let edge_config_clone = Arc::clone(&edge_config);
-        tokio::spawn(async move {
-            match async_nats::connect(&nats_url_clone).await {
-                Ok(client) => {
-                    info!("NATS call control client successfully connected");
-                    edge_state_clone.set_nats(client.clone());
-                    if edge_config_clone.webhooks.control_mode == "nats" {
-                        if let Err(e) =
-                            crate::sip::handlers::command_listener::start_command_listener(
-                                edge_state_clone.clone(),
-                                edge_config_clone,
-                                client.clone(),
-                            )
-                            .await
-                        {
-                            tracing::error!("NATS VCI command listener failed: {:?}", e);
-                        }
-                    }
-
-                    let sub_client = client.clone();
-                    let sub_state = edge_state_clone.clone();
-                    tokio::spawn(async move {
-                        use futures::StreamExt;
-                        if let Ok(mut subscriber) = sub_client
-                            .subscribe("vos_rs.cluster.registration.invalidate")
-                            .await
-                        {
-                            tracing::info!("Subscribed to vos_rs.cluster.registration.invalidate");
-                            while let Some(message) = subscriber.next().await {
-                                if let Ok(payload) = std::str::from_utf8(&message.payload) {
-                                    if let Ok(msg) = serde_json::from_str::<
-                                        crate::sip::registrar::RegistrationInvalidateMsg,
-                                    >(payload)
-                                    {
-                                        sub_state
-                                            .registrar
-                                            .write()
-                                            .await
-                                            .invalidate_cache(&msg.aor);
-                                        tracing::debug!(aor = %msg.aor, "invalidated registration cache from cluster broadcast");
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("failed to connect to NATS for call control: {:?}", e);
-                }
-            }
-        });
-    }
-
-    // Start TCP listener
-    let tcp_listener = match tokio::net::TcpListener::bind(&bind_addr).await {
-        Ok(l) => {
-            info!(%bind_addr, "sip-edge TCP listener started");
-            Some(Arc::new(l) as Arc<tokio::net::TcpListener>)
-        }
-        Err(e) => {
-            warn!(%bind_addr, error = %e, "failed to start TCP listener");
-            None
-        }
-    };
-
-    if let Some(l) = tcp_listener {
-        net::start_tcp_listener(l, Arc::clone(&edge_state), Arc::clone(&edge_config));
-    }
-
-    // Start TLS listener (default derived port 5061) only when TLS material is configured.
-    let tls_bind_addr = edge_config
-        .tls_bind_addr
-        .clone()
-        .or_else(|| {
-            bind_addr.parse::<SocketAddr>().ok().map(|addr| {
-                let mut tls_addr = addr;
-                tls_addr.set_port(5061);
-                tls_addr.to_string()
-            })
-        })
-        .and_then(|addr| match addr.parse::<SocketAddr>() {
-            Ok(addr) => Some(addr),
-            Err(e) => {
-                warn!(addr, error = %e, "invalid TLS bind address; TLS listener disabled");
-                None
-            }
-        });
-
-    let tls_acceptor = match create_tls_acceptor(
-        edge_config.tls_cert_path.as_deref(),
-        edge_config.tls_key_path.as_deref(),
-        edge_config.tls_allow_test_certificate,
-    ) {
-        Ok(Some(acceptor)) => {
-            if let Some(tls_addr) = tls_bind_addr {
-                match tokio::net::TcpListener::bind(&tls_addr).await {
-                    Ok(l) => {
-                        info!(%tls_addr, "sip-edge TLS listener started");
-                        net::start_tls_listener(
-                            Arc::new(l),
-                            acceptor.clone(),
-                            Arc::clone(&edge_state),
-                            Arc::clone(&edge_config),
-                        );
-                    }
-                    Err(e) => {
-                        warn!(%tls_addr, error = %e, "failed to start TLS listener");
-                    }
-                }
-            }
-            Some(acceptor)
-        }
-        Ok(None) => {
-            info!("SIP TLS listener disabled; configure TLS cert/key paths in config.yaml");
-            None
-        }
-        Err(e) => {
-            warn!(error = %e, "failed to create TLS acceptor; TLS listener disabled");
-            None
-        }
-    };
-
-    // Start WebSocket listener
-    let ws_bind_addr = edge_config.ws_bind_addr.clone().unwrap_or_else(|| {
-        if let Ok(addr) = bind_addr.parse::<SocketAddr>() {
-            let mut ws_addr = addr;
-            ws_addr.set_port(5062);
-            ws_addr.to_string()
-        } else {
-            "0.0.0.0:5062".to_string()
-        }
-    });
-
-    if let Ok(ws_listener) = tokio::net::TcpListener::bind(&ws_bind_addr).await {
-        info!(%ws_bind_addr, "sip-edge WebSocket listener started");
-        net::start_ws_listener(
-            ws_listener,
-            tls_acceptor,
-            Arc::clone(&edge_state),
-            Arc::clone(&edge_config),
-        );
-    } else {
-        warn!(%ws_bind_addr, "failed to start WebSocket listener");
-    }
-
-    // Start session timer watchdog — sends BYE to zombie calls that exceed Session-Expires
-    spawn_session_timer_watchdog(
-        Arc::clone(&edge_state),
-        Arc::clone(&socket),
-        edge_config.clone(),
-    );
     resource_lease::spawn_renewal_loop(Arc::clone(&edge_state));
 
-    // Start NAT keepalive background loop — sends keepalive probes to active registrations
     let num_workers = if edge_config.udp_workers_auto {
         num_cpus::get().max(1)
     } else {
@@ -691,42 +346,47 @@ async fn main() -> Result<(), AnyError> {
                         Transport::Udp
                     };
 
-                    let client_transaction_key = if transport == Transport::Udp {
-                        parse_message(&datagram.bytes)
-                            .ok()
-                            .and_then(|message| match message {
-                                SipMessageBorrow::Request(request)
-                                    if !matches!(&request.method, Method::Ack) =>
-                                {
-                                    sip::ClientTransactionKey::from_request(&request)
-                                }
-                                _ => None,
-                            })
-                    } else {
-                        None
-                    };
-                    let registered_transaction = client_transaction_key.and_then(|key| {
-                        if state.client_transactions.contains_key(&key) {
-                            None
+                    let client_transaction_key =
+                        if transport == Transport::Udp && datagram.is_request() {
+                            parse_message(&datagram.bytes)
+                                .ok()
+                                .and_then(|message| match message {
+                                    SipMessageBorrow::Request(request)
+                                        if !matches!(&request.method, Method::Ack) =>
+                                    {
+                                        sip::ClientTransactionKey::from_request(&request)
+                                    }
+                                    _ => None,
+                                })
                         } else {
-                            spawn_client_transaction_retransmission(
-                                Arc::clone(&state),
-                                Arc::clone(&sock),
-                                datagram.target.clone(),
-                                datagram.bytes.clone(),
-                                key.clone(),
-                                cfg.clone(),
-                            );
-                            Some(key)
-                        }
+                            None
+                        };
+                    let registered_transaction = client_transaction_key.clone().and_then(|key| {
+                        spawn_client_transaction_retransmission(
+                            Arc::clone(&state),
+                            Arc::clone(&sock),
+                            datagram.target.clone(),
+                            datagram.bytes.clone(),
+                            key.clone(),
+                            cfg.clone(),
+                        )
+                        .then_some(key)
                     });
+                    if client_transaction_key.is_some() && registered_transaction.is_none() {
+                        continue;
+                    }
 
                     if let Err(error) = state.send_sip_datagram(datagram.clone(), &sock, &cfg).await
                     {
                         if let Some(key) = registered_transaction.as_ref() {
-                            state.cancel_client_transaction(key);
+                            state.client_transactions.cancel(key);
                         }
                         warn!(target = %datagram.target, error = %error, "failed to send SIP message");
+                    } else if datagram.bytes.starts_with(b"INVITE ") {
+                        let msg_head = String::from_utf8_lossy(
+                            &datagram.bytes[..datagram.bytes.len().min(300)],
+                        );
+                        debug!(target = %datagram.target, head = %msg_head, "sending outbound INVITE datagram");
                     } else {
                         debug!(
                             peer = %datagram.target,
@@ -772,9 +432,11 @@ async fn main() -> Result<(), AnyError> {
                 raw_buf.truncate(size);
                 let packet = PooledBuffer::new(raw_buf, Arc::clone(&buffer_pool));
 
-                // 使用 Call-ID 哈希进行 worker 路由：确保同一 Dialog 的所有消息
-                // (INVITE/ACK/BYE/re-INVITE) 由同一 Worker 处理，消除跨 worker 竞态。
-                // 若解析失败则 fallback 到 peer-IP 哈希保证负载均衡。
+                // SIP client transactions belong to the transport layer. Apply responses
+                // before worker queueing so 100/180/183 can stop Timer A without waiting
+                // for routing, media, CDR, or other application response processing.
+                edge_state.client_transactions.observe_packet(&packet);
+
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 match extract_call_id_fast(&packet) {
@@ -841,39 +503,18 @@ async fn main() -> Result<(), AnyError> {
     Ok(())
 }
 
-fn init_tracing(filter: &str) {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(filter))
-        .init();
-}
-
-fn config_logging_filter(default: &str) -> String {
-    let path = std::env::var("VOS_RS_CONFIG_FILE").unwrap_or_else(|_| "config.yaml".to_string());
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
-        .and_then(|root| {
-            root.get("logging")?
-                .get("filter")?
-                .as_str()
-                .map(str::to_owned)
-        })
-        .filter(|filter| !filter.trim().is_empty())
-        .unwrap_or_else(|| default.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::auth::{digest_response, AuthConfig};
     use super::{
         handle_datagram, media, response, spawn_client_transaction_retransmission,
-        spawn_nat_keepalive_loop, spawn_session_timer_watchdog,
-        validate_runtime_security_for_environment, CdrSinks, ClientTransactionKey, EdgeConfig,
-        EdgeState,
+        spawn_nat_keepalive_loop, spawn_session_timer_watchdog, CdrSinks, ClientTransactionKey,
+        EdgeConfig, EdgeState,
     };
     use crate::cdr::flush_cdr_batch;
     use crate::edge_state::PendingDatagram;
     use crate::net::handle_ws_connection;
+    use crate::startup::validate_runtime_security_for_environment;
     use call_core::{CallId, CallManager, CallState, Route, RouteTable, RouteTarget};
     use sdp_core::RtpEndpoint;
     use sip_core::{parse_message, SipMessage, SipUri};

@@ -10,6 +10,9 @@ mod header;
 mod message;
 mod method;
 mod uri;
+pub mod via;
+
+pub use via::ViaHeader;
 
 pub use error::{SipParseError, SipResult};
 pub use header::{HeaderMap, HeaderName, HeaderValue};

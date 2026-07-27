@@ -291,24 +291,17 @@ pub(crate) fn select_node<'a>(
     call_id: &str,
     nodes: &'a [crate::discovery::SipNode],
 ) -> Option<&'a crate::discovery::SipNode> {
-    nodes.iter().max_by(|a, b| {
-        let mut hasher_a = DefaultHasher::new();
-        call_id.hash(&mut hasher_a);
-        a.id.hash(&mut hasher_a);
-        let hash_a = hasher_a.finish();
+    nodes
+        .iter()
+        .max_by_key(|node| calculate_node_weight(call_id, node))
+}
 
-        let mut hasher_b = DefaultHasher::new();
-        call_id.hash(&mut hasher_b);
-        b.id.hash(&mut hasher_b);
-        let hash_b = hasher_b.finish();
+fn calculate_node_weight(call_id: &str, node: &crate::discovery::SipNode) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    call_id.hash(&mut hasher);
+    node.id.hash(&mut hasher);
+    let hash = hasher.finish();
 
-        // 综合 QoS 得分计算：动态算分 = 节点 Hash - (RTT_ms * 1000 + LossRate * 100000)
-        let qos_penalty_a = (a.rtt_ms * 1000.0 + a.packet_loss_rate * 100_000.0) as u64;
-        let qos_penalty_b = (b.rtt_ms * 1000.0 + b.packet_loss_rate * 100_000.0) as u64;
-
-        let score_a = hash_a.saturating_sub(qos_penalty_a);
-        let score_b = hash_b.saturating_sub(qos_penalty_b);
-
-        score_a.cmp(&score_b)
-    })
+    let qos_penalty = (node.rtt_ms * 1000.0 + node.packet_loss_rate * 100_000.0) as u64;
+    hash.saturating_sub(qos_penalty)
 }

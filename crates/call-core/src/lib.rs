@@ -44,7 +44,8 @@ mod manager;
 mod outbound_policy;
 mod pool_selection;
 mod queue;
-mod routing;
+pub mod routing;
+pub mod rwi;
 mod webhooks;
 
 pub use cdr::{CallCdr, CallQualityMetrics, CdrAuditSnapshot, CdrStatus};
@@ -61,8 +62,10 @@ pub use pool_selection::CallerPoolStrategy;
 pub use queue::{Agent, AgentState, CallQueue, QueueMetrics, QueueStrategy, QueuedCall};
 pub use routing::{
     CircuitState, GatewayHealth, GatewayHealthTracker, GatewayId, HealthThresholds, Route,
-    RouteTable, RouteTarget, SelectedRoute,
+    RouteTable, RouteTarget, SelectedRoute, WebhookRouteAction, WebhookRouteConfig,
+    WebhookRouteRequest, WebhookRouteResponse, WebhookRouter,
 };
+pub use rwi::{RwiCommand, RwiEvent, RwiMessage, RwiPayload};
 pub use webhooks::{CallEvent, VciInstruction, WebhookEvent, WEBHOOK_SCHEMA_VERSION};
 
 /// 活跃呼叫摘要（供管理 API 暴露）。

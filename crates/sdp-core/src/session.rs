@@ -121,7 +121,8 @@ impl SessionDescription {
     pub fn rewrite_first_audio_rtp_endpoint(&mut self, endpoint: RtpEndpoint) -> SdpResult<()> {
         let media_index = self.first_audio_rtp_media_index()?;
         self.rewrite_media_line(media_index, endpoint.port);
-        self.rewrite_connection_line(media_index, endpoint.address);
+        self.rewrite_connection_line(media_index, endpoint.address.clone());
+        self.rewrite_rtcp_attribute(media_index, &endpoint);
         Ok(())
     }
 
@@ -344,6 +345,31 @@ impl SessionDescription {
         self.shift_indices_after_insert(insert_at);
         self.media[media_index].connection_line_index = Some(insert_at);
         self.media[media_index].connection_address = Some(connection.address);
+    }
+
+    fn rewrite_rtcp_attribute(&mut self, media_index: usize, endpoint: &RtpEndpoint) {
+        let Some(rtcp_port) = endpoint.port.checked_add(1) else {
+            return;
+        };
+        let start = self.media[media_index].media_line_index + 1;
+        let end = self
+            .media
+            .get(media_index + 1)
+            .map(|media| media.media_line_index)
+            .unwrap_or(self.lines.len());
+        let address_type = address_type_for(&endpoint.address);
+
+        for line in &mut self.lines[start..end] {
+            let Some(value) = line.strip_prefix("a=rtcp:") else {
+                continue;
+            };
+            *line = if value.split_whitespace().nth(1).is_some() {
+                format!("a=rtcp:{rtcp_port} IN {address_type} {}", endpoint.address)
+            } else {
+                format!("a=rtcp:{rtcp_port}")
+            };
+            break;
+        }
     }
 
     fn shift_indices_after_insert(&mut self, insert_at: usize) {

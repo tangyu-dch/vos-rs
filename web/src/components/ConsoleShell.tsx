@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection,
   Button, Avatar, Chip,
@@ -6,7 +6,7 @@ import {
   Modal, ModalContent, ModalBody,
 } from '@heroui/react';
 import {
-  LayoutDashboard, PhoneCall, Users, BookOpen, GitBranch, GitFork, Bot,
+  LayoutDashboard, PhoneCall, Users, BookOpen, GitBranch, GitFork, Bot, Radio,
   Grid, Server, ShieldCheck, ShieldAlert, Settings, LogOut, ChevronDown, Menu as MenuIcon, Activity, Cpu,
   Sun, Moon, ChevronsLeft, ChevronsRight, User as UserIcon,
 } from 'lucide-react';
@@ -14,6 +14,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
 import { canAccessPage, roleLabel, type UserRole } from '@/services/auth';
 import { useTheme } from '@/theme/ThemeContext';
+import { api } from '@/services/client';
 
 interface NavItem {
   to: string;
@@ -30,6 +31,7 @@ interface NavGroup {
 const groups: NavGroup[] = [
   { label: '运行中心', icon: <Activity className="w-3.5 h-3.5" />, items: [
     { to: '/overview', label: '运行总览', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { to: '/rwi', label: 'RWI 实时控制台', icon: <Radio className="w-4 h-4" /> },
     { to: '/copilot', label: '智能助手', icon: <Bot className="w-4 h-4" /> },
     { to: '/calls/active', label: '活跃通话', icon: <PhoneCall className="w-4 h-4" /> },
   ] },
@@ -181,6 +183,37 @@ export default function ConsoleShell({ children }: { children: ReactNode }) {
     .filter((item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`))
     .sort((a, b) => b.to.length - a.to.length)[0];
 
+  // ============ 全局顶栏集群指标状态（SIP 节点数 / 媒体节点数 / 并发 / CPS） ============
+  const [clusterStats, setClusterStats] = useState({
+    sipNodes: 0,
+    mediaNodes: 0,
+    activeCalls: 0,
+    cps: 0,
+  });
+
+  useEffect(() => {
+    const fetchClusterStats = async () => {
+      try {
+        const [sipCluster, mediaCluster, summary] = await Promise.all([
+          api.get<{ nodes: unknown[] }>('/infrastructure/sip-cluster').catch(() => ({ nodes: [] })),
+          api.get<{ nodes: unknown[] }>('/infrastructure/media-cluster').catch(() => ({ nodes: [] })),
+          api.get<{ active_calls: number; today_total_calls: number }>('/overview/summary').catch(() => ({ active_calls: 0, today_total_calls: 0 })),
+        ]);
+        setClusterStats({
+          sipNodes: sipCluster.nodes?.length || 0,
+          mediaNodes: mediaCluster.nodes?.length || 0,
+          activeCalls: summary.active_calls || 0,
+          cps: 0,
+        });
+      } catch {
+        // 忽略
+      }
+    };
+    void fetchClusterStats();
+    const timer = setInterval(() => { void fetchClusterStats(); }, 15000);
+    return () => clearInterval(timer);
+  }, []);
+
   const sidebarWidth = collapsed ? 'w-[68px] min-w-[68px] max-w-[68px]' : 'w-60 shrink-0';
 
   const sidebarHeader = (hidden: boolean) => (
@@ -263,6 +296,22 @@ export default function ConsoleShell({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <div className="hidden lg:flex items-center gap-1.5 font-mono text-[11px] mr-1">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-content2 border border-default-200/60 text-default-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+                SIP节点 <strong className="text-foreground font-bold">{clusterStats.sipNodes}</strong>
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-content2 border border-default-200/60 text-default-600">
+                媒体节点 <strong className="text-foreground font-bold">{clusterStats.mediaNodes}</strong>
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-content2 border border-default-200/60 text-default-600">
+                活跃并发 <strong className="text-success font-bold">{clusterStats.activeCalls}</strong>
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-content2 border border-default-200/60 text-default-600">
+                CPS <strong className="text-primary font-bold">{clusterStats.cps}</strong>
+              </span>
+            </div>
+
             <Chip
               color="success"
               variant="dot"

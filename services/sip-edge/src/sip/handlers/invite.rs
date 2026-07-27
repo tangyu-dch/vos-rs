@@ -10,7 +10,7 @@ use super::{
     response_for_media_error,
 };
 use crate::config::EdgeConfig;
-use crate::edge_state::{EdgeState, PendingDatagram};
+use crate::edge_state::{EdgeState, ForkDialogState, PendingDatagram};
 use crate::sip::{outbound, response, AuthDecision};
 
 pub(crate) async fn handle_invite_request(
@@ -19,6 +19,28 @@ pub(crate) async fn handle_invite_request(
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
 ) -> Vec<PendingDatagram> {
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    if let Some(call_id) = request.headers.get("call-id").map(|v| v.as_str()) {
+        let has_auth = request.headers.get("authorization").is_some()
+            || request.headers.get("proxy-authorization").is_some();
+        let now = std::time::Instant::now();
+        if !has_auth {
+            if let Some(last_seen) = edge_state.recent_inbound_invites.get(call_id) {
+                if now.duration_since(*last_seen) < std::time::Duration::from_millis(500) {
+                    debug!(
+                        call_id,
+                        "duplicate inbound INVITE received within 500ms, returning empty datagrams"
+                    );
+                    return Vec::new();
+                }
+            }
+        }
+        edge_state
+            .recent_inbound_invites
+            .insert(call_id.to_string(), now);
+    }
+
     if edge_state.draining.load(Ordering::Relaxed) {
         info!(
             call_id = %request.headers.get("call-id").map(|v| v.as_str()).unwrap_or(""),
@@ -57,14 +79,9 @@ pub(crate) async fn handle_invite_request(
         info!(conf_id, "incoming SIP INVITE to join conference");
 
         // 1. 自动为会议分配媒体中继端口
-        let call_id = request
-            .headers
-            .get("call-id")
-            .map(|value| value.as_str())
-            .unwrap_or("");
         let local_ep = match edge_state
             .media_relay
-            .allocate_endpoint_for_call(&edge_config.media, call_id)
+            .allocate_endpoint_for_call(&edge_config.media, &session_id)
         {
             Ok(ep) => ep,
             Err(e) => {
@@ -167,6 +184,7 @@ pub(crate) async fn handle_invite_request(
 
         // 5. 记录事务状态
         edge_state.remember_inbound_invite(
+            session_id.clone(),
             &request,
             peer,
             SipUri::from_str(&format!("sip:{}@localhost", conf_id)).unwrap(),
@@ -505,7 +523,7 @@ pub(crate) async fn handle_invite_request(
             .clone()
             .or_else(|| EdgeState::username_from_request(&request))
             .unwrap_or_else(|| "1001".to_string());
-        call_source = Some(call_core::CallSource::new("trunk", username));
+        call_source = Some(call_core::CallSource::new("extension", username));
     }
 
     let source = call_source.expect("source must be resolved here");
@@ -519,7 +537,9 @@ pub(crate) async fn handle_invite_request(
     let callee_domain = request.uri.host.clone();
 
     if let Some(ref caller_dom) = caller_domain {
-        if callee_domain != *caller_dom {
+        let caller_dom_no_port = caller_dom.split(':').next().unwrap_or(caller_dom);
+        let callee_dom_no_port = callee_domain.split(':').next().unwrap_or(&callee_domain);
+        if callee_dom_no_port != caller_dom_no_port {
             let registered_contact = edge_state.lookup_destination_contact(&request.uri).await;
 
             if registered_contact.is_some() {
@@ -545,20 +565,17 @@ pub(crate) async fn handle_invite_request(
         }
     }
     if edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats" {
-        let edge_state_arc = match edge_state.self_weak.get().and_then(|w| w.upgrade()) {
-            Some(arc) => arc,
-            None => {
-                warn!("self_weak not initialized inside handle_invite_request for VCI control");
-                return Vec::new();
-            }
-        };
-        return crate::sip::handlers::interactive_control::handle_interactive_webhook_call(
-            request,
-            peer,
-            &edge_state_arc,
-            edge_config,
-        )
-        .await;
+        if let Some(edge_state_arc) = edge_state.self_weak.get().and_then(|w| w.upgrade()) {
+            return crate::sip::handlers::interactive_control::handle_interactive_webhook_call(
+                request,
+                peer,
+                &edge_state_arc,
+                edge_config,
+            )
+            .await;
+        } else {
+            warn!("self_weak not initialized inside handle_invite_request for VCI control; falling back to standard routing");
+        }
     }
 
     let registered_contact = edge_state.lookup_destination_contact(&request.uri).await;
@@ -785,7 +802,10 @@ pub(crate) async fn handle_invite_request(
     let mut billing_pulse: Option<(u32, f64)> = None;
 
     // 呼叫热路径只从 Redis 读取余额和费率，不回退查询 PostgreSQL。
-    if edge_config.balance_enforcement_enabled && outbound_invite.is_some() {
+    if edge_config.balance_enforcement_enabled
+        && edge_config.redis_url.is_some()
+        && outbound_invite.is_some()
+    {
         let callee = request.uri.user.as_deref().unwrap_or("");
         if let Some(caller_user) = billing_account.as_deref() {
             match edge_state.redis_balance_check(caller_user, callee).await {
@@ -911,11 +931,7 @@ pub(crate) async fn handle_invite_request(
             &edge_state.media_relay,
             &edge_config.media,
             "inbound INVITE offer",
-            request
-                .headers
-                .get("call-id")
-                .map(|value| value.as_str())
-                .unwrap_or(""),
+            &session_id,
         ) {
             Ok(rewritten_sdp) => rewritten_sdp,
             Err(error) => {
@@ -958,6 +974,7 @@ pub(crate) async fn handle_invite_request(
         }
 
         edge_state.remember_inbound_invite(
+            session_id.clone(),
             &request,
             peer,
             outbound_invite.outbound_uri.clone(),
@@ -996,17 +1013,46 @@ pub(crate) async fn handle_invite_request(
         );
         if forking_enabled && candidates.len() > 1 && !managed_resources {
             let fork_candidates = candidates.iter().take(3).cloned().collect::<Vec<_>>();
-            let mut forks_to_save = Vec::new();
+            let Some(gateway_dialog_template) = edge_state
+                .inbound_transactions
+                .get(&session_id)
+                .map(|transaction| transaction.dialogs.gateway.clone())
+            else {
+                warn!(
+                    session_id,
+                    "fork session disappeared before candidate setup"
+                );
+                return datagrams;
+            };
             for candidate in &fork_candidates {
                 let external_call_id = uuid::Uuid::new_v4().to_string();
-                edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
-                forks_to_save.push((
-                    external_call_id.clone(),
-                    candidate.target.gateway_id.as_str().to_string(),
-                ));
-
                 let target = outbound::target_addr_for(&candidate.outbound_uri);
-                let bytes = outbound::build_outbound_invite_with_session_timer_call_id_and_caller(
+                let gateway_local_tag = format!("vosrs-b-{}", uuid::Uuid::new_v4().simple());
+                let mut fork_dialog = gateway_dialog_template.clone();
+                fork_dialog.call_id = external_call_id.clone();
+                fork_dialog.local_tag = gateway_local_tag.clone();
+                fork_dialog.remote_uri = candidate.outbound_uri.clone();
+                fork_dialog.remote_tag = None;
+                fork_dialog.local_cseq = 1;
+                fork_dialog.remote_cseq = None;
+                fork_dialog.route_set = path.to_vec();
+                fork_dialog.remote_target = candidate.outbound_uri.clone();
+                fork_dialog.peer = Some(target.clone());
+                let gateway_id = candidate.target.gateway_id.as_str().to_string();
+                if !edge_state.inbound_transactions.insert_fork_dialog(
+                    &session_id,
+                    ForkDialogState {
+                        dialog: fork_dialog,
+                        gateway_id: gateway_id.clone(),
+                    },
+                ) {
+                    warn!(
+                        session_id,
+                        external_call_id, "failed to register fork dialog"
+                    );
+                    continue;
+                }
+                let bytes = outbound::build_b2bua_outbound_invite(
                     &request,
                     &candidate.outbound_uri,
                     &edge_config.advertised_addr,
@@ -1017,30 +1063,33 @@ pub(crate) async fn handle_invite_request(
                     edge_config.session_expires_gateway,
                     path,
                     &external_call_id,
+                    &gateway_local_tag,
                     outbound_invite.caller_identity.as_ref(),
                 );
                 datagrams.push(PendingDatagram::new(target, bytes));
 
-                let gw_id = candidate.target.gateway_id.as_str().to_string();
-                if !gw_id.is_empty() {
-                    edge_state.gateway_health.increment_active(&gw_id);
-                    let status = edge_state.gateway_health.get_gateway_status(&gw_id);
-                    crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
+                if !gateway_id.is_empty() {
+                    edge_state.gateway_health.increment_active(&gateway_id);
+                    let status = edge_state.gateway_health.get_gateway_status(&gateway_id);
+                    crate::timers::persist_gateway_health(edge_state, gateway_id.clone(), status);
                 }
-            }
-
-            if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(&internal_call_id) {
-                t_mut.active_forks = forks_to_save;
             }
         } else {
             let external_call_id = uuid::Uuid::new_v4().to_string();
-            edge_state.register_call_id_mapping(&internal_call_id, &external_call_id);
+            edge_state.bind_gateway_dialog(&session_id, &external_call_id);
+            let gateway_local_tag = edge_state
+                .inbound_transactions
+                .get(&internal_call_id)
+                .map(|transaction| transaction.dialogs.gateway.local_tag.clone())
+                .unwrap_or_else(|| format!("vosrs-b-{}", uuid::Uuid::new_v4().simple()));
             debug!(
                 internal_call_id,
                 external_call_id, "topology hiding: registered Call-ID mapping"
             );
 
-            let target = if let Some(ref override_addr) = outbound_invite.target_override_addr {
+            let target = if let Some(ref contact) = registered_contact {
+                contact.received_from.clone()
+            } else if let Some(ref override_addr) = outbound_invite.target_override_addr {
                 override_addr.clone()
             } else {
                 outbound::target_addr_for(&outbound_invite.outbound_uri)
@@ -1054,7 +1103,7 @@ pub(crate) async fn handle_invite_request(
                 "bench: sending outbound INVITE to gateway"
             );
 
-            let bytes = outbound::build_outbound_invite_with_session_timer_call_id_and_caller(
+            let bytes = outbound::build_b2bua_outbound_invite(
                 &request,
                 &outbound_invite.outbound_uri,
                 &edge_config.advertised_addr,
@@ -1065,6 +1114,7 @@ pub(crate) async fn handle_invite_request(
                 edge_config.session_expires_gateway,
                 path,
                 &external_call_id,
+                &gateway_local_tag,
                 outbound_invite.caller_identity.as_ref(),
             );
             datagrams.push(PendingDatagram::new(target, bytes));

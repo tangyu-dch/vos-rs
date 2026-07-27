@@ -6,8 +6,10 @@ use sha2::{Digest, Sha256};
 
 use crate::{FileInfo, StorageBackend, StorageError};
 
+mod signer;
+use signer::{hmac_sha256_raw, percent_encode_query, AwsV4Signer};
+
 /// OSS 兼容对象存储后端。
-/// 支持阿里云 OSS、MinIO 等兼容 S3/REST 协议的存储。
 pub struct OssStorage {
     client: Client,
     endpoint: String,
@@ -75,51 +77,6 @@ impl OssStorage {
         }
     }
 
-    fn sign_v4(
-        &self,
-        method: &str,
-        full_key: &str,
-        date: &str,
-        date_full: &str,
-        payload_hash: &str,
-        content_type: &str,
-    ) -> String {
-        let region = self.region.as_str();
-        let credential_scope = format!("{}/{}/s3/aws4_request", date, region);
-        let host = self.host();
-
-        let canonical_headers = format!(
-            "content-type:{content_type}\nhost:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{date_full}\n"
-        );
-        let signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date";
-        // RustFS 默认使用 path-style：/{bucket}/{object-key}。
-        let canonical_uri = format!("/{}/{}", self.bucket, full_key);
-
-        let canonical_request = format!(
-            "{method}\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
-        );
-
-        let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{date_full}\n{credential_scope}\n{:x}",
-            Sha256::digest(canonical_request.as_bytes())
-        );
-
-        let k_secret = format!("AWS4{}", self.secret_key);
-        let k_date = hmac_sha256_raw(k_secret.as_bytes(), date.as_bytes());
-        let k_region = hmac_sha256_raw(&k_date, region.as_bytes());
-        let k_service = hmac_sha256_raw(&k_region, b"s3");
-        let k_signing = hmac_sha256_raw(&k_service, b"aws4_request");
-        let signature = hex::encode(hmac_sha256_raw(&k_signing, string_to_sign.as_bytes()));
-
-        format!(
-            "AWS4-HMAC-SHA256 Credential={access_key}/{scope}, SignedHeaders={signed}, Signature={sig}",
-            access_key = self.access_key,
-            scope = credential_scope,
-            signed = signed_headers,
-            sig = signature,
-        )
-    }
-
     async fn do_request(
         &self,
         method: reqwest::Method,
@@ -135,14 +92,24 @@ impl OssStorage {
             .unwrap_or_else(|| {
                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()
             });
-        let authorization = self.sign_v4(
+
+        let host = self.host();
+        let signer = AwsV4Signer {
+            secret_key: &self.secret_key,
+            access_key: &self.access_key,
+            region: &self.region,
+            bucket: &self.bucket,
+            host: &host,
+        };
+
+        let authorization = signer.sign(
             method.as_str(),
             &self.full_key(key),
             &date,
             &date_full,
             &payload_hash,
             "application/octet-stream",
-        );
+        )?;
 
         let mut req = self
             .client
@@ -160,31 +127,6 @@ impl OssStorage {
     }
 }
 
-fn hmac_sha256_raw(key: &[u8], data: &[u8]) -> Vec<u8> {
-    use hmac::{Hmac, Mac};
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC 可接受任意长度 key");
-    mac.update(data);
-    mac.finalize().into_bytes().to_vec()
-}
-
-/// 按 RFC 3986 规则编码 S3 查询参数。
-///
-/// 签名计算和实际请求必须使用完全相同的编码结果；不能直接把对象前缀
-/// 拼接到 URL，否则前缀中的 `/`、空格或非 ASCII 字符会导致签名不一致。
-fn percent_encode_query(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            encoded.push(byte as char);
-        } else {
-            encoded.push('%');
-            encoded.push_str(&format!("{byte:02X}"));
-        }
-    }
-    encoded
-}
-
 #[async_trait]
 impl StorageBackend for OssStorage {
     async fn put(
@@ -198,14 +140,24 @@ impl StorageBackend for OssStorage {
         let date_full = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let payload_hash = format!("{:x}", Sha256::digest(&data));
         let ct = content_type.unwrap_or("application/octet-stream");
-        let authorization = self.sign_v4(
+
+        let host = self.host();
+        let signer = AwsV4Signer {
+            secret_key: &self.secret_key,
+            access_key: &self.access_key,
+            region: &self.region,
+            bucket: &self.bucket,
+            host: &host,
+        };
+
+        let authorization = signer.sign(
             "PUT",
             &self.full_key(key),
             &date,
             &date_full,
             &payload_hash,
             ct,
-        );
+        )?;
 
         let resp = self
             .client
@@ -256,7 +208,6 @@ impl StorageBackend for OssStorage {
         let host = self.host();
         let encoded_prefix = percent_encode_query(&full_prefix);
 
-        // S3 ListObjects: path is /{bucket}/ with query prefix=...
         let canonical_uri = format!("/{}/", self.bucket);
         let canonical_query = format!("prefix={encoded_prefix}");
         let canonical_headers = format!(
@@ -274,11 +225,11 @@ impl StorageBackend for OssStorage {
         );
 
         let k_secret = format!("AWS4{}", self.secret_key);
-        let k_date = hmac_sha256_raw(k_secret.as_bytes(), date.as_bytes());
-        let k_region = hmac_sha256_raw(&k_date, region.as_bytes());
-        let k_service = hmac_sha256_raw(&k_region, b"s3");
-        let k_signing = hmac_sha256_raw(&k_service, b"aws4_request");
-        let signature = hex::encode(hmac_sha256_raw(&k_signing, string_to_sign.as_bytes()));
+        let k_date = hmac_sha256_raw(k_secret.as_bytes(), date.as_bytes())?;
+        let k_region = hmac_sha256_raw(&k_date, region.as_bytes())?;
+        let k_service = hmac_sha256_raw(&k_region, b"s3")?;
+        let k_signing = hmac_sha256_raw(&k_service, b"aws4_request")?;
+        let signature = hex::encode(hmac_sha256_raw(&k_signing, string_to_sign.as_bytes())?);
 
         let authorization = format!(
             "AWS4-HMAC-SHA256 Credential={access_key}/{scope}, SignedHeaders={signed}, Signature={sig}",
@@ -367,11 +318,11 @@ impl StorageBackend for OssStorage {
         );
 
         let k_secret = format!("AWS4{}", self.secret_key);
-        let k_date = hmac_sha256_raw(k_secret.as_bytes(), date.as_bytes());
-        let k_region = hmac_sha256_raw(&k_date, region.as_bytes());
-        let k_service = hmac_sha256_raw(&k_region, b"s3");
-        let k_signing = hmac_sha256_raw(&k_service, b"aws4_request");
-        let signature = hex::encode(hmac_sha256_raw(&k_signing, string_to_sign.as_bytes()));
+        let k_date = hmac_sha256_raw(k_secret.as_bytes(), date.as_bytes())?;
+        let k_region = hmac_sha256_raw(&k_date, region.as_bytes())?;
+        let k_service = hmac_sha256_raw(&k_region, b"s3")?;
+        let k_signing = hmac_sha256_raw(&k_service, b"aws4_request")?;
+        let signature = hex::encode(hmac_sha256_raw(&k_signing, string_to_sign.as_bytes())?);
 
         let expiry = now.timestamp() + expires_secs as i64;
         let sep = if self.endpoint.contains('?') {

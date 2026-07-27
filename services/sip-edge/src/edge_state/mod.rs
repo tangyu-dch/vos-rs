@@ -1,3 +1,7 @@
+mod models;
+
+pub use models::*;
+
 use crate::cluster::{flow_key, ClusterEgress, FlowRecord};
 use crate::handle_datagram;
 use crate::media::relay::MediaRelayMetrics;
@@ -9,8 +13,8 @@ use crate::{
     media::{MediaConfig, MediaRelayState},
     net::{handle_stream_connection, SipStream, Transport},
     sip::{
-        dialog, transaction, ClientTransactionKey, DialogValidationError, InviteAckKey,
-        RequestTransactionKey,
+        client_transaction::ClientTransactionManager, dialog, transaction, DialogValidationError,
+        InviteAckKey, RequestTransactionKey,
     },
 };
 use call_core::{CallId, CallManager, GatewayHealthTracker};
@@ -19,6 +23,7 @@ use dashmap::DashMap;
 use rustls_pki_types::ServerName;
 use sdp_core::RtpEndpoint;
 use sip_core::{parse_message, Method, SipRequest, SipUri};
+
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
@@ -28,44 +33,6 @@ use std::{
 };
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::{debug, error, info, warn};
-
-#[derive(Debug, Clone)]
-pub(crate) struct PendingDatagram {
-    pub target: String,
-    pub bytes: Vec<u8>,
-    invite_response: Option<InviteResponseMetadata>,
-}
-
-impl PendingDatagram {
-    pub fn new(target: impl Into<String>, bytes: Vec<u8>) -> Self {
-        Self {
-            target: target.into(),
-            bytes,
-            invite_response: None,
-        }
-    }
-
-    pub(crate) fn with_invite_response_order(
-        mut self,
-        order: Arc<tokio::sync::Mutex<InviteResponseOrder>>,
-        cseq: Option<u32>,
-        status_code: u16,
-    ) -> Self {
-        self.invite_response = Some(InviteResponseMetadata {
-            order,
-            cseq,
-            status_code,
-        });
-        self
-    }
-}
-
-#[derive(Debug, Clone)]
-struct InviteResponseMetadata {
-    order: Arc<tokio::sync::Mutex<InviteResponseOrder>>,
-    cseq: Option<u32>,
-    status_code: u16,
-}
 
 #[derive(Debug, Clone)]
 struct CachedRegistrationLookup {
@@ -82,8 +49,7 @@ pub(crate) struct IvrMenu {
     pub(crate) timeout_secs: i32,
     pub(crate) actions: HashMap<String, IvrAction>,
     /// 可视化拓扑画布（存在且 nodes 非空时走拓扑引擎，否则走扁平 DTMF 表）
-    pub(crate) topology:
-        Option<crate::sip::handlers::ivr_topology::IvrTopology>,
+    pub(crate) topology: Option<crate::sip::handlers::ivr_topology::IvrTopology>,
 }
 
 #[derive(Debug, Clone)]
@@ -256,63 +222,10 @@ pub(crate) struct ReferSubscription {
     pub(crate) from_header: String,
     pub(crate) to_header: String,
     pub(crate) notify_cseq: u32,
-    pub(crate) transfer_call_id: String,
     pub(crate) referrer_peer: String,
     pub(crate) refer_cseq: u32,
     pub(crate) target_relay_port: Option<u16>,
     pub(crate) transferee_relay_port: Option<u16>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct InboundTransaction {
-    pub(crate) peer: String,
-    pub(crate) outbound_peer: Option<String>,
-    pub(crate) vias: Vec<String>,
-    pub(crate) outbound_uri: SipUri,
-    pub(crate) inbound_from_tag: Option<String>,
-    pub(crate) inbound_to_tag: Option<String>,
-    pub(crate) last_inbound_cseq: Option<u32>,
-    pub(crate) last_outbound_cseq: Option<u32>,
-    pub(crate) caller_rtp: Option<RtpEndpoint>,
-    pub(crate) gateway_relay_rtp: Option<RtpEndpoint>,
-    pub(crate) gateway_rtp: Option<RtpEndpoint>,
-    pub(crate) caller_relay_rtp: Option<RtpEndpoint>,
-    pub(crate) original_request: Option<Arc<SipRequest>>,
-    pub(crate) inbound_route_set: Vec<String>,
-    pub(crate) outbound_route_set: Vec<String>,
-    pub(crate) caller_contact: Option<SipUri>,
-    pub(crate) callee_contact: Option<SipUri>,
-    /// Negotiated Session-Expires value in seconds (from 200 OK)
-    pub(crate) session_expires: Option<u32>,
-    /// Who is responsible for refresh: "uac" (caller) or "uas" (gateway)
-    pub(crate) session_refresher: Option<String>,
-    /// Timestamp of the last session refresh (Re-INVITE / UPDATE received)
-    pub(crate) last_session_refresh: Option<Instant>,
-    /// RSeq counter for 100rel provisional responses sent toward the caller
-    pub(crate) prack_rseq: u32,
-    /// Whether the gateway negotiated 100rel (Require: 100rel seen in a 1xx)
-    pub(crate) gateway_100rel: bool,
-    /// Information about any active REFER transfer subscription handled locally
-    pub(crate) refer_subscription: Option<ReferSubscription>,
-    pub(crate) transfer_from_header: Option<String>,
-    pub(crate) transfer_to_header: Option<String>,
-    pub(crate) transfer_call_id: Option<String>,
-    pub(crate) transfer_contact: Option<SipUri>,
-    pub(crate) transfer_peer: Option<String>,
-    pub(crate) transferee_is_caller: bool,
-    pub(crate) callee_behind_nat: bool,
-    pub(crate) active_forks: Vec<(String, String)>,
-    pub(crate) max_duration_secs: Option<u32>,
-    pub(crate) established_at: Option<std::time::Instant>,
-    /// Serializes INVITE responses for this dialog and rejects late provisional responses.
-    pub(crate) invite_response_order: Arc<tokio::sync::Mutex<InviteResponseOrder>>,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct InviteResponseOrder {
-    pub(crate) cseq: Option<u32>,
-    pub(crate) final_response_seen: bool,
-    pub(crate) final_response_send_started: bool,
 }
 
 impl InboundTransaction {
@@ -321,36 +234,54 @@ impl InboundTransaction {
         request: &SipRequest,
         peer: SocketAddr,
     ) -> Result<(DialogLeg, Option<u32>), DialogValidationError> {
-        let leg = self
-            .dialog_leg_for_peer(peer)
-            .ok_or(DialogValidationError::PeerMismatch)?;
-
+        let request_call_id = request
+            .headers
+            .get("call-id")
+            .map(|value| value.as_str())
+            .unwrap_or_default();
         let request_from_tag = request
             .headers
             .get("from")
             .and_then(|value| dialog::tag_param(value.as_str()))
             .ok_or(DialogValidationError::MissingFromTag)?;
-        let expected_from_tag = match leg {
-            DialogLeg::Caller => self.inbound_from_tag.as_ref(),
-            DialogLeg::Gateway => self.inbound_to_tag.as_ref(),
+
+        let leg = if request_call_id == self.dialogs.caller.call_id {
+            DialogLeg::Caller
+        } else if request_call_id == self.dialogs.gateway.call_id {
+            DialogLeg::Gateway
+        } else if self
+            .transfer_dialog
+            .as_ref()
+            .is_some_and(|transfer| request_call_id == transfer.dialog.call_id)
+        {
+            DialogLeg::Transfer
+        } else {
+            self.dialog_leg_for_peer(peer)
+                .ok_or(DialogValidationError::PeerMismatch)?
         };
-        if expected_from_tag.is_some_and(|tag| tag != &request_from_tag) {
+        let dialog = match leg {
+            DialogLeg::Caller => &self.dialogs.caller,
+            DialogLeg::Gateway => &self.dialogs.gateway,
+            DialogLeg::Transfer => {
+                &self
+                    .transfer_dialog
+                    .as_ref()
+                    .ok_or(DialogValidationError::PeerMismatch)?
+                    .dialog
+            }
+        };
+
+        if dialog.remote_tag.as_deref() != Some(request_from_tag.as_str()) {
             return Err(DialogValidationError::FromTagMismatch);
         }
 
         if !matches!(&request.method, Method::Cancel) {
-            let expected_to_tag = match leg {
-                DialogLeg::Caller => self.inbound_to_tag.as_ref(),
-                DialogLeg::Gateway => self.inbound_from_tag.as_ref(),
-            };
-            if let Some(expected_to_tag) = expected_to_tag {
-                let request_to_tag = request
-                    .headers
-                    .get("to")
-                    .and_then(|value| dialog::tag_param(value.as_str()));
-                if request_to_tag.as_ref() != Some(expected_to_tag) {
-                    return Err(DialogValidationError::ToTagMismatch);
-                }
+            let request_to_tag = request
+                .headers
+                .get("to")
+                .and_then(|value| dialog::tag_param(value.as_str()));
+            if request_to_tag.as_deref() != Some(dialog.local_tag.as_str()) {
+                return Err(DialogValidationError::ToTagMismatch);
             }
         }
 
@@ -362,10 +293,7 @@ impl InboundTransaction {
                 .and_then(|value| {
                     dialog::cseq_number(value.as_str()).ok_or(DialogValidationError::InvalidCSeq)
                 })?;
-            let last_cseq = match leg {
-                DialogLeg::Caller => self.last_inbound_cseq,
-                DialogLeg::Gateway => self.last_outbound_cseq,
-            };
+            let last_cseq = dialog.remote_cseq;
             if let Some(last_cseq) = last_cseq {
                 if cseq <= last_cseq {
                     return Err(DialogValidationError::CSeqOutOfOrder {
@@ -381,21 +309,50 @@ impl InboundTransaction {
     }
 
     pub(crate) fn dialog_leg_for_peer(&self, peer: SocketAddr) -> Option<DialogLeg> {
-        let peer = peer.to_string();
-        if self.peer == peer {
+        let peer_str = peer.to_string();
+        if self.dialogs.caller.peer.as_deref() == Some(peer_str.as_str()) {
             return Some(DialogLeg::Caller);
         }
-        if self.outbound_peer.as_deref() == Some(peer.as_str()) {
+        if self.dialogs.gateway.peer.as_deref() == Some(peer_str.as_str()) {
             return Some(DialogLeg::Gateway);
+        }
+        if self
+            .transfer_dialog
+            .as_ref()
+            .and_then(|transfer| transfer.dialog.peer.as_deref())
+            == Some(peer_str.as_str())
+        {
+            return Some(DialogLeg::Transfer);
+        }
+        // Fallback: IP-level matching in case client port changed or behind NAT
+        let peer_ip = peer.ip().to_string();
+        if let Some(caller_peer) = self.dialogs.caller.peer.as_deref() {
+            if let Ok(caller_addr) = caller_peer.parse::<SocketAddr>() {
+                if caller_addr.ip().to_string() == peer_ip {
+                    return Some(DialogLeg::Caller);
+                }
+            }
+        }
+        if let Some(ref out_peer) = self.dialogs.gateway.peer {
+            if let Ok(out_addr) = out_peer.parse::<SocketAddr>() {
+                if out_addr.ip().to_string() == peer_ip {
+                    return Some(DialogLeg::Gateway);
+                }
+            }
+        }
+        if let Some(transfer_peer) = self
+            .transfer_dialog
+            .as_ref()
+            .and_then(|transfer| transfer.dialog.peer.as_deref())
+        {
+            if let Ok(transfer_addr) = transfer_peer.parse::<SocketAddr>() {
+                if transfer_addr.ip().to_string() == peer_ip {
+                    return Some(DialogLeg::Transfer);
+                }
+            }
         }
         None
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DialogLeg {
-    Caller,
-    Gateway,
 }
 
 pub(crate) fn extract_uri_from_contact(contact: &str) -> Option<SipUri> {
@@ -459,6 +416,7 @@ pub(crate) struct AccessIpRule {
 
 #[derive(Clone)]
 pub(crate) struct ParkedCall {
+    pub(crate) session_id: String,
     pub(crate) invite_request: sip_core::SipRequest,
     pub(crate) peer_addr: std::net::SocketAddr,
     pub(crate) caller_relay_port: u16,
@@ -470,12 +428,12 @@ pub(crate) struct EdgeState {
     pub(crate) cdr_pipeline_metrics:
         std::sync::OnceLock<std::sync::Arc<crate::cdr_spool::CdrPipelineMetrics>>,
     pub(crate) gateway_health: GatewayHealthTracker,
-    pub(crate) inbound_transactions: dashmap::DashMap<String, InboundTransaction>,
+    pub(crate) inbound_transactions: CallSessionStore,
     pub(crate) media_relay: MediaRelayState,
     pub(crate) registrar: tokio::sync::RwLock<RegistrationStore>,
     pub(crate) db_store: Option<PostgresCdrStore>,
-    pub(crate) client_transactions:
-        dashmap::DashMap<ClientTransactionKey, tokio::sync::oneshot::Sender<()>>,
+    pub(crate) client_transactions: ClientTransactionManager,
+    pub recent_inbound_invites: dashmap::DashMap<String, std::time::Instant>,
     pub(crate) draining: std::sync::atomic::AtomicBool,
     pub(crate) refer_transfers: dashmap::DashMap<String, String>,
     pub(crate) bridged_transfers: dashmap::DashMap<String, String>,
@@ -483,14 +441,19 @@ pub(crate) struct EdgeState {
         RequestTransactionKey,
         tokio::sync::mpsc::Sender<transaction::ServerTransactionEvent>,
     >,
+    invite_ack_transactions: dashmap::DashMap<
+        InviteAckKey,
+        (
+            RequestTransactionKey,
+            tokio::sync::mpsc::Sender<transaction::ServerTransactionEvent>,
+        ),
+    >,
     pub(crate) socket: std::sync::OnceLock<Arc<UdpSocket>>,
     pub(crate) test_request_cache: dashmap::DashMap<RequestTransactionKey, Vec<PendingDatagram>>,
     pub(crate) nonce_replay_cache: DashMap<String, u64>,
     pub(crate) tcp_connections: dashmap::DashMap<SocketAddr, tokio::sync::mpsc::Sender<Vec<u8>>>,
     pub(crate) sbc_engine: sbc::SbcEngine,
     pub(crate) sbc_rate_limit_enabled: bool,
-    pub(crate) external_to_internal_call_ids: dashmap::DashMap<String, String>,
-    pub(crate) internal_to_external_call_ids: dashmap::DashMap<String, String>,
     pub(crate) gateway_cache: std::sync::RwLock<GatewayIdentityCache>,
     pub(crate) access_trunk_auth_modes: std::sync::RwLock<HashMap<String, String>>,
     pub(crate) access_username_to_trunk_id: std::sync::RwLock<HashMap<String, String>>,
@@ -568,23 +531,23 @@ impl EdgeState {
             call_manager: std::sync::Arc::new(call_manager),
             cdr_pipeline_metrics: std::sync::OnceLock::new(),
             gateway_health: GatewayHealthTracker::new(call_core::HealthThresholds::default()),
-            inbound_transactions: dashmap::DashMap::new(),
+            inbound_transactions: CallSessionStore::default(),
             media_relay,
             registrar: tokio::sync::RwLock::new(RegistrationStore::new()),
             db_store,
-            client_transactions: dashmap::DashMap::new(),
+            client_transactions: ClientTransactionManager::new(),
+            recent_inbound_invites: dashmap::DashMap::new(),
             draining: std::sync::atomic::AtomicBool::new(false),
             refer_transfers: dashmap::DashMap::new(),
             bridged_transfers: dashmap::DashMap::new(),
             server_transactions: dashmap::DashMap::new(),
+            invite_ack_transactions: dashmap::DashMap::new(),
             socket: std::sync::OnceLock::new(),
             test_request_cache: dashmap::DashMap::new(),
             nonce_replay_cache: DashMap::new(),
             tcp_connections: dashmap::DashMap::new(),
             sbc_engine,
             sbc_rate_limit_enabled: config.sbc_rate_limit_enabled,
-            external_to_internal_call_ids: dashmap::DashMap::new(),
-            internal_to_external_call_ids: dashmap::DashMap::new(),
             gateway_cache: std::sync::RwLock::new(GatewayIdentityCache::default()),
             access_trunk_auth_modes: std::sync::RwLock::new(HashMap::new()),
             access_username_to_trunk_id: std::sync::RwLock::new(HashMap::new()),
@@ -624,79 +587,8 @@ impl EdgeState {
     }
 
     #[cfg(test)]
-    #[cfg(test)]
     pub(crate) fn with_config(call_manager: CallManager, config: &EdgeConfig) -> Self {
-        let sbc_engine = sbc::SbcEngine::new(
-            &config
-                .sbc_allow_rules
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>(),
-            &config
-                .sbc_block_rules
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>(),
-            config.sbc_rate_limit_capacity,
-            config.sbc_rate_limit_fill_rate,
-        );
-
-        Self {
-            call_manager: std::sync::Arc::new(call_manager),
-            cdr_pipeline_metrics: std::sync::OnceLock::new(),
-            gateway_health: GatewayHealthTracker::default(),
-            inbound_transactions: dashmap::DashMap::new(),
-            media_relay: MediaRelayState::new(),
-            registrar: tokio::sync::RwLock::new(RegistrationStore::new()),
-            db_store: None,
-            client_transactions: dashmap::DashMap::new(),
-            draining: std::sync::atomic::AtomicBool::new(false),
-            refer_transfers: dashmap::DashMap::new(),
-            bridged_transfers: dashmap::DashMap::new(),
-            server_transactions: dashmap::DashMap::new(),
-            socket: std::sync::OnceLock::new(),
-            test_request_cache: dashmap::DashMap::new(),
-            nonce_replay_cache: DashMap::new(),
-            tcp_connections: dashmap::DashMap::new(),
-            sbc_engine,
-            sbc_rate_limit_enabled: config.sbc_rate_limit_enabled,
-            external_to_internal_call_ids: dashmap::DashMap::new(),
-            internal_to_external_call_ids: dashmap::DashMap::new(),
-            gateway_cache: std::sync::RwLock::new(GatewayIdentityCache::default()),
-            access_trunk_auth_modes: std::sync::RwLock::new(HashMap::new()),
-            access_username_to_trunk_id: std::sync::RwLock::new(HashMap::new()),
-            trunk_billing_accounts: std::sync::RwLock::new(HashMap::new()),
-            did_destinations: std::sync::RwLock::new(HashMap::new()),
-            extension_groups: std::sync::RwLock::new(HashMap::new()),
-            ivr_menus: std::sync::RwLock::new(HashMap::new()),
-            outbound_registrations: dashmap::DashMap::new(),
-            access_ip_rules: std::sync::RwLock::new(Vec::new()),
-            registered_access_users: std::sync::RwLock::new(Vec::new()),
-            user_concurrency: dashmap::DashMap::new(),
-            anti_fraud_rules: std::sync::RwLock::new(Vec::new()),
-            media_metrics_log: config.media_metrics_log,
-            billing_settlement_enabled: config.billing_settlement_enabled,
-            gateway_health_persistence_enabled: config.gateway_health_checks_enabled,
-            gateway_probes: dashmap::DashMap::new(),
-            redis_conn: std::sync::OnceLock::new(),
-            registration_sync: std::sync::OnceLock::new(),
-            cluster_egress: std::sync::OnceLock::new(),
-            registration_lookup_cache: dashmap::DashMap::new(),
-            registration_lookup_locks: dashmap::DashMap::new(),
-            parked_calls: std::sync::Arc::new(dashmap::DashMap::new()),
-            nats_client: std::sync::OnceLock::new(),
-            test_gateways: std::sync::Mutex::new(Vec::new()),
-            self_weak: std::sync::OnceLock::new(),
-            sipflow_enabled: std::sync::atomic::AtomicBool::new(config.sipflow_enabled),
-            sipflow_whitelist: std::sync::RwLock::new(config.sipflow_whitelist.clone()),
-            sipflow_retention_days: std::sync::atomic::AtomicI32::new(
-                config.sipflow_retention_days,
-            ),
-            sip_flow_tx: std::sync::OnceLock::new(),
-            call_caller_addrs: dashmap::DashMap::new(),
-            matched_call_ids: dashmap::DashMap::new(),
-            voice_engine: std::sync::OnceLock::new(),
-        }
+        Self::with_media_relay_and_db(call_manager, MediaRelayState::new(), None, config)
     }
 
     /// 设置 Redis 连接（仅在启动阶段调用一次）。
@@ -715,6 +607,20 @@ impl EdgeState {
 
     pub(crate) fn nats_connection(&self) -> Option<async_nats::Client> {
         self.nats_client.get().cloned()
+    }
+
+    pub(crate) fn broadcast_rwi_event(&self, event: &call_core::RwiEvent) {
+        let call_id = event.call_id().to_string();
+        if let Some(nats) = self.nats_connection() {
+            if let Ok(payload) = serde_json::to_vec(event) {
+                let subject = format!("vos_rs.call.{call_id}");
+                tokio::spawn(async move {
+                    if let Err(e) = nats.publish(subject, payload.into()).await {
+                        tracing::warn!(error = %e, "failed to publish RWI call event to NATS");
+                    }
+                });
+            }
+        }
     }
 
     /// 注入 IVR TTS/ASR 引擎管理器 (仅在启动阶段调用一次)。
@@ -805,18 +711,26 @@ impl EdgeState {
         is_trunk: bool,
     ) -> crate::sip::AuthDecision {
         let username = auth.authorization_username(request);
-        let password = if let Some(username) = username.as_deref() {
-            self.redis_auth_password(username, is_trunk)
-                .await
-                .or_else(|| auth.configured_password(username))
+        let password = if let Some(ref username) = username {
+            let pwd = self.redis_auth_password(username, is_trunk).await;
+            if pwd.is_some() {
+                pwd
+            } else if let Some(ref db) = self.db_store {
+                match db.get_user_password(username).await {
+                    Ok(Some(db_pwd)) => Some(db_pwd),
+                    _ => auth.configured_password(username),
+                }
+            } else {
+                auth.configured_password(username)
+            }
         } else {
             None
         };
         let is_bypass = std::env::var("VOS_RS_AUTH_BYPASS").ok().as_deref() == Some("true");
-        let auth_required = if !auth.is_enabled() || is_bypass {
+        let auth_required = if is_bypass {
             false
         } else {
-            auth.is_enabled() || self.redis_connection().is_some()
+            auth.is_enabled() || self.redis_connection().is_some() || self.db_store.is_some()
         };
         auth.verify_request_with_password(
             request,
@@ -881,6 +795,22 @@ impl EdgeState {
         &self,
         uri: &SipUri,
     ) -> Option<crate::sip::registrar::RegistrationContact> {
+        let contact = self.lookup_contact_internal(uri).await;
+        if contact.is_some() {
+            return contact;
+        }
+        if uri.port.is_some() {
+            let mut uri_no_port = uri.clone();
+            uri_no_port.port = None;
+            return Box::pin(self.lookup_contact_internal(&uri_no_port)).await;
+        }
+        None
+    }
+
+    async fn lookup_contact_internal(
+        &self,
+        uri: &SipUri,
+    ) -> Option<crate::sip::registrar::RegistrationContact> {
         let aor = crate::sip::registrar::canonical_aor(uri).ok()?;
         if let Some(cached) = self.cached_registration_lookup(&aor) {
             return cached;
@@ -901,7 +831,7 @@ impl EdgeState {
             .registrar
             .read()
             .await
-            .lookup_contact(uri, now, None)
+            .lookup_contact(uri, now, self.db_store.as_ref())
             .await;
 
         if result.is_none() {
@@ -1008,23 +938,14 @@ impl EdgeState {
         self.registration_lookup_cache.remove(aor);
     }
 
-    pub(crate) fn get_internal_call_id(&self, external_call_id: &str) -> Option<String> {
-        self.external_to_internal_call_ids
-            .get(external_call_id)
-            .map(|r| r.clone())
-    }
-
-    pub(crate) fn get_external_call_id(&self, internal_call_id: &str) -> Option<String> {
-        self.internal_to_external_call_ids
-            .get(internal_call_id)
-            .map(|r| r.clone())
-    }
-
-    pub(crate) fn register_call_id_mapping(&self, internal_call_id: &str, external_call_id: &str) {
-        self.internal_to_external_call_ids
-            .insert(internal_call_id.to_string(), external_call_id.to_string());
-        self.external_to_internal_call_ids
-            .insert(external_call_id.to_string(), internal_call_id.to_string());
+    pub(crate) fn bind_gateway_dialog(&self, session_id: &str, gateway_call_id: &str) {
+        if let Some(mut transaction) = self.inbound_transactions.get_mut(session_id) {
+            transaction.dialogs.gateway.call_id = gateway_call_id.to_string();
+            let session_id = transaction.session_id.clone();
+            drop(transaction);
+            self.inbound_transactions
+                .index_dialog(&session_id, gateway_call_id);
+        }
     }
 
     pub(crate) fn set_socket(&self, socket: Arc<UdpSocket>) {
@@ -1352,6 +1273,10 @@ impl EdgeState {
         key: RequestTransactionKey,
         tx: tokio::sync::mpsc::Sender<transaction::ServerTransactionEvent>,
     ) {
+        if let Some(ack_key) = key.invite_ack_key() {
+            self.invite_ack_transactions
+                .insert(ack_key, (key.clone(), tx.clone()));
+        }
         self.server_transactions.insert(key, tx);
     }
 
@@ -1359,13 +1284,9 @@ impl EdgeState {
         &self,
         key: &InviteAckKey,
     ) -> Option<tokio::sync::mpsc::Sender<transaction::ServerTransactionEvent>> {
-        let transaction_key = self.server_transactions.iter().find_map(|entry| {
-            (entry.key().invite_ack_key().as_ref() == Some(key)).then(|| entry.key().clone())
-        })?;
-        self.server_transactions
-            .remove(&transaction_key)
-            .map(|(_, tx)| tx)
-            .filter(|tx| !tx.is_closed())
+        let (_, (transaction_key, tx)) = self.invite_ack_transactions.remove(key)?;
+        self.server_transactions.remove(&transaction_key);
+        (!tx.is_closed()).then_some(tx)
     }
 
     pub(crate) fn get_server_transaction(
@@ -1376,6 +1297,9 @@ impl EdgeState {
             if tx.is_closed() {
                 drop(tx);
                 self.server_transactions.remove(key);
+                if let Some(ack_key) = key.invite_ack_key() {
+                    self.invite_ack_transactions.remove(&ack_key);
+                }
                 None
             } else {
                 Some(tx.clone())
@@ -1508,15 +1432,10 @@ impl EdgeState {
             .any(|configured| configured == username)
     }
 
-    pub(crate) fn cancel_client_transaction(&self, key: &ClientTransactionKey) {
-        if let Some((_, cancel_tx)) = self.client_transactions.remove(key) {
-            let _ = cancel_tx.send(());
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn remember_inbound_invite(
         &self,
+        session_id: String,
         request: &SipRequest,
         peer: SocketAddr,
         outbound_uri: SipUri,
@@ -1528,12 +1447,6 @@ impl EdgeState {
         let Some(call_id) = request.headers.get("call-id") else {
             return;
         };
-
-        let vias = request
-            .headers
-            .get_all("via")
-            .map(|value| value.as_str().to_string())
-            .collect::<Vec<_>>();
 
         let inbound_route_set = request
             .headers
@@ -1550,13 +1463,62 @@ impl EdgeState {
                 }
                 uri
             });
+        let caller_call_id = call_id.as_str().to_string();
+        let caller_remote_uri = request
+            .headers
+            .get("from")
+            .and_then(|value| extract_uri_from_contact(value.as_str()))
+            .unwrap_or_else(|| sip_uri_from_peer(&peer.to_string()));
+        let caller_local_uri = request
+            .headers
+            .get("to")
+            .and_then(|value| extract_uri_from_contact(value.as_str()))
+            .unwrap_or_else(|| outbound_uri.clone());
+        let caller_remote_tag = request
+            .headers
+            .get("from")
+            .and_then(|value| dialog::tag_param(value.as_str()));
+        let caller_remote_cseq = request
+            .headers
+            .get("cseq")
+            .and_then(|value| dialog::cseq_number(value.as_str()));
+        let caller_remote_target = caller_contact
+            .clone()
+            .unwrap_or_else(|| sip_uri_from_peer(&peer.to_string()));
+        let dialogs = B2buaDialogPair {
+            caller: DialogLegState {
+                call_id: caller_call_id.clone(),
+                local_uri: caller_local_uri,
+                remote_uri: caller_remote_uri.clone(),
+                local_tag: format!("vosrs-a-{}", uuid::Uuid::new_v4().simple()),
+                remote_tag: caller_remote_tag.clone(),
+                local_cseq: 0,
+                remote_cseq: caller_remote_cseq,
+                route_set: inbound_route_set.clone(),
+                remote_target: caller_remote_target,
+                peer: Some(peer.to_string()),
+            },
+            gateway: DialogLegState {
+                call_id: String::new(),
+                local_uri: caller_remote_uri,
+                remote_uri: outbound_uri.clone(),
+                local_tag: format!("vosrs-b-{}", uuid::Uuid::new_v4().simple()),
+                remote_tag: None,
+                local_cseq: caller_remote_cseq.unwrap_or(1),
+                remote_cseq: None,
+                route_set: Vec::new(),
+                remote_target: outbound_uri.clone(),
+                peer: None,
+            },
+        };
 
         self.inbound_transactions.insert(
-            call_id.as_str().to_string(),
+            caller_call_id,
             InboundTransaction {
+                session_id,
+                dialogs,
                 peer: peer.to_string(),
                 outbound_peer: None,
-                vias,
                 outbound_uri,
                 inbound_from_tag: request
                     .headers
@@ -1586,14 +1548,9 @@ impl EdgeState {
                 prack_rseq: 0,
                 gateway_100rel: false,
                 refer_subscription: None,
-                transfer_from_header: None,
-                transfer_to_header: None,
-                transfer_call_id: None,
-                transfer_contact: None,
-                transfer_peer: None,
-                transferee_is_caller: false,
+                transfer_dialog: None,
                 callee_behind_nat,
-                active_forks: Vec::new(),
+                fork_dialogs: Default::default(),
                 max_duration_secs,
                 established_at: None,
                 invite_response_order: Arc::new(tokio::sync::Mutex::new(
@@ -1615,31 +1572,37 @@ impl EdgeState {
         caller_relay_rtp: RtpEndpoint,
         media_config: &MediaConfig,
     ) {
-        let gateway_relay_port = self
-            .inbound_transactions
-            .get(call_id)
-            .and_then(|t| t.gateway_relay_rtp.as_ref().map(|ep| ep.port));
+        let media_session = self.inbound_transactions.get(call_id).map(|transaction| {
+            (
+                transaction
+                    .gateway_relay_rtp
+                    .as_ref()
+                    .map(|endpoint| endpoint.port),
+                transaction.session_id.clone(),
+                transaction.dialogs.caller.call_id.clone(),
+            )
+        });
 
         if let Some(mut transaction) = self.inbound_transactions.get_mut(call_id) {
             transaction.gateway_rtp = gateway_rtp;
-            if let Some(gw_port) = gateway_relay_port {
+            if let Some((Some(gw_port), session_id, caller_call_id)) = media_session {
                 self.media_relay.pair_ports(gw_port, caller_relay_rtp.port);
                 match self.media_relay.start_call_recording(
-                    call_id,
+                    &session_id,
                     caller_relay_rtp.port,
                     gw_port,
                     media_config,
                 ) {
                     Ok(Some(path)) => {
                         self.call_manager.set_recording_path(
-                            &CallId::new(call_id),
+                            &CallId::new(caller_call_id.clone()),
                             format!("local:{}", path.display()),
                         );
-                        debug!(call_id, path = %path.display(), "started call recording");
+                        debug!(session_id, caller_call_id, path = %path.display(), "started call recording");
                     }
                     Ok(None) => {}
                     Err(error) => {
-                        warn!(call_id, %error, "failed to start call recording");
+                        warn!(session_id, caller_call_id, %error, "failed to start call recording");
                     }
                 }
             }
@@ -1647,7 +1610,11 @@ impl EdgeState {
         }
     }
 
-    pub(crate) fn remember_inbound_to_tag(&self, call_id: &str, response: &sip_core::SipResponse) {
+    pub(crate) fn remember_gateway_remote_tag(
+        &self,
+        call_id: &str,
+        response: &sip_core::SipResponse,
+    ) {
         let Some(to_tag) = response
             .headers
             .get("to")
@@ -1659,18 +1626,29 @@ impl EdgeState {
             return;
         };
 
-        match &transaction.inbound_to_tag {
+        match &transaction.dialogs.gateway.remote_tag {
             Some(existing_tag) if existing_tag != &to_tag => {
-                warn!(
-                    call_id,
-                    existing_tag,
-                    new_tag = %to_tag,
-                    "ignoring additional dialog To tag; forked dialogs are not implemented yet"
-                );
+                if response.status_code >= 180 && response.status_code <= 299 {
+                    debug!(
+                        call_id,
+                        existing_tag,
+                        new_tag = %to_tag,
+                        status_code = response.status_code,
+                        "updating dialog To tag from provisional/final response"
+                    );
+                    transaction.dialogs.gateway.remote_tag = Some(to_tag);
+                } else {
+                    warn!(
+                        call_id,
+                        existing_tag,
+                        new_tag = %to_tag,
+                        "ignoring additional dialog To tag; forked dialogs are not implemented yet"
+                    );
+                }
             }
             Some(_) => {}
             None => {
-                transaction.inbound_to_tag = Some(to_tag);
+                transaction.dialogs.gateway.remote_tag = Some(to_tag);
             }
         }
     }
@@ -1719,6 +1697,15 @@ impl EdgeState {
             dtmf_events = totals.dtmf_events,
             "RTP relay metrics totals"
         );
+    }
+
+    /// Atomically removes a SIP call transaction and releases every media resource owned by it.
+    pub(crate) fn teardown_call_transaction(&self, call_id: &str) -> Option<InboundTransaction> {
+        let (_, transaction) = self.inbound_transactions.remove(call_id)?;
+        self.media_relay.clear_dtmf_digits(&transaction.session_id);
+        self.media_relay.clear_dtmf_events(&transaction.session_id);
+        self.clear_media_targets(&transaction);
+        Some(transaction)
     }
 }
 

@@ -20,6 +20,8 @@
 //! - 检查网关容量
 //! - 应用前缀规则和 Caller ID 重写
 
+use std::net::SocketAddr;
+
 use call_core::{
     CallDirection, CallError, CallManager, CallSource, CallerIdentity, GatewayHealthTracker,
 };
@@ -217,6 +219,7 @@ fn invite_error_status(error: &CallError) -> (u16, &'static str) {
         CallError::GatewayUnavailable(_) => (503, "Service Unavailable"),
         CallError::CallerIdentityUnavailable(_) => (403, "Forbidden"),
         CallError::UnknownCall(_) => (481, "Call/Transaction Does Not Exist"),
+        CallError::WebhookRoutingError(_) => (502, "Bad Gateway"),
         CallError::InvalidTransition { .. }
         | CallError::OutboundLegAlreadyExists
         | CallError::MissingOutboundLeg => (500, "Internal Server Error"),
@@ -258,10 +261,28 @@ pub fn build_response_with_owned_headers(
     extra_headers: &[(String, String)],
     body: &str,
 ) -> Vec<u8> {
+    build_response_with_owned_headers_and_peer(
+        request,
+        status_code,
+        reason_phrase,
+        extra_headers,
+        body,
+        None,
+    )
+}
+
+pub fn build_response_with_owned_headers_and_peer(
+    request: &sip_core::SipRequestBorrow<'_>,
+    status_code: u16,
+    reason_phrase: &str,
+    extra_headers: &[(String, String)],
+    body: &str,
+    peer: Option<SocketAddr>,
+) -> Vec<u8> {
     let mut response = String::new();
     response.push_str(&format!("SIP/2.0 {status_code} {reason_phrase}\r\n"));
 
-    append_all_headers(&mut response, &request.headers, "via", "Via");
+    append_via_headers_with_peer(&mut response, &request.headers, peer);
     append_single_header(&mut response, &request.headers, "from", "From");
     append_to_header(&mut response, &request.headers, status_code);
     append_single_header(&mut response, &request.headers, "call-id", "Call-ID");
@@ -287,85 +308,80 @@ pub fn build_response_with_owned_headers(
     response.into_bytes()
 }
 
-#[allow(dead_code)]
-pub fn forward_response_to_inbound_with_body(
-    response: &SipResponse,
-    inbound_vias: &[String],
-    inbound_route_set: &[String],
+/// Builds the response owned by the inbound B2BUA dialog leg.
+///
+/// The downstream status, To-tag and negotiation headers are retained, while dialog routing
+/// identity comes exclusively from the original inbound request and this edge. In particular,
+/// the downstream Contact must never become the caller's remote target.
+pub(crate) fn build_inbound_leg_response(
+    downstream: &SipResponse,
+    inbound_request: &SipRequest,
+    advertised_addr: &str,
+    caller_local_tag: &str,
     body: &[u8],
-) -> Vec<u8> {
-    forward_response_to_inbound_with_body_and_call_id(
-        response,
-        inbound_vias,
-        inbound_route_set,
-        body,
-        None,
-    )
-}
-
-/// Topology-hiding variant: the caller-facing response uses `override_call_id` instead
-/// of the gateway's external Call-ID.
-pub fn forward_response_to_inbound_with_body_and_call_id(
-    response: &SipResponse,
-    inbound_vias: &[String],
-    inbound_route_set: &[String],
-    body: &[u8],
-    override_call_id: Option<&str>,
+    peer: Option<SocketAddr>,
 ) -> Vec<u8> {
     let mut forwarded = String::new();
     forwarded.push_str(&format!(
         "SIP/2.0 {} {}\r\n",
-        response.status_code, response.reason_phrase
+        downstream.status_code, downstream.reason_phrase
     ));
 
-    for via in inbound_vias {
-        forwarded.push_str("Via: ");
-        forwarded.push_str(via);
-        forwarded.push_str("\r\n");
-    }
+    append_via_headers_with_peer(&mut forwarded, &inbound_request.headers, peer);
+    append_all_headers(
+        &mut forwarded,
+        &inbound_request.headers,
+        "record-route",
+        "Record-Route",
+    );
+    append_single_header(&mut forwarded, &inbound_request.headers, "from", "From");
+    append_to_with_local_tag(&mut forwarded, &inbound_request.headers, caller_local_tag);
+    append_single_header(
+        &mut forwarded,
+        &inbound_request.headers,
+        "call-id",
+        "Call-ID",
+    );
+    append_single_header(&mut forwarded, &inbound_request.headers, "cseq", "CSeq");
 
-    for route in inbound_route_set {
-        forwarded.push_str("Record-Route: ");
-        forwarded.push_str(route);
-        forwarded.push_str("\r\n");
+    let creates_dialog = downstream.status_code > 100
+        && downstream.status_code < 300
+        && inbound_request.method == Method::Invite;
+    if creates_dialog {
+        forwarded.push_str("Contact: <sip:vosrs@");
+        forwarded.push_str(advertised_addr);
+        forwarded.push_str(">\r\n");
     }
-
-    append_single_header(&mut forwarded, &response.headers, "from", "From");
-    append_single_header(&mut forwarded, &response.headers, "to", "To");
-    // Topology Hiding: use the override (internal) Call-ID when present so the caller
-    // never sees the external Call-ID that was forwarded to the gateway.
-    if let Some(cid) = override_call_id {
-        forwarded.push_str("Call-ID: ");
-        forwarded.push_str(cid);
-        forwarded.push_str("\r\n");
-    } else {
-        append_single_header(&mut forwarded, &response.headers, "call-id", "Call-ID");
-    }
-    append_single_header(&mut forwarded, &response.headers, "cseq", "CSeq");
 
     // RFC 3262: pass through 100rel negotiation headers in provisional responses
-    append_single_header(&mut forwarded, &response.headers, "require", "Require");
-    append_single_header(&mut forwarded, &response.headers, "rseq", "RSeq");
+    append_single_header(&mut forwarded, &downstream.headers, "require", "Require");
+    append_single_header(&mut forwarded, &downstream.headers, "rseq", "RSeq");
 
     // RFC 4028: pass through session timer negotiation headers
     append_single_header(
         &mut forwarded,
-        &response.headers,
+        &downstream.headers,
         "session-expires",
         "Session-Expires",
     );
-    append_single_header(&mut forwarded, &response.headers, "min-se", "Min-SE");
-    append_single_header(&mut forwarded, &response.headers, "supported", "Supported");
+    append_single_header(&mut forwarded, &downstream.headers, "min-se", "Min-SE");
+    append_single_header(
+        &mut forwarded,
+        &downstream.headers,
+        "supported",
+        "Supported",
+    );
 
     if !body.is_empty() {
         append_single_header(
             &mut forwarded,
-            &response.headers,
+            &downstream.headers,
             "content-type",
             "Content-Type",
         );
     }
 
+    forwarded.push_str(&format!("Server: {SERVER_HEADER}\r\n"));
     forwarded.push_str(&format!("Content-Length: {}\r\n", body.len()));
     forwarded.push_str("\r\n");
 
@@ -374,17 +390,46 @@ pub fn forward_response_to_inbound_with_body_and_call_id(
     bytes
 }
 
-fn append_all_headers(
-    response: &mut String,
-    headers: &HeaderMap,
-    lookup_name: &str,
-    output_name: &str,
-) {
-    for value in headers.get_all(lookup_name) {
-        response.push_str(output_name);
-        response.push_str(": ");
-        response.push_str(value.as_str());
-        response.push_str("\r\n");
+fn append_to_with_local_tag(out: &mut String, headers: &HeaderMap, local_tag: &str) {
+    let Some(value) = headers.get("to") else {
+        return;
+    };
+    let value = value.as_str();
+    let lower = value.to_ascii_lowercase();
+    let without_tag = if let Some(start) = lower.find(";tag=") {
+        let end = value[start + 1..]
+            .find(';')
+            .map(|offset| start + 1 + offset)
+            .unwrap_or(value.len());
+        format!("{}{}", &value[..start], &value[end..])
+    } else {
+        value.to_string()
+    };
+    out.push_str("To: ");
+    out.push_str(&without_tag);
+    out.push_str(";tag=");
+    out.push_str(local_tag);
+    out.push_str("\r\n");
+}
+
+fn append_all_headers(out: &mut String, headers: &HeaderMap, name: &str, header_name: &str) {
+    for value in headers.get_all(name) {
+        out.push_str(header_name);
+        out.push_str(": ");
+        out.push_str(value.as_str());
+        out.push_str("\r\n");
+    }
+}
+
+fn append_via_headers_with_peer(out: &mut String, headers: &HeaderMap, peer: Option<SocketAddr>) {
+    for (i, via) in headers.get_all("via").enumerate() {
+        out.push_str("Via: ");
+        if i == 0 {
+            out.push_str(&patch_via_rport_and_received(via.as_str(), peer));
+        } else {
+            out.push_str(via.as_str());
+        }
+        out.push_str("\r\n");
     }
 }
 
@@ -496,5 +541,16 @@ mod tests {
         assert!(response.starts_with("SIP/2.0 202 Accepted\r\n"));
         assert!(response.contains("CSeq: 3 REFER\r\n"));
         assert!(response.contains("Content-Length: 0\r\n\r\n"));
+    }
+}
+
+pub fn patch_via_rport_and_received(via: &str, peer: Option<SocketAddr>) -> String {
+    if let Ok(mut via_hdr) = sip_core::ViaHeader::parse(via) {
+        if let Some(peer) = peer {
+            via_hdr.apply_rfc3581(peer.ip(), peer.port());
+        }
+        via_hdr.to_string()
+    } else {
+        via.to_string()
     }
 }

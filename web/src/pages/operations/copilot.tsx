@@ -119,6 +119,8 @@ export function CopilotPage() {
     if (el) el.scrollTo({ top: el.scrollHeight });
   }, [currentId]);
 
+
+
   // ============ 获取当前启用的模型 ============
   const fetchActiveModel = useCallback(async () => {
     try {
@@ -421,7 +423,7 @@ export function CopilotPage() {
                   >
                     <PanelLeft className="w-4 h-4" />
                   </Button>
-                  <ActiveModelBadge activeModel={activeModel} />
+                  <ActiveModelBadge activeModel={activeModel} onModelChange={fetchActiveModel} />
                   {(hasMessages || sending) && (
                     <>
                       {sending && (

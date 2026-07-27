@@ -104,9 +104,15 @@ pub async fn execute(
                 timeout_secs,
                 terminator,
             } => {
-                let dtmf =
-                    wait_for_dtmf(edge_state, &context.call_id, a_port, max_digits, timeout_secs, terminator)
-                        .await;
+                let dtmf = wait_for_dtmf(
+                    edge_state,
+                    &context.call_id,
+                    a_port,
+                    max_digits,
+                    timeout_secs,
+                    terminator,
+                )
+                .await;
                 context.collected_dtmf = dtmf.clone();
                 let port = format!("key_{dtmf}");
                 match graph.next_node(&current_id, &port) {

@@ -4,11 +4,14 @@
 import type { ResourceSpec } from '@/pages/shared/types';
 
 export const extensions: ResourceSpec = {
-  title: '分机', description: '管理 SIP 身份、凭据状态和呼叫策略。', path: '/extensions',
+  title: '分机', description: '管理 SIP 账号凭据与呼叫身份。', path: '/extensions',
   idKey: 'username', detailPath: '/extensions', createLabel: '新建分机',
   fields: [
-    { key: 'username', label: '分机号', required: true },
-    { key: 'password', label: 'SIP 密码', kind: 'secret', required: true },
+    { key: 'username', label: '分机号', required: true, placeholder: '例如 1001' },
+    { key: 'registration_status', label: '注册状态', readonly: true },
+    { key: 'sip_domain', label: '注册服务器', readonly: true },
+    { key: 'realm', label: '鉴权域 (Realm)', readonly: true },
+    { key: 'password', label: 'SIP 密码', kind: 'secret', required: true, preserveEmptyOnEdit: true, placeholder: '编辑时保留空表示不修改密码' },
   ],
 };
 
@@ -17,13 +20,12 @@ export const accessTrunks: ResourceSpec = {
   params: { role: 'access' }, idKey: 'id', detailPath: '/trunks/access', createLabel: '新建接入中继',
   fields: [
     { key: 'id', label: '中继标识', required: true, placeholder: '例如 customer-a' },
-    { key: 'role', label: '中继类型', kind: 'select', required: true, options: [{ label: '接入中继', value: 'access' }], defaultValue: 'access' },
     { key: 'access_auth_mode', label: '认证方式', kind: 'select', required: true, options: [{ label: 'IP 白名单', value: 'ip_allowlist' }, { label: '注册认证', value: 'digest_register' }, { label: 'IP 加认证', value: 'ip_and_digest' }], defaultValue: 'ip_allowlist' },
     { key: 'access_username', label: '注册用户', required: true, showWhen: (draft) => ['digest_register', 'ip_and_digest'].includes(String(draft.access_auth_mode)) },
     { key: 'access_realm', label: '认证 Realm', required: true, defaultValue: 'vos-rs', showWhen: (draft) => ['digest_register', 'ip_and_digest'].includes(String(draft.access_auth_mode)) },
     { key: 'access_password', label: '注册密码', kind: 'secret', required: true, preserveEmptyOnEdit: true, showWhen: (draft) => ['digest_register', 'ip_and_digest'].includes(String(draft.access_auth_mode)) },
     { key: 'max_capacity', label: '容量上限', kind: 'number', defaultValue: 100 },
-    { key: 'account_id', label: '计费账户', kind: 'number', placeholder: '可选（对应计费账户用户名）' },
+    { key: 'account_id', label: '计费账户', kind: 'select', optionsResource: 'accounts', placeholder: '选择主叫扣费账户' },
     { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
     { key: 'host', label: '内部主机', readonly: true, defaultValue: '' },
     { key: 'port', label: '内部端口', readonly: true, defaultValue: 5060 },
@@ -32,16 +34,15 @@ export const accessTrunks: ResourceSpec = {
 };
 
 export const egressTrunks: ResourceSpec = {
-  title: '落地中继', description: '管理对接上游运营商网关端点与容量上限。', path: '/trunks',
+  title: '落地中继', description: '管理对接上游运营商网关端点、计费账户与容量上限。', path: '/trunks',
   params: { role: 'egress' }, idKey: 'id', detailPath: '/trunks/egress', createLabel: '新建落地中继',
   fields: [
     { key: 'id', label: '中继标识', required: true, placeholder: '例如 carrier-a' },
-    { key: 'role', label: '中继类型', kind: 'select', required: true, options: [{ label: '落地中继', value: 'egress' }], defaultValue: 'egress' },
     { key: 'host', label: '对端主机地址', required: true, placeholder: '对端 IP 地址' },
     { key: 'port', label: 'SIP 端口', kind: 'number', defaultValue: 5060, required: true },
     { key: 'transport', label: '传输协议', kind: 'select', required: true, options: [{ label: 'UDP', value: 'udp' }, { label: 'TCP', value: 'tcp' }, { label: 'TLS', value: 'tls' }], defaultValue: 'udp' },
     { key: 'max_capacity', label: '容量上限', kind: 'number', defaultValue: 100 },
-    { key: 'account_id', label: '计费账户', kind: 'number', placeholder: '可选' },
+    { key: 'account_id', label: '计费账户', kind: 'select', optionsResource: 'accounts', placeholder: '选择落地成本/扣费账户' },
     { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
   ],
 };

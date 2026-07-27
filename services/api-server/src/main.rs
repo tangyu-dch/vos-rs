@@ -21,6 +21,7 @@ mod import;
 mod llm_configs;
 mod middleware;
 mod recording;
+mod rwi_ws;
 mod v1;
 
 // 重导出迁移后的公共 API，保持 `crate::ApiError` 等旧路径继续可用。
@@ -486,6 +487,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/anti-fraud/config/:key", put(update_anti_fraud_config))
         .route("/api/audit-logs", get(list_audit_logs))
         .route("/api/dashboard/events", get(dashboard_events))
+        .route("/rwi/v1/ws", get(rwi_ws::rwi_ws_handler))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             audit_log,
@@ -493,7 +495,8 @@ async fn main() -> anyhow::Result<()> {
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             jwt_auth,
-        ));
+        ))
+        .route_layer(axum::middleware::from_fn(v1::response_contract));
 
     let app = Router::new()
         .merge(public_routes)

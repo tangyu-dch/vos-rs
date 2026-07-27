@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
-pub(super) async fn response_contract(mut request: Request, next: Next) -> Response {
+pub(crate) async fn response_contract(mut request: Request, next: Next) -> Response {
     let request_id = request_id(&request);
     let path = request.uri().path().to_string();
     if let Ok(value) = HeaderValue::from_str(&request_id) {
@@ -36,6 +36,7 @@ async fn envelope_response(response: Response, request_id: &str, path: &str) -> 
     if (!is_json_response(&response) && status.is_success() && is_raw_response(path))
         || is_csv_response(&response)
         || is_sse_response(&response)
+        || is_ws_response(&response)
     {
         return with_request_id(response, request_id);
     }
@@ -103,6 +104,11 @@ fn is_sse_response(response: &Response) -> bool {
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("text/event-stream"))
+}
+
+/// WebSocket 协议切换（`101 Switching Protocols`）不做 envelope 包装
+fn is_ws_response(response: &Response) -> bool {
+    response.status() == StatusCode::SWITCHING_PROTOCOLS
 }
 
 fn contract_payload(status: StatusCode, value: Value, request_id: &str, path: &str) -> Value {

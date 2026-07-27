@@ -10,6 +10,14 @@ pub mod live_transcode;
 pub mod metrics;
 pub mod recording;
 pub mod rtcp;
+pub mod rtp_session;
 pub mod sdp;
+pub mod speech;
 pub mod time;
 pub mod wav_reader;
+
+pub use rtp_session::{RtpPortSession, RtpPortSessionTable};
+pub use speech::{
+    AsrResult, SherpaAsrConfig, SherpaAsrEngine, SherpaOnnxRecognizer, SherpaOnnxSynthesizer,
+    SherpaTtsConfig, SherpaTtsEngine, TtsAudioResult,
+};

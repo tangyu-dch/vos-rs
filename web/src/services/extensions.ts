@@ -7,6 +7,7 @@ export interface ExtensionWorkspaceData {
   registrations: Entity[];
   numbers: Entity[];
   credential?: Entity;
+  system_config?: { realm?: string; sip_domain?: string };
 }
 
 export async function getExtensionWorkspace(username: string): Promise<ExtensionWorkspaceData> {
@@ -16,6 +17,7 @@ export async function getExtensionWorkspace(username: string): Promise<Extension
     registrations: Array.isArray(result.registrations) ? result.registrations as Entity[] : [],
     numbers: Array.isArray(result.numbers) ? result.numbers as Entity[] : [],
     credential: result.credential as Entity | undefined,
+    system_config: result.system_config as { realm?: string; sip_domain?: string } | undefined,
   };
 }
 

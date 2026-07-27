@@ -1,9 +1,9 @@
 //! IVR 拓扑引擎全量单元测试
 
-use super::types::*;
-use super::executors::flow;
 use super::executors::basic;
+use super::executors::flow;
 use super::executors::media;
+use super::types::*;
 use super::voice_engine::VoiceEngineManager;
 use serde_json::json;
 
@@ -133,12 +133,19 @@ fn test_topology_graph_construction_and_lookups() {
     assert_eq!(next_vip.map(|n| n.id.as_str()), Some("node-prompt-vip"));
 
     let next_normal = graph.next_node("node-condition", "nomatch");
-    assert_eq!(next_normal.map(|n| n.id.as_str()), Some("node-prompt-normal"));
+    assert_eq!(
+        next_normal.map(|n| n.id.as_str()),
+        Some("node-prompt-normal")
+    );
 }
 
 #[test]
 fn test_execution_context_variables_and_template_render() {
-    let mut ctx = IvrExecutionContext::new("call-12345".to_string(), "1001".to_string(), "8888".to_string());
+    let mut ctx = IvrExecutionContext::new(
+        "call-12345".to_string(),
+        "1001".to_string(),
+        "8888".to_string(),
+    );
     ctx.set_var("customer_name", json!("张三"));
     ctx.set_var("account_balance", json!("100.50"));
 
@@ -146,13 +153,18 @@ fn test_execution_context_variables_and_template_render() {
     assert_eq!(ctx.get_var("account_balance"), Some(&json!("100.50")));
     assert_eq!(ctx.get_var("non_existent"), None);
 
-    let rendered = ctx.render_template("尊敬的 {{customer_name}}，您的余额为 {{account_balance}} 元。");
+    let rendered =
+        ctx.render_template("尊敬的 {{customer_name}}，您的余额为 {{account_balance}} 元。");
     assert_eq!(rendered, "尊敬的 张三，您的余额为 100.50 元。");
 }
 
 #[tokio::test]
 async fn test_condition_executor_operators() {
-    let mut ctx = IvrExecutionContext::new("call-test".to_string(), "1001".to_string(), "8888".to_string());
+    let mut ctx = IvrExecutionContext::new(
+        "call-test".to_string(),
+        "1001".to_string(),
+        "8888".to_string(),
+    );
     ctx.set_var("score", json!("95"));
     ctx.set_var("status", json!("ACTIVE"));
     ctx.set_var("phone", json!("13800138000"));
@@ -205,7 +217,11 @@ async fn test_condition_executor_operators() {
 
 #[tokio::test]
 async fn test_set_var_and_loop_executors() {
-    let mut ctx = IvrExecutionContext::new("call-loop".to_string(), "1001".to_string(), "8888".to_string());
+    let mut ctx = IvrExecutionContext::new(
+        "call-loop".to_string(),
+        "1001".to_string(),
+        "8888".to_string(),
+    );
 
     // 1. 设置变量节点
     let node_set = TopologyNode {
@@ -268,7 +284,11 @@ async fn test_set_var_and_loop_executors() {
 
 #[tokio::test]
 async fn test_basic_executors_start_prompt_hangup() {
-    let mut ctx = IvrExecutionContext::new("call-basic".to_string(), "1001".to_string(), "8888".to_string());
+    let mut ctx = IvrExecutionContext::new(
+        "call-basic".to_string(),
+        "1001".to_string(),
+        "8888".to_string(),
+    );
 
     let node_start = TopologyNode {
         id: "start".to_string(),
@@ -299,7 +319,11 @@ async fn test_basic_executors_start_prompt_hangup() {
 
 #[tokio::test]
 async fn test_route_and_media_executors() {
-    let mut ctx = IvrExecutionContext::new("call-media".to_string(), "1001".to_string(), "8888".to_string());
+    let mut ctx = IvrExecutionContext::new(
+        "call-media".to_string(),
+        "1001".to_string(),
+        "8888".to_string(),
+    );
 
     // 路由/呼转分支节点
     let node_route = TopologyNode {
@@ -311,7 +335,10 @@ async fn test_route_and_media_executors() {
         position: Some(Position { x: 0.0, y: 0.0 }),
     };
     match flow::execute_route(&node_route, &mut ctx) {
-        NodeExecuteResult::Transfer { target, transfer_type } => {
+        NodeExecuteResult::Transfer {
+            target,
+            transfer_type,
+        } => {
             assert_eq!(target, "8001");
             assert_eq!(transfer_type, "extension");
         }
@@ -328,7 +355,10 @@ async fn test_route_and_media_executors() {
         position: Some(Position { x: 0.0, y: 0.0 }),
     };
     match media::execute_transfer(&node_transfer, &mut ctx) {
-        NodeExecuteResult::Transfer { target, transfer_type } => {
+        NodeExecuteResult::Transfer {
+            target,
+            transfer_type,
+        } => {
             assert_eq!(target, "queue-support");
             assert_eq!(transfer_type, "queue");
         }

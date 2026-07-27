@@ -29,7 +29,9 @@
 //! | `registrar` | REGISTER 注册处理 |
 
 pub(crate) mod auth;
+pub(crate) mod client_transaction;
 pub(crate) mod dialog;
+pub(crate) mod dialog_request;
 pub(crate) mod dispatcher;
 pub(crate) mod handlers;
 pub(crate) mod outbound;

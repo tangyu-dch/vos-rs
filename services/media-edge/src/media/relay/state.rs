@@ -43,6 +43,7 @@ impl MediaRelayState {
             playback_loops: Arc::new(DashMap::new()),
             muted_ports: Arc::new(dashmap::DashSet::new()),
             continuity: Arc::new(DashMap::new()),
+            port_sessions: media_core::RtpPortSessionTable::new(),
             conference_manager,
             monitors: Arc::new(DashMap::new()),
             webrtc_sessions: Arc::new(DashMap::new()),
@@ -158,12 +159,18 @@ impl MediaRelayState {
 
     pub fn set_target_addr(&self, relay_port: u16, target: SocketAddr) {
         self.targets.insert(relay_port, target);
+        if let Some(session) = self.port_sessions.get(relay_port) {
+            session.set_target(target);
+        }
 
         let binding_opt = self.source_bindings.get(&relay_port).map(|entry| *entry);
         if let Some(binding) = binding_opt {
             let target_port_opt = self.peer_ports.get(&relay_port).map(|entry| *entry);
             if let Some(target_port) = target_port_opt {
                 self.targets.insert(target_port, binding.address);
+                if let Some(session) = self.port_sessions.get(target_port) {
+                    session.set_target(binding.address);
+                }
                 self.mark_relay_features_changed(target_port);
 
                 if let (SocketAddr::V4(src_v4), SocketAddr::V4(dst_v4)) = (binding.address, target)
@@ -265,6 +272,7 @@ impl MediaRelayState {
         self.unregister_webrtc_session(rtp_port);
         self.dtmf_states.remove(&rtp_port);
         self.leased_rtp_ports.remove(rtp_port);
+        self.port_sessions.remove(rtp_port);
         if let Some(peer_port) = peer_port {
             self.targets.remove(&peer_port);
             self.metrics.remove(&peer_port);
@@ -274,6 +282,7 @@ impl MediaRelayState {
             self.recordings.remove(&peer_port);
             self.unregister_webrtc_session(peer_port);
             self.dtmf_states.remove(&peer_port);
+            self.port_sessions.remove(peer_port);
         }
         if let Some(rtcp_port) = rtcp_port_for(rtp_port) {
             self.targets.remove(&rtcp_port);

@@ -453,12 +453,17 @@ async fn rtp_relay_transcodes_pcma_to_pcmu() {
         .unwrap();
 
     let mut buffer = [0_u8; 1500];
-    let (size, _) = timeout(Duration::from_secs(2), target_socket.recv_from(&mut buffer))
+    let (size, source) = timeout(Duration::from_secs(2), target_socket.recv_from(&mut buffer))
         .await
         .expect("RTP packet should be relayed")
         .unwrap();
 
     let relayed_rtp = rtp_core::RtpPacket::parse(&buffer[..size]).unwrap();
+    assert_eq!(
+        source.port(),
+        gateway_port,
+        "processed media must also leave through the paired leg socket"
+    );
     assert_eq!(relayed_rtp.payload_type, 0); // PCMU static payload type is 0
     assert_eq!(relayed_rtp.payload.len(), 2);
     let decoded_sample0 = crate::media::recording::decode_pcmu(relayed_rtp.payload[0]);
@@ -506,7 +511,7 @@ async fn rtp_relay_listener_learns_symmetric_source_for_paired_port() {
         .unwrap();
 
     let mut gateway_buffer = [0_u8; 1500];
-    let (gateway_size, _) = timeout(
+    let (gateway_size, gateway_source) = timeout(
         Duration::from_secs(1),
         gateway_socket.recv_from(&mut gateway_buffer),
     )
@@ -514,6 +519,11 @@ async fn rtp_relay_listener_learns_symmetric_source_for_paired_port() {
     .expect("caller RTP should be relayed to gateway target")
     .unwrap();
     assert_eq!(&gateway_buffer[..gateway_size], caller_packet.as_slice());
+    assert_eq!(
+        gateway_source.port(),
+        caller_bound_port,
+        "media received on the gateway-facing port must leave through the paired caller-facing socket"
+    );
 
     wait_for_target(&relay, caller_bound_port, learned_caller_addr).await;
     assert_eq!(
@@ -533,7 +543,7 @@ async fn rtp_relay_listener_learns_symmetric_source_for_paired_port() {
         .unwrap();
 
     let mut caller_buffer = [0_u8; 1500];
-    let (caller_size, _) = timeout(
+    let (caller_size, caller_source) = timeout(
         Duration::from_secs(1),
         caller_socket.recv_from(&mut caller_buffer),
     )
@@ -541,6 +551,11 @@ async fn rtp_relay_listener_learns_symmetric_source_for_paired_port() {
     .expect("gateway RTP should use learned caller source")
     .unwrap();
     assert_eq!(&caller_buffer[..caller_size], gateway_packet.as_slice());
+    assert_eq!(
+        caller_source.port(),
+        gateway_bound_port,
+        "media received on the caller-facing port must leave through the paired gateway-facing socket"
+    );
     let fast_metrics = wait_for_metrics(&relay, caller_bound_port, |metrics| {
         metrics.fast_path_packets >= 1
     })
@@ -842,6 +857,35 @@ fn relay_plan_uses_fast_path_for_same_codec_without_media_features() {
     relay.set_target_addr(40_000, "127.0.0.1:9000".parse().unwrap());
 
     assert_eq!(relay.relay_plan(40_000).path, RelayPath::Fast);
+}
+
+#[tokio::test]
+async fn clearing_one_side_stops_both_paired_relay_loops() {
+    let relay = MediaRelayState::new();
+    let caller_port = 40_000;
+    let gateway_port = 40_002;
+    let (caller_shutdown, caller_stopped) = tokio::sync::oneshot::channel();
+    let (gateway_shutdown, gateway_stopped) = tokio::sync::oneshot::channel();
+
+    relay.pair_ports(caller_port, gateway_port);
+    relay
+        .active_loops
+        .insert(caller_port, vec![caller_shutdown]);
+    relay
+        .active_loops
+        .insert(gateway_port, vec![gateway_shutdown]);
+    relay.set_target_addr(caller_port, "127.0.0.1:9000".parse().unwrap());
+    relay.set_target_addr(gateway_port, "127.0.0.1:9002".parse().unwrap());
+
+    relay.clear_target(caller_port);
+
+    assert!(caller_stopped.await.is_ok());
+    assert!(gateway_stopped.await.is_ok());
+    assert!(relay.active_loops.is_empty());
+    assert!(relay.peer_port_for(caller_port).is_none());
+    assert!(relay.peer_port_for(gateway_port).is_none());
+    assert!(relay.target_for_port(caller_port).is_none());
+    assert!(relay.target_for_port(gateway_port).is_none());
 }
 
 #[test]

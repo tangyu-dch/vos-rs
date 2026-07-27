@@ -86,10 +86,21 @@ impl RtcpQualityWindow {
         if self.samples == 0 {
             return;
         }
-        self.average_fraction_lost = Some((self.total_fraction_lost / self.samples) as u8);
-        self.average_jitter = Some((self.total_jitter / self.samples) as u32);
-        self.average_rtt_ms =
-            (self.rtt_samples > 0).then_some((self.total_rtt_ms / self.rtt_samples) as u32);
+        self.average_fraction_lost = if self.samples > 0 {
+            Some((self.total_fraction_lost / self.samples) as u8)
+        } else {
+            None
+        };
+        self.average_jitter = if self.samples > 0 {
+            Some((self.total_jitter / self.samples) as u32)
+        } else {
+            None
+        };
+        self.average_rtt_ms = if self.rtt_samples > 0 {
+            Some((self.total_rtt_ms / self.rtt_samples) as u32)
+        } else {
+            None
+        };
 
         let loss_percent =
             f64::from(self.average_fraction_lost.unwrap_or_default()) * 100.0 / 255.0;

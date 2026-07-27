@@ -3,15 +3,16 @@
 //! 拆分自 copilot.tsx，避免主页面文件超过 500 行。
 //! 本文件不含任何业务状态，纯展示/解析工具。
 
-import { useEffect, useState } from 'react';
-import { Chip } from '@heroui/react';
+import { useState } from 'react';
+import { Chip, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem } from '@heroui/react';
 import {
-  AlertTriangle, ChevronDown, Cpu, Info, Settings2,
+  AlertTriangle, Check, ChevronDown, Cpu, Info, Sparkles,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { api } from '@/services/client';
+import { message } from '@/utils/toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { findPreset } from '../settings/llm-presets';
+import { findPreset, type LlmConfigRecord } from '../settings/llm-presets';
 
 // ============ 类型定义 ============
 
@@ -402,33 +403,97 @@ export function buildExportMarkdown(messages: MessageItem[]): string {
   return md;
 }
 
-// ============ 当前启用模型徽标 ============
+/** 顶部展示与一键下拉切换当前启用的 LLM 模型 */
+export function ActiveModelBadge({
+  activeModel,
+  onModelChange,
+}: {
+  activeModel: { id?: number; provider: string; model: string } | null;
+  onModelChange?: () => void;
+}) {
+  const [configs, setConfigs] = useState<LlmConfigRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [switching, setSwitching] = useState(false);
 
-/** 顶部展示当前启用的 LLM 模型，点击跳转 /settings/llm 配置页 */
-export function ActiveModelBadge({ activeModel }: { activeModel: { provider: string; model: string } | null }) {
-  const [model, setModel] = useState<string>('');
-
-  useEffect(() => {
-    if (activeModel) {
-      const providerLabel = findPreset(activeModel.provider)?.label || activeModel.provider;
-      setModel(`${providerLabel} · ${activeModel.model}`);
-    } else {
-      setModel('');
+  const fetchConfigs = async () => {
+    setLoading(true);
+    try {
+      const list = await api.get<LlmConfigRecord[]>('/llm-configs');
+      setConfigs(list);
+    } catch {
+      // 忽略
+    } finally {
+      setLoading(false);
     }
-  }, [activeModel]);
+  };
+
+  const handleSelect = async (idKey: React.Key) => {
+    const id = Number(idKey);
+    if (!id || id === activeModel?.id) return;
+    setSwitching(true);
+    try {
+      await api.post(`/llm-configs/${id}/activate`);
+      message.success('已切换大模型引擎');
+      onModelChange?.();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '切换失败');
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  const activePreset = activeModel ? findPreset(activeModel.provider) : null;
+  const activeLabel = activeModel
+    ? `${activePreset?.label || activeModel.provider} · ${activeModel.model}`
+    : '未配置大模型';
 
   return (
-    <Link to="/settings/llm" className="inline-flex items-center no-underline">
-      <Chip
-        size="sm"
+    <Dropdown placement="bottom-end" backdrop="transparent" onOpenChange={(open) => open && void fetchConfigs()}>
+      <DropdownTrigger>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 hover:bg-primary/20 text-primary transition-all text-xs font-medium cursor-pointer select-none"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-primary" />
+          <span>{switching ? '正在切换...' : activeLabel}</span>
+          <ChevronDown className="w-3.5 h-3.5 opacity-60 ml-0.5" />
+        </button>
+      </DropdownTrigger>
+      <DropdownMenu
+        aria-label="选择大模型引擎"
         variant="flat"
-        color={model ? 'primary' : 'default'}
-        className="text-[10px] h-5 cursor-pointer hover:opacity-80"
-        startContent={<Cpu className="w-2.5 h-2.5" />}
-        endContent={<Settings2 className="w-2.5 h-2.5 opacity-60" />}
+        className="w-72 p-1.5"
+        onAction={handleSelect}
+        emptyContent={<div className="p-3 text-center text-xs text-default-400">{loading ? '加载可用模型中...' : '暂无可用 LLM 配置'}</div>}
       >
-        {model || '未配置 LLM'}
-      </Chip>
-    </Link>
+        {configs.map((cfg) => {
+          const providerLabel = findPreset(cfg.provider)?.label || cfg.provider;
+          const isCurrent = cfg.id === activeModel?.id || (activeModel == null && cfg.is_active);
+          return (
+            <DropdownItem
+              key={cfg.id}
+              textValue={`${providerLabel} - ${cfg.model}`}
+              className={`rounded-xl py-2 my-0.5 transition-colors ${isCurrent ? 'bg-primary/10 text-primary font-semibold' : ''}`}
+            >
+              <div className="flex items-center justify-between gap-2 w-full">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className={`p-1.5 rounded-lg ${isCurrent ? 'bg-primary/20 text-primary' : 'bg-default-100 text-default-500'}`}>
+                    <Cpu className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-medium text-foreground truncate">{providerLabel}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-content3 font-mono text-default-500">{cfg.model}</span>
+                    </div>
+                    {cfg.name && <span className="text-[10px] text-default-400 truncate">{cfg.name}</span>}
+                  </div>
+                </div>
+                {isCurrent && <Check className="w-4 h-4 text-primary shrink-0" />}
+              </div>
+            </DropdownItem>
+          );
+        })}
+      </DropdownMenu>
+    </Dropdown>
   );
 }

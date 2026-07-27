@@ -16,7 +16,7 @@ export interface FieldSpec {
   kind?: FieldKind;
   required?: boolean;
   options?: Array<string | SelectOptionSpec>;
-  optionsResource?: 'egress-trunks' | 'allocation-source';
+  optionsResource?: 'egress-trunks' | 'allocation-source' | 'accounts';
   readonly?: boolean;
   defaultValue?: unknown;
   fullWidth?: boolean;

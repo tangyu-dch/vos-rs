@@ -1,6 +1,6 @@
 use crate::{ApiError, AppState};
 
-const AUTH_USERS_KEY: &str = "vos_rs:auth_users";
+const AUTH_USERS_KEY: &str = "vos_rs:auth:extensions";
 const BILLING_RATES_KEY: &str = "vos_rs:billing:rates";
 const BILLING_INTERVALS_KEY: &str = "vos_rs:billing:intervals";
 const BILLING_PRICES_KEY: &str = "vos_rs:billing:prices";

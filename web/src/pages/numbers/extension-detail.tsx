@@ -123,8 +123,9 @@ interface TabDef {
   content: ReactNode;
 }
 
-export default function ExtensionDetailPage() {
-  const { id: username = '' } = useParams();
+export function ExtensionDetailView({ id: propId }: { id?: string }) {
+  const params = useParams();
+  const username = propId || params.id || '';
   const [data, setData] = useState<ExtensionWorkspaceData | null>(null);
   const [policy, setPolicy] = useState<OutboundPolicy>(emptyPolicy);
   const [password, setPassword] = useState('');
@@ -185,48 +186,72 @@ export default function ExtensionDetailPage() {
   const isOnline = Boolean(data?.registrations && data.registrations.length > 0);
   const regCount = data?.registrations?.length ?? 0;
 
-  const tabs = useMemo<TabDef[]>(() => [
-    {
-      key: 'basic',
-      title: '基本配置',
-      content: (
-        <FormGrid>
-          <WorkspaceField label="分机号码" required>
-            <Input variant="bordered" value={username} isDisabled />
-          </WorkspaceField>
-          <WorkspaceField label="凭据状态">
-            <Input
-              variant="bordered"
-              isDisabled
-              value={data?.credential?.configured ? '已配置 Digest 凭据' : '尚未配置凭据'}
-            />
-          </WorkspaceField>
-          <WorkspaceField label="更新密码">
-            <Input
-              type="password"
-              variant="bordered"
-              value={password}
-              onValueChange={setPassword}
-              placeholder="留空表示不修改"
-            />
-          </WorkspaceField>
-          <WorkspaceField label="确认密码">
-            <Input
-              type="password"
-              variant="bordered"
-              value={confirmPassword}
-              onValueChange={setConfirmPassword}
-              placeholder="再次输入新密码"
-            />
-          </WorkspaceField>
-        </FormGrid>
-      ),
-    },
-    { key: 'registration', title: '注册状态', content: <RegistrationStatus registrations={data?.registrations || []} onRefresh={load} refreshing={loading} /> },
-    { key: 'caller', title: '主叫策略', content: <CallerPolicyForm policy={policy} set={setPolicyField} pools={pools} numbers={data?.numbers || []} /> },
-    { key: 'binding', title: '落地绑定', content: <EgressBindingForm policy={policy} set={setPolicyField} groups={groups} trunks={trunks} /> },
-    { key: 'numbers', title: '号码归属', content: <NumberOwnership numbers={data?.numbers || []} /> },
-  ], [confirmPassword, data, groups, loading, load, password, policy, pools, trunks, username]);
+  const tabs = useMemo<TabDef[]>(() => {
+    const sipDomain = data?.system_config?.sip_domain || '127.0.0.1:5060';
+    const realm = data?.system_config?.realm || 'vos-rs';
+
+    return [
+      {
+        key: 'basic',
+        title: '基本配置',
+        content: (
+          <FormGrid>
+            <WorkspaceField label="分机号码 (User)" required>
+              <Input variant="bordered" value={username} isDisabled />
+            </WorkspaceField>
+            <WorkspaceField label="注册服务器 (SIP Domain / Server)">
+              <Input variant="bordered" value={sipDomain} isDisabled />
+            </WorkspaceField>
+            <WorkspaceField label="鉴权域 (Realm)">
+              <Input variant="bordered" value={realm} isDisabled />
+            </WorkspaceField>
+            <WorkspaceField label="凭据鉴权状态">
+              <Input
+                variant="bordered"
+                isDisabled
+                value={data?.credential?.configured ? '已配置 MD5 Digest 凭据 (不可逆哈希)' : '尚未配置凭据'}
+              />
+            </WorkspaceField>
+            <WorkspaceField label="重置/设定 SIP 密码">
+              <Input
+                type="password"
+                variant="bordered"
+                value={password}
+                onValueChange={setPassword}
+                placeholder="输入新 SIP 密码 (如 123456)"
+                autoComplete="new-password"
+              />
+            </WorkspaceField>
+            <WorkspaceField label="确认 SIP 密码">
+              <Input
+                type="password"
+                variant="bordered"
+                value={confirmPassword}
+                onValueChange={setConfirmPassword}
+                placeholder="再次输入确认新密码"
+                autoComplete="new-password"
+              />
+            </WorkspaceField>
+            <div className="md:col-span-2 col-span-1 p-4 bg-primary/5 rounded-xl border border-primary/20 text-tiny text-default-600 flex flex-col gap-1.5">
+              <span className="font-bold text-primary flex items-center gap-1.5">
+                💡 SIP 软电话 / 话机注册配置指引
+              </span>
+              <ul className="list-disc list-inside space-y-1 text-default-500">
+                <li><strong>SIP 账号 (Username / Auth ID)：</strong> <code className="text-foreground bg-content2 px-1 rounded">{username}</code></li>
+                <li><strong>SIP 域名 / 代理服务器 (Domain / Registrar)：</strong> <code className="text-foreground bg-content2 px-1 rounded">{sipDomain}</code></li>
+                <li><strong>鉴权域 (Realm / Domain)：</strong> <code className="text-foreground bg-content2 px-1 rounded">{realm}</code> (软电话若要求填 Realm 请填此值)</li>
+                <li><strong>认证密码说明：</strong> 电信级 VoIP 为安全起见在服务端以不可逆 Digest 哈希存储凭据。如忘记注册密码，请直接在上方填写新密码并点击右上方<strong>保存配置</strong>进行快速重置。</li>
+              </ul>
+            </div>
+          </FormGrid>
+        ),
+      },
+      { key: 'registration', title: '注册状态', content: <RegistrationStatus registrations={data?.registrations || []} onRefresh={load} refreshing={loading} /> },
+      { key: 'caller', title: '主叫策略', content: <CallerPolicyForm policy={policy} set={setPolicyField} pools={pools} numbers={data?.numbers || []} /> },
+      { key: 'binding', title: '落地绑定', content: <EgressBindingForm policy={policy} set={setPolicyField} groups={groups} trunks={trunks} /> },
+      { key: 'numbers', title: '号码归属', content: <NumberOwnership numbers={data?.numbers || []} /> },
+    ];
+  }, [confirmPassword, data, groups, loading, load, password, policy, pools, trunks, username]);
 
   if (loading) {
     return (
@@ -286,4 +311,8 @@ export default function ExtensionDetailPage() {
       )}
     </section>
   );
+}
+
+export default function ExtensionDetailPage() {
+  return <ExtensionDetailView />;
 }

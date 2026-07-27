@@ -118,7 +118,7 @@ export function PageHeader({
   actions,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   icon?: LucideIcon;
   statusChip?: { label: string; color?: 'success' | 'warning' | 'danger' | 'primary' | 'default'; pulse?: boolean };
   actions?: ReactNode;

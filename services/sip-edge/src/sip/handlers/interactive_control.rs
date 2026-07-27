@@ -33,13 +33,14 @@ pub(crate) async fn handle_interactive_webhook_call(
         .get("call-id")
         .map(|v| v.as_str().to_string())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = uuid::Uuid::new_v4().to_string();
 
     info!(call_id = %call_id, "intercepting call via HTTP interactive Webhook control");
 
     // 1. Allocate media endpoint
     let local_ep = match edge_state
         .media_relay
-        .allocate_endpoint_for_call(&edge_config.media, &call_id)
+        .allocate_endpoint_for_call(&edge_config.media, &session_id)
     {
         Ok(ep) => ep,
         Err(e) => {
@@ -74,6 +75,7 @@ pub(crate) async fn handle_interactive_webhook_call(
 
     // 3. Park the call
     let parked = ParkedCall {
+        session_id,
         invite_request: request.clone(),
         peer_addr: peer,
         caller_relay_port: local_ep.port,
@@ -153,6 +155,7 @@ async fn answer_parked_call_if_needed(
     };
 
     edge_state.remember_inbound_invite(
+        parked.session_id,
         &parked.invite_request,
         parked.peer_addr,
         sip_core::SipUri::from_str(&format!(
@@ -168,7 +171,7 @@ async fn answer_parked_call_if_needed(
 
     if let Some(mut tx) = edge_state.inbound_transactions.get_mut(call_id) {
         tx.caller_relay_rtp = Some(local_ep);
-        tx.inbound_to_tag = Some(to_tag.to_string());
+        tx.dialogs.caller.local_tag = to_tag.to_string();
     }
 
     let codec = crate::media::sdp::negotiated_audio_codec(&parked.invite_request.body)
@@ -490,9 +493,19 @@ pub(crate) fn execute_instruction(
                 };
 
                 if let Some(port) = port {
-                    edge_state
-                        .media_relay
-                        .register_port_dtmf_tracking(call_id, port, 101);
+                    let Some(media_session_id) = edge_state
+                        .inbound_transactions
+                        .get(call_id)
+                        .map(|transaction| transaction.session_id.clone())
+                    else {
+                        warn!(call_id, "gather session disappeared before DTMF setup");
+                        return;
+                    };
+                    edge_state.media_relay.register_port_dtmf_tracking(
+                        &media_session_id,
+                        port,
+                        101,
+                    );
 
                     if let Some(ref play_url) = play_url {
                         let _ = edge_state
@@ -520,7 +533,9 @@ pub(crate) fn execute_instruction(
                             if !edge_state_clone.inbound_transactions.contains_key(&cid) {
                                 return;
                             }
-                            if let Some(digits) = edge_state_clone.media_relay.get_dtmf_digits(&cid)
+                            if let Some(digits) = edge_state_clone
+                                .media_relay
+                                .get_dtmf_digits(&media_session_id)
                             {
                                 gathered = digits.clone();
                                 if gathered.len() >= max_digits {
@@ -888,9 +903,9 @@ pub(crate) fn execute_instruction(
                     call_id,
                     digits, "VCI PlayDigits command received, sending SIP INFO"
                 );
-                if let Some(tx) = edge_state.inbound_transactions.get(call_id) {
+                if let Some(mut tx) = edge_state.inbound_transactions.get_mut(call_id) {
                     if let Some(socket) = edge_state.get_socket() {
-                        if let Some(ref orig_req) = tx.original_request {
+                        if let Some(orig_req) = tx.original_request.clone() {
                             let mut dummy_req = (*orig_req.as_ref()).clone();
                             dummy_req.method = sip_core::Method::Info;
                             for digit in digits.chars() {
@@ -902,17 +917,34 @@ pub(crate) fn execute_instruction(
                                     ),
                                 );
                                 dummy_req.body = std::borrow::Cow::Owned(info_body.into_bytes());
-
+                                tx.dialogs.gateway.local_cseq =
+                                    tx.dialogs.gateway.local_cseq.saturating_add(1);
+                                let gateway = &tx.dialogs.gateway;
                                 let info_bytes =
-                                    crate::sip::outbound::build_outbound_in_dialog_request(
+                                    crate::sip::outbound::build_b2bua_in_dialog_request(
                                         &dummy_req,
-                                        &tx.outbound_uri,
+                                        &gateway.remote_target,
                                         &edge_config.advertised_addr,
-                                        tx.outbound_route_set.as_slice(),
+                                        &gateway.route_set,
+                                        &gateway.call_id,
+                                        &gateway.local_uri,
+                                        &gateway.local_tag,
+                                        &gateway.remote_uri,
+                                        gateway.remote_tag.as_deref(),
+                                        gateway.local_cseq,
+                                        &dummy_req.body,
                                     );
 
-                                let target_peer =
-                                    tx.outbound_peer.clone().unwrap_or_else(|| tx.peer.clone());
+                                let target_peer = gateway
+                                    .route_set
+                                    .first()
+                                    .map(|route| crate::sip::outbound::target_addr_for_str(route))
+                                    .or_else(|| gateway.peer.clone())
+                                    .unwrap_or_else(|| {
+                                        crate::sip::outbound::target_addr_for(
+                                            &gateway.remote_target,
+                                        )
+                                    });
                                 let dg = PendingDatagram::new(target_peer, info_bytes);
                                 let _ =
                                     edge_state.send_sip_datagram(dg, &socket, edge_config).await;

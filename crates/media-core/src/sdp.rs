@@ -134,6 +134,11 @@ fn try_fast_rewrite_inner(input: &str, endpoint: &RtpEndpoint) -> Option<(Vec<u8
             in_audio_section = false;
         }
 
+        if in_audio_section && trimmed.starts_with("a=rtcp:") {
+            write_relay_rtcp_attribute(&mut result, trimmed, endpoint);
+            continue;
+        }
+
         if trimmed.starts_with("c=IN IP") {
             let parsed_addr = trimmed
                 .get(7..)
@@ -173,6 +178,31 @@ fn try_fast_rewrite_inner(input: &str, endpoint: &RtpEndpoint) -> Option<(Vec<u8
         };
         (result, original_endpoint)
     })
+}
+
+fn write_relay_rtcp_attribute(result: &mut Vec<u8>, line: &str, endpoint: &RtpEndpoint) {
+    let Some(rtcp_port) = endpoint.port.checked_add(1) else {
+        result.extend_from_slice(line.as_bytes());
+        result.extend_from_slice(b"\r\n");
+        return;
+    };
+    let has_explicit_address = line["a=rtcp:".len()..].split_whitespace().nth(1).is_some();
+    if has_explicit_address {
+        let address_type = if endpoint.address.contains(':') {
+            "IP6"
+        } else {
+            "IP4"
+        };
+        result.extend_from_slice(
+            format!(
+                "a=rtcp:{rtcp_port} IN {address_type} {}\r\n",
+                endpoint.address
+            )
+            .as_bytes(),
+        );
+    } else {
+        result.extend_from_slice(format!("a=rtcp:{rtcp_port}\r\n").as_bytes());
+    }
 }
 
 /// Parses the first audio RTP endpoint from an SDP body.

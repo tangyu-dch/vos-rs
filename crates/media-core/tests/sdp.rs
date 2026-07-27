@@ -80,6 +80,26 @@ fn rewrites_and_returns_the_original_endpoint() {
 }
 
 #[test]
+fn rewrite_keeps_explicit_rtcp_on_the_relay_port_pair() {
+    let answer = concat!(
+        "v=0\r\n",
+        "c=IN IP4 127.0.0.1\r\n",
+        "m=audio 4004 RTP/AVP 96 101\r\n",
+        "a=rtcp:4005 IN IP4 127.0.0.1\r\n",
+        "a=rtpmap:96 opus/48000/2\r\n",
+        "a=rtpmap:101 telephone-event/48000\r\n",
+    );
+
+    let rewritten =
+        rewrite_sdp_body(answer.as_bytes(), RtpEndpoint::new("203.0.113.10", 40_002)).unwrap();
+    let rewritten = String::from_utf8(rewritten).unwrap();
+
+    assert!(rewritten.contains("m=audio 40002 RTP/AVP 96 101\r\n"));
+    assert!(rewritten.contains("a=rtcp:40003 IN IP4 203.0.113.10\r\n"));
+    assert!(!rewritten.contains("a=rtcp:4005"));
+}
+
+#[test]
 fn rewrite_rejects_an_offer_without_a_voice_codec() {
     let dtmf_only = concat!(
         "v=0\r\n",
@@ -120,6 +140,7 @@ fn rewrite_fallback_supports_static_payload_without_rtpmap() {
         "c=IN IP4 192.0.2.10\r\n",
         "t=0 0\r\n",
         "m=audio 49170 RTP/AVP 0\r\n",
+        "a=rtcp:49171 IN IP4 192.0.2.10\r\n",
     );
 
     let rewritten = rewrite_sdp_body(
@@ -131,4 +152,5 @@ fn rewrite_fallback_supports_static_payload_without_rtpmap() {
 
     assert!(rewritten.contains("c=IN IP4 203.0.113.10\r\n"));
     assert!(rewritten.contains("m=audio 40004 RTP/AVP 0\r\n"));
+    assert!(rewritten.contains("a=rtcp:40005 IN IP4 203.0.113.10\r\n"));
 }

@@ -275,6 +275,10 @@ impl SbcEngine {
     }
 
     pub fn is_allowed(&self, ip: IpAddr) -> bool {
+        if ip.is_loopback() {
+            return true;
+        }
+
         // 1. 检查动态爆破锁定
         if let Some(lock_time) = self.locked_ips.get(&ip) {
             if Instant::now() < *lock_time {
@@ -303,6 +307,10 @@ impl SbcEngine {
     }
 
     pub fn register_auth_failure(&self, ip: IpAddr) {
+        if ip.is_loopback() {
+            return;
+        }
+
         let now = Instant::now();
         let mut fail_count = 1;
 

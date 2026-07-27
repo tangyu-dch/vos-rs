@@ -14,6 +14,10 @@ pub(super) enum RelayPath {
 pub(super) struct RelayPlan {
     pub(super) path: RelayPath,
     pub(super) target: Option<SocketAddr>,
+    /// Socket owned by the opposite B2BUA media leg. Packets received on this
+    /// port must leave through the peer port so their source matches the SDP
+    /// advertised to the destination endpoint.
+    pub(super) egress_socket: Option<Arc<UdpSocket>>,
     pub(super) dtmf_payload_type: Option<u8>,
     pub(super) recording: Option<RecordingLeg>,
     pub(super) is_in_conference: bool,
@@ -100,6 +104,11 @@ impl MediaRelayState {
     pub(super) fn relay_plan(&self, relay_port: u16) -> RelayPlan {
         let target = self.targets.get(&relay_port).map(|entry| *entry);
         let peer_port = self.peer_ports.get(&relay_port).map(|entry| *entry);
+        let egress_socket = peer_port.and_then(|port| {
+            self.active_sockets
+                .get(&port)
+                .map(|entry| Arc::clone(entry.value()))
+        });
         let dtmf_payload_type = self
             .dtmf_states
             .get(&relay_port)
@@ -149,6 +158,7 @@ impl MediaRelayState {
                 RelayPath::Processed
             },
             target,
+            egress_socket,
             dtmf_payload_type,
             recording,
             is_in_conference,

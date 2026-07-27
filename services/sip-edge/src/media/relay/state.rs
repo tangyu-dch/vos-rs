@@ -54,7 +54,6 @@ impl MediaRelayState {
             storage,
         };
 
-        spawn_rtp_keepalive_loop(relay.clone());
         relay
     }
 
@@ -422,10 +421,10 @@ impl MediaRelayState {
         self.targets.remove(&rtp_port);
         self.metrics.remove(&rtp_port);
         self.source_bindings.remove(&rtp_port);
+        self.clear_srtp_session(rtp_port);
         self.peer_ports.remove(&rtp_port);
         self.codecs.remove(&rtp_port);
         self.recordings.remove(&rtp_port);
-        self.clear_srtp_session(rtp_port);
         self.dtmf_states.remove(&rtp_port);
         self.leased_rtp_ports.remove(rtp_port);
         if let Some(peer_port) = peer_port {
@@ -436,6 +435,7 @@ impl MediaRelayState {
             self.codecs.remove(&peer_port);
             self.recordings.remove(&peer_port);
             self.dtmf_states.remove(&peer_port);
+            self.leased_rtp_ports.remove(peer_port);
         }
         if let Some(rtcp_port) = rtcp_port_for(rtp_port) {
             self.targets.remove(&rtcp_port);
@@ -450,11 +450,13 @@ impl MediaRelayState {
         }
         if let MediaRelayMode::Pool { pool } = &self.mode {
             pool.release_port(rtp_port);
-        }
-        if let Some((_, senders)) = self.active_loops.remove(&rtp_port) {
-            for sender in senders {
-                let _ = sender.send(());
+            if let Some(peer_port) = peer_port {
+                pool.release_port(peer_port);
             }
+        }
+        stop_relay_loops(&self.active_loops, rtp_port);
+        if let Some(peer_port) = peer_port {
+            stop_relay_loops(&self.active_loops, peer_port);
         }
         self.mark_relay_features_changed(rtp_port);
         if let Some(peer_port) = peer_port {
@@ -463,36 +465,13 @@ impl MediaRelayState {
     }
 }
 
-pub(crate) fn spawn_rtp_keepalive_loop(relay: MediaRelayState) {
-    if !cfg!(test) && tokio::runtime::Handle::try_current().is_ok() {
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-            loop {
-                interval.tick().await;
-                for entry in relay.targets.iter() {
-                    let port = *entry.key();
-                    let target_addr = *entry.value();
-                    if let Some(socket) = relay.active_sockets.get(&port) {
-                        let mut keepalive_packet = vec![0u8; 13];
-                        keepalive_packet[0] = 0x80;
-                        keepalive_packet[1] = 13; // Comfort Noise
-                        keepalive_packet[2] = 0x12;
-                        keepalive_packet[3] = 0x34;
-                        keepalive_packet[4] = 0x00;
-                        keepalive_packet[5] = 0x00;
-                        keepalive_packet[6] = 0x04;
-                        keepalive_packet[7] = 0xd2;
-                        keepalive_packet[8] = 0x12;
-                        keepalive_packet[9] = 0x34;
-                        keepalive_packet[10] = 0x56;
-                        keepalive_packet[11] = 0x78;
-                        keepalive_packet[12] = 0x00;
-                        if let Err(e) = socket.send_to(&keepalive_packet, target_addr).await {
-                            tracing::debug!("RTP keepalive send failed on port {}: {}", port, e);
-                        }
-                    }
-                }
-            }
-        });
+fn stop_relay_loops(
+    active_loops: &DashMap<u16, Vec<tokio::sync::oneshot::Sender<()>>>,
+    rtp_port: u16,
+) {
+    if let Some((_, senders)) = active_loops.remove(&rtp_port) {
+        for sender in senders {
+            let _ = sender.send(());
+        }
     }
 }

@@ -6,7 +6,10 @@ use sip_core::{SipRequest, SipUri};
 use tracing::info;
 
 use crate::config::EdgeConfig;
-use crate::edge_state::{EdgeState, InboundTransaction, PendingDatagram};
+use crate::edge_state::{
+    extract_uri_from_contact, B2buaDialogPair, DialogLegState, EdgeState, InboundTransaction,
+    PendingDatagram,
+};
 use crate::sip::{outbound, response};
 
 pub(crate) async fn handle_out_of_dialog_message(
@@ -51,12 +54,7 @@ pub(crate) async fn handle_out_of_dialog_message(
         )];
     };
 
-    let vias = request
-        .headers
-        .get_all("via")
-        .map(|v| v.as_str().to_string())
-        .collect::<Vec<_>>();
-    let inbound_route_set = request
+    let caller_route_set = request
         .headers
         .get_all("record-route")
         .map(|v| v.as_str().to_string())
@@ -68,13 +66,66 @@ pub(crate) async fn handle_out_of_dialog_message(
         outbound::target_addr_for(&outbound_uri)
     };
 
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let gateway_call_id = uuid::Uuid::new_v4().to_string();
+    let caller_remote_uri = request
+        .headers
+        .get("from")
+        .and_then(|value| extract_uri_from_contact(value.as_str()))
+        .unwrap_or_else(|| request.uri.clone());
+    let caller_local_uri = request
+        .headers
+        .get("to")
+        .and_then(|value| extract_uri_from_contact(value.as_str()))
+        .unwrap_or_else(|| request.uri.clone());
+    let caller_remote_tag = request
+        .headers
+        .get("from")
+        .and_then(|value| crate::sip::dialog::tag_param(value.as_str()));
+    let caller_remote_cseq = request
+        .headers
+        .get("cseq")
+        .and_then(|value| crate::sip::dialog::cseq_number(value.as_str()));
+    let caller_remote_target = request
+        .headers
+        .get("contact")
+        .and_then(|value| extract_uri_from_contact(value.as_str()))
+        .unwrap_or_else(|| caller_remote_uri.clone());
+    let dialogs = B2buaDialogPair {
+        caller: DialogLegState {
+            call_id: call_id.clone(),
+            local_uri: caller_local_uri,
+            remote_uri: caller_remote_uri.clone(),
+            local_tag: format!("vosrs-a-{}", uuid::Uuid::new_v4().simple()),
+            remote_tag: caller_remote_tag.clone(),
+            local_cseq: 0,
+            remote_cseq: caller_remote_cseq,
+            route_set: caller_route_set.clone(),
+            remote_target: caller_remote_target,
+            peer: Some(peer.to_string()),
+        },
+        gateway: DialogLegState {
+            call_id: gateway_call_id.clone(),
+            local_uri: caller_remote_uri,
+            remote_uri: outbound_uri.clone(),
+            local_tag: format!("vosrs-b-{}", uuid::Uuid::new_v4().simple()),
+            remote_tag: None,
+            local_cseq: caller_remote_cseq.unwrap_or(1),
+            remote_cseq: None,
+            route_set: Vec::new(),
+            remote_target: outbound_uri.clone(),
+            peer: Some(target_addr.clone()),
+        },
+    };
+
     {
         edge_state.inbound_transactions.insert(
             call_id.clone(),
             InboundTransaction {
+                session_id,
+                dialogs: dialogs.clone(),
                 peer: peer.to_string(),
                 outbound_peer: target_contact.as_ref().map(|c| c.received_from.clone()),
-                vias,
                 outbound_uri: outbound_uri.clone(),
                 inbound_from_tag: request
                     .headers
@@ -91,7 +142,7 @@ pub(crate) async fn handle_out_of_dialog_message(
                 gateway_rtp: None,
                 caller_relay_rtp: None,
                 original_request: Some(Arc::new(request.clone())),
-                inbound_route_set,
+                inbound_route_set: caller_route_set,
                 outbound_route_set: Vec::new(),
                 caller_contact: None,
                 callee_contact: None,
@@ -101,14 +152,9 @@ pub(crate) async fn handle_out_of_dialog_message(
                 prack_rseq: 0,
                 gateway_100rel: false,
                 refer_subscription: None,
-                transfer_from_header: None,
-                transfer_to_header: None,
-                transfer_call_id: None,
-                transfer_contact: None,
-                transfer_peer: None,
-                transferee_is_caller: false,
+                transfer_dialog: None,
                 callee_behind_nat: target_contact.is_some(),
-                active_forks: Vec::new(),
+                fork_dialogs: Default::default(),
                 max_duration_secs: None,
                 established_at: None,
                 invite_response_order: Arc::new(tokio::sync::Mutex::new(
@@ -118,8 +164,19 @@ pub(crate) async fn handle_out_of_dialog_message(
         );
     }
 
-    let outbound_bytes =
-        outbound::build_outbound_message(&request, &outbound_uri, &edge_config.advertised_addr);
+    let outbound_bytes = outbound::build_b2bua_in_dialog_request(
+        &request,
+        &dialogs.gateway.remote_target,
+        &edge_config.advertised_addr,
+        &dialogs.gateway.route_set,
+        &dialogs.gateway.call_id,
+        &dialogs.gateway.local_uri,
+        &dialogs.gateway.local_tag,
+        &dialogs.gateway.remote_uri,
+        None,
+        dialogs.gateway.local_cseq,
+        &request.body,
+    );
 
     vec![PendingDatagram::new(target_addr, outbound_bytes)]
 }

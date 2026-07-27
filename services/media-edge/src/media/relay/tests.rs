@@ -417,12 +417,17 @@ async fn rtp_relay_transcodes_pcma_to_pcmu() {
         .unwrap();
 
     let mut buffer = [0_u8; 1500];
-    let (size, _) = timeout(Duration::from_secs(2), target_socket.recv_from(&mut buffer))
+    let (size, source) = timeout(Duration::from_secs(2), target_socket.recv_from(&mut buffer))
         .await
         .expect("RTP packet should be relayed")
         .unwrap();
 
     let relayed_rtp = rtp_core::RtpPacket::parse(&buffer[..size]).unwrap();
+    assert_eq!(
+        source.port(),
+        gateway_port,
+        "processed media must leave through the paired leg socket"
+    );
     assert_eq!(relayed_rtp.payload_type, 0); // PCMU static payload type is 0
     assert_eq!(relayed_rtp.payload.len(), 2);
     let decoded_sample0 = crate::media::recording::decode_pcmu(relayed_rtp.payload[0]);
@@ -470,7 +475,7 @@ async fn rtp_relay_listener_learns_symmetric_source_for_paired_port() {
         .unwrap();
 
     let mut gateway_buffer = [0_u8; 1500];
-    let (gateway_size, _) = timeout(
+    let (gateway_size, gateway_source) = timeout(
         Duration::from_secs(1),
         gateway_socket.recv_from(&mut gateway_buffer),
     )
@@ -478,6 +483,11 @@ async fn rtp_relay_listener_learns_symmetric_source_for_paired_port() {
     .expect("caller RTP should be relayed to gateway target")
     .unwrap();
     assert_eq!(&gateway_buffer[..gateway_size], caller_packet.as_slice());
+    assert_eq!(
+        gateway_source.port(),
+        caller_bound_port,
+        "media received on the gateway-facing port must leave through the paired caller-facing socket"
+    );
 
     wait_for_target(&relay, caller_bound_port, learned_caller_addr).await;
     assert_eq!(
@@ -497,7 +507,7 @@ async fn rtp_relay_listener_learns_symmetric_source_for_paired_port() {
         .unwrap();
 
     let mut caller_buffer = [0_u8; 1500];
-    let (caller_size, _) = timeout(
+    let (caller_size, caller_source) = timeout(
         Duration::from_secs(1),
         caller_socket.recv_from(&mut caller_buffer),
     )
@@ -505,6 +515,11 @@ async fn rtp_relay_listener_learns_symmetric_source_for_paired_port() {
     .expect("gateway RTP should use learned caller source")
     .unwrap();
     assert_eq!(&caller_buffer[..caller_size], gateway_packet.as_slice());
+    assert_eq!(
+        caller_source.port(),
+        gateway_bound_port,
+        "media received on the caller-facing port must leave through the paired gateway-facing socket"
+    );
     let fast_metrics = wait_for_metrics(&relay, caller_bound_port, |metrics| {
         metrics.fast_path_packets >= 1
     })

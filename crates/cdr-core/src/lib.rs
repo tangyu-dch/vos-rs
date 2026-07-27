@@ -1,42 +1,12 @@
 //! # cdr-core：数据存储层
 //!
 //! 本 crate 是 VoIP 软交换平台的数据存储层，负责：
-//!
-//! - **CDR 存储**：通话详单（Call Detail Record）的持久化
-//! - **网关管理**：网关配置和健康状态的 CRUD
-//! - **路由管理**：路由规则 of the CRUD
-//! - **用户管理**：SIP 用户的 CRUD
-//! - **计费管理**：费率、账户、账本、实时计费、离线对账
-//! - **注册管理**：SIP REGISTER 绑定的存储
-//! - **反欺诈**：反欺诈规则的 CRUD
-//! - **号码库存**：号码资源的 CRUD
-//! - **数据迁移**：数据库表结构自动迁移
-//!
-//! ## 数据库表
-//!
-//! | 表名 | 用途 |
-//! |------|------|
-//! | `call_cdrs` | 通话详单 |
-//! | `sip_gateways` | 网关配置 |
-//! | `sip_routes` | 路由规则 |
-//! | `sip_users` | SIP 用户 |
-//! | `sip_registrations` | 注册绑定 |
-//! | `billing_rates` | 费率表 |
-//! | `billing_accounts` | 计费账户 |
-//! | `billing_ledger` | 扣费流水 |
-//! | `gateway_health_status` | 网关健康状态 |
-//! | `anti_fraud_rules` | 反欺诈规则 |
-//! | `dtmf_events` | DTMF 事件 |
-//! | `number_inventory` | 号码库存 |
-//!
-//! ## 设计原则
-//!
-//! - 使用 `sqlx` 编译期 SQL 检查
-//! - 所有方法返回 `Result`，不使用 panic
-//! - 在线迁移（`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`）
-//! - 实时计费使用事务保证原子性
-//!
+//! - CDR 存储与数据模型
+//! - 数据库在线表结构自动迁移
+//! - 高吞吐量 CDR 异步批处理通道
 
+pub mod batch;
+mod migrations;
 mod models;
 mod schema;
 pub mod store;
@@ -44,23 +14,17 @@ mod termination_models;
 mod termination_schema;
 mod utils;
 
-/// 重新导出 CdrAuditSnapshot，供下游（如 api-server copilot）构造 CdrEvent 时使用。
+pub use batch::{CdrBatchChannel, CdrBatchConfig};
 pub use call_core::CdrAuditSnapshot;
 pub use models::*;
-pub use termination_models::*;
-pub use utils::current_hhmm;
-// Copilot 历史会话相关类型，供 api-server 直接使用
 pub use store::copilot::{AppendCopilotMessageInput, CopilotMessage, CopilotSession};
 pub use store::llm_config::{LlmConfigRecord, UpsertLlmConfigInput};
+pub use termination_models::*;
+pub use utils::current_hhmm;
 
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
-use schema::*;
-
 /// PostgreSQL 数据存储：所有数据访问的入口。
-///
-/// 封装了 PostgreSQL 连接池，提供所有数据表的 CRUD 操作。
-/// 使用 `sqlx` 编译期 SQL 检查，确保类型安全。
 #[derive(Debug, Clone)]
 pub struct PostgresCdrStore {
     pub(crate) pool: PgPool,
@@ -78,272 +42,10 @@ impl PostgresCdrStore {
     }
 
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(75812903)")
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query(CREATE_CDR_TABLE_SQL).execute(&mut *tx).await?;
-        sqlx::query(MIGRATE_CDR_AUDIT_SQL).execute(&mut *tx).await?;
-        sqlx::query(CREATE_CALL_ID_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        // CDR 可能因 NATS 重投或 ACK 失败重复到达，数据库约束是最终幂等边界。
-        sqlx::query(MIGRATE_CDR_IDEMPOTENCY_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_STARTED_AT_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_STATUS_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_CDR_CALLER_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_CDR_CALLEE_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_SIP_USERS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_SIP_GATEWAYS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        for migration_sql in MIGRATE_SIP_GATEWAYS_SQL {
-            sqlx::query(migration_sql).execute(&mut *tx).await?;
-        }
-        for index_sql in [
-            CREATE_GATEWAYS_TYPE_INDEX_SQL,
-            CREATE_GATEWAYS_PARENT_INDEX_SQL,
-            CREATE_GATEWAYS_ACCOUNT_INDEX_SQL,
-            CREATE_GATEWAYS_ENABLED_INDEX_SQL,
-        ] {
-            sqlx::query(index_sql).execute(&mut *tx).await?;
-        }
-        sqlx::query(CREATE_SIP_ROUTES_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_ROUTES_PRIORITY_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_ROUTES_PREFIX_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_ROUTES_GATEWAY_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(MIGRATION_ADD_ROUTE_WEIGHT)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(MIGRATION_ADD_ROUTE_TOPOLOGY)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_SIP_REGISTRATIONS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("ALTER TABLE sip_registrations ADD COLUMN IF NOT EXISTS path TEXT")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_REGISTRATIONS_EXPIRES_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("ALTER TABLE sip_gateways ADD COLUMN IF NOT EXISTS max_capacity INTEGER")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(
-            "ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS cost DOUBLE PRECISION NOT NULL DEFAULT 0.0",
-        )
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query("ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS time_start TEXT")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS time_end TEXT")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_DTMF_EVENTS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_DTMF_CALL_ID_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_BILLING_RATES_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_BILLING_ACCOUNTS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        for migration_sql in MIGRATE_BILLING_ACCOUNTS_SQL {
-            sqlx::query(migration_sql).execute(&mut *tx).await?;
-        }
-        sqlx::query(ADD_GATEWAY_ACCOUNT_FOREIGN_KEY_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_BILLING_LEDGER_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_BILLING_CREDITS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_BILLING_CREDITS_USERNAME_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::raw_sql(MIGRATE_BILLING_INTERVALS_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_LEDGER_USERNAME_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_LEDGER_CREATED_AT_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_NUMBER_INVENTORY_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        for migration_sql in MIGRATE_NUMBER_INVENTORY_SQL {
-            sqlx::query(migration_sql).execute(&mut *tx).await?;
-        }
-        for index_sql in [
-            CREATE_NUMBERS_GATEWAY_INDEX_SQL,
-            CREATE_NUMBERS_STATUS_INDEX_SQL,
-            CREATE_NUMBERS_USERNAME_INDEX_SQL,
-        ] {
-            sqlx::query(index_sql).execute(&mut *tx).await?;
-        }
-        sqlx::query(CREATE_GATEWAY_NUMBER_ASSIGNMENTS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_GATEWAY_PEER_LINKS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        for index_sql in CREATE_GATEWAY_ASSIGNMENT_INDEXES_SQL {
-            sqlx::query(index_sql).execute(&mut *tx).await?;
-        }
-        sqlx::query(CREATE_GATEWAY_HEALTH_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_GATEWAY_HEALTH_STATE_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'closed'")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS last_failure_at TIMESTAMPTZ")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS half_open_successes INTEGER NOT NULL DEFAULT 0")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(
-            "ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS last_probe_at TIMESTAMPTZ",
-        )
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query("ALTER TABLE gateway_health_status ADD COLUMN IF NOT EXISTS active_calls INTEGER NOT NULL DEFAULT 0")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_ANTI_FRAUD_RULES_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(MIGRATE_LEGACY_ANTI_FRAUD_RULES_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(MIGRATE_LEGACY_ANTI_FRAUD_RULES_STEP2_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(MIGRATE_LEGACY_ANTI_FRAUD_RULES_STEP3_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(MIGRATE_LEGACY_ANTI_FRAUD_RULES_STEP4_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_ANTI_FRAUD_CONFIG_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(SEED_ANTI_FRAUD_CONFIG_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_AUDIT_LOGS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_AUDIT_LOGS_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        // 迁移：添加审计日志的 query_params 和 request_body 列
-        sqlx::query("ALTER TABLE api_audit_logs ADD COLUMN IF NOT EXISTS query_params TEXT")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("ALTER TABLE api_audit_logs ADD COLUMN IF NOT EXISTS request_body TEXT")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_SYSTEM_CONFIGS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(SEED_SYSTEM_CONFIGS_SQL)
-            .execute(&mut *tx)
-            .await?;
-        // 兼容处理：检查是否存在旧的非分区 sip_flows 表，若存在则重命名为 sip_flows_old
-        if let Ok(Some(relkind)) = sqlx::query_scalar::<_, String>(
-            "SELECT relkind::text FROM pg_class WHERE relname = 'sip_flows'",
-        )
-        .fetch_optional(&mut *tx)
-        .await
-        {
-            if relkind == "r" {
-                tracing::info!(
-                    "Found old non-partitioned sip_flows table. Renaming it to sip_flows_old."
-                );
-                let _ = sqlx::query("DROP TABLE IF EXISTS sip_flows_old CASCADE")
-                    .execute(&mut *tx)
-                    .await;
-                let _ = sqlx::query("ALTER TABLE sip_flows RENAME TO sip_flows_old")
-                    .execute(&mut *tx)
-                    .await;
-            }
-        }
-
-        sqlx::query(CREATE_SIP_FLOWS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_SIP_FLOWS_CALL_ID_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_SIP_FLOWS_TIMESTAMP_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_COPILOT_SESSIONS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_COPILOT_SESSIONS_OPERATOR_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_COPILOT_MESSAGES_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_COPILOT_MESSAGES_SESSION_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(MIGRATE_COPILOT_MESSAGES_IMAGES_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_LLM_CONFIGS_TABLE_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(CREATE_LLM_CONFIGS_ACTIVE_INDEX_SQL)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(SEED_DEFAULT_LLM_CONFIG_SQL)
-            .execute(&mut *tx)
-            .await?;
-        for migration_sql in termination_schema::MIGRATE_TERMINATION_DOMAIN_SQL {
-            sqlx::query(migration_sql).execute(&mut *tx).await?;
-        }
-        tx.commit().await?;
-        Ok(())
+        migrations::run_migrations(&self.pool).await
     }
 
-    /// 检查数据库连接是否仍然可用，用于服务就绪探针。
+    /// 检查数据库连接是否仍然可用。
     pub async fn ping(&self) -> Result<(), sqlx::Error> {
         sqlx::query("SELECT 1")
             .execute(&self.pool)
@@ -371,6 +73,7 @@ impl PostgresCdrStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::*;
     use crate::utils::{extract_sip_user, match_rate};
 
     #[test]
@@ -422,8 +125,8 @@ mod tests {
                 ..call_core::CdrAuditSnapshot::default()
             },
         };
-        let json = event.to_json_bytes();
-        let decoded = CdrEvent::from_json_slice(&json).expect("failed to decode json");
+        let json = event.to_json_bytes().unwrap();
+        let decoded = CdrEvent::from_json_slice(&json).unwrap();
         assert_eq!(event, decoded);
     }
 
@@ -438,7 +141,7 @@ mod tests {
             "gateway_rtcp_loss_rate":null,"gateway_rtcp_jitter_ms":null,"gateway_rtcp_rtt_ms":null,
             "mos":null,"dtmf_digits":null,"recording_path":null,"direction":"outbound"
         }"#;
-        let decoded = CdrEvent::from_json_slice(payload).expect("legacy CDR must remain readable");
+        let decoded = CdrEvent::from_json_slice(payload).unwrap();
         assert_eq!(decoded.audit, call_core::CdrAuditSnapshot::default());
     }
 

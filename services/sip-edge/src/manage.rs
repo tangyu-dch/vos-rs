@@ -36,7 +36,12 @@ async fn internal_auth(
 }
 
 /// 启动管理 API（活跃呼叫查询 / 强制拆线）。
-pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String) {
+pub async fn serve(
+    addr: String,
+    state: Arc<EdgeState>,
+    internal_secret: String,
+    advertised_addr: String,
+) {
     let protected = Router::new()
         .route("/manage/active-calls", get(active_calls))
         .route("/manage/active-calls/count", get(active_calls_count))
@@ -69,7 +74,10 @@ pub async fn serve(addr: String, state: Arc<EdgeState>, internal_secret: String)
             ManageAuthSecret(internal_secret),
             internal_auth,
         ))
-        .with_state(state);
+        .with_state(ManageState {
+            edge: state,
+            advertised_addr: AdvertisedAddr(advertised_addr),
+        });
     let app = Router::new()
         .route("/health", get(health))
         .merge(protected)
@@ -105,15 +113,37 @@ async fn active_calls_count(State(state): State<Arc<EdgeState>>) -> Json<usize> 
     Json(state.call_manager.active_calls_count())
 }
 
+#[derive(Clone)]
+struct AdvertisedAddr(String);
+
+#[derive(Clone)]
+struct ManageState {
+    edge: Arc<EdgeState>,
+    advertised_addr: AdvertisedAddr,
+}
+
+impl axum::extract::FromRef<ManageState> for Arc<EdgeState> {
+    fn from_ref(state: &ManageState) -> Self {
+        Arc::clone(&state.edge)
+    }
+}
+
+impl axum::extract::FromRef<ManageState> for AdvertisedAddr {
+    fn from_ref(state: &ManageState) -> Self {
+        state.advertised_addr.clone()
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ClusterRuntimeStatus {
     status: &'static str,
     active_calls: usize,
     media_nodes_healthy: usize,
     media_nodes_total: usize,
+    advertised_addr: String,
 }
 
-fn runtime_status(state: &EdgeState) -> ClusterRuntimeStatus {
+fn runtime_status(state: &EdgeState, advertised_addr: &str) -> ClusterRuntimeStatus {
     let (media_nodes_healthy, media_nodes_total) = state.media_relay.media_node_counts();
     ClusterRuntimeStatus {
         status: if state.draining.load(Ordering::Acquire) {
@@ -124,23 +154,33 @@ fn runtime_status(state: &EdgeState) -> ClusterRuntimeStatus {
         active_calls: state.call_manager.active_calls_count(),
         media_nodes_healthy,
         media_nodes_total,
+        advertised_addr: advertised_addr.to_string(),
     }
 }
 
-async fn cluster_status(State(state): State<Arc<EdgeState>>) -> Json<ClusterRuntimeStatus> {
-    Json(runtime_status(&state))
+async fn cluster_status(
+    State(edge): State<Arc<EdgeState>>,
+    State(AdvertisedAddr(addr)): State<AdvertisedAddr>,
+) -> Json<ClusterRuntimeStatus> {
+    Json(runtime_status(&edge, &addr))
 }
 
-async fn cluster_drain(State(state): State<Arc<EdgeState>>) -> Json<ClusterRuntimeStatus> {
-    state.draining.store(true, Ordering::Release);
+async fn cluster_drain(
+    State(edge): State<Arc<EdgeState>>,
+    State(AdvertisedAddr(addr)): State<AdvertisedAddr>,
+) -> Json<ClusterRuntimeStatus> {
+    edge.draining.store(true, Ordering::Release);
     tracing::info!("SIP 节点已通过管理 API 进入摘流状态");
-    Json(runtime_status(&state))
+    Json(runtime_status(&edge, &addr))
 }
 
-async fn cluster_resume(State(state): State<Arc<EdgeState>>) -> Json<ClusterRuntimeStatus> {
-    state.draining.store(false, Ordering::Release);
+async fn cluster_resume(
+    State(edge): State<Arc<EdgeState>>,
+    State(AdvertisedAddr(addr)): State<AdvertisedAddr>,
+) -> Json<ClusterRuntimeStatus> {
+    edge.draining.store(false, Ordering::Release);
     tracing::info!("SIP 节点已通过管理 API 恢复接收新呼叫");
-    Json(runtime_status(&state))
+    Json(runtime_status(&edge, &addr))
 }
 
 /// RTP/录音聚合指标，供 API Server、压测脚本和运维面板读取。
@@ -180,26 +220,50 @@ async fn cdr_metrics(State(state): State<Arc<EdgeState>>) -> Json<CdrRuntimeMetr
     })
 }
 
-async fn terminate(State(state): State<Arc<EdgeState>>, Path(call_id): Path<String>) -> StatusCode {
-    // 强制挂断：同步清理并发计数和事务记录
-    let username = state.inbound_transactions.get(&call_id).and_then(|tx| {
-        tx.original_request
-            .as_ref()
-            .and_then(|req| crate::edge_state::EdgeState::username_from_request(req))
-    });
+async fn terminate(
+    State(state): State<Arc<EdgeState>>,
+    State(AdvertisedAddr(advertised_addr)): State<AdvertisedAddr>,
+    Path(call_id): Path<String>,
+) -> StatusCode {
+    // 管理接口接受任意一条腿的 Call-ID，但业务和媒体分别使用 A-leg ID 与 session_id。
+    let Some((session_id, caller_call_id, username)) =
+        state.inbound_transactions.get(&call_id).map(|transaction| {
+            let username = transaction
+                .original_request
+                .as_ref()
+                .and_then(|request| crate::edge_state::EdgeState::username_from_request(request));
+            (
+                transaction.session_id.clone(),
+                transaction.dialogs.caller.call_id.clone(),
+                username,
+            )
+        })
+    else {
+        return StatusCode::NOT_FOUND;
+    };
     if let Some(ref uname) = username {
         state.decrement_user_concurrency(uname);
     }
     // Decrement active call count for the gateway before terminating.
-    if let Some(gw_id) = state.call_manager.current_gateway_id(&call_id) {
+    if let Some(gw_id) = state.call_manager.current_gateway_id(&caller_call_id) {
         state.gateway_health.decrement_active(&gw_id);
     }
-    state.inbound_transactions.remove(&call_id);
-    state.call_manager.terminate_call(&call_id);
+    let Some(mut transaction) = state.teardown_call_transaction(&session_id) else {
+        return StatusCode::NOT_FOUND;
+    };
+    let byes = crate::sip::dialog_request::build_session_byes(&mut transaction, &advertised_addr);
+    if let Some(socket) = state.get_socket() {
+        for bye in byes {
+            if let Err(error) = socket.send_to(&bye.bytes, &bye.target).await {
+                tracing::warn!(%error, target = %bye.target, session_id, "管理拆线发送 BYE 失败");
+            }
+        }
+    }
+    state.call_manager.terminate_call(&caller_call_id);
 
     crate::billing_settlement::settle_completed_call(
         &state,
-        &call_core::CallId::new(call_id.clone()),
+        &call_core::CallId::new(caller_call_id),
     );
 
     StatusCode::OK
@@ -630,7 +694,9 @@ async fn call_status(
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "call_id": call_id,
+            "session_id": tx.session_id,
+            "caller_call_id": tx.dialogs.caller.call_id,
+            "gateway_call_id": tx.dialogs.gateway.call_id,
             "caller": {
                 "muted": caller_muted,
                 "is_talking": caller_talking,

@@ -60,6 +60,8 @@ pub(crate) struct SipClusterStatus {
 pub(crate) struct SipNodeActionResult {
     status: String,
     active_calls: usize,
+    #[serde(default)]
+    advertised_addr: String,
 }
 
 /// 返回 Redis 心跳中仍在线的 SIP 信令节点。
@@ -275,7 +277,11 @@ async fn load_standalone_node(
         .await?;
     Ok(SipNodeStatus {
         node_id: "sip-edge-standalone".to_string(),
-        advertised_addr: "-".to_string(),
+        advertised_addr: if runtime.advertised_addr.is_empty() || runtime.advertised_addr == "-" {
+            "-".to_string()
+        } else {
+            runtime.advertised_addr
+        },
         management_url: state.sip_manage_base.clone(),
         router_mode: "direct".to_string(),
         status: runtime.status,

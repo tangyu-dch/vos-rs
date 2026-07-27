@@ -33,6 +33,7 @@ import { SettingsPage } from '@/pages/system/settings';
 import { LlmConfigPage } from '@/pages/settings/llm-config';
 
 import { CopilotPage } from '@/pages/operations/copilot';
+import { RwiConsolePage } from '@/pages/operations/rwi-console';
 
 function PrivateConsole() {
   const { session } = useAuth();
@@ -45,6 +46,7 @@ function PrivateConsole() {
         <Routes>
           <Route path="/" element={<Navigate to="/overview" replace />} />
           <Route path="/overview" element={<DashboardPage />} />
+          <Route path="/rwi" element={<RwiConsolePage />} />
           <Route path="/copilot" element={<CopilotPage />} />
           <Route path="/calls/active" element={<ActiveCallsPage />} />
           <Route path="/calls" element={<CallsPage />} />

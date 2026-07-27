@@ -297,7 +297,8 @@ impl AsrEngine {
                 let asr = guard
                     .as_mut()
                     .ok_or_else(|| "ASR 引擎未初始化".to_string())?;
-                let float_samples: Vec<f32> = samples_vec.iter().map(|&s| s as f32 / 32768.0).collect();
+                let float_samples: Vec<f32> =
+                    samples_vec.iter().map(|&s| s as f32 / 32768.0).collect();
                 let result = asr.transcribe(_sample_rate, &float_samples);
                 Ok(result.text)
             })

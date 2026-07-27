@@ -11,7 +11,7 @@ use axum::{
 
 use crate::{copilot, system::auth, AppState};
 
-use response::response_contract;
+pub(crate) use response::response_contract;
 use routes::*;
 
 /// Builds public v1 endpoints. These routes do not require a bearer token.

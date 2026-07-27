@@ -1,107 +1,15 @@
-use crate::sip::transaction::ClientTransactionKey;
-use crate::{
-    config::EdgeConfig,
-    edge_state::{parse_target_addr_from_route, sip_uri_from_peer, EdgeState, PendingDatagram},
-};
+use crate::{config::EdgeConfig, edge_state::EdgeState};
 use call_core::CallQualityMetrics;
-use sip_core::SipUri;
+use sip_core::{Method, SipUri};
 use std::{
-    net::SocketAddr,
     sync::Arc,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, SystemTime},
 };
 use tokio::net::UdpSocket;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
-use crate::handle_datagram;
 use crate::media;
-use crate::sip::outbound;
-
-pub(crate) fn spawn_client_transaction_retransmission(
-    edge_state: Arc<EdgeState>,
-    socket: Arc<UdpSocket>,
-    target: String,
-    bytes: Vec<u8>,
-    key: ClientTransactionKey,
-    edge_config: Arc<EdgeConfig>,
-) {
-    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-
-    let key_clone = key.clone();
-    edge_state.client_transactions.insert(key_clone, cancel_tx);
-    tokio::spawn(async move {
-        let is_invite = key.method == "INVITE";
-        // To make unit tests faster, we can scale down the initial T1 timer in tests.
-        // But for production, default is 500ms.
-        let mut t1 = if cfg!(test) {
-            Duration::from_millis(5)
-        } else {
-            Duration::from_millis(500)
-        };
-        let max_time = if cfg!(test) {
-            Duration::from_millis(50)
-        } else {
-            Duration::from_secs(32)
-        };
-        let start_time = Instant::now();
-
-        let mut cancel_rx = cancel_rx;
-        let mut completed = false;
-
-        loop {
-            tokio::select! {
-                _ = &mut cancel_rx => {
-                    completed = true;
-                    break;
-                }
-                _ = tokio::time::sleep(t1) => {
-                    let elapsed = start_time.elapsed();
-                    if elapsed >= max_time {
-                        break;
-                    }
-                    if let Err(error) = socket.send_to(&bytes, &target).await {
-                        warn!(%error, ?key, "failed to retransmit client transaction request");
-                    } else {
-                        debug!(?key, elapsed = ?elapsed, "retransmitted client transaction request");
-                    }
-                    if is_invite {
-                        t1 *= 2;
-                    } else {
-                        t1 = std::cmp::min(t1 * 2, Duration::from_secs(4));
-                    }
-                }
-            }
-        }
-
-        edge_state.client_transactions.remove(&key);
-
-        if !completed {
-            warn!(?key, "client transaction timed out without response");
-            if key.method == "INVITE" || key.method == "BYE" {
-                let local_503 = format!(
-                    "SIP/2.0 503 Service Unavailable\r\n\
-                     Via: SIP/2.0/UDP {target};branch={branch}\r\n\
-                     From: local;tag=timeout\r\n\
-                     To: local;tag=timeout\r\n\
-                     Call-ID: {call_id}\r\n\
-                     CSeq: 1 {method}\r\n\
-                     Content-Length: 0\r\n\r\n",
-                    target = target,
-                    branch = key.branch,
-                    call_id = key.call_id,
-                    method = key.method
-                );
-
-                let target_addr: SocketAddr = target
-                    .parse()
-                    .unwrap_or_else(|_| "127.0.0.1:5060".parse().unwrap());
-                let _ =
-                    handle_datagram(local_503.as_bytes(), target_addr, &edge_state, &edge_config)
-                        .await;
-            }
-        }
-    });
-}
+use crate::sip::{dialog_request, outbound};
 
 /// Periodically scans all active transactions and sends BYE to both legs
 /// of any call that has exceeded its negotiated Session-Expires timeout.
@@ -128,7 +36,6 @@ pub(crate) fn spawn_session_timer_watchdog(
             let refreshes_to_send = {
                 let mut tasks = Vec::new();
                 for mut entry in edge_state.inbound_transactions.iter_mut() {
-                    let call_id = entry.key().clone();
                     let tx = entry.value_mut();
                     let Some(expires) = tx.session_expires else {
                         continue;
@@ -147,252 +54,110 @@ pub(crate) fn spawn_session_timer_watchdog(
 
                         if is_to_gw || is_to_caller {
                             tx.last_session_refresh = Some(std::time::Instant::now());
-
-                            let next_cseq = if is_to_gw {
-                                let c = tx.last_outbound_cseq.unwrap_or(1) + 1;
-                                tx.last_outbound_cseq = Some(c);
-                                c
-                            } else {
-                                let c = tx.last_inbound_cseq.unwrap_or(1) + 1;
-                                tx.last_inbound_cseq = Some(c);
-                                c
+                            let Some(template) = tx.original_request.clone() else {
+                                continue;
                             };
-
-                            let (target_addr, req_uri, from_hdr, to_hdr, route_set) = if is_to_gw {
-                                let target = if !tx.outbound_route_set.is_empty() {
-                                    outbound::target_addr_for_str(&tx.outbound_route_set[0])
-                                } else {
-                                    outbound::target_addr_for(&tx.outbound_uri)
-                                };
-                                let uri = tx
-                                    .callee_contact
-                                    .as_ref()
-                                    .map(|u| u.to_string())
-                                    .unwrap_or_else(|| tx.outbound_uri.to_string());
-                                let from = tx
-                                    .original_request
-                                    .as_ref()
-                                    .and_then(|r| r.headers.get("from"))
-                                    .map(|v| v.as_str().to_string())
-                                    .unwrap_or_default();
-                                let to = format!(
-                                    "{};tag={}",
-                                    tx.original_request
-                                        .as_ref()
-                                        .and_then(|r| r.headers.get("to"))
-                                        .map(|v| v.as_str())
-                                        .unwrap_or_default(),
-                                    tx.inbound_to_tag.as_deref().unwrap_or("")
-                                );
-                                (target, uri, from, to, tx.outbound_route_set.clone())
+                            let dialog = if is_to_gw {
+                                &mut tx.dialogs.gateway
                             } else {
-                                let target = if !tx.inbound_route_set.is_empty() {
-                                    parse_target_addr_from_route(&tx.inbound_route_set[0])
-                                        .unwrap_or_else(|| tx.peer.clone())
-                                } else {
-                                    tx.peer.clone()
-                                };
-                                let uri = tx
-                                    .caller_contact
-                                    .as_ref()
-                                    .map(|u| u.to_string())
-                                    .unwrap_or_else(|| sip_uri_from_peer(&tx.peer).to_string());
-                                let from = format!(
-                                    "{};tag={}",
-                                    tx.original_request
-                                        .as_ref()
-                                        .and_then(|r| r.headers.get("to"))
-                                        .map(|v| v.as_str())
-                                        .unwrap_or_default(),
-                                    tx.inbound_to_tag.as_deref().unwrap_or("")
-                                );
-                                let to = tx
-                                    .original_request
-                                    .as_ref()
-                                    .and_then(|r| r.headers.get("from"))
-                                    .map(|v| v.as_str().to_string())
-                                    .unwrap_or_default();
-                                (target, uri, from, to, tx.inbound_route_set.clone())
+                                &mut tx.dialogs.caller
                             };
-
-                            let route_headers = route_set
-                                .iter()
-                                .map(|r| format!("Route: {r}\r\n"))
-                                .collect::<Vec<_>>()
-                                .join("");
-                            let branch = format!("z9hG4bK-refresh-{}-{}", is_to_gw, next_cseq);
-
-                            let update_req = format!(
-                                "UPDATE {req_uri} SIP/2.0\r\n\
-                                 Via: SIP/2.0/UDP {addr};branch={branch}\r\n\
-                                 Max-Forwards: 70\r\n\
-                                 From: {from_hdr}\r\n\
-                                 To: {to_hdr}\r\n\
-                                 Call-ID: {call_id}\r\n\
-                                 CSeq: {next_cseq} UPDATE\r\n\
-                                 Supported: timer\r\n\
-                                 Session-Expires: {expires};refresher={refresher}\r\n\
-                                 {route_headers}\
-                                 Content-Length: 0\r\n\r\n",
-                                req_uri = req_uri,
-                                addr = edge_config.advertised_addr,
-                                branch = branch,
-                                from_hdr = from_hdr,
-                                to_hdr = to_hdr,
-                                call_id = call_id,
-                                next_cseq = next_cseq,
-                                expires = expires,
-                                refresher = refresher,
-                                route_headers = route_headers
-                            );
-
-                            tasks.push((target_addr, update_req.into_bytes()));
+                            if dialog.call_id.is_empty() || dialog.remote_tag.is_none() {
+                                continue;
+                            }
+                            if let Some(datagram) = dialog_request::build_dialog_request(
+                                &template,
+                                dialog,
+                                Method::Update,
+                                &edge_config.advertised_addr,
+                                &[],
+                            ) {
+                                tasks.push(datagram);
+                            }
                         }
                     }
                 }
                 tasks
             };
 
-            for (target_addr, bytes) in refreshes_to_send {
+            for datagram in refreshes_to_send {
                 let _ = edge_state
-                    .send_sip_datagram(
-                        PendingDatagram::new(target_addr, bytes),
-                        &socket,
-                        &edge_config,
-                    )
+                    .send_sip_datagram(datagram, &socket, &edge_config)
                     .await;
             }
 
             // 2. Collect expired calls without holding the lock during async I/O
-            let expired: Vec<(String, String, String, String)> = {
-                edge_state
-                    .inbound_transactions
-                    .iter()
-                    .filter_map(|entry| {
-                        let call_id = entry.key().clone();
-                        let tx = entry.value();
-
-                        // Check 1: Balance exhaustion
-                        if let (Some(est), Some(max_dur)) =
-                            (tx.established_at, tx.max_duration_secs)
-                        {
-                            if max_dur > 0 && est.elapsed().as_secs() >= u64::from(max_dur) {
-                                warn!(
-                                    call_id,
-                                    max_duration = max_dur,
-                                    "real-time balance exhausted — sending BYE to both legs"
-                                );
-                                return Some((
-                                    call_id.clone(),
-                                    tx.peer.clone(),
-                                    tx.outbound_uri.to_string(),
-                                    "balance exhausted".to_string(),
-                                ));
-                            }
-                        }
-
-                        // Check 2: Session Timer expiration
-                        if let (Some(expires), Some(last_refresh)) =
-                            (tx.session_expires, tx.last_session_refresh)
-                        {
-                            let elapsed = last_refresh.elapsed().as_secs();
-                            if elapsed >= u64::from(expires) {
-                                warn!(
-                                    call_id,
-                                    elapsed,
-                                    session_expires = expires,
-                                    "session timer expired — sending BYE to both legs"
-                                );
-                                return Some((
-                                    call_id.clone(),
-                                    tx.peer.clone(),
-                                    tx.outbound_uri.to_string(),
-                                    "session timer expired".to_string(),
-                                ));
-                            }
-                        }
-
+            let expired = {
+                let mut calls = Vec::new();
+                for mut entry in edge_state.inbound_transactions.iter_mut() {
+                    let session_id = entry.key().clone();
+                    let tx = entry.value_mut();
+                    let reason = if let (Some(established), Some(max_duration)) =
+                        (tx.established_at, tx.max_duration_secs)
+                    {
+                        (max_duration > 0
+                            && established.elapsed().as_secs() >= u64::from(max_duration))
+                        .then_some("balance exhausted")
+                    } else {
                         None
-                    })
-                    .collect()
+                    }
+                    .or_else(|| {
+                        let expires = tx.session_expires?;
+                        let refreshed = tx.last_session_refresh?;
+                        (refreshed.elapsed().as_secs() >= u64::from(expires))
+                            .then_some("session timer expired")
+                    });
+                    let Some(reason) = reason else {
+                        continue;
+                    };
+
+                    let caller_call_id = tx.dialogs.caller.call_id.clone();
+                    let username = tx.original_request.as_ref().and_then(|request| {
+                        crate::edge_state::EdgeState::username_from_request(request)
+                    });
+                    let datagrams =
+                        dialog_request::build_session_byes(tx, &edge_config.advertised_addr);
+                    warn!(
+                        session_id,
+                        caller_call_id, reason, "watchdog terminating B2BUA session"
+                    );
+                    calls.push((
+                        session_id,
+                        caller_call_id,
+                        username,
+                        reason.to_string(),
+                        datagrams,
+                    ));
+                }
+                calls
             };
 
-            for (call_id, caller_peer, gateway_uri, reason) in expired {
-                // Build a BYE toward the caller
-                let caller_bye = format!(
-                    "BYE sip:{caller} SIP/2.0\r\n\
-                     Via: SIP/2.0/UDP {addr};branch=z9hG4bK-watchdog-{call_id}\r\n\
-                     Max-Forwards: 70\r\n\
-                     From: <sip:watchdog@{addr}>;tag=watchdog\r\n\
-                     To: <sip:{caller}>\r\n\
-                     Call-ID: {call_id}\r\n\
-                     CSeq: 9 BYE\r\n\
-                     Content-Length: 0\r\n\r\n",
-                    caller = caller_peer,
-                    addr = edge_config.advertised_addr,
-                    call_id = call_id
-                );
-                let _ = edge_state
-                    .send_sip_datagram(
-                        PendingDatagram::new(caller_peer, caller_bye.into_bytes()),
-                        &socket,
-                        &edge_config,
-                    )
-                    .await;
+            for (session_id, caller_call_id, username, reason, datagrams) in expired {
+                for datagram in datagrams {
+                    let _ = edge_state
+                        .send_sip_datagram(datagram, &socket, &edge_config)
+                        .await;
+                }
 
-                // Build a BYE toward the gateway
-                let gw_bye = format!(
-                    "BYE {gw_uri} SIP/2.0\r\n\
-                     Via: SIP/2.0/UDP {addr};branch=z9hG4bK-watchdog-gw-{call_id}\r\n\
-                     Max-Forwards: 70\r\n\
-                     From: <sip:watchdog@{addr}>;tag=watchdog\r\n\
-                     To: <{gw_uri}>\r\n\
-                     Call-ID: {call_id}\r\n\
-                     CSeq: 9 BYE\r\n\
-                     Content-Length: 0\r\n\r\n",
-                    gw_uri = gateway_uri,
-                    addr = edge_config.advertised_addr,
-                    call_id = call_id
-                );
-                let _ = edge_state
-                    .send_sip_datagram(
-                        PendingDatagram::new(
-                            outbound::target_addr_for_str(&gateway_uri),
-                            gw_bye.into_bytes(),
-                        ),
-                        &socket,
-                        &edge_config,
-                    )
-                    .await;
-
-                // 清理事务前先递减用户并发计数
-                let username = edge_state
-                    .inbound_transactions
-                    .get(&call_id)
-                    .and_then(|tx| {
-                        tx.original_request.as_ref().and_then(|req| {
-                            crate::edge_state::EdgeState::username_from_request(req)
-                        })
-                    });
                 if let Some(ref uname) = username {
                     edge_state.decrement_user_concurrency(uname);
                 }
                 // Clean up the transaction and call state
-                edge_state.inbound_transactions.remove(&call_id);
+                edge_state.teardown_call_transaction(&session_id);
                 // Decrement active call count for the gateway before terminating.
-                if let Some(gw_id) = edge_state.call_manager.current_gateway_id(&call_id) {
+                if let Some(gw_id) = edge_state.call_manager.current_gateway_id(&caller_call_id) {
                     edge_state.gateway_health.decrement_active(&gw_id);
                 }
                 edge_state
                     .call_manager
-                    .terminate_call_with_reason(&call_id, &reason);
+                    .terminate_call_with_reason(&caller_call_id, &reason);
 
                 crate::billing_settlement::settle_completed_call(
                     &edge_state,
-                    &call_core::CallId::new(call_id.clone()),
+                    &call_core::CallId::new(caller_call_id.clone()),
                 );
 
-                info!(call_id, "session-expired call terminated by watchdog");
+                info!(session_id, caller_call_id, "watchdog terminated call");
             }
 
             // 2. 异步后台清理过期的 nonce 防重放记录，避免影响鉴权热路径性能

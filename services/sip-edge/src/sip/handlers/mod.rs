@@ -35,6 +35,13 @@ pub(crate) async fn handle_request(
         return handle_register_request(request, peer, edge_state, edge_config).await;
     }
 
+    // ACK belongs to the receiving B2BUA leg. The dispatcher uses it to
+    // terminate the INVITE server transaction; it is never routed as a new
+    // request to the opposite leg.
+    if matches!(&request.method, Method::Ack) {
+        return Vec::new();
+    }
+
     if matches!(&request.method, Method::Message) {
         let to_tag = request
             .headers

@@ -5,21 +5,6 @@
 //! - **本地文件系统**：开发和小规模部署
 //! - **阿里云 OSS**：生产环境云存储
 //! - **双写模式**：本地 + OSS 同时写入，保证数据安全
-//!
-//! ## 配置
-//!
-//! 通过 `StorageConfig` 配置存储后端：
-//! - `kind`：后端类型（local/oss/dual）
-//! - `base_dir`：本地存储目录
-//! - `oss_endpoint`：OSS 端点
-//! - `oss_bucket`：OSS 桶名
-//! - `oss_access_key`：OSS 访问密钥
-//!
-//! ## 使用场景
-//!
-//! - 录音文件存储
-//! - CDR 导出文件
-//! - 系统配置文件
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -94,6 +79,9 @@ pub trait StorageBackend: Send + Sync {
     /// 返回后端类型名称。
     fn backend_name(&self) -> &str;
 }
+
+/// `StorageEngine` 是 `StorageBackend` 的特征别名/同义接口。
+pub use StorageBackend as StorageEngine;
 
 /// 根据存储配置创建对应的存储后端。
 pub async fn create_storage(
@@ -170,7 +158,6 @@ pub async fn create_storage(
 }
 
 /// 双写存储：先写 OSS，失败时回退到本地存储。
-/// 同时支持从两个后端读取。
 pub struct DualStorage {
     primary: Box<dyn StorageBackend>,
     fallback: Box<dyn StorageBackend>,

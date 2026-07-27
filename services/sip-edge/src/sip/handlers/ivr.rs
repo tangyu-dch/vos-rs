@@ -20,13 +20,14 @@ pub(crate) async fn handle_ivr_locally(
         .get("call-id")
         .map(|v| v.as_str().to_string())
         .unwrap_or_default();
+    let session_id = uuid::Uuid::new_v4().to_string();
 
     info!(call_id = %internal_call_id, ivr_id = %did_dest.target_id, "呼入呼叫进入本地 IVR 流程");
 
     // 1. 分配 A-leg 本地媒体端点
     let a_relay_endpoint = match edge_state
         .media_relay
-        .allocate_endpoint_for_call(&edge_config.media, &internal_call_id)
+        .allocate_endpoint_for_call(&edge_config.media, &session_id)
     {
         Ok(ep) => ep,
         Err(e) => {
@@ -107,6 +108,7 @@ pub(crate) async fn handle_ivr_locally(
 
     // 记录呼入 invite 并响应 200 OK
     edge_state.remember_inbound_invite(
+        session_id.clone(),
         &request,
         peer,
         request.uri.clone(),
@@ -147,11 +149,9 @@ pub(crate) async fn handle_ivr_locally(
     );
 
     // 启动 DTMF 检测
-    edge_state.media_relay.register_port_dtmf_tracking(
-        &internal_call_id,
-        a_relay_endpoint.port,
-        101,
-    );
+    edge_state
+        .media_relay
+        .register_port_dtmf_tracking(&session_id, a_relay_endpoint.port, 101);
 
     // 查找 IVR 菜单
     let menu = edge_state
@@ -178,11 +178,7 @@ pub(crate) async fn handle_ivr_locally(
     let request_clone = request.clone();
 
     // 有拓扑画布时走拓扑执行引擎，否则走扁平 DTMF 表（向后兼容）
-    if let Some(topology) = ivr_menu
-        .topology
-        .as_ref()
-        .filter(|t| !t.nodes.is_empty())
-    {
+    if let Some(topology) = ivr_menu.topology.as_ref().filter(|t| !t.nodes.is_empty()) {
         spawn_topology_execution(
             edge_state_clone,
             edge_config_clone,
@@ -204,6 +200,7 @@ pub(crate) async fn handle_ivr_locally(
             edge_state_clone,
             edge_config_clone,
             internal_call_id_clone,
+            session_id,
             a_port,
             request_clone,
             peer,
@@ -265,6 +262,7 @@ async fn run_ivr_menu_loop(
     edge_state: Arc<EdgeState>,
     edge_config: Arc<EdgeConfig>,
     call_id: String,
+    media_session_id: String,
     a_port: u16,
     request: SipRequest,
     peer: SocketAddr,
@@ -304,7 +302,7 @@ async fn run_ivr_menu_loop(
                 return;
             }
 
-            if let Some(digits) = edge_state.media_relay.get_dtmf_digits(&call_id) {
+            if let Some(digits) = edge_state.media_relay.get_dtmf_digits(&media_session_id) {
                 if digits.len() > accum.len() {
                     let new_digit = digits.chars().last().unwrap();
                     accum.push(new_digit);
@@ -461,11 +459,19 @@ async fn execute_ivr_action(
 
             // 发起 B-leg Outbound 呼叫
             let b_call_id = uuid::Uuid::new_v4().to_string();
-            edge_state.register_call_id_mapping(call_id, &b_call_id);
+            let Some(session_id) = edge_state
+                .inbound_transactions
+                .get(call_id)
+                .map(|transaction| transaction.session_id.clone())
+            else {
+                warn!(call_id, "IVR 转接会话已不存在");
+                return;
+            };
+            edge_state.bind_gateway_dialog(&session_id, &b_call_id);
 
             let b_relay_endpoint = match edge_state
                 .media_relay
-                .allocate_endpoint_for_call(&edge_config.media, &b_call_id)
+                .allocate_endpoint_for_call(&edge_config.media, &session_id)
             {
                 Ok(ep) => ep,
                 Err(e) => {
@@ -503,17 +509,25 @@ async fn execute_ivr_action(
                 .clone()
                 .unwrap_or_else(|| outbound::target_addr_for(&uri));
 
-            let invite_bytes =
-                outbound::build_outbound_invite_with_session_timer_call_id_and_caller(
-                    template_request,
-                    &uri,
-                    &edge_config.advertised_addr,
-                    sdp_offer.as_bytes(),
-                    edge_config.session_expires_gateway,
-                    &[],
-                    &b_call_id,
-                    None,
-                );
+            let Some(gateway_local_tag) = edge_state
+                .inbound_transactions
+                .get(&session_id)
+                .map(|transaction| transaction.dialogs.gateway.local_tag.clone())
+            else {
+                warn!(call_id, "IVR 转接 B-leg 会话已不存在");
+                return;
+            };
+            let invite_bytes = outbound::build_b2bua_outbound_invite(
+                template_request,
+                &uri,
+                &edge_config.advertised_addr,
+                sdp_offer.as_bytes(),
+                edge_config.session_expires_gateway,
+                &[],
+                &b_call_id,
+                &gateway_local_tag,
+                None,
+            );
 
             let socket_sender = edge_state.socket.get().expect("socket initialized");
             if let Ok(addr) = target_peer.parse::<SocketAddr>() {
@@ -672,9 +686,14 @@ mod tests {
         edge_state.socket.set(Arc::new(socket)).unwrap();
 
         let dummy_transaction = InboundTransaction {
+            session_id: "test-session-123".to_string(),
+            dialogs: crate::edge_state::B2buaDialogPair::placeholder(
+                "test-call-id-123",
+                SipUri::from_str("sip:13800138000@example.com").unwrap(),
+                "127.0.0.1:5060",
+            ),
             peer: "127.0.0.1:5060".to_string(),
             outbound_peer: None,
-            vias: vec![],
             outbound_uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
             inbound_from_tag: None,
             inbound_to_tag: None,
@@ -695,14 +714,9 @@ mod tests {
             prack_rseq: 0,
             gateway_100rel: false,
             refer_subscription: None,
-            transfer_from_header: None,
-            transfer_to_header: None,
-            transfer_call_id: None,
-            transfer_contact: None,
-            transfer_peer: None,
-            transferee_is_caller: false,
+            transfer_dialog: None,
             callee_behind_nat: false,
-            active_forks: vec![],
+            fork_dialogs: Default::default(),
             max_duration_secs: None,
             established_at: None,
             invite_response_order: Arc::new(tokio::sync::Mutex::new(
@@ -751,13 +765,11 @@ mod tests {
         )
         .await;
 
-        let b_call_id = edge_state.get_external_call_id("test-call-id-123");
-        assert!(b_call_id.is_some());
-
         let transaction = edge_state
             .inbound_transactions
             .get("test-call-id-123")
             .unwrap();
+        assert!(!transaction.dialogs.gateway.call_id.is_empty());
         assert!(transaction.gateway_relay_rtp.is_some());
     }
 
@@ -857,9 +869,14 @@ mod tests {
         edge_state.inbound_transactions.insert(
             "test-call-id-retry".to_string(),
             InboundTransaction {
+                session_id: "test-session-retry".to_string(),
+                dialogs: crate::edge_state::B2buaDialogPair::placeholder(
+                    "test-call-id-retry",
+                    SipUri::from_str("sip:13800138000@example.com").unwrap(),
+                    "127.0.0.1:5060",
+                ),
                 peer: "127.0.0.1:5060".to_string(),
                 outbound_peer: None,
-                vias: vec![],
                 outbound_uri: SipUri::from_str("sip:13800138000@example.com").unwrap(),
                 inbound_from_tag: None,
                 inbound_to_tag: None,
@@ -880,14 +897,9 @@ mod tests {
                 prack_rseq: 0,
                 gateway_100rel: false,
                 refer_subscription: None,
-                transfer_from_header: None,
-                transfer_to_header: None,
-                transfer_call_id: None,
-                transfer_contact: None,
-                transfer_peer: None,
-                transferee_is_caller: false,
+                transfer_dialog: None,
                 callee_behind_nat: false,
-                active_forks: vec![],
+                fork_dialogs: Default::default(),
                 max_duration_secs: None,
                 established_at: None,
                 invite_response_order: Arc::new(tokio::sync::Mutex::new(
@@ -909,6 +921,7 @@ mod tests {
             edge_state.clone(),
             Arc::new(EdgeConfig::default()),
             "test-call-id-retry".to_string(),
+            "test-session-retry".to_string(),
             40002,
             template_request.clone(),
             "127.0.0.1:5060".parse().unwrap(),

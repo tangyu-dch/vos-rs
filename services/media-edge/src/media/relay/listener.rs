@@ -222,15 +222,27 @@ pub(crate) async fn relay_media_port(
                 );
             }
 
-            let Some(target) = plan.target else {
+            let port_session = relay.port_sessions.get(local_port);
+            let target = port_session
+                .as_ref()
+                .and_then(|s| s.get_target())
+                .or(plan.target);
+            let Some(target) = target else {
                 fast_path_counters.flush(&relay, local_port);
                 continue;
             };
-            if let Err(error) = socket.send_to(packet, target).await {
+            let egress_socket = plan
+                .egress_socket
+                .as_deref()
+                .unwrap_or_else(|| socket.as_ref());
+            if let Err(error) = egress_socket.send_to(packet, target).await {
                 fast_path_counters.record_send_error();
                 warn!(%error, %source, %target, local_port, "failed to relay RTP packet on fast path");
             } else {
                 fast_path_counters.record_forwarded();
+                if let Some(session) = port_session {
+                    session.record_forwarded_packet(packet.len());
+                }
             }
             fast_path_counters.flush_if_needed(&relay, local_port);
             continue;
@@ -569,7 +581,11 @@ pub(crate) async fn relay_media_port(
             None
         };
         let outbound_packet = web_rtc_encrypted.as_deref().unwrap_or(outbound_packet);
-        if let Err(error) = socket.send_to(outbound_packet, target).await {
+        let egress_socket = plan
+            .egress_socket
+            .as_deref()
+            .unwrap_or_else(|| socket.as_ref());
+        if let Err(error) = egress_socket.send_to(outbound_packet, target).await {
             relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
             warn!(%error, %source, %target, local_port, packet_kind = packet_kind.label(), "failed to relay media packet");
             continue;

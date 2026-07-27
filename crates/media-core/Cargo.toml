@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+dashmap = "6.1.0"
 libc = "0.2"
 opus = "0.3.0"
 rtp-core = { path = "../rtp-core" }
@@ -13,5 +14,5 @@ sdp-core = { path = "../sdp-core" }
 rubato = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "sync"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 tracing = "0.1"

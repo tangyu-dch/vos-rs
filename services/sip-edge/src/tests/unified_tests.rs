@@ -277,18 +277,29 @@ async fn register_contact(edge_state: &EdgeState, user: &str, host: &str, port: 
 }
 
 async fn send_gateway_ok(edge_state: &EdgeState, call_id: &str) {
+    let (gateway_call_id, gateway_local_tag) = {
+        let transaction = edge_state
+            .inbound_transactions
+            .get(call_id)
+            .expect("B2BUA session must exist before the gateway answer");
+        (
+            transaction.dialogs.gateway.call_id.clone(),
+            transaction.dialogs.gateway.local_tag.clone(),
+        )
+    };
     let gateway_response = format!(
         concat!(
             "SIP/2.0 200 OK\r\n",
             "Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n",
-            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "From: <sip:1001@example.com>;tag={gateway_local_tag}\r\n",
             "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-            "Call-ID: {call_id}\r\n",
+            "Call-ID: {gateway_call_id}\r\n",
             "CSeq: 1 INVITE\r\n",
             "Content-Length: 0\r\n",
             "\r\n"
         ),
-        call_id = call_id
+        gateway_call_id = gateway_call_id,
+        gateway_local_tag = gateway_local_tag,
     );
 
     let datagrams = handle_datagram(
@@ -302,6 +313,28 @@ async fn send_gateway_ok(edge_state: &EdgeState, call_id: &str) {
     assert!(datagrams
         .iter()
         .any(|datagram| datagram_text(datagram).starts_with("ACK ")));
+}
+
+fn caller_local_tag(edge_state: &EdgeState, call_id: &str) -> String {
+    edge_state
+        .inbound_transactions
+        .get(call_id)
+        .expect("B2BUA session must exist")
+        .dialogs
+        .caller
+        .local_tag
+        .clone()
+}
+
+fn gateway_dialog(edge_state: &EdgeState, call_id: &str) -> (String, String) {
+    let transaction = edge_state
+        .inbound_transactions
+        .get(call_id)
+        .expect("B2BUA session must exist");
+    (
+        transaction.dialogs.gateway.call_id.clone(),
+        transaction.dialogs.gateway.local_tag.clone(),
+    )
 }
 
 #[test]
@@ -799,7 +832,7 @@ async fn replies_to_invite_with_trying_and_dispatches_outbound_invite() {
     assert!(!response.contains("To: <sip:13800138000@example.com>;tag="));
 
     let outbound_invite = datagram_text(&datagrams[1]);
-    assert_eq!(datagrams[1].target, "gw1.example.com:5060");
+    assert_eq!(datagrams[1].target, "198.51.100.20:5060");
     assert!(outbound_invite
         .starts_with("INVITE sip:13800138000@gw1.example.com:5060;transport=udp SIP/2.0\r\n"));
     assert!(outbound_invite.contains("Via: SIP/2.0/UDP edge.example.com:5060;branch="));
@@ -1080,8 +1113,8 @@ async fn outbound_failure_releases_rtp_port_lease() {
         &edge_config,
     )
     .await;
-    assert_eq!(failure_datagrams.len(), 1);
-    assert!(datagram_text(&failure_datagrams[0]).starts_with("SIP/2.0 486 Busy Here\r\n"));
+    assert_eq!(failure_datagrams.len(), 2);
+    assert!(datagram_text(&failure_datagrams[1]).starts_with("SIP/2.0 486 Busy Here\r\n"));
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -1329,16 +1362,22 @@ async fn forwards_gateway_ringing_response_to_inbound_peer() {
         "\r\n"
     );
     let _ = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
+    let caller_to_tag = caller_local_tag(&edge_state, "invite-2@example.com");
+    let (gateway_call_id, gateway_from_tag) = gateway_dialog(&edge_state, "invite-2@example.com");
 
-    let gateway_response = concat!(
-        "SIP/2.0 180 Ringing\r\n",
-        "Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n",
-        "From: <sip:1001@example.com>;tag=from-tag\r\n",
-        "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-        "Call-ID: invite-2@example.com\r\n",
-        "CSeq: 1 INVITE\r\n",
-        "Content-Length: 0\r\n",
-        "\r\n"
+    let gateway_response = format!(
+        concat!(
+            "SIP/2.0 180 Ringing\r\n",
+            "Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n",
+            "From: <sip:1001@example.com>;tag={gateway_from_tag}\r\n",
+            "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
+            "Call-ID: {gateway_call_id}\r\n",
+            "CSeq: 1 INVITE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        gateway_from_tag = gateway_from_tag,
+        gateway_call_id = gateway_call_id,
     );
 
     let datagrams = handle_datagram(
@@ -1353,7 +1392,9 @@ async fn forwards_gateway_ringing_response_to_inbound_peer() {
     let response = datagram_text(&datagrams[0]);
     assert!(response.starts_with("SIP/2.0 180 Ringing\r\n"));
     assert!(response.contains("Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-inbound\r\n"));
-    assert!(response.contains("To: <sip:13800138000@example.com>;tag=gw-tag\r\n"));
+    assert!(response.contains(&format!(
+        "To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n"
+    )));
 
     let call_guard = &edge_state.call_manager;
     let call = call_guard
@@ -1403,9 +1444,15 @@ async fn forwards_gateway_ok_with_sdp_and_establishes_call() {
         .inbound_transactions
         .get("invite-3@example.com")
         .expect("transaction should be remembered");
-    assert_eq!(transaction.inbound_from_tag.as_deref(), Some("from-tag"));
-    assert_eq!(transaction.inbound_to_tag.as_deref(), Some("gw-tag"));
-    assert_eq!(transaction.last_inbound_cseq, Some(1));
+    assert_eq!(
+        transaction.dialogs.caller.remote_tag.as_deref(),
+        Some("from-tag")
+    );
+    assert_eq!(
+        transaction.dialogs.gateway.remote_tag.as_deref(),
+        Some("gw-tag")
+    );
+    assert_eq!(transaction.dialogs.caller.remote_cseq, Some(1));
 }
 
 #[tokio::test]
@@ -1567,7 +1614,7 @@ async fn pairs_rtp_relay_ports_after_sdp_offer_answer() {
 }
 
 #[tokio::test]
-async fn forwards_inbound_ack_to_gateway_without_response() {
+async fn caller_ack_is_consumed_after_gateway_leg_was_acknowledged() {
     let edge_state = state_with_default_route();
     send_invite(&edge_state, "invite-4@example.com").await;
     send_gateway_ok(&edge_state, "invite-4@example.com").await;
@@ -1586,18 +1633,14 @@ async fn forwards_inbound_ack_to_gateway_without_response() {
 
     let datagrams = handle_datagram(ack.as_bytes(), peer(), &edge_state, &edge_config()).await;
 
-    assert_eq!(datagrams.len(), 1);
-    assert_eq!(datagrams[0].target, "gw1.example.com:5060");
-
-    let outbound_ack = datagram_text(&datagrams[0]);
-    assert!(outbound_ack
-        .starts_with("ACK sip:13800138000@gw1.example.com:5060;transport=udp SIP/2.0\r\n"));
-    assert!(outbound_ack.contains("CSeq: 1 ACK\r\n"));
-    assert!(outbound_ack.contains("Content-Length: 0\r\n\r\n"));
+    assert!(datagrams.is_empty());
+    assert!(edge_state
+        .inbound_transactions
+        .contains_key("invite-4@example.com"));
 }
 
 #[tokio::test]
-async fn retransmitted_ack_is_forwarded_instead_of_cached() {
+async fn retransmitted_caller_ack_does_not_duplicate_gateway_ack() {
     let edge_state = state_with_default_route();
     send_invite(&edge_state, "invite-ack-retry@example.com").await;
     send_gateway_ok(&edge_state, "invite-ack-retry@example.com").await;
@@ -1617,12 +1660,11 @@ async fn retransmitted_ack_is_forwarded_instead_of_cached() {
     let first = handle_datagram(ack.as_bytes(), peer(), &edge_state, &edge_config()).await;
     let second = handle_datagram(ack.as_bytes(), peer(), &edge_state, &edge_config()).await;
 
-    assert_eq!(first.len(), 1);
-    assert_eq!(second.len(), 1);
-    assert_eq!(first[0].target, "gw1.example.com:5060");
-    assert_eq!(second[0].target, "gw1.example.com:5060");
-    assert!(datagram_text(&second[0])
-        .starts_with("ACK sip:13800138000@gw1.example.com:5060;transport=udp SIP/2.0\r\n"));
+    assert!(first.is_empty());
+    assert!(second.is_empty());
+    assert!(edge_state
+        .inbound_transactions
+        .contains_key("invite-ack-retry@example.com"));
 }
 
 #[tokio::test]
@@ -1630,6 +1672,7 @@ async fn inbound_info_gets_ok_and_is_forwarded_to_gateway_with_body() {
     let edge_state = state_with_default_route();
     send_invite(&edge_state, "invite-info@example.com").await;
     send_gateway_ok(&edge_state, "invite-info@example.com").await;
+    let local_tag = caller_local_tag(&edge_state, "invite-info@example.com");
     let body = "Signal=1\r\nDuration=160\r\n";
     let info = format!(
         concat!(
@@ -1637,7 +1680,7 @@ async fn inbound_info_gets_ok_and_is_forwarded_to_gateway_with_body() {
             "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-info\r\n",
             "Max-Forwards: 70\r\n",
             "From: <sip:1001@example.com>;tag=from-tag\r\n",
-            "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
+            "To: <sip:13800138000@example.com>;tag={local_tag}\r\n",
             "Call-ID: invite-info@example.com\r\n",
             "CSeq: 2 INFO\r\n",
             "Content-Type: application/dtmf-relay\r\n",
@@ -1646,22 +1689,22 @@ async fn inbound_info_gets_ok_and_is_forwarded_to_gateway_with_body() {
             "{}"
         ),
         body.len(),
-        body
+        body,
+        local_tag = local_tag,
     );
 
     let datagrams = handle_datagram(info.as_bytes(), peer(), &edge_state, &edge_config()).await;
 
     assert_eq!(datagrams.len(), 2);
     assert_eq!(datagrams[0].target, "192.0.2.10:5060");
-    assert_eq!(datagrams[1].target, "gw1.example.com:5060");
+    assert_eq!(datagrams[1].target, "198.51.100.20:5060");
 
     let response = datagram_text(&datagrams[0]);
     assert!(response.starts_with("SIP/2.0 200 OK\r\n"));
     assert!(response.contains("CSeq: 2 INFO\r\n"));
 
     let outbound_info = datagram_text(&datagrams[1]);
-    assert!(outbound_info
-        .starts_with("INFO sip:13800138000@gw1.example.com:5060;transport=udp SIP/2.0\r\n"));
+    assert!(outbound_info.starts_with("INFO "));
     assert!(outbound_info.contains("CSeq: 2 INFO\r\n"));
     assert!(outbound_info.contains("Content-Type: application/dtmf-relay\r\n"));
     assert!(outbound_info.contains("Content-Length: 24\r\n\r\nSignal=1\r\nDuration=160\r\n"));
@@ -1672,6 +1715,7 @@ async fn retransmitted_info_replays_ok_without_duplicate_outbound_info() {
     let edge_state = state_with_default_route();
     send_invite(&edge_state, "invite-info-retry@example.com").await;
     send_gateway_ok(&edge_state, "invite-info-retry@example.com").await;
+    let local_tag = caller_local_tag(&edge_state, "invite-info-retry@example.com");
     let body = "Signal=2\r\nDuration=120\r\n";
     let info = format!(
         concat!(
@@ -1679,7 +1723,7 @@ async fn retransmitted_info_replays_ok_without_duplicate_outbound_info() {
             "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-info-retry\r\n",
             "Max-Forwards: 70\r\n",
             "From: <sip:1001@example.com>;tag=from-tag\r\n",
-            "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
+            "To: <sip:13800138000@example.com>;tag={local_tag}\r\n",
             "Call-ID: invite-info-retry@example.com\r\n",
             "CSeq: 2 INFO\r\n",
             "Content-Type: application/dtmf-relay\r\n",
@@ -1688,7 +1732,8 @@ async fn retransmitted_info_replays_ok_without_duplicate_outbound_info() {
             "{}"
         ),
         body.len(),
-        body
+        body,
+        local_tag = local_tag,
     );
 
     let first = handle_datagram(info.as_bytes(), peer(), &edge_state, &edge_config()).await;
@@ -1760,30 +1805,37 @@ async fn in_dialog_request_with_stale_cseq_receives_server_error_without_forward
     let edge_state = state_with_default_route();
     send_invite(&edge_state, "invite-stale-cseq@example.com").await;
     send_gateway_ok(&edge_state, "invite-stale-cseq@example.com").await;
-    let info = concat!(
-        "INFO sip:13800138000@example.com SIP/2.0\r\n",
-        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-info-before-stale\r\n",
-        "Max-Forwards: 70\r\n",
-        "From: <sip:1001@example.com>;tag=from-tag\r\n",
-        "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-        "Call-ID: invite-stale-cseq@example.com\r\n",
-        "CSeq: 2 INFO\r\n",
-        "Content-Length: 0\r\n",
-        "\r\n"
+    let local_tag = caller_local_tag(&edge_state, "invite-stale-cseq@example.com");
+    let info = format!(
+        concat!(
+            "INFO sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-info-before-stale\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "To: <sip:13800138000@example.com>;tag={local_tag}\r\n",
+            "Call-ID: invite-stale-cseq@example.com\r\n",
+            "CSeq: 2 INFO\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        local_tag = local_tag
     );
     let first = handle_datagram(info.as_bytes(), peer(), &edge_state, &edge_config()).await;
     assert_eq!(first.len(), 2);
 
-    let stale_bye = concat!(
-        "BYE sip:13800138000@example.com SIP/2.0\r\n",
-        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-stale-bye\r\n",
-        "Max-Forwards: 70\r\n",
-        "From: <sip:1001@example.com>;tag=from-tag\r\n",
-        "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-        "Call-ID: invite-stale-cseq@example.com\r\n",
-        "CSeq: 2 BYE\r\n",
-        "Content-Length: 0\r\n",
-        "\r\n"
+    let stale_bye = format!(
+        concat!(
+            "BYE sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-stale-bye\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "To: <sip:13800138000@example.com>;tag={local_tag}\r\n",
+            "Call-ID: invite-stale-cseq@example.com\r\n",
+            "CSeq: 2 BYE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        local_tag = local_tag
     );
 
     let datagrams =
@@ -1809,32 +1861,35 @@ async fn inbound_bye_gets_ok_and_is_forwarded_to_gateway() {
     let edge_state = state_with_default_route();
     send_invite(&edge_state, "invite-5@example.com").await;
     send_gateway_ok(&edge_state, "invite-5@example.com").await;
+    let local_tag = caller_local_tag(&edge_state, "invite-5@example.com");
 
-    let bye = concat!(
-        "BYE sip:13800138000@example.com SIP/2.0\r\n",
-        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-bye\r\n",
-        "Max-Forwards: 70\r\n",
-        "From: <sip:1001@example.com>;tag=from-tag\r\n",
-        "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-        "Call-ID: invite-5@example.com\r\n",
-        "CSeq: 2 BYE\r\n",
-        "Content-Length: 0\r\n",
-        "\r\n"
+    let bye = format!(
+        concat!(
+            "BYE sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-bye\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "To: <sip:13800138000@example.com>;tag={local_tag}\r\n",
+            "Call-ID: invite-5@example.com\r\n",
+            "CSeq: 2 BYE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        local_tag = local_tag
     );
 
     let datagrams = handle_datagram(bye.as_bytes(), peer(), &edge_state, &edge_config()).await;
 
     assert_eq!(datagrams.len(), 2);
     assert_eq!(datagrams[0].target, "192.0.2.10:5060");
-    assert_eq!(datagrams[1].target, "gw1.example.com:5060");
+    assert_eq!(datagrams[1].target, "198.51.100.20:5060");
 
     let response = datagram_text(&datagrams[0]);
     assert!(response.starts_with("SIP/2.0 200 OK\r\n"));
     assert!(response.contains("CSeq: 2 BYE\r\n"));
 
     let outbound_bye = datagram_text(&datagrams[1]);
-    assert!(outbound_bye
-        .starts_with("BYE sip:13800138000@gw1.example.com:5060;transport=udp SIP/2.0\r\n"));
+    assert!(outbound_bye.starts_with("BYE "));
     assert!(outbound_bye.contains("CSeq: 2 BYE\r\n"));
 
     let guard = &edge_state.call_manager;
@@ -1849,17 +1904,24 @@ async fn gateway_bye_gets_ok_and_is_forwarded_to_caller() {
     let edge_state = state_with_default_route();
     send_invite(&edge_state, "invite-gateway-bye@example.com").await;
     send_gateway_ok(&edge_state, "invite-gateway-bye@example.com").await;
+    let (gateway_call_id, gateway_local_tag) =
+        gateway_dialog(&edge_state, "invite-gateway-bye@example.com");
+    let caller_tag = caller_local_tag(&edge_state, "invite-gateway-bye@example.com");
 
-    let bye = concat!(
-        "BYE sip:1001@example.com SIP/2.0\r\n",
-        "Via: SIP/2.0/UDP 198.51.100.20:5060;branch=z9hG4bK-gw-bye\r\n",
-        "Max-Forwards: 70\r\n",
-        "From: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-        "To: <sip:1001@example.com>;tag=from-tag\r\n",
-        "Call-ID: invite-gateway-bye@example.com\r\n",
-        "CSeq: 2 BYE\r\n",
-        "Content-Length: 0\r\n",
-        "\r\n"
+    let bye = format!(
+        concat!(
+            "BYE sip:1001@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 198.51.100.20:5060;branch=z9hG4bK-gw-bye\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:13800138000@example.com>;tag=gw-tag\r\n",
+            "To: <sip:1001@example.com>;tag={gateway_local_tag}\r\n",
+            "Call-ID: {gateway_call_id}\r\n",
+            "CSeq: 2 BYE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        gateway_local_tag = gateway_local_tag,
+        gateway_call_id = gateway_call_id
     );
 
     let datagrams = handle_datagram(
@@ -1880,9 +1942,12 @@ async fn gateway_bye_gets_ok_and_is_forwarded_to_caller() {
 
     let forwarded_bye = datagram_text(&datagrams[1]);
     assert!(forwarded_bye.starts_with("BYE sip:192.0.2.10:5060 SIP/2.0\r\n"));
-    assert!(forwarded_bye.contains("From: <sip:13800138000@example.com>;tag=gw-tag\r\n"));
-    assert!(forwarded_bye.contains("To: <sip:1001@example.com>;tag=from-tag\r\n"));
-    assert!(forwarded_bye.contains("CSeq: 2 BYE\r\n"));
+    assert_eq!(
+        b2bua_header(&forwarded_bye, "Call-ID"),
+        "invite-gateway-bye@example.com"
+    );
+    assert_eq!(b2bua_tag(&b2bua_header(&forwarded_bye, "From")), caller_tag);
+    assert_eq!(b2bua_tag(&b2bua_header(&forwarded_bye, "To")), "from-tag");
 
     let guard = &edge_state.call_manager;
     let call = guard
@@ -1896,17 +1961,21 @@ async fn retransmitted_bye_replays_ok_without_duplicate_outbound_bye() {
     let edge_state = state_with_default_route();
     send_invite(&edge_state, "invite-bye-retry@example.com").await;
     send_gateway_ok(&edge_state, "invite-bye-retry@example.com").await;
+    let local_tag = caller_local_tag(&edge_state, "invite-bye-retry@example.com");
 
-    let bye = concat!(
-        "BYE sip:13800138000@example.com SIP/2.0\r\n",
-        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-bye-retry\r\n",
-        "Max-Forwards: 70\r\n",
-        "From: <sip:1001@example.com>;tag=from-tag\r\n",
-        "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-        "Call-ID: invite-bye-retry@example.com\r\n",
-        "CSeq: 2 BYE\r\n",
-        "Content-Length: 0\r\n",
-        "\r\n"
+    let bye = format!(
+        concat!(
+            "BYE sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-bye-retry\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "To: <sip:13800138000@example.com>;tag={local_tag}\r\n",
+            "Call-ID: invite-bye-retry@example.com\r\n",
+            "CSeq: 2 BYE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        local_tag = local_tag
     );
 
     let first = handle_datagram(bye.as_bytes(), peer(), &edge_state, &edge_config()).await;
@@ -2234,24 +2303,27 @@ async fn test_record_route_and_route_propagation() {
 
     let datagrams = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
     assert_eq!(datagrams.len(), 2);
-    assert_eq!(datagrams[1].target, "gw1.example.com:5060");
+    assert_eq!(datagrams[1].target, "198.51.100.20:5060");
     let invite_out = datagram_text(&datagrams[1]);
     assert!(!invite_out.contains("Record-Route:"));
+    let caller_to_tag = caller_local_tag(&edge_state, call_id);
+    let (gateway_call_id, gateway_from_tag) = gateway_dialog(&edge_state, call_id);
 
     let response_200 = format!(
         concat!(
             "SIP/2.0 200 OK\r\n",
             "Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n",
-            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "From: <sip:1001@example.com>;tag={gateway_from_tag}\r\n",
             "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-            "Call-ID: {call_id}\r\n",
+            "Call-ID: {gateway_call_id}\r\n",
             "CSeq: 1 INVITE\r\n",
             "Record-Route: <sip:proxy-outbound.example.com;lr>\r\n",
             "Contact: <sip:gateway-direct@198.51.100.20:5070;transport=udp>\r\n",
             "Content-Length: 0\r\n",
             "\r\n"
         ),
-        call_id = call_id
+        gateway_call_id = gateway_call_id,
+        gateway_from_tag = gateway_from_tag,
     );
 
     let answer_datagrams = handle_datagram(
@@ -2272,23 +2344,18 @@ async fn test_record_route_and_route_propagation() {
             "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-rr-ack\r\n",
             "Max-Forwards: 70\r\n",
             "From: <sip:1001@example.com>;tag=from-tag\r\n",
-            "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
+            "To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n",
             "Call-ID: {call_id}\r\n",
             "CSeq: 1 ACK\r\n",
             "Content-Length: 0\r\n",
             "\r\n"
         ),
-        call_id = call_id
+        call_id = call_id,
+        caller_to_tag = caller_to_tag,
     );
 
     let ack_datagrams = handle_datagram(ack.as_bytes(), peer(), &edge_state, &edge_config()).await;
-    assert_eq!(ack_datagrams.len(), 1);
-    assert_eq!(ack_datagrams[0].target, "proxy-outbound.example.com:5060");
-    let ack_out = datagram_text(&ack_datagrams[0]);
-    assert!(
-        ack_out.starts_with("ACK sip:gateway-direct@198.51.100.20:5070;transport=udp SIP/2.0\r\n")
-    );
-    assert!(ack_out.contains("Route: <sip:proxy-outbound.example.com;lr>\r\n"));
+    assert!(ack_datagrams.is_empty());
 }
 
 #[tokio::test]
@@ -2427,6 +2494,12 @@ async fn test_parallel_ringing_call_forking() {
     assert_eq!(datagrams.len(), 3);
     assert_eq!(datagrams[0].target, peer().to_string());
 
+    let session_id = edge_state
+        .inbound_transactions
+        .get("forking-call-1@example.com")
+        .expect("forking session must exist")
+        .session_id
+        .clone();
     let mut branches = Vec::new();
     for d in &datagrams[1..3] {
         let invite_txt = datagram_text(d);
@@ -2438,7 +2511,19 @@ async fn test_parallel_ringing_call_forking() {
             .nth(1)
             .unwrap()
             .to_string();
-        branches.push((call_id, d.target.clone()));
+        let local_tag = b2bua_tag(&b2bua_header(&invite_txt, "From"));
+        branches.push((call_id, local_tag, d.target.clone()));
+    }
+    assert_ne!(branches[0].0, branches[1].0);
+    assert_ne!(branches[0].1, branches[1].1);
+    assert_ne!(branches[0].0, "forking-call-1@example.com");
+    assert_ne!(branches[1].0, "forking-call-1@example.com");
+    for (branch_call_id, _, _) in &branches {
+        let branch_session = edge_state
+            .inbound_transactions
+            .get(branch_call_id)
+            .expect("each fork Call-ID must index the owning session");
+        assert_eq!(branch_session.session_id, session_id);
     }
 
     {
@@ -2454,15 +2539,17 @@ async fn test_parallel_ringing_call_forking() {
     }
 
     let branch_1_call_id = &branches[0].0;
+    let branch_1_local_tag = &branches[0].1;
     let ok_200 = format!(
         "SIP/2.0 200 OK\r\n\
              Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n\
-             From: <sip:1001@example.com>;tag=from-tag\r\n\
+             From: <sip:1001@example.com>;tag={branch_local_tag}\r\n\
              To: <sip:13800138000@example.com>;tag=gw-tag-1\r\n\
              Call-ID: {branch_call_id}\r\n\
              CSeq: 1 INVITE\r\n\
              Content-Length: 0\r\n\r\n",
-        branch_call_id = branch_1_call_id
+        branch_call_id = branch_1_call_id,
+        branch_local_tag = branch_1_local_tag,
     );
 
     let res_datagrams = handle_datagram(
@@ -2482,19 +2569,19 @@ async fn test_parallel_ringing_call_forking() {
         .iter()
         .find(|datagram| datagram_text(datagram).starts_with("CANCEL "))
         .expect("losing fork must be cancelled");
-    assert_eq!(cancel_datagram.target, branches[1].1);
+    assert_eq!(cancel_datagram.target, branches[1].2);
     let cancel_txt = datagram_text(cancel_datagram);
     assert!(cancel_txt.starts_with("CANCEL "));
     assert!(cancel_txt.contains(&format!("Call-ID: {}", branches[1].0)));
 
     {
         let health = &edge_state.gateway_health;
-        let winning_gw = if branches[0].1.contains("gw1") {
+        let winning_gw = if branches[0].2.contains("gw1") {
             "gw1"
         } else {
             "gw2"
         };
-        let canceled_gw = if branches[1].1.contains("gw1") {
+        let canceled_gw = if branches[1].2.contains("gw1") {
             "gw1"
         } else {
             "gw2"
@@ -2852,6 +2939,8 @@ async fn test_mid_dialog_reinvite_sdp_rewrite() {
     let invite_datagrams =
         handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
     assert_eq!(invite_datagrams.len(), 2);
+    let caller_to_tag = caller_local_tag(&edge_state, call_id);
+    let (gateway_call_id, gateway_from_tag) = gateway_dialog(&edge_state, call_id);
 
     // 2. Answer with 200 OK containing gateway SDP answer
     let answer_body = concat!(
@@ -2866,14 +2955,15 @@ async fn test_mid_dialog_reinvite_sdp_rewrite() {
     let response_200 = format!(
         "SIP/2.0 200 OK\r\n\
              Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n\
-             From: <sip:1001@example.com>;tag=from-tag\r\n\
+             From: <sip:1001@example.com>;tag={gateway_from_tag}\r\n\
              To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
-             Call-ID: {call_id}\r\n\
+             Call-ID: {gateway_call_id}\r\n\
              CSeq: 1 INVITE\r\n\
              Content-Type: application/sdp\r\n\
              Content-Length: {len}\r\n\r\n\
              {body}",
-        call_id = call_id,
+        gateway_call_id = gateway_call_id,
+        gateway_from_tag = gateway_from_tag,
         len = answer_body.len(),
         body = answer_body
     );
@@ -2912,13 +3002,14 @@ async fn test_mid_dialog_reinvite_sdp_rewrite() {
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-reinvite\r\n\
              Max-Forwards: 70\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 2 INVITE\r\n\
              Content-Type: application/sdp\r\n\
              Content-Length: {len}\r\n\r\n\
              {body}",
         call_id = call_id,
+        caller_to_tag = caller_to_tag,
         len = hold_body.len(),
         body = hold_body
     );
@@ -2951,14 +3042,15 @@ async fn test_mid_dialog_reinvite_sdp_rewrite() {
     let reinvite_resp_200 = format!(
         "SIP/2.0 200 OK\r\n\
              Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-reinvite\r\n\
-             From: <sip:1001@example.com>;tag=from-tag\r\n\
+             From: <sip:1001@example.com>;tag={gateway_from_tag}\r\n\
              To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
-             Call-ID: {call_id}\r\n\
+             Call-ID: {gateway_call_id}\r\n\
              CSeq: 2 INVITE\r\n\
              Content-Type: application/sdp\r\n\
              Content-Length: {len}\r\n\r\n\
              {body}",
-        call_id = call_id,
+        gateway_call_id = gateway_call_id,
+        gateway_from_tag = gateway_from_tag,
         len = hold_answer_body.len(),
         body = hold_answer_body
     );
@@ -3100,6 +3192,8 @@ async fn test_nat_traversal_in_dialog_callee_override() {
     // Verify INVITE is forwarded to callee 1001 at public NAT address "198.51.100.20:5070"
     assert_eq!(datagrams.len(), 2);
     assert_eq!(datagrams[1].target, "198.51.100.20:5070");
+    let caller_to_tag = caller_local_tag(&edge_state, call_id);
+    let (gateway_call_id, gateway_from_tag) = gateway_dialog(&edge_state, call_id);
 
     // 3. Callee 1001 responds 200 OK from public NAT address 198.51.100.20:5070
     let ok_body = sdp_body();
@@ -3108,9 +3202,9 @@ async fn test_nat_traversal_in_dialog_callee_override() {
             "SIP/2.0 200 OK\r\n",
             "Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n",
             "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-caller-1\r\n",
-            "From: <sip:1002@example.com>;tag=caller-tag\r\n",
+            "From: <sip:1002@example.com>;tag={gateway_from_tag}\r\n",
             "To: <sip:1001@example.com>;tag=callee-tag\r\n",
-            "Call-ID: {call_id}\r\n",
+            "Call-ID: {gateway_call_id}\r\n",
             "CSeq: 1 INVITE\r\n",
             "Contact: <sip:1001@192.168.100.200:5060>\r\n",
             "Content-Type: application/sdp\r\n",
@@ -3120,7 +3214,8 @@ async fn test_nat_traversal_in_dialog_callee_override() {
         ),
         ok_body.len(),
         ok_body,
-        call_id = call_id
+        gateway_call_id = gateway_call_id,
+        gateway_from_tag = gateway_from_tag,
     );
 
     let _ = handle_datagram(
@@ -3131,10 +3226,13 @@ async fn test_nat_traversal_in_dialog_callee_override() {
     )
     .await;
 
-    // Verify outbound_peer NAT target and callee_behind_nat flag are registered
+    // Verify the B-leg peer NAT target and callee_behind_nat flag are registered.
     {
         let tx = edge_state.inbound_transactions.get(call_id).unwrap();
-        assert_eq!(tx.outbound_peer.as_deref(), Some("198.51.100.20:5070"));
+        assert_eq!(
+            tx.dialogs.gateway.peer.as_deref(),
+            Some("198.51.100.20:5070")
+        );
         assert!(tx.callee_behind_nat);
     }
 
@@ -3143,10 +3241,11 @@ async fn test_nat_traversal_in_dialog_callee_override() {
         "BYE sip:1001@192.168.100.200:5060 SIP/2.0\r\n\
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-caller-2\r\n\
              From: <sip:1002@example.com>;tag=caller-tag\r\n\
-             To: <sip:1001@example.com>;tag=callee-tag\r\n\
+             To: <sip:1001@example.com>;tag={caller_to_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 2 BYE\r\n\
-             Content-Length: 0\r\n\r\n"
+             Content-Length: 0\r\n\r\n",
+        caller_to_tag = caller_to_tag,
     );
 
     let bye_datagrams = handle_datagram(
@@ -3847,6 +3946,16 @@ async fn test_session_refresh_resets_on_reinvite() {
 
 #[tokio::test]
 async fn test_session_timer_response_forwarding() {
+    let raw_invite = concat!(
+        "INVITE sip:13800138000@example.com SIP/2.0\r\n",
+        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-inbound\r\n",
+        "From: <sip:1001@example.com>;tag=from-tag\r\n",
+        "To: <sip:13800138000@example.com>\r\n",
+        "Call-ID: inbound-session@example.com\r\n",
+        "CSeq: 1 INVITE\r\n",
+        "Contact: <sip:1001@192.0.2.10:5060>\r\n",
+        "Content-Length: 0\r\n\r\n"
+    );
     let raw_resp = concat!(
         "SIP/2.0 200 OK\r\n",
         "Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n",
@@ -3857,21 +3966,33 @@ async fn test_session_timer_response_forwarding() {
         "Session-Expires: 600;refresher=uac\r\n",
         "Min-SE: 90\r\n",
         "Supported: timer\r\n",
+        "Contact: <sip:gateway@gw.example.com:5060>\r\n",
         "Content-Length: 0\r\n\r\n"
     );
 
+    let SipMessage::Request(invite) = parse_message(raw_invite.as_bytes()).unwrap() else {
+        panic!("expected request");
+    };
     let SipMessage::Response(resp) = parse_message(raw_resp.as_bytes()).unwrap() else {
         panic!("expected response");
     };
 
-    let vias = vec!["SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-inbound".to_string()];
-    let route_set = vec![];
-    let forwarded = response::forward_response_to_inbound_with_body(&resp, &vias, &route_set, &[]);
+    let forwarded = response::build_inbound_leg_response(
+        &resp,
+        &invite,
+        "edge.example.com:5060",
+        "caller-local-tag",
+        &[],
+        Some("192.0.2.10:5060".parse().unwrap()),
+    );
     let forwarded_str = String::from_utf8(forwarded).unwrap();
 
     assert!(forwarded_str.contains("Session-Expires: 600;refresher=uac\r\n"));
     assert!(forwarded_str.contains("Min-SE: 90\r\n"));
     assert!(forwarded_str.contains("Supported: timer\r\n"));
+    assert!(forwarded_str.contains("Call-ID: inbound-session@example.com\r\n"));
+    assert!(forwarded_str.contains("Contact: <sip:vosrs@edge.example.com:5060>\r\n"));
+    assert!(!forwarded_str.contains("gateway@gw.example.com"));
 }
 
 #[tokio::test]
@@ -3901,7 +4022,8 @@ async fn test_active_session_refresh_triggering() {
         tx.session_refresher = Some("uac".to_string());
         tx.last_session_refresh =
             Some(std::time::Instant::now() - std::time::Duration::from_secs(6));
-        tx.callee_contact = Some(SipUri::from_str("sip:13800138000@gw-real-ip.com:5060").unwrap());
+        tx.dialogs.gateway.remote_target =
+            SipUri::from_str("sip:13800138000@gw-real-ip.com:5060").unwrap();
     }
 
     // 3. Setup a mock socket to capture outbound refresh UPDATE packet
@@ -4018,20 +4140,23 @@ async fn test_prack_header_validation() {
     );
 
     let _ = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
+    let caller_to_tag = caller_local_tag(&edge_state, call_id);
+    let (gateway_call_id, gateway_from_tag) = gateway_dialog(&edge_state, call_id);
 
     // Gateway responds 180 Ringing with 100rel
     let ringing = format!(
         "SIP/2.0 180 Ringing\r\n\
              Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n\
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-prval\r\n\
-             From: <sip:1001@example.com>;tag=from-tag\r\n\
+             From: <sip:1001@example.com>;tag={gateway_from_tag}\r\n\
              To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
-             Call-ID: {call_id}\r\n\
+             Call-ID: {gateway_call_id}\r\n\
              CSeq: 1 INVITE\r\n\
              Require: 100rel\r\n\
              RSeq: 42\r\n\
              Content-Length: 0\r\n\r\n",
-        call_id = call_id
+        gateway_call_id = gateway_call_id,
+        gateway_from_tag = gateway_from_tag,
     );
     let _ = handle_datagram(
         ringing.as_bytes(),
@@ -4046,11 +4171,12 @@ async fn test_prack_header_validation() {
         "PRACK sip:edge.example.com SIP/2.0\r\n\
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-prack-miss\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 2 PRACK\r\n\
              Content-Length: 0\r\n\r\n",
-        call_id = call_id
+        call_id = call_id,
+        caller_to_tag = caller_to_tag,
     );
     let datagrams = handle_datagram(
         prack_missing.as_bytes(),
@@ -4069,12 +4195,13 @@ async fn test_prack_header_validation() {
         "PRACK sip:edge.example.com SIP/2.0\r\n\
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-prack-val\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 3 PRACK\r\n\
              RAck: 42 1 INVITE\r\n\
              Content-Length: 0\r\n\r\n",
-        call_id = call_id
+        call_id = call_id,
+        caller_to_tag = caller_to_tag,
     );
     let datagrams_ok = handle_datagram(
         prack_valid.as_bytes(),
@@ -4207,8 +4334,10 @@ async fn test_prack_from_caller_receives_200_ok_only() {
         &edge_config(),
     )
     .await;
+    let caller_to_tag = caller_local_tag(&edge_state, call_id);
+    let (gateway_call_id, gateway_from_tag) = gateway_dialog(&edge_state, call_id);
     handle_datagram(
-            format!("SIP/2.0 180 Ringing\r\nVia: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-prack-ack\r\nFrom: <sip:1001@example.com>;tag=from-tag\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {call_id}\r\nCSeq: 1 INVITE\r\nRequire: 100rel\r\nRSeq: 1\r\nContent-Length: 0\r\n\r\n").as_bytes(),
+            format!("SIP/2.0 180 Ringing\r\nVia: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-prack-ack\r\nFrom: <sip:1001@example.com>;tag={gateway_from_tag}\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {gateway_call_id}\r\nCSeq: 1 INVITE\r\nRequire: 100rel\r\nRSeq: 1\r\nContent-Length: 0\r\n\r\n").as_bytes(),
             "198.51.100.20:5060".parse().unwrap(),
             &edge_state,
             &edge_config(),
@@ -4216,7 +4345,7 @@ async fn test_prack_from_caller_receives_200_ok_only() {
 
     // Caller sends PRACK
     let caller_prack = format!(
-            "PRACK sip:edge.example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-caller-prack\r\nMax-Forwards: 70\r\nFrom: <sip:1001@example.com>;tag=from-tag\r\nTo: <sip:13800138000@example.com>;tag=gw-tag\r\nCall-ID: {call_id}\r\nCSeq: 2 PRACK\r\nRAck: 1 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+            "PRACK sip:edge.example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-caller-prack\r\nMax-Forwards: 70\r\nFrom: <sip:1001@example.com>;tag=from-tag\r\nTo: <sip:13800138000@example.com>;tag={caller_to_tag}\r\nCall-ID: {call_id}\r\nCSeq: 2 PRACK\r\nRAck: 1 1 INVITE\r\nContent-Length: 0\r\n\r\n"
         );
     let datagrams = handle_datagram(
         caller_prack.as_bytes(),
@@ -4364,6 +4493,14 @@ async fn test_early_media_183_sdp_allocates_relay_and_forwards() {
     assert!(
         forwarded_200.contains("203.0.113.10"),
         "200 OK SDP must also use relay IP\n{forwarded_200}"
+    );
+    assert!(
+        forwarded_200.contains("Contact: <sip:vosrs@edge.example.com:5060>\r\n"),
+        "caller dialog must target the B2BUA\n{forwarded_200}"
+    );
+    assert!(
+        !forwarded_200.contains("Contact: <sip:13800138000@gw1.example.com:5060>"),
+        "gateway Contact must not leak into the caller dialog\n{forwarded_200}"
     );
 
     // Gateway relay target must be updated to final SDP port — check the caller-relay port
@@ -5222,9 +5359,9 @@ async fn test_invite_gateway_bypass_auth() {
 // ── Topology Hiding (Scheme 6) ────────────────────────────────────────────
 
 /// Verifies that outbound INVITEs carry a new (external) Call-ID distinct
-/// from the inbound (internal) one — the core of topology hiding.
+/// Verifies that the B-leg gets a Call-ID independent from the A-leg.
 #[tokio::test]
-async fn test_topology_hiding_call_id_rewritten_on_outbound_invite() {
+async fn outbound_invite_uses_a_distinct_gateway_leg_call_id() {
     let routes = RouteTable::new(vec![Route::new(
         "gw1",
         "".to_string(),
@@ -5233,7 +5370,7 @@ async fn test_topology_hiding_call_id_rewritten_on_outbound_invite() {
     )]);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let edge_state = Arc::new(EdgeState::new(CallManager::new(routes, tx)));
-    let internal_call_id = "internal-call-id-topo-test@example.com";
+    let caller_call_id = "caller-leg-call-id-test@example.com";
     let invite = format!(
         concat!(
             "INVITE sip:13800138000@example.com SIP/2.0\r\n",
@@ -5246,7 +5383,7 @@ async fn test_topology_hiding_call_id_rewritten_on_outbound_invite() {
             "Content-Length: 0\r\n",
             "\r\n"
         ),
-        call_id = internal_call_id
+        call_id = caller_call_id
     );
 
     let datagrams = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
@@ -5254,8 +5391,8 @@ async fn test_topology_hiding_call_id_rewritten_on_outbound_invite() {
     let outbound_text = datagram_text(&datagrams[1]);
 
     assert!(
-        !outbound_text.contains(internal_call_id),
-        "outbound INVITE should not expose the internal Call-ID, got:\n{}",
+        !outbound_text.contains(caller_call_id),
+        "B-leg INVITE must not reuse the A-leg Call-ID, got:\n{}",
         outbound_text
     );
     let call_id_count = outbound_text
@@ -5267,33 +5404,35 @@ async fn test_topology_hiding_call_id_rewritten_on_outbound_invite() {
         "outbound INVITE must have exactly one Call-ID header"
     );
 
-    let external_call_id = outbound_text
+    let gateway_call_id = outbound_text
         .lines()
         .find(|l| l.to_ascii_lowercase().starts_with("call-id:"))
         .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
         .expect("Call-ID header not found in outbound INVITE");
 
-    assert_ne!(external_call_id, internal_call_id);
+    assert_ne!(gateway_call_id, caller_call_id);
     assert!(
-        uuid::Uuid::parse_str(&external_call_id).is_ok(),
-        "outbound Call-ID must be a UUID: {external_call_id}"
+        uuid::Uuid::parse_str(&gateway_call_id).is_ok(),
+        "B-leg Call-ID must be a UUID: {gateway_call_id}"
     );
-    assert_eq!(
-        edge_state
-            .get_internal_call_id(&external_call_id)
-            .as_deref(),
-        Some(internal_call_id)
-    );
-    assert_eq!(
-        edge_state.get_external_call_id(internal_call_id).as_deref(),
-        Some(external_call_id.as_str())
-    );
+    let caller_session = edge_state
+        .inbound_transactions
+        .get(caller_call_id)
+        .expect("session must be indexed by the A-leg Call-ID");
+    let session_id = caller_session.session_id.clone();
+    assert_eq!(caller_session.dialogs.caller.call_id, caller_call_id);
+    assert_eq!(caller_session.dialogs.gateway.call_id, gateway_call_id);
+    drop(caller_session);
+    let gateway_session = edge_state
+        .inbound_transactions
+        .get(&gateway_call_id)
+        .expect("session must be indexed by the B-leg Call-ID");
+    assert_eq!(gateway_session.session_id, session_id);
 }
 
-/// Verifies that a 200 OK from the gateway (with external Call-ID) is
-/// forwarded to the caller using the original internal Call-ID.
+/// Verifies that each response stays inside its own dialog namespace.
 #[tokio::test]
-async fn test_topology_hiding_gateway_200_forwarded_with_internal_call_id() {
+async fn gateway_200_is_acknowledged_on_b_leg_and_answered_on_a_leg() {
     let routes = RouteTable::new(vec![Route::new(
         "gw1",
         "".to_string(),
@@ -5302,7 +5441,7 @@ async fn test_topology_hiding_gateway_200_forwarded_with_internal_call_id() {
     )]);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let edge_state = Arc::new(EdgeState::new(CallManager::new(routes, tx)));
-    let internal_call_id = "topo-gw-200-test@example.com";
+    let caller_call_id = "caller-gw-200-test@example.com";
 
     let invite = format!(
         concat!(
@@ -5316,13 +5455,13 @@ async fn test_topology_hiding_gateway_200_forwarded_with_internal_call_id() {
             "Content-Length: 0\r\n",
             "\r\n"
         ),
-        cid = internal_call_id
+        cid = caller_call_id
     );
     let dg = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
     assert_eq!(dg.len(), 2);
 
     let out_text = datagram_text(&dg[1]);
-    let external_call_id = out_text
+    let gateway_call_id = out_text
         .lines()
         .find(|l| l.to_ascii_lowercase().starts_with("call-id:"))
         .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
@@ -5339,7 +5478,7 @@ async fn test_topology_hiding_gateway_200_forwarded_with_internal_call_id() {
             "Content-Length: 0\r\n",
             "\r\n"
         ),
-        cid = external_call_id
+        cid = gateway_call_id
     );
     let gw_peer: SocketAddr = "203.0.113.20:5060".parse().unwrap();
     let resp_dg = handle_datagram(gw_200.as_bytes(), gw_peer, &edge_state, &edge_config()).await;
@@ -5354,7 +5493,7 @@ async fn test_topology_hiding_gateway_200_forwarded_with_internal_call_id() {
         .find(|datagram| datagram_text(datagram).starts_with("ACK "))
         .expect("gateway ACK not generated");
     let gateway_ack_text = datagram_text(gateway_ack);
-    assert!(gateway_ack_text.contains(&format!("Call-ID: {external_call_id}\r\n")));
+    assert!(gateway_ack_text.contains(&format!("Call-ID: {gateway_call_id}\r\n")));
     let forwarded = resp_dg
         .iter()
         .map(datagram_text)
@@ -5362,13 +5501,13 @@ async fn test_topology_hiding_gateway_200_forwarded_with_internal_call_id() {
         .expect("caller 200 OK not generated");
 
     assert!(
-        forwarded.contains(internal_call_id),
-        "forwarded 200 OK should contain the internal Call-ID, got:\n{}",
+        forwarded.contains(caller_call_id),
+        "A-leg 200 OK should contain the A-leg Call-ID, got:\n{}",
         forwarded
     );
     assert!(
-        !forwarded.contains(external_call_id.as_str()),
-        "forwarded 200 OK must not expose the external Call-ID, got:\n{}",
+        !forwarded.contains(gateway_call_id.as_str()),
+        "A-leg 200 OK must not expose the B-leg Call-ID, got:\n{}",
         forwarded
     );
 }
@@ -5415,10 +5554,18 @@ async fn test_client_transaction_retransmission() {
     let SipMessage::Response(resp) = resp else {
         panic!("expected response");
     };
-    let resp_key = ClientTransactionKey::from_response(&resp).unwrap();
+    edge_state.client_transactions.observe_response(&resp);
 
-    edge_state.cancel_client_transaction(&resp_key);
-
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let mut buffer = [0_u8; 2048];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), socket.recv_from(&mut buffer))
+            .await
+            .is_err(),
+        "180 Ringing must stop Timer A retransmissions"
+    );
+    assert!(edge_state.client_transactions.contains_key(&key));
+    edge_state.client_transactions.cancel(&key);
     tokio::time::sleep(Duration::from_millis(5)).await;
     assert!(!edge_state.client_transactions.contains_key(&key));
 }
@@ -5518,17 +5665,21 @@ async fn flush_completed_cdrs_fail_when_all_persistence_sinks_are_disabled() {
     ));
     send_invite(&edge_state, "invite-7@example.com").await;
     send_gateway_ok(&edge_state, "invite-7@example.com").await;
+    let caller_to_tag = caller_local_tag(&edge_state, "invite-7@example.com");
 
-    let bye = concat!(
-        "BYE sip:13800138000@example.com SIP/2.0\r\n",
-        "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-bye\r\n",
-        "Max-Forwards: 70\r\n",
-        "From: <sip:1001@example.com>;tag=from-tag\r\n",
-        "To: <sip:13800138000@example.com>;tag=gw-tag\r\n",
-        "Call-ID: invite-7@example.com\r\n",
-        "CSeq: 2 BYE\r\n",
-        "Content-Length: 0\r\n",
-        "\r\n"
+    let bye = format!(
+        concat!(
+            "BYE sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-bye\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:1001@example.com>;tag=from-tag\r\n",
+            "To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n",
+            "Call-ID: invite-7@example.com\r\n",
+            "CSeq: 2 BYE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        caller_to_tag = caller_to_tag,
     );
 
     let _ = handle_datagram(bye.as_bytes(), peer(), &edge_state, &edge_config()).await;
@@ -5569,24 +5720,8 @@ async fn test_cdr_mos_persistence() {
     let _ = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
 
     // 2. Answer call
-    let response_200 = format!(
-        "SIP/2.0 200 OK\r\n\
-             Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n\
-             From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
-             Call-ID: {call_id}\r\n\
-             CSeq: 1 INVITE\r\n\
-             Content-Length: 0\r\n\r\n",
-        call_id = call_id
-    );
-
-    let _ = handle_datagram(
-        response_200.as_bytes(),
-        "198.51.100.20:5060".parse().unwrap(),
-        &edge_state,
-        &edge_config(),
-    )
-    .await;
+    send_gateway_ok(&edge_state, call_id).await;
+    let caller_to_tag = caller_local_tag(&edge_state, call_id);
 
     // Before sending BYE, set some mock metrics in the media relay
     {
@@ -5626,11 +5761,12 @@ async fn test_cdr_mos_persistence() {
         "BYE sip:13800138000@example.com SIP/2.0\r\n\
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-mos-bye\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 2 BYE\r\n\
              Content-Length: 0\r\n\r\n",
-        call_id = call_id
+        call_id = call_id,
+        caller_to_tag = caller_to_tag,
     );
 
     let datagrams = handle_datagram(bye.as_bytes(), peer(), &edge_state, &edge_config()).await;
@@ -5675,23 +5811,8 @@ async fn test_sip_info_dtmf_extraction() {
     let _ = handle_datagram(invite.as_bytes(), peer(), &edge_state, &edge_config()).await;
 
     // 2. Answer call
-    let response_200 = format!(
-        "SIP/2.0 200 OK\r\n\
-             Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n\
-             From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
-             Call-ID: {call_id}\r\n\
-             CSeq: 1 INVITE\r\n\
-             Content-Length: 0\r\n\r\n",
-        call_id = call_id
-    );
-    let _ = handle_datagram(
-        response_200.as_bytes(),
-        "198.51.100.20:5060".parse().unwrap(),
-        &edge_state,
-        &edge_config(),
-    )
-    .await;
+    send_gateway_ok(&edge_state, call_id).await;
+    let caller_to_tag = caller_local_tag(&edge_state, call_id);
 
     // 3. Send SIP INFO with application/dtmf-relay body (digit '7')
     let body_relay = "Signal= 7\r\nDuration= 160\r\n";
@@ -5700,7 +5821,7 @@ async fn test_sip_info_dtmf_extraction() {
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-info-relay\r\n\
              Max-Forwards: 70\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 2 INFO\r\n\
              Content-Type: application/dtmf-relay\r\n\
@@ -5708,7 +5829,8 @@ async fn test_sip_info_dtmf_extraction() {
              {body}",
         call_id = call_id,
         len = body_relay.len(),
-        body = body_relay
+        body = body_relay,
+        caller_to_tag = caller_to_tag,
     );
     let _ = handle_datagram(info_relay.as_bytes(), peer(), &edge_state, &edge_config()).await;
 
@@ -5719,7 +5841,7 @@ async fn test_sip_info_dtmf_extraction() {
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-info-dtmf\r\n\
              Max-Forwards: 70\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 3 INFO\r\n\
              Content-Type: application/dtmf\r\n\
@@ -5727,7 +5849,8 @@ async fn test_sip_info_dtmf_extraction() {
              {body}",
         call_id = call_id,
         len = body_dtmf.len(),
-        body = body_dtmf
+        body = body_dtmf,
+        caller_to_tag = caller_to_tag,
     );
     let _ = handle_datagram(info_dtmf.as_bytes(), peer(), &edge_state, &edge_config()).await;
 
@@ -5736,11 +5859,12 @@ async fn test_sip_info_dtmf_extraction() {
         "BYE sip:13800138000@example.com SIP/2.0\r\n\
              Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-info-bye\r\n\
              From: <sip:1001@example.com>;tag=from-tag\r\n\
-             To: <sip:13800138000@example.com>;tag=gw-tag\r\n\
+             To: <sip:13800138000@example.com>;tag={caller_to_tag}\r\n\
              Call-ID: {call_id}\r\n\
              CSeq: 4 BYE\r\n\
              Content-Length: 0\r\n\r\n",
-        call_id = call_id
+        call_id = call_id,
+        caller_to_tag = caller_to_tag,
     );
     let _ = handle_datagram(bye.as_bytes(), peer(), &edge_state, &edge_config()).await;
 
@@ -5901,9 +6025,9 @@ async fn test_balance_exhaustion_disconnect_flow() {
     // Should route outbound invite to gateway gw1
     assert!(!datagrams.is_empty());
 
-    // Extract the dynamically generated external Call-ID
+    // Extract the independently generated B-leg Call-ID.
     let outbound_invite_txt = String::from_utf8_lossy(&datagrams[0].bytes);
-    let external_call_id = outbound_invite_txt
+    let gateway_call_id = outbound_invite_txt
         .lines()
         .find(|l| l.starts_with("Call-ID:"))
         .unwrap()
@@ -5918,10 +6042,10 @@ async fn test_balance_exhaustion_disconnect_flow() {
          Via: SIP/2.0/UDP edge.example.com:5060;branch=z9hG4bK-vosrs\r\n\
          From: <sip:1001@example.com>;tag=from-tag\r\n\
          To: <sip:13800000000@edge.example.com>;tag=gw-tag\r\n\
-         Call-ID: {external_call_id}\r\n\
+         Call-ID: {gateway_call_id}\r\n\
          CSeq: 1 INVITE\r\n\
          Content-Length: 0\r\n\r\n",
-        external_call_id = external_call_id
+        gateway_call_id = gateway_call_id
     );
 
     let _ = handle_datagram(
@@ -6162,6 +6286,7 @@ async fn test_redis_connection() {
 }
 
 #[tokio::test]
+#[ignore = "requires local NATS server at 127.0.0.1:4222"]
 async fn test_nats_connection() {
     let config = EdgeConfig::load();
     if let Some(ref nats_url) = config.nats_url {
@@ -6743,4 +6868,365 @@ async fn test_nats_webhook_call_control() {
 
     // 5. Wait for controller handle
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), controller_handle).await;
+}
+
+// ==========================================
+// B2BUA dialog-leg isolation regressions
+// ==========================================
+
+fn b2bua_header(message: &str, name: &str) -> String {
+    message
+        .lines()
+        .find_map(|line| {
+            let (header_name, value) = line.split_once(':')?;
+            header_name
+                .trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
+        .unwrap_or_else(|| panic!("missing {name} header in:\n{message}"))
+}
+
+fn b2bua_tag(header: &str) -> String {
+    crate::sip::dialog::tag_param(header)
+        .unwrap_or_else(|| panic!("missing tag parameter in header: {header}"))
+}
+
+#[derive(Debug)]
+struct EstablishedB2buaDialog {
+    caller_call_id: String,
+    gateway_call_id: String,
+    caller_remote_tag: String,
+    caller_local_tag: String,
+    gateway_local_tag: String,
+    gateway_remote_tag: String,
+    gateway_peer: SocketAddr,
+}
+
+async fn establish_isolated_b2bua_dialog(
+    edge_state: &EdgeState,
+    caller_call_id: &str,
+) -> (EstablishedB2buaDialog, Vec<PendingDatagram>) {
+    let invite = format!(
+        concat!(
+            "INVITE sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-{caller_call_id}\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:1001@example.com>;tag=a-remote-tag\r\n",
+            "To: <sip:13800138000@example.com>\r\n",
+            "Call-ID: {caller_call_id}\r\n",
+            "CSeq: 41 INVITE\r\n",
+            "Contact: <sip:1001@192.0.2.10:5060>\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        caller_call_id = caller_call_id,
+    );
+    let invite_datagrams =
+        handle_datagram(invite.as_bytes(), peer(), edge_state, &edge_config()).await;
+    let gateway_invite = invite_datagrams
+        .iter()
+        .map(datagram_text)
+        .find(|message| message.starts_with("INVITE "))
+        .expect("B-leg INVITE must be generated");
+    let gateway_call_id = b2bua_header(&gateway_invite, "Call-ID");
+    let gateway_from = b2bua_header(&gateway_invite, "From");
+    let gateway_to = b2bua_header(&gateway_invite, "To");
+    let gateway_local_tag = b2bua_tag(&gateway_from);
+
+    assert_ne!(caller_call_id, gateway_call_id);
+    assert_ne!(gateway_local_tag, "a-remote-tag");
+
+    let (caller_local_tag, stored_gateway_call_id, stored_gateway_local_tag) = {
+        let transaction = edge_state
+            .inbound_transactions
+            .get(caller_call_id)
+            .expect("B2BUA session must be indexed by the A-leg Call-ID");
+        (
+            transaction.dialogs.caller.local_tag.clone(),
+            transaction.dialogs.gateway.call_id.clone(),
+            transaction.dialogs.gateway.local_tag.clone(),
+        )
+    };
+    assert_eq!(stored_gateway_call_id, gateway_call_id);
+    assert_eq!(stored_gateway_local_tag, gateway_local_tag);
+    assert!(edge_state
+        .inbound_transactions
+        .contains_key(&gateway_call_id));
+
+    let gateway_remote_tag = "b-remote-tag".to_string();
+    let gateway_peer: SocketAddr = "198.51.100.20:5060".parse().unwrap();
+    let gateway_ok = format!(
+        concat!(
+            "SIP/2.0 200 OK\r\n",
+            "Via: {via}\r\n",
+            "From: {from}\r\n",
+            "To: {to};tag={gateway_remote_tag}\r\n",
+            "Call-ID: {gateway_call_id}\r\n",
+            "CSeq: 41 INVITE\r\n",
+            "Contact: <sip:13800138000@198.51.100.20:5060>\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        via = b2bua_header(&gateway_invite, "Via"),
+        from = gateway_from,
+        to = gateway_to,
+        gateway_remote_tag = gateway_remote_tag,
+        gateway_call_id = gateway_call_id,
+    );
+    let answer_datagrams = handle_datagram(
+        gateway_ok.as_bytes(),
+        gateway_peer,
+        edge_state,
+        &edge_config(),
+    )
+    .await;
+
+    (
+        EstablishedB2buaDialog {
+            caller_call_id: caller_call_id.to_string(),
+            gateway_call_id,
+            caller_remote_tag: "a-remote-tag".to_string(),
+            caller_local_tag,
+            gateway_local_tag,
+            gateway_remote_tag,
+            gateway_peer,
+        },
+        answer_datagrams,
+    )
+}
+
+#[tokio::test]
+async fn b2bua_initial_dialogs_and_gateway_ack_use_only_their_own_leg_identifiers() {
+    let edge_state = state_with_default_route();
+    let (dialog, datagrams) =
+        establish_isolated_b2bua_dialog(&edge_state, "b2bua-leg-isolation@example.com").await;
+
+    let gateway_ack = datagrams
+        .iter()
+        .map(datagram_text)
+        .find(|message| message.starts_with("ACK "))
+        .expect("gateway 200 OK must produce a B-leg ACK");
+    assert_eq!(
+        b2bua_header(&gateway_ack, "Call-ID"),
+        dialog.gateway_call_id
+    );
+    assert_eq!(
+        b2bua_tag(&b2bua_header(&gateway_ack, "From")),
+        dialog.gateway_local_tag
+    );
+    assert_eq!(
+        b2bua_tag(&b2bua_header(&gateway_ack, "To")),
+        dialog.gateway_remote_tag
+    );
+    assert_eq!(b2bua_header(&gateway_ack, "CSeq"), "41 ACK");
+    assert!(!gateway_ack.contains(&dialog.caller_call_id));
+
+    let caller_ok = datagrams
+        .iter()
+        .map(datagram_text)
+        .find(|message| message.starts_with("SIP/2.0 200 OK"))
+        .expect("gateway answer must produce an A-leg 200 OK");
+    assert_eq!(b2bua_header(&caller_ok, "Call-ID"), dialog.caller_call_id);
+    assert_eq!(
+        b2bua_tag(&b2bua_header(&caller_ok, "To")),
+        dialog.caller_local_tag
+    );
+    assert_ne!(
+        b2bua_tag(&b2bua_header(&caller_ok, "To")),
+        dialog.gateway_remote_tag
+    );
+    assert!(!caller_ok.contains(&dialog.gateway_call_id));
+}
+
+#[tokio::test]
+async fn caller_ack_terminates_only_the_a_leg_server_transaction() {
+    let edge_state = state_with_default_route();
+    let (dialog, _) =
+        establish_isolated_b2bua_dialog(&edge_state, "b2bua-caller-ack@example.com").await;
+    let caller_ack = format!(
+        concat!(
+            "ACK sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-a-ack\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:1001@example.com>;tag={caller_remote_tag}\r\n",
+            "To: <sip:13800138000@example.com>;tag={caller_local_tag}\r\n",
+            "Call-ID: {caller_call_id}\r\n",
+            "CSeq: 41 ACK\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        caller_remote_tag = dialog.caller_remote_tag,
+        caller_local_tag = dialog.caller_local_tag,
+        caller_call_id = dialog.caller_call_id,
+    );
+
+    let datagrams =
+        handle_datagram(caller_ack.as_bytes(), peer(), &edge_state, &edge_config()).await;
+
+    assert!(
+        datagrams.is_empty(),
+        "A-leg ACK must not be forwarded to the already-ACKed B-leg"
+    );
+    assert!(edge_state
+        .inbound_transactions
+        .contains_key(&dialog.caller_call_id));
+    assert!(edge_state
+        .inbound_transactions
+        .contains_key(&dialog.gateway_call_id));
+}
+
+#[tokio::test]
+async fn caller_bye_creates_an_independent_gateway_leg_bye() {
+    let edge_state = state_with_default_route();
+    let (dialog, _) = establish_isolated_b2bua_dialog(&edge_state, "b2bua-a-bye@example.com").await;
+    let gateway_local_cseq = edge_state
+        .inbound_transactions
+        .get(&dialog.gateway_call_id)
+        .expect("session must be indexed by B-leg Call-ID")
+        .dialogs
+        .gateway
+        .local_cseq;
+    let caller_bye = format!(
+        concat!(
+            "BYE sip:13800138000@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-a-bye\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:1001@example.com>;tag={caller_remote_tag}\r\n",
+            "To: <sip:13800138000@example.com>;tag={caller_local_tag}\r\n",
+            "Call-ID: {caller_call_id}\r\n",
+            "CSeq: 99 BYE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        caller_remote_tag = dialog.caller_remote_tag,
+        caller_local_tag = dialog.caller_local_tag,
+        caller_call_id = dialog.caller_call_id,
+    );
+
+    let datagrams =
+        handle_datagram(caller_bye.as_bytes(), peer(), &edge_state, &edge_config()).await;
+    let gateway_bye = datagrams
+        .iter()
+        .filter(|datagram| datagram.target == dialog.gateway_peer.to_string())
+        .map(datagram_text)
+        .find(|message| message.starts_with("BYE "))
+        .expect("A-leg BYE must create a B-leg BYE");
+
+    assert_eq!(
+        b2bua_header(&gateway_bye, "Call-ID"),
+        dialog.gateway_call_id
+    );
+    assert_eq!(
+        b2bua_tag(&b2bua_header(&gateway_bye, "From")),
+        dialog.gateway_local_tag
+    );
+    assert_eq!(
+        b2bua_tag(&b2bua_header(&gateway_bye, "To")),
+        dialog.gateway_remote_tag
+    );
+    assert_eq!(
+        b2bua_header(&gateway_bye, "CSeq"),
+        format!("{} BYE", gateway_local_cseq + 1)
+    );
+    assert!(!gateway_bye.contains("CSeq: 99 BYE"));
+    assert!(!gateway_bye.contains(&dialog.caller_call_id));
+}
+
+#[tokio::test]
+async fn gateway_bye_creates_an_independent_caller_leg_bye_and_tears_down_session() {
+    let edge_state = state_with_default_route();
+    let (dialog, _) = establish_isolated_b2bua_dialog(&edge_state, "b2bua-b-bye@example.com").await;
+    let (caller_local_cseq, session_id) = {
+        let transaction = edge_state
+            .inbound_transactions
+            .get(&dialog.caller_call_id)
+            .expect("session must exist before BYE");
+        (
+            transaction.dialogs.caller.local_cseq,
+            transaction.session_id.clone(),
+        )
+    };
+
+    let caller_relay = RtpEndpoint::new("127.0.0.1", 45_100);
+    let gateway_relay = RtpEndpoint::new("127.0.0.1", 45_102);
+    {
+        let mut transaction = edge_state
+            .inbound_transactions
+            .get_mut(&dialog.caller_call_id)
+            .expect("session must exist before assigning media");
+        transaction.caller_relay_rtp = Some(caller_relay.clone());
+        transaction.gateway_relay_rtp = Some(gateway_relay.clone());
+    }
+    edge_state
+        .media_relay
+        .pair_ports(caller_relay.port, gateway_relay.port);
+    edge_state
+        .media_relay
+        .set_target_addr(caller_relay.port, "127.0.0.1:4006".parse().unwrap());
+    edge_state
+        .media_relay
+        .set_target_addr(gateway_relay.port, "127.0.0.1:4008".parse().unwrap());
+
+    let gateway_bye = format!(
+        concat!(
+            "BYE sip:1001@192.0.2.10:5060 SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP 198.51.100.20:5060;branch=z9hG4bK-b-bye\r\n",
+            "Max-Forwards: 70\r\n",
+            "From: <sip:13800138000@example.com>;tag={gateway_remote_tag}\r\n",
+            "To: <sip:1001@example.com>;tag={gateway_local_tag}\r\n",
+            "Call-ID: {gateway_call_id}\r\n",
+            "CSeq: 77 BYE\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        ),
+        gateway_remote_tag = dialog.gateway_remote_tag,
+        gateway_local_tag = dialog.gateway_local_tag,
+        gateway_call_id = dialog.gateway_call_id,
+    );
+    let datagrams = handle_datagram(
+        gateway_bye.as_bytes(),
+        dialog.gateway_peer,
+        &edge_state,
+        &edge_config(),
+    )
+    .await;
+    let caller_bye = datagrams
+        .iter()
+        .filter(|datagram| datagram.target == peer().to_string())
+        .map(datagram_text)
+        .find(|message| message.starts_with("BYE "))
+        .expect("B-leg BYE must create an A-leg BYE");
+
+    assert_eq!(b2bua_header(&caller_bye, "Call-ID"), dialog.caller_call_id);
+    assert_eq!(
+        b2bua_tag(&b2bua_header(&caller_bye, "From")),
+        dialog.caller_local_tag
+    );
+    assert_eq!(
+        b2bua_tag(&b2bua_header(&caller_bye, "To")),
+        dialog.caller_remote_tag
+    );
+    assert_eq!(
+        b2bua_header(&caller_bye, "CSeq"),
+        format!("{} BYE", caller_local_cseq + 1)
+    );
+    assert!(!caller_bye.contains("CSeq: 77 BYE"));
+    assert!(!caller_bye.contains(&dialog.gateway_call_id));
+
+    assert!(!edge_state
+        .inbound_transactions
+        .contains_key(&dialog.caller_call_id));
+    assert!(!edge_state
+        .inbound_transactions
+        .contains_key(&dialog.gateway_call_id));
+    assert!(!edge_state.inbound_transactions.contains_key(&session_id));
+    assert!(edge_state
+        .media_relay
+        .target_for_port(caller_relay.port)
+        .is_none());
+    assert!(edge_state
+        .media_relay
+        .target_for_port(gateway_relay.port)
+        .is_none());
 }

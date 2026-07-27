@@ -26,12 +26,12 @@ use std::fmt;
 pub(crate) enum DialogValidationError {
     /// 来源地址与对话不匹配
     PeerMismatch,
-    /// 缺少 From tag
+    /// Missing From tag
     MissingFromTag,
-    /// From tag 不匹配
-    FromTagMismatch,
     /// To tag 不匹配
     ToTagMismatch,
+    /// From tag 不匹配
+    FromTagMismatch,
     /// 缺少 CSeq
     MissingCSeq,
     /// 无效 CSeq

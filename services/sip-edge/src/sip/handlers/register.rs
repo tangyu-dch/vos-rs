@@ -47,7 +47,7 @@ pub(crate) async fn handle_register_request(
                 &request,
                 peer,
                 SystemTime::now(),
-                None,
+                edge_state.db_store.as_ref(),
                 edge_state.nats_connection().as_ref(),
             )
             .await

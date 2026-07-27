@@ -665,8 +665,9 @@ interface TabDef {
   hide?: boolean;
 }
 
-export default function TrunkDetailPage() {
-  const { id = '' } = useParams();
+export function TrunkDetailView({ id: propId }: { id?: string }) {
+  const params = useParams();
+  const id = propId || params.id || '';
   const [data, setData] = useState<TrunkWorkspaceData | null>(null);
   const [draft, setDraft] = useState<Entity>({});
   const [rules, setRules] = useState<TrunkIpRule[]>([]);
@@ -918,4 +919,8 @@ export default function TrunkDetailPage() {
       )}
     </section>
   );
+}
+
+export default function TrunkDetailPage() {
+  return <TrunkDetailView />;
 }

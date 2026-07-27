@@ -16,13 +16,35 @@ pub(crate) async fn extension(
     State(state): State<AppState>,
     Path(username): Path<String>,
 ) -> Result<Json<Value>, DetailError> {
-    let (users, registrations, numbers, allocations) = tokio::try_join!(
+    let (users, registrations, numbers, allocations, configs) = tokio::try_join!(
         state.store.list_users(),
         state.store.list_registrations(),
         state.store.list_numbers(),
         state.store.list_number_allocations(None),
+        sqlx::query("SELECT config_key, config_value FROM system_configs")
+            .fetch_all(state.store.pool()),
     )
     .map_err(database_error)?;
+
+    let config_map = configs
+        .into_iter()
+        .map(|row| {
+            use sqlx::Row;
+            let k: String = row.get("config_key");
+            let v: String = row.get("config_value");
+            (k, v)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let realm = config_map
+        .get("realm")
+        .cloned()
+        .unwrap_or_else(|| "vos-rs".to_string());
+    let sip_domain = config_map
+        .get("sip_domain")
+        .cloned()
+        .unwrap_or_else(|| "127.0.0.1:5060".to_string());
+
     let user = users
         .into_iter()
         .find(|user| user.username == username)
@@ -47,11 +69,16 @@ pub(crate) async fn extension(
                 || number.username.as_deref() == Some(username.as_str())
         })
         .collect::<Vec<_>>();
+
     Ok(Json(json!({
         "extension": user,
         "credential": {"configured": true, "storage": "digest_ha1"},
         "registrations": registrations,
         "numbers": numbers,
+        "system_config": {
+            "realm": realm,
+            "sip_domain": sip_domain
+        }
     })))
 }
 

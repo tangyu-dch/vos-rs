@@ -30,6 +30,7 @@ use tokio::net::UdpSocket;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ClientTransactionKey {
     pub call_id: String,
+    pub cseq: String,
     pub method: String,
     pub branch: String,
 }
@@ -44,24 +45,12 @@ impl ClientTransactionKey {
             .get("via")
             .and_then(|via| branch_param(via.as_str()))?;
         let call_id = request.headers.get("call-id")?.as_str().to_string();
+        let cseq_header = request.headers.get("cseq")?.as_str();
+        let cseq = cseq_header.split_whitespace().next()?.to_string();
         let method = request.method.as_str().to_string();
         Some(Self {
             call_id,
-            method,
-            branch,
-        })
-    }
-
-    pub(crate) fn from_response(response: &sip_core::SipResponse) -> Option<Self> {
-        let branch = response
-            .headers
-            .get("via")
-            .and_then(|via| branch_param(via.as_str()))?;
-        let call_id = response.headers.get("call-id")?.as_str().to_string();
-        let cseq = response.headers.get("cseq")?.as_str();
-        let method = cseq.split_whitespace().nth(1)?.to_string();
-        Some(Self {
-            call_id,
+            cseq,
             method,
             branch,
         })
@@ -83,16 +72,12 @@ pub(crate) struct RequestTransactionKey {
 /// differs from the INVITE branch. The dialog identifiers and CSeq number are the stable keys.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct InviteAckKey {
-    peer: String,
     call_id: String,
     cseq: String,
 }
 
 impl InviteAckKey {
-    pub(crate) fn from_request(
-        request: &sip_core::SipRequestBorrow<'_>,
-        peer: SocketAddr,
-    ) -> Option<Self> {
+    pub(crate) fn from_request(request: &sip_core::SipRequestBorrow<'_>) -> Option<Self> {
         if !matches!(&request.method, Method::Invite | Method::Ack) {
             return None;
         }
@@ -104,11 +89,7 @@ impl InviteAckKey {
             .split_whitespace()
             .next()?
             .to_string();
-        Some(Self {
-            peer: peer.to_string(),
-            call_id,
-            cseq,
-        })
+        Some(Self { call_id, cseq })
     }
 }
 
@@ -153,7 +134,6 @@ impl RequestTransactionKey {
         }
         let cseq = self.cseq.as_deref()?.split_whitespace().next()?.to_string();
         Some(InviteAckKey {
-            peer: self.peer.clone(),
             call_id: self.call_id.clone()?,
             cseq,
         })
@@ -238,7 +218,6 @@ mod tests {
 
     #[test]
     fn invite_ack_key_ignores_the_separate_ack_branch() {
-        let peer = "192.0.2.10:5060".parse().unwrap();
         let invite = request(concat!(
             "INVITE sip:1002@example.com SIP/2.0\r\n",
             "Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-invite\r\n",
@@ -255,8 +234,8 @@ mod tests {
         ));
 
         assert_eq!(
-            InviteAckKey::from_request(&invite, peer),
-            InviteAckKey::from_request(&ack, peer)
+            InviteAckKey::from_request(&invite),
+            InviteAckKey::from_request(&ack)
         );
     }
 
@@ -298,7 +277,7 @@ mod tests {
         // Feed Response
         let resp_bytes = b"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec();
         event_tx
-            .send(ServerTransactionEvent::Response(resp_bytes.clone()))
+            .send(ServerTransactionEvent::send_response(resp_bytes.clone()))
             .await
             .unwrap();
 
@@ -374,7 +353,7 @@ mod tests {
         // Feed provisional response
         let trying_bytes = b"SIP/2.0 100 Trying\r\nContent-Length: 0\r\n\r\n".to_vec();
         event_tx
-            .send(ServerTransactionEvent::Response(trying_bytes.clone()))
+            .send(ServerTransactionEvent::send_response(trying_bytes.clone()))
             .await
             .unwrap();
 
@@ -408,7 +387,7 @@ mod tests {
         // Feed final 302 response
         let final_bytes = b"SIP/2.0 302 Moved\r\nContent-Length: 0\r\n\r\n".to_vec();
         event_tx
-            .send(ServerTransactionEvent::Response(final_bytes.clone()))
+            .send(ServerTransactionEvent::send_response(final_bytes.clone()))
             .await
             .unwrap();
 
@@ -491,7 +470,9 @@ mod tests {
             .unwrap();
         let final_response = b"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec();
         event_tx
-            .send(ServerTransactionEvent::Response(final_response.clone()))
+            .send(ServerTransactionEvent::send_response(
+                final_response.clone(),
+            ))
             .await
             .unwrap();
 
@@ -518,7 +499,7 @@ mod tests {
 
         let ack = request(concat!(
             "ACK sip:1002@example.com SIP/2.0\r\n",
-            "Via: SIP/2.0/UDP 127.0.0.1:0;branch=z9hG4bK-separate-ack\r\n",
+            "Via: SIP/2.0/UDP 127.0.0.1:0;branch=z9hG4bK-ack\r\n",
             "Call-ID: call-success@example.com\r\n",
             "CSeq: 1 ACK\r\n",
             "Content-Length: 0\r\n\r\n"
@@ -551,9 +532,28 @@ mod tests {
 #[allow(dead_code)]
 pub(crate) enum ServerTransactionEvent {
     Request(SipRequest),
-    Response(Vec<u8>),
+    Response {
+        bytes: Vec<u8>,
+        send_immediately: bool,
+    },
     UpdateLastProvisional(Vec<u8>),
     Ack(SipRequest),
+}
+
+impl ServerTransactionEvent {
+    pub(crate) fn send_response(bytes: Vec<u8>) -> Self {
+        Self::Response {
+            bytes,
+            send_immediately: true,
+        }
+    }
+
+    pub(crate) fn observe_response(bytes: Vec<u8>) -> Self {
+        Self::Response {
+            bytes,
+            send_immediately: false,
+        }
+    }
 }
 
 pub(crate) fn spawn_non_invite_server_transaction(
@@ -591,17 +591,24 @@ pub(crate) fn spawn_non_invite_server_transaction(
                                 }
                             }
                         }
-                        ServerTransactionEvent::Response(resp_bytes) => {
+                        ServerTransactionEvent::Response {
+                            bytes: resp_bytes,
+                            send_immediately,
+                        } => {
                             let is_provisional = resp_bytes.starts_with(b"SIP/2.0 1");
                             if is_provisional {
                                 last_provisional = Some(resp_bytes.clone());
-                                if let Some(ref s) = socket {
-                                    let _ = s.send_to(&resp_bytes, peer).await;
+                                if send_immediately {
+                                    if let Some(ref s) = socket {
+                                        let _ = s.send_to(&resp_bytes, peer).await;
+                                    }
                                 }
                             } else {
                                 last_response = Some(resp_bytes.clone());
-                                if let Some(ref s) = socket {
-                                    let _ = s.send_to(&resp_bytes, peer).await;
+                                if send_immediately {
+                                    if let Some(ref s) = socket {
+                                        let _ = s.send_to(&resp_bytes, peer).await;
+                                    }
                                 }
                                 break;
                             }
@@ -689,26 +696,35 @@ pub(crate) fn spawn_invite_server_transaction(
                                 }
                             }
                         }
-                        ServerTransactionEvent::Response(resp_bytes) => {
+                        ServerTransactionEvent::Response {
+                            bytes: resp_bytes,
+                            send_immediately,
+                        } => {
                             let is_provisional = resp_bytes.starts_with(b"SIP/2.0 1");
                             if is_provisional {
                                 last_provisional = Some(resp_bytes.clone());
-                                if let Some(ref s) = socket {
-                                    let _ = s.send_to(&resp_bytes, peer).await;
+                                if send_immediately {
+                                    if let Some(ref s) = socket {
+                                        let _ = s.send_to(&resp_bytes, peer).await;
+                                    }
                                 }
                             } else {
                                 let is_2xx = resp_bytes.starts_with(b"SIP/2.0 2");
                                 if is_2xx {
                                     last_response = Some(resp_bytes.clone());
-                                    if let Some(ref s) = socket {
-                                        let _ = s.send_to(&resp_bytes, peer).await;
+                                    if send_immediately {
+                                        if let Some(ref s) = socket {
+                                            let _ = s.send_to(&resp_bytes, peer).await;
+                                        }
                                     }
                                     successful_final = true;
                                     break;
                                 } else {
                                     last_response = Some(resp_bytes.clone());
-                                    if let Some(ref s) = socket {
-                                        let _ = s.send_to(&resp_bytes, peer).await;
+                                    if send_immediately {
+                                        if let Some(ref s) = socket {
+                                            let _ = s.send_to(&resp_bytes, peer).await;
+                                        }
                                     }
                                     break;
                                 }
@@ -717,7 +733,9 @@ pub(crate) fn spawn_invite_server_transaction(
                         ServerTransactionEvent::UpdateLastProvisional(resp_bytes) => {
                             last_provisional = Some(resp_bytes);
                         }
-                        ServerTransactionEvent::Ack(_) => {}
+                        ServerTransactionEvent::Ack(_) => {
+                            return;
+                        }
                     }
                 }
             }
@@ -749,7 +767,9 @@ pub(crate) fn spawn_invite_server_transaction(
                                     let _ = s.send_to(response, peer).await;
                                 }
                             }
-                            ServerTransactionEvent::Ack(_) => break,
+                            ServerTransactionEvent::Ack(_) => {
+                                break;
+                            }
                             _ => {}
                         }
                     }

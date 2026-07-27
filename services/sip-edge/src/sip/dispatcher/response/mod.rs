@@ -5,19 +5,180 @@ use std::time::Instant;
 
 use sdp_core::RtpEndpoint;
 use sip_core::{HeaderName, HeaderValue, SipResponse, SipUri};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
+
+mod failover;
+mod media_negotiation;
 
 use crate::config::EdgeConfig;
-use crate::edge_state::{EdgeState, PendingDatagram};
+use crate::edge_state::{DialogLeg, DialogLegState, EdgeState, PendingDatagram};
 use crate::media;
-use crate::sip::{outbound, response, transaction, ClientTransactionKey, RequestTransactionKey};
+use crate::sip::{outbound, response, transaction, RequestTransactionKey};
+
+async fn notify_invite_server_transaction(
+    tx: &tokio::sync::mpsc::Sender<transaction::ServerTransactionEvent>,
+    status_code: u16,
+    response_bytes: Vec<u8>,
+) {
+    let event = if status_code >= 200 {
+        transaction::ServerTransactionEvent::observe_response(response_bytes)
+    } else {
+        transaction::ServerTransactionEvent::UpdateLastProvisional(response_bytes)
+    };
+    let _ = tx.send(event).await;
+}
+
+fn tagged_dialog_uri(uri: &SipUri, tag: Option<&str>) -> String {
+    match tag {
+        Some(tag) => format!("<{uri}>;tag={tag}"),
+        None => format!("<{uri}>"),
+    }
+}
+
+fn build_gateway_success_ack(
+    response: &SipResponse,
+    dialog: &DialogLegState,
+    advertised_addr: &str,
+) -> Vec<u8> {
+    let branch = format!("z9hG4bK-ack-{}", uuid::Uuid::new_v4().simple());
+    let mut ack = format!(
+        "ACK {request_uri} SIP/2.0\r\n\
+         Via: SIP/2.0/UDP {advertised_addr};branch={branch}\r\n\
+         Max-Forwards: 70\r\n",
+        request_uri = dialog.remote_target,
+    );
+    for route in &dialog.route_set {
+        ack.push_str("Route: ");
+        ack.push_str(route);
+        ack.push_str("\r\n");
+    }
+    ack.push_str("From: ");
+    ack.push_str(&tagged_dialog_uri(
+        &dialog.local_uri,
+        Some(&dialog.local_tag),
+    ));
+    ack.push_str("\r\nTo: ");
+    ack.push_str(&tagged_dialog_uri(
+        &dialog.remote_uri,
+        dialog.remote_tag.as_deref(),
+    ));
+    ack.push_str("\r\nCall-ID: ");
+    ack.push_str(&dialog.call_id);
+    ack.push_str("\r\nCSeq: ");
+    ack.push_str(&dialog.local_cseq.to_string());
+    ack.push_str(" ACK\r\nContent-Length: 0\r\n\r\n");
+
+    if response
+        .headers
+        .get("call-id")
+        .is_some_and(|value| value.as_str() != dialog.call_id)
+    {
+        warn!(
+            dialog_call_id = %dialog.call_id,
+            "refusing to borrow gateway response identity while building ACK"
+        );
+    }
+    ack.into_bytes()
+}
+
+pub(super) fn build_gateway_non_2xx_ack(
+    response: &SipResponse,
+    dialog: &DialogLegState,
+) -> Vec<u8> {
+    let via = response
+        .headers
+        .get("via")
+        .map(|value| value.as_str())
+        .unwrap_or_default();
+    let mut ack = format!(
+        "ACK {request_uri} SIP/2.0\r\n\
+         Via: {via}\r\n\
+         Max-Forwards: 70\r\n",
+        request_uri = dialog.remote_uri,
+    );
+    ack.push_str("From: ");
+    ack.push_str(&tagged_dialog_uri(
+        &dialog.local_uri,
+        Some(&dialog.local_tag),
+    ));
+    ack.push_str("\r\nTo: ");
+    ack.push_str(&tagged_dialog_uri(
+        &dialog.remote_uri,
+        dialog.remote_tag.as_deref(),
+    ));
+    ack.push_str("\r\nCall-ID: ");
+    ack.push_str(&dialog.call_id);
+    ack.push_str("\r\nCSeq: ");
+    ack.push_str(&dialog.local_cseq.to_string());
+    ack.push_str(" ACK\r\nContent-Length: 0\r\n\r\n");
+    ack.into_bytes()
+}
+
+fn gateway_peer(dialog: &DialogLegState, response_peer: SocketAddr) -> String {
+    if let Some(route_peer) = dialog
+        .route_set
+        .first()
+        .and_then(|route| crate::edge_state::parse_target_addr_from_route(route))
+    {
+        return route_peer.to_string();
+    }
+    dialog
+        .peer
+        .clone()
+        .unwrap_or_else(|| response_peer.to_string())
+}
+
+fn dialog_target(dialog: &DialogLegState) -> String {
+    dialog
+        .route_set
+        .first()
+        .and_then(|route| crate::edge_state::parse_target_addr_from_route(route))
+        .or_else(|| dialog.peer.clone())
+        .unwrap_or_else(|| outbound::target_addr_for(&dialog.remote_target))
+}
+
+fn build_dialog_bye(dialog: &mut DialogLegState, advertised_addr: &str) -> (String, Vec<u8>) {
+    dialog.local_cseq = dialog.local_cseq.saturating_add(1);
+    let branch = format!("z9hG4bK-bye-{}-{}", dialog.call_id, dialog.local_cseq);
+    let mut bye = format!(
+        "BYE {request_uri} SIP/2.0\r\n\
+         Via: SIP/2.0/UDP {advertised_addr};branch={branch}\r\n\
+         Max-Forwards: 70\r\n",
+        request_uri = dialog.remote_target,
+    );
+    for route in &dialog.route_set {
+        bye.push_str("Route: ");
+        bye.push_str(route);
+        bye.push_str("\r\n");
+    }
+    bye.push_str("From: ");
+    bye.push_str(&tagged_dialog_uri(
+        &dialog.local_uri,
+        Some(&dialog.local_tag),
+    ));
+    bye.push_str("\r\nTo: ");
+    bye.push_str(&tagged_dialog_uri(
+        &dialog.remote_uri,
+        dialog.remote_tag.as_deref(),
+    ));
+    bye.push_str("\r\nCall-ID: ");
+    bye.push_str(&dialog.call_id);
+    bye.push_str("\r\nCSeq: ");
+    bye.push_str(&dialog.local_cseq.to_string());
+    bye.push_str(" BYE\r\nContent-Length: 0\r\n\r\n");
+    (dialog_target(dialog), bye.into_bytes())
+}
 
 pub(crate) async fn dispatch_response(
-    mut sip_response: SipResponse,
+    sip_response: SipResponse,
     peer: SocketAddr,
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
 ) -> Vec<PendingDatagram> {
+    edge_state
+        .client_transactions
+        .observe_response(&sip_response);
+
     let is_self_refresh = sip_response
         .headers
         .get_all("via")
@@ -30,9 +191,20 @@ pub(crate) async fn dispatch_response(
             .map(|v| v.as_str().to_string());
         if sip_response.status_code >= 200 && sip_response.status_code < 300 {
             if let Some(ref cid) = call_id {
-                if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
-                    t_mut.last_session_refresh = Some(std::time::Instant::now());
-                    debug!(call_id = %cid, "received 200 OK for self-generated session refresh");
+                let session_id = edge_state
+                    .inbound_transactions
+                    .get(cid)
+                    .map(|transaction| transaction.session_id.clone());
+                if let Some(session_id) = session_id {
+                    if let Some(mut transaction) =
+                        edge_state.inbound_transactions.get_mut(&session_id)
+                    {
+                        transaction.last_session_refresh = Some(std::time::Instant::now());
+                        debug!(
+                            session_id,
+                            "received 200 OK for self-generated session refresh"
+                        );
+                    }
                 }
             }
         } else if sip_response.status_code >= 300 {
@@ -45,9 +217,6 @@ pub(crate) async fn dispatch_response(
         return Vec::new();
     }
 
-    if let Some(key) = ClientTransactionKey::from_response(&sip_response) {
-        edge_state.cancel_client_transaction(&key);
-    }
     let call_id = sip_response
         .headers
         .get("call-id")
@@ -85,27 +254,46 @@ pub(crate) async fn dispatch_response(
         }
     }
 
-    let raw_external_call_id = sip_response
+    let gateway_call_id = sip_response
         .headers
         .get("call-id")
         .map(|call_id| call_id.as_str().to_string())
         .unwrap_or_default();
 
-    let call_id = if let Some(ref cid) = call_id {
-        if let Some(internal_cid) = edge_state.get_internal_call_id(cid) {
-            debug!(external_call_id = %cid, internal_call_id = %internal_cid, "topology hiding: translated gateway Call-ID to internal");
-            if let Ok(name) = HeaderName::new("call-id") {
-                sip_response
-                    .headers
-                    .replace(name, HeaderValue::new_owned(internal_cid.clone()));
-            }
-            Some(internal_cid)
-        } else {
-            call_id.clone()
-        }
-    } else {
-        call_id.clone()
-    };
+    let resolved_session = call_id.as_deref().and_then(|wire_call_id| {
+        edge_state
+            .inbound_transactions
+            .get(wire_call_id)
+            .map(|transaction| {
+                (
+                    transaction.session_id.clone(),
+                    transaction.dialogs.caller.call_id.clone(),
+                )
+            })
+    });
+    let session_id = resolved_session
+        .as_ref()
+        .map(|(session_id, _)| session_id.clone());
+    let call_id = resolved_session
+        .map(|(_, caller_call_id)| caller_call_id)
+        .or(call_id);
+    let session_key = session_id.as_deref().or(call_id.as_deref());
+    let (is_fork_response, is_transfer_response) = session_key
+        .and_then(|session_id| {
+            edge_state
+                .inbound_transactions
+                .get(session_id)
+                .map(|transaction| {
+                    (
+                        transaction.fork_dialogs.contains_key(&gateway_call_id),
+                        transaction
+                            .transfer_dialog
+                            .as_ref()
+                            .is_some_and(|transfer| transfer.dialog.call_id == gateway_call_id),
+                    )
+                })
+        })
+        .unwrap_or((false, false));
 
     let is_invite = sip_response
         .headers
@@ -119,11 +307,11 @@ pub(crate) async fn dispatch_response(
 
     // UDP worker tasks may finish out of order under load. Keep response ordering local to
     // each dialog so a delayed 1xx can never be emitted after that INVITE's final response.
-    let invite_response_order = if is_invite {
-        call_id.as_deref().and_then(|cid| {
+    let invite_response_order = if is_invite && !is_fork_response && !is_transfer_response {
+        session_key.and_then(|session_id| {
             edge_state
                 .inbound_transactions
-                .get(cid)
+                .get(session_id)
                 .map(|transaction| Arc::clone(&transaction.invite_response_order))
         })
     } else {
@@ -163,14 +351,17 @@ pub(crate) async fn dispatch_response(
                 let mut to_header = String::new();
                 let mut invite_cseq = 1;
 
-                if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
-                    if !t_mut.active_forks.is_empty() {
-                        for (fork_cid, fork_gw) in t_mut.active_forks.iter() {
-                            if fork_cid != &raw_external_call_id {
-                                forks_to_cancel.push((fork_cid.clone(), fork_gw.clone()));
+                if let Some(mut t_mut) = edge_state
+                    .inbound_transactions
+                    .get_mut(session_key.unwrap_or(cid))
+                {
+                    if !t_mut.fork_dialogs.is_empty() {
+                        for (fork_cid, fork) in t_mut.fork_dialogs.iter() {
+                            if fork_cid != &gateway_call_id {
+                                forks_to_cancel.push((fork_cid.clone(), fork.gateway_id.clone()));
                             }
                         }
-                        t_mut.active_forks.clear();
+                        t_mut.fork_dialogs.clear();
                     }
                     if let Some(ref orig_req) = t_mut.original_request {
                         from_header = orig_req
@@ -240,14 +431,12 @@ pub(crate) async fn dispatch_response(
                 }
             } else if sip_response.status_code >= 300 {
                 let mut fork_gw_to_decrement = None;
-                if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
-                    if let Some(pos) = t_mut
-                        .active_forks
-                        .iter()
-                        .position(|(f_cid, _)| f_cid == &raw_external_call_id)
-                    {
-                        let (_, gw) = t_mut.active_forks.remove(pos);
-                        fork_gw_to_decrement = Some(gw);
+                if let Some(mut t_mut) = edge_state
+                    .inbound_transactions
+                    .get_mut(session_key.unwrap_or(cid))
+                {
+                    if let Some(fork) = t_mut.fork_dialogs.remove(&gateway_call_id) {
+                        fork_gw_to_decrement = Some(fork.gateway_id);
                     }
                 }
                 if let Some(gw_id) = fork_gw_to_decrement {
@@ -261,256 +450,234 @@ pub(crate) async fn dispatch_response(
         }
     }
 
-    let original_call_id = if let Some(ref cid) = call_id {
-        edge_state.refer_transfers.get(cid).map(|r| r.clone())
-    } else {
-        None
-    };
+    if is_transfer_response {
+        let Some(session_id) = session_key else {
+            return Vec::new();
+        };
+        let Some((_, mut transaction)) = edge_state.inbound_transactions.remove(session_id) else {
+            return Vec::new();
+        };
+        let Some(mut subscription) = transaction.refer_subscription.take() else {
+            edge_state
+                .inbound_transactions
+                .insert(transaction.session_id.clone(), transaction);
+            return Vec::new();
+        };
 
-    if let Some(orig_cid) = original_call_id {
-        if let Some((_, mut t)) = edge_state.inbound_transactions.remove(&orig_cid) {
-            if let Some(ref original_request) = t.original_request {
-                if let Some(uname) =
-                    crate::edge_state::EdgeState::username_from_request(original_request)
-                {
-                    edge_state.decrement_user_concurrency(&uname);
-                }
+        let status = sip_response.status_code;
+        let Some(transfer) = transaction.transfer_dialog.as_mut() else {
+            edge_state
+                .inbound_transactions
+                .insert(transaction.session_id.clone(), transaction);
+            return Vec::new();
+        };
+        if status >= 180 {
+            transfer.dialog.remote_tag = sip_response
+                .headers
+                .get("to")
+                .and_then(|value| crate::sip::dialog::tag_param(value.as_str()));
+            if let Some(uri) = sip_response
+                .headers
+                .get("from")
+                .and_then(|value| crate::edge_state::extract_uri_from_contact(value.as_str()))
+            {
+                transfer.dialog.local_uri = uri;
             }
-            if let Some(ref mut sub) = t.refer_subscription {
-                sub.notify_cseq += 1;
-                let status_code = sip_response.status_code;
-                let notify_body =
-                    format!("SIP/2.0 {} {}\r\n", status_code, sip_response.reason_phrase);
-
-                let sub_state = if status_code >= 200 {
-                    "terminated;reason=noresource"
-                } else {
-                    "active;expires=60"
-                };
-
-                let notify = outbound::build_notify_sipfrag_with_state(
-                    &orig_cid,
-                    &sub.from_header,
-                    &sub.to_header,
-                    sub.notify_cseq,
-                    &edge_config.advertised_addr,
-                    &notify_body,
-                    sub_state,
-                );
-                let mut datagrams = vec![PendingDatagram::new(sub.referrer_peer.clone(), notify)];
-
-                if (200..300).contains(&status_code) {
-                    let bye_cseq = t.last_outbound_cseq.unwrap_or(100) + 1;
-                    t.last_outbound_cseq = Some(bye_cseq);
-
-                    let to_tag_str = t
-                        .inbound_to_tag
-                        .as_ref()
-                        .map(|s| format!(";tag={}", s))
-                        .unwrap_or_default();
-                    let from_tag_str = t
-                        .inbound_from_tag
-                        .as_ref()
-                        .map(|s| format!(";tag={}", s))
-                        .unwrap_or_default();
-                    let from_hdr = format!(
-                        "{};tag={}",
-                        sub.to_header.split(';').next().unwrap_or(""),
-                        to_tag_str
-                    );
-                    let to_hdr = format!(
-                        "{};tag={}",
-                        sub.from_header.split(';').next().unwrap_or(""),
-                        from_tag_str
-                    );
-
-                    let req_uri = t
-                        .caller_contact
-                        .clone()
-                        .unwrap_or_else(|| crate::edge_state::sip_uri_from_peer(&t.peer));
-
-                    let bye_branch = format!("z9hG4bK-bye-{}-{}", orig_cid, bye_cseq);
-                    let bye_bytes = format!(
-                        "BYE {req_uri} SIP/2.0\r\n\
-                         Via: SIP/2.0/UDP {addr};branch={bye_branch}\r\n\
-                         Max-Forwards: 70\r\n\
-                         From: {from_hdr}\r\n\
-                         To: {to_hdr}\r\n\
-                         Call-ID: {orig_cid}\r\n\
-                         CSeq: {bye_cseq} BYE\r\n\
-                         Content-Length: 0\r\n\r\n",
-                        req_uri = req_uri,
-                        addr = edge_config.advertised_addr,
-                        bye_branch = bye_branch,
-                        from_hdr = from_hdr,
-                        to_hdr = to_hdr,
-                        orig_cid = orig_cid,
-                        bye_cseq = bye_cseq
-                    )
-                    .into_bytes();
-
-                    datagrams.push(PendingDatagram::new(sub.referrer_peer.clone(), bye_bytes));
-
-                    if let (Some(target_port), Some(transferee_port)) =
-                        (sub.target_relay_port, sub.transferee_relay_port)
-                    {
-                        if let Ok(c_media_rtp) = media::parse_sdp_rtp_endpoint(&sip_response.body) {
-                            let target_ep = RtpEndpoint {
-                                address: c_media_rtp.address.clone(),
-                                port: c_media_rtp.port,
-                            };
-                            let transferee_relay_ep = RtpEndpoint {
-                                address: edge_config
-                                    .advertised_addr
-                                    .split(':')
-                                    .next()
-                                    .unwrap_or("127.0.0.1")
-                                    .to_string(),
-                                port: transferee_port,
-                            };
-                            let _ = edge_state
-                                .media_relay
-                                .set_target(&transferee_relay_ep, &target_ep);
-
-                            let transferee_is_caller = sub.transferee_relay_port.is_some()
-                                && t.caller_relay_rtp.as_ref().map(|ep| ep.port)
-                                    == sub.transferee_relay_port;
-                            let transferee_dest = if transferee_is_caller {
-                                t.caller_rtp.clone()
-                            } else {
-                                t.gateway_rtp.clone()
-                            };
-                            if let Some(dest) = transferee_dest {
-                                let target_relay_ep = RtpEndpoint {
-                                    address: edge_config
-                                        .advertised_addr
-                                        .split(':')
-                                        .next()
-                                        .unwrap_or("127.0.0.1")
-                                        .to_string(),
-                                    port: target_port,
-                                };
-                                let _ = edge_state.media_relay.set_target(&target_relay_ep, &dest);
-                            }
-                        }
-                    }
-
-                    let from_header_val = sip_response
-                        .headers
-                        .get("from")
-                        .map(|v| v.as_str().to_string());
-                    let to_header_val = sip_response
-                        .headers
-                        .get("to")
-                        .map(|v| v.as_str().to_string());
-                    let contact_val = sip_response
-                        .headers
-                        .get("contact")
-                        .and_then(|v| crate::edge_state::extract_uri_from_contact(v.as_str()));
-
-                    t.transfer_from_header = from_header_val;
-                    t.transfer_to_header = to_header_val;
-                    t.transfer_call_id = call_id.clone();
-                    t.transfer_contact = contact_val;
-                    t.transfer_peer = Some(peer.to_string());
-                    t.transferee_is_caller = sub.transferee_relay_port.is_some()
-                        && t.caller_relay_rtp.as_ref().map(|ep| ep.port)
-                            == sub.transferee_relay_port;
-
-                    if let Some(ref cid) = call_id {
-                        edge_state
-                            .bridged_transfers
-                            .insert(cid.clone(), orig_cid.clone());
-                        edge_state
-                            .bridged_transfers
-                            .insert(orig_cid.clone(), cid.clone());
-                    }
-                }
-
-                if status_code >= 300 {
-                    if let Some(target_port) = sub.target_relay_port {
-                        edge_state.media_relay.clear_target(target_port);
-                    }
-
-                    let transferee_is_caller = sub.transferee_relay_port.is_some()
-                        && t.caller_relay_rtp.as_ref().map(|ep| ep.port)
-                            == sub.transferee_relay_port;
-                    let transferee_relay = if transferee_is_caller {
-                        t.caller_relay_rtp.clone()
-                    } else {
-                        t.gateway_relay_rtp.clone()
-                    };
-                    let referrer_relay = if transferee_is_caller {
-                        t.gateway_relay_rtp.clone()
-                    } else {
-                        t.caller_relay_rtp.clone()
-                    };
-                    if let (Some(transferee_relay), Some(referrer_relay)) =
-                        (transferee_relay, referrer_relay)
-                    {
-                        edge_state
-                            .media_relay
-                            .pair_ports(transferee_relay.port, referrer_relay.port);
-
-                        let ref_dest = if transferee_is_caller {
-                            t.gateway_rtp.clone()
-                        } else {
-                            t.caller_rtp.clone()
-                        };
-                        if let Some(ref_dest) = ref_dest {
-                            let _ = edge_state
-                                .media_relay
-                                .set_target(&transferee_relay, &ref_dest);
-                        }
-                        let trans_dest = if transferee_is_caller {
-                            t.caller_rtp.clone()
-                        } else {
-                            t.gateway_rtp.clone()
-                        };
-                        if let Some(trans_dest) = trans_dest {
-                            let _ = edge_state
-                                .media_relay
-                                .set_target(&referrer_relay, &trans_dest);
-                        }
-                        debug!(orig_cid = ?orig_cid, "restored original media session after transfer failure");
-                    }
-                }
-
-                if status_code >= 200 {
-                    if let Some(ref cid) = call_id {
-                        edge_state.refer_transfers.remove(cid);
-                    }
-                    t.refer_subscription = None;
-                }
-
-                edge_state.inbound_transactions.insert(orig_cid, t);
-                return datagrams;
+            if let Some(uri) = sip_response
+                .headers
+                .get("to")
+                .and_then(|value| crate::edge_state::extract_uri_from_contact(value.as_str()))
+            {
+                transfer.dialog.remote_uri = uri;
+            }
+            if let Some(uri) = sip_response
+                .headers
+                .get("contact")
+                .and_then(|value| crate::edge_state::extract_uri_from_contact(value.as_str()))
+            {
+                transfer.dialog.remote_target = uri;
+            }
+            let mut route_set = sip_response
+                .headers
+                .get_all("record-route")
+                .map(|value| value.as_str().to_string())
+                .collect::<Vec<_>>();
+            route_set.reverse();
+            transfer.dialog.route_set = route_set;
+            transfer.dialog.peer = Some(peer.to_string());
+            if let Some(cseq) = response_cseq {
+                transfer.dialog.local_cseq = cseq;
             }
         }
+        let transfer_snapshot = transfer.clone();
+        let transferee_leg = transfer.transferee_leg;
+
+        let mut datagrams = Vec::new();
+        if is_invite && (200..300).contains(&status) {
+            let ack = build_gateway_success_ack(
+                &sip_response,
+                &transfer_snapshot.dialog,
+                &edge_config.advertised_addr,
+            );
+            datagrams.push(PendingDatagram::new(
+                gateway_peer(&transfer_snapshot.dialog, peer),
+                ack,
+            ));
+        } else if is_invite && status >= 300 {
+            let ack = build_gateway_non_2xx_ack(&sip_response, &transfer_snapshot.dialog);
+            datagrams.push(PendingDatagram::new(
+                gateway_peer(&transfer_snapshot.dialog, peer),
+                ack,
+            ));
+        }
+
+        subscription.notify_cseq = subscription.notify_cseq.saturating_add(1);
+        let referrer_dialog = match transferee_leg {
+            DialogLeg::Caller => &transaction.dialogs.gateway,
+            DialogLeg::Gateway => &transaction.dialogs.caller,
+            DialogLeg::Transfer => &transaction.dialogs.caller,
+        };
+        let notify = outbound::build_notify_sipfrag_with_state(
+            &referrer_dialog.call_id,
+            &subscription.from_header,
+            &subscription.to_header,
+            subscription.notify_cseq,
+            &edge_config.advertised_addr,
+            &format!("SIP/2.0 {} {}\r\n", status, sip_response.reason_phrase),
+            if status >= 200 {
+                "terminated;reason=noresource"
+            } else {
+                "active;expires=60"
+            },
+        );
+        datagrams.push(PendingDatagram::new(
+            subscription.referrer_peer.clone(),
+            notify,
+        ));
+
+        if (200..300).contains(&status) {
+            if let (Some(target_port), Ok(target_endpoint)) = (
+                subscription.target_relay_port,
+                media::parse_sdp_rtp_endpoint(&sip_response.body),
+            ) {
+                let transferee_relay = match transferee_leg {
+                    DialogLeg::Caller => transaction.caller_relay_rtp.clone(),
+                    DialogLeg::Gateway => transaction.gateway_relay_rtp.clone(),
+                    DialogLeg::Transfer => None,
+                };
+                let transferee_destination = match transferee_leg {
+                    DialogLeg::Caller => transaction.caller_rtp.clone(),
+                    DialogLeg::Gateway => transaction.gateway_rtp.clone(),
+                    DialogLeg::Transfer => None,
+                };
+                if let Some(transferee_relay) = transferee_relay {
+                    let _ = edge_state
+                        .media_relay
+                        .set_target(&transferee_relay, &target_endpoint);
+                }
+                if let Some(destination) = transferee_destination {
+                    let target_relay = RtpEndpoint {
+                        address: edge_config
+                            .advertised_addr
+                            .split(':')
+                            .next()
+                            .unwrap_or("127.0.0.1")
+                            .to_string(),
+                        port: target_port,
+                    };
+                    let _ = edge_state
+                        .media_relay
+                        .set_target(&target_relay, &destination);
+                }
+            }
+            let referrer_dialog = match transferee_leg {
+                DialogLeg::Caller => &mut transaction.dialogs.gateway,
+                DialogLeg::Gateway => &mut transaction.dialogs.caller,
+                DialogLeg::Transfer => &mut transaction.dialogs.caller,
+            };
+            let (target, bye) = build_dialog_bye(referrer_dialog, &edge_config.advertised_addr);
+            datagrams.push(PendingDatagram::new(target, bye));
+        } else if status >= 300 {
+            if let Some(target_port) = subscription.target_relay_port {
+                edge_state.media_relay.clear_target(target_port);
+            }
+            if let (Some(caller_relay), Some(gateway_relay)) = (
+                transaction.caller_relay_rtp.clone(),
+                transaction.gateway_relay_rtp.clone(),
+            ) {
+                edge_state
+                    .media_relay
+                    .pair_ports(caller_relay.port, gateway_relay.port);
+                if let Some(gateway) = transaction.gateway_rtp.clone() {
+                    let _ = edge_state.media_relay.set_target(&caller_relay, &gateway);
+                }
+                if let Some(caller) = transaction.caller_rtp.clone() {
+                    let _ = edge_state.media_relay.set_target(&gateway_relay, &caller);
+                }
+            }
+            transaction.transfer_dialog = None;
+        }
+
+        if status < 200 {
+            transaction.refer_subscription = Some(subscription);
+        }
+        edge_state
+            .inbound_transactions
+            .insert(transaction.session_id.clone(), transaction);
+        return datagrams;
     }
 
     if let Some(call_id) = call_id.as_deref() {
-        edge_state.remember_inbound_to_tag(call_id, &sip_response);
-        {
-            if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(call_id) {
-                t_mut.outbound_peer = Some(peer.to_string());
-            }
+        if is_invite && session_key.is_some() {
+            edge_state.remember_gateway_remote_tag(session_key.unwrap_or(call_id), &sip_response);
         }
-        if sip_response.status_code >= 180 && sip_response.status_code < 300 {
-            if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(call_id) {
-                t_mut.outbound_route_set = sip_response
+        if let Some(mut t_mut) = edge_state
+            .inbound_transactions
+            .get_mut(session_key.unwrap_or(call_id))
+        {
+            t_mut.dialogs.gateway.peer = Some(peer.to_string());
+        }
+        if is_invite && sip_response.status_code >= 180 && sip_response.status_code < 300 {
+            if let Some(mut t_mut) = edge_state
+                .inbound_transactions
+                .get_mut(session_key.unwrap_or(call_id))
+            {
+                let mut route_set = sip_response
                     .headers
                     .get_all("record-route")
                     .map(|value| value.as_str().to_string())
                     .collect::<Vec<_>>();
+                route_set.reverse();
+                t_mut.dialogs.gateway.route_set = route_set;
+                if let Some(local_uri) = sip_response
+                    .headers
+                    .get("from")
+                    .and_then(|value| crate::edge_state::extract_uri_from_contact(value.as_str()))
+                {
+                    t_mut.dialogs.gateway.local_uri = local_uri;
+                }
+                if let Some(remote_uri) = sip_response
+                    .headers
+                    .get("to")
+                    .and_then(|value| crate::edge_state::extract_uri_from_contact(value.as_str()))
+                {
+                    t_mut.dialogs.gateway.remote_uri = remote_uri;
+                }
+                if let Some(invite_cseq) = sip_response
+                    .headers
+                    .get("cseq")
+                    .and_then(|value| crate::sip::dialog::cseq_number(value.as_str()))
+                {
+                    t_mut.dialogs.gateway.local_cseq = invite_cseq;
+                }
                 if let Some(contact_val) = sip_response.headers.get("contact") {
                     if let Some(mut uri) =
                         crate::edge_state::extract_uri_from_contact(contact_val.as_str())
                     {
                         if uri.port.is_none() {
-                            uri.port = t_mut.outbound_uri.port;
+                            uri.port = t_mut.dialogs.gateway.remote_uri.port;
                         }
-                        t_mut.callee_contact = Some(uri);
+                        t_mut.dialogs.gateway.remote_target = uri;
                     }
                 }
             }
@@ -551,10 +718,10 @@ pub(crate) async fn dispatch_response(
             }
         }
     }
-    let transaction = call_id.as_deref().and_then(|call_id| {
+    let transaction = session_key.and_then(|session_id| {
         edge_state
             .inbound_transactions
-            .get(call_id)
+            .get(session_id)
             .map(|r| r.clone())
     });
 
@@ -610,7 +777,10 @@ pub(crate) async fn dispatch_response(
                     }
                 });
             }
-            if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
+            if let Some(mut t_mut) = edge_state
+                .inbound_transactions
+                .get_mut(session_key.unwrap_or(cid))
+            {
                 if t_mut.established_at.is_none() {
                     t_mut.established_at = Some(std::time::Instant::now());
                 }
@@ -628,7 +798,10 @@ pub(crate) async fn dispatch_response(
                     .and_then(|p| p.split('=').nth(1).map(|r| r.trim().to_string()))
                     .unwrap_or_else(|| "uac".to_string());
                 if let Some(secs) = secs {
-                    if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
+                    if let Some(mut t_mut) = edge_state
+                        .inbound_transactions
+                        .get_mut(session_key.unwrap_or(cid))
+                    {
                         t_mut.session_expires = Some(secs);
                         t_mut.session_refresher = Some(refresher);
                         t_mut.last_session_refresh = Some(Instant::now());
@@ -640,6 +813,14 @@ pub(crate) async fn dispatch_response(
                     }
                 }
             }
+            if let Some(mut t_mut) = edge_state
+                .inbound_transactions
+                .get_mut(session_key.unwrap_or(cid))
+            {
+                if t_mut.established_at.is_none() {
+                    t_mut.established_at = Some(Instant::now());
+                }
+            }
         }
     }
 
@@ -649,9 +830,9 @@ pub(crate) async fn dispatch_response(
         .map(|cseq| cseq.as_str().contains("MESSAGE"))
         .unwrap_or(false);
     if is_message && sip_response.status_code >= 200 {
-        if let Some(cid) = call_id.as_deref() {
-            edge_state.inbound_transactions.remove(cid);
-            debug!(call_id = %cid, "cleaned up temporary MESSAGE transaction");
+        if let Some(session_id) = session_key {
+            edge_state.inbound_transactions.remove(session_id);
+            debug!(session_id, "cleaned up temporary MESSAGE transaction");
         }
     }
 
@@ -667,27 +848,33 @@ pub(crate) async fn dispatch_response(
             .map(|t| t.established_at.is_some())
             .unwrap_or(false);
 
+    // The call manager still owns the logical caller-side call state. Give it a private
+    // projection of the response; never rewrite the wire B-leg response in place.
+    let mut call_state_response = sip_response.clone();
+    if let Some(caller_call_id) = call_id.as_deref() {
+        if let Ok(name) = HeaderName::new("call-id") {
+            call_state_response
+                .headers
+                .replace(name, HeaderValue::new_owned(caller_call_id.to_string()));
+        }
+    }
+
     let mut outbound_response_outcome = if is_invite && !is_reinvite_response {
         match edge_state
             .call_manager
-            .handle_outbound_response(&sip_response)
+            .handle_outbound_response(&call_state_response)
         {
             Ok(outcome) => outcome,
             Err(error) => {
-                if sip_response.status_code >= 200 && sip_response.status_code < 300 {
-                    debug!(%error, "200 OK arrived after call terminated, forwarding anyway");
+                if sip_response.status_code >= 180 && sip_response.status_code < 300 {
+                    debug!(%error, status = sip_response.status_code, "response arrived when call state machine not in active state, forwarding anyway");
                 } else {
                     warn!(%error, "failed to apply outbound SIP response");
                     return Vec::new();
                 }
                 call_core::OutboundResponseOutcome {
                     call_id: call_core::CallId::new(
-                        sip_response
-                            .headers
-                            .get("call-id")
-                            .map(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
+                        call_id.as_deref().unwrap_or_default().to_string(),
                     ),
                     state: call_core::CallState::Established,
                     failover_uri: None,
@@ -699,14 +886,7 @@ pub(crate) async fn dispatch_response(
         }
     } else {
         call_core::OutboundResponseOutcome {
-            call_id: call_core::CallId::new(
-                sip_response
-                    .headers
-                    .get("call-id")
-                    .map(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            ),
+            call_id: call_core::CallId::new(call_id.as_deref().unwrap_or_default().to_string()),
             state: call_core::CallState::Established,
             failover_uri: None,
             gateway_id: String::new(),
@@ -773,126 +953,19 @@ pub(crate) async fn dispatch_response(
     }
 
     if outbound_response_outcome.failover_uri.is_some() {
-        if let Err(error) = crate::resource_lease::migrate_to_current(
+        if let Some(datagrams) = failover::handle_gateway_failover(
             edge_state,
-            &outbound_response_outcome.call_id,
-            &outbound_response_outcome.gateway_id,
+            edge_config,
+            &sip_response,
+            session_key,
+            &mut outbound_response_outcome,
+            transaction.as_ref(),
+            peer,
         )
         .await
         {
-            warn!(
-                call_id = %outbound_response_outcome.call_id.as_str(),
-                %error,
-                "gateway failover rejected because resource lease migration failed"
-            );
-            edge_state.call_manager.terminate_call_with_reason(
-                outbound_response_outcome.call_id.as_str(),
-                &error.to_string(),
-            );
-            outbound_response_outcome.failover_uri = None;
-            outbound_response_outcome.failover_gateway_id = None;
-            outbound_response_outcome.state = call_core::CallState::Failed;
+            return datagrams;
         }
-    }
-
-    if let Some(next_uri) = outbound_response_outcome.failover_uri {
-        info!(
-            call_id = ?call_id,
-            status = sip_response.status_code,
-            %next_uri,
-            "triggering gateway failover"
-        );
-
-        let old_gw = &outbound_response_outcome.gateway_id;
-        if !old_gw.is_empty() {
-            edge_state.gateway_health.decrement_active(old_gw);
-        }
-        if let Some(new_gateway_id) = outbound_response_outcome.failover_gateway_id.as_deref() {
-            edge_state.gateway_health.increment_active(new_gateway_id);
-        }
-
-        if let Some(transaction) = transaction.as_ref() {
-            edge_state.clear_media_targets(transaction);
-        }
-
-        let original_request = transaction
-            .as_ref()
-            .and_then(|t| t.original_request.as_ref());
-        let rewritten_sdp = if let Some(req) = original_request {
-            match crate::sip::handlers::prepare_rewritten_sdp(
-                &req.headers,
-                &req.body,
-                &edge_state.media_relay,
-                &edge_config.media,
-                "failover INVITE offer",
-                call_id.as_deref().unwrap_or(""),
-            ) {
-                Ok(rewritten_sdp) => rewritten_sdp,
-                Err(error) => {
-                    warn!(%error, "failed to prepare media for failover INVITE");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        if let (Some(call_id), Some(sdp)) = (call_id.as_deref(), rewritten_sdp.as_ref()) {
-            if let Some(caller_rtp) = &sdp.original_endpoint {
-                crate::sip::handlers::register_relay_target(
-                    &edge_state.media_relay,
-                    &sdp.relay_endpoint,
-                    caller_rtp,
-                    "gateway-to-caller RTP (failover)",
-                );
-            }
-
-            if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(call_id) {
-                t_mut.outbound_uri = next_uri.clone();
-                t_mut.gateway_relay_rtp = Some(sdp.relay_endpoint.clone());
-                t_mut.caller_rtp = sdp.original_endpoint.clone();
-                t_mut.gateway_rtp = None;
-                t_mut.caller_relay_rtp = None;
-            }
-        }
-
-        let mut datagrams = Vec::new();
-
-        // 构造针对上一个网关的非 2xx 响应的 ACK 并发送
-        if let Some(ref t) = transaction {
-            let ack_bytes = outbound::build_non_2xx_response_ack(
-                &sip_response,
-                &t.outbound_uri,
-                &raw_external_call_id,
-            );
-            datagrams.push(PendingDatagram::new(peer.to_string(), ack_bytes));
-        }
-
-        if let (Some(req), Some(sdp)) = (original_request, rewritten_sdp) {
-            let target = outbound::target_addr_for(&next_uri);
-            let failover_internal_cid = req
-                .headers
-                .get("call-id")
-                .map(|v| v.as_str().to_string())
-                .unwrap_or_default();
-            let failover_external_cid = edge_state
-                .get_external_call_id(&failover_internal_cid)
-                .unwrap_or_else(|| failover_internal_cid.clone());
-            let bytes = outbound::build_outbound_invite_with_body_call_id_and_caller(
-                req,
-                &next_uri,
-                &edge_config.advertised_addr,
-                sdp.body.as_slice(),
-                &failover_external_cid,
-                outbound_response_outcome.caller_identity.as_ref(),
-            );
-            datagrams.push(PendingDatagram::new(target, bytes));
-        } else {
-            warn!(
-                "could not perform failover because original request or rewritten sdp is missing"
-            );
-        }
-        return datagrams;
     }
 
     if matches!(
@@ -904,11 +977,14 @@ pub(crate) async fn dispatch_response(
         }
         if !is_reinvite_response {
             if let Some(cid) = call_id.as_deref() {
-                let username = edge_state.inbound_transactions.get(cid).and_then(|tx| {
-                    tx.original_request
-                        .as_ref()
-                        .and_then(|req| crate::edge_state::EdgeState::username_from_request(req))
-                });
+                let username = edge_state
+                    .inbound_transactions
+                    .get(session_key.unwrap_or(cid))
+                    .and_then(|tx| {
+                        tx.original_request.as_ref().and_then(|req| {
+                            crate::edge_state::EdgeState::username_from_request(req)
+                        })
+                    });
                 if let Some(ref uname) = username {
                     edge_state.decrement_user_concurrency(uname);
                 }
@@ -958,125 +1034,21 @@ pub(crate) async fn dispatch_response(
                         .await;
                     });
                 }
-                edge_state.inbound_transactions.remove(cid);
-            }
-        }
-    }
-
-    let mut rewritten_sdp_body = None;
-    let mut mid_dialog_rewritten = false;
-
-    if let Some(t) = &transaction {
-        if t.gateway_relay_rtp.is_some() && t.caller_relay_rtp.is_some() {
-            mid_dialog_rewritten = true;
-            if media::is_sdp_body(&sip_response.headers, &sip_response.body) {
-                let is_to_caller = peer.to_string() != t.peer;
-                let relay_ep = if is_to_caller {
-                    t.caller_relay_rtp.as_ref()
-                } else {
-                    t.gateway_relay_rtp.as_ref()
-                };
-
-                if let Some(ep) = relay_ep {
-                    if let Ok((rewritten, remote_ep)) =
-                        media::rewrite_sdp_and_extract_endpoint(&sip_response.body, ep)
-                    {
-                        rewritten_sdp_body = Some(rewritten);
-                        crate::sip::handlers::register_relay_target(
-                            &edge_state.media_relay,
-                            ep,
-                            &remote_ep,
-                            "mid-dialog response target update",
-                        );
-
-                        if let Some(cid) = call_id.as_deref() {
-                            if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
-                                if is_to_caller {
-                                    t_mut.gateway_rtp = Some(remote_ep);
-                                } else {
-                                    t_mut.caller_rtp = Some(remote_ep);
-                                }
-                            }
-                        }
-                    }
+                if let Some(session_id) = session_key {
+                    edge_state.inbound_transactions.remove(session_id);
                 }
             }
         }
     }
 
-    let rewritten_sdp_bytes = if mid_dialog_rewritten {
-        rewritten_sdp_body
-    } else {
-        let caller_is_webrtc = transaction
-            .as_ref()
-            .and_then(|value| value.original_request.as_ref())
-            .is_some_and(|request| media::is_webrtc_sdp(&request.body));
-        let prepared =
-            if caller_is_webrtc && media::is_sdp_body(&sip_response.headers, &sip_response.body) {
-                crate::sip::handlers::prepare_webrtc_answer(
-                    &sip_response.body,
-                    &edge_state.media_relay,
-                    &edge_config.media,
-                    call_id.as_deref().unwrap_or(""),
-                )
-                .map(Some)
-            } else {
-                crate::sip::handlers::prepare_rewritten_sdp(
-                    &sip_response.headers,
-                    &sip_response.body,
-                    &edge_state.media_relay,
-                    &edge_config.media,
-                    "outbound response answer",
-                    call_id.as_deref().unwrap_or(""),
-                )
-            };
-        match prepared {
-            Ok(Some(sdp)) => {
-                if let (Some(call_id), Some(gateway_rtp)) =
-                    (call_id.as_deref(), &sdp.original_endpoint)
-                {
-                    crate::sip::handlers::register_relay_target(
-                        &edge_state.media_relay,
-                        &sdp.relay_endpoint,
-                        gateway_rtp,
-                        "caller-to-gateway RTP",
-                    );
-
-                    if let Some(pt) = media::parse_sdp_dtmf_payload_type(&sip_response.body) {
-                        edge_state.media_relay.register_port_dtmf_tracking(
-                            call_id,
-                            sdp.relay_endpoint.port,
-                            pt,
-                        );
-                    }
-
-                    if let Some(t) = &transaction {
-                        if let Some(original_req) = &t.original_request {
-                            if let Some(pt) = media::parse_sdp_dtmf_payload_type(&original_req.body)
-                            {
-                                if let Some(gateway_relay) = &t.gateway_relay_rtp {
-                                    edge_state.media_relay.register_port_dtmf_tracking(
-                                        call_id,
-                                        gateway_relay.port,
-                                        pt,
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    edge_state.remember_gateway_media(
-                        call_id,
-                        sdp.original_endpoint.clone(),
-                        sdp.relay_endpoint.clone(),
-                        &edge_config.media,
-                    );
-                }
-                Some(sdp.body)
-            }
-            _ => None,
-        }
-    };
+    let (rewritten_sdp_bytes, _mid_dialog_rewritten) = media_negotiation::prepare_response_sdp(
+        &sip_response,
+        peer,
+        transaction.as_ref(),
+        call_id.as_deref(),
+        edge_state,
+        edge_config,
+    );
 
     let cseq_method = sip_response
         .headers
@@ -1106,28 +1078,32 @@ pub(crate) async fn dispatch_response(
                 .and_then(|v| v.as_str().trim().parse::<u32>().ok())
                 .unwrap_or(1);
 
-            let (our_rseq, prack_cseq, from_val, to_val, outbound_uri) = {
-                if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
+            let (our_rseq, prack_cseq, from_val, to_val, gateway_call_id, target_uri, target_peer) = {
+                if let Some(mut t_mut) = edge_state
+                    .inbound_transactions
+                    .get_mut(session_key.unwrap_or(cid))
+                {
                     t_mut.prack_rseq += 1;
                     t_mut.gateway_100rel = true;
                     let our_rseq = t_mut.prack_rseq;
-                    let prack_cseq = t_mut.last_inbound_cseq.unwrap_or(1) + 100 + our_rseq;
-                    let from_val = sip_response
-                        .headers
-                        .get("from")
-                        .map(|v| v.as_str().to_string())
-                        .unwrap_or_default();
-                    let to_val = sip_response
-                        .headers
-                        .get("to")
-                        .map(|v| v.as_str().to_string())
-                        .unwrap_or_default();
+                    let gateway_dialog = &t_mut.dialogs.gateway;
+                    let prack_cseq = gateway_dialog.local_cseq.saturating_add(our_rseq);
+                    let from_val = tagged_dialog_uri(
+                        &gateway_dialog.local_uri,
+                        Some(&gateway_dialog.local_tag),
+                    );
+                    let to_val = tagged_dialog_uri(
+                        &gateway_dialog.remote_uri,
+                        gateway_dialog.remote_tag.as_deref(),
+                    );
                     (
                         our_rseq,
                         prack_cseq,
                         from_val,
                         to_val,
-                        t_mut.outbound_uri.clone(),
+                        gateway_dialog.call_id.clone(),
+                        gateway_dialog.remote_target.clone(),
+                        gateway_peer(gateway_dialog, peer),
                     )
                 } else {
                     (
@@ -1135,10 +1111,12 @@ pub(crate) async fn dispatch_response(
                         1,
                         String::new(),
                         String::new(),
+                        gateway_call_id.clone(),
                         transaction
                             .as_ref()
-                            .map(|t| t.outbound_uri.clone())
+                            .map(|t| t.dialogs.gateway.remote_target.clone())
                             .unwrap_or_else(|| SipUri::from_str("sip:unknown@127.0.0.1").unwrap()),
+                        peer.to_string(),
                     )
                 }
             };
@@ -1150,33 +1128,35 @@ pub(crate) async fn dispatch_response(
                 .unwrap_or(1);
             let rack_value = format!("{gw_rseq} {gw_cseq_num} INVITE");
 
-            let prack_call_id = edge_state
-                .get_external_call_id(cid)
-                .unwrap_or_else(|| cid.to_string());
             let prack_bytes = outbound::build_outbound_prack(
-                &prack_call_id,
+                &gateway_call_id,
                 &from_val,
                 &to_val,
                 prack_cseq,
                 &rack_value,
                 &edge_config.advertised_addr,
-                &outbound_uri,
+                &target_uri,
             );
-            let gw_target = outbound::target_addr_for(&outbound_uri);
             let mut datagrams: Vec<PendingDatagram> =
-                vec![PendingDatagram::new(gw_target, prack_bytes)];
+                vec![PendingDatagram::new(target_peer, prack_bytes)];
 
             if let Some(t) = transaction.as_ref() {
-                let mut rewritten_response =
-                    response::forward_response_to_inbound_with_body_and_call_id(
-                        &sip_response,
-                        &t.vias,
-                        &t.inbound_route_set,
-                        rewritten_sdp_bytes
-                            .as_deref()
-                            .unwrap_or(sip_response.body.as_ref()),
-                        call_id.as_deref(),
-                    );
+                let caller_peer = t.dialogs.caller.peer.clone().unwrap_or_default();
+                let peer_addr = caller_peer.parse::<SocketAddr>().ok();
+                let Some(inbound_request) = t.original_request.as_deref() else {
+                    warn!(call_id = ?call_id, "cannot build caller response without inbound INVITE");
+                    return datagrams;
+                };
+                let mut rewritten_response = response::build_inbound_leg_response(
+                    &sip_response,
+                    inbound_request,
+                    &edge_config.advertised_addr,
+                    &t.dialogs.caller.local_tag,
+                    rewritten_sdp_bytes
+                        .as_deref()
+                        .unwrap_or(sip_response.body.as_ref()),
+                    peer_addr,
+                );
                 let raw_str = String::from_utf8_lossy(&rewritten_response);
                 let patched = crate::sip::handlers::replace_header_value(
                     &raw_str,
@@ -1186,7 +1166,7 @@ pub(crate) async fn dispatch_response(
                 rewritten_response = patched.into_bytes();
 
                 if let (Some(ref orig_req), Ok(peer_addr)) =
-                    (&t.original_request, t.peer.parse::<SocketAddr>())
+                    (&t.original_request, caller_peer.parse::<SocketAddr>())
                 {
                     if let Some(key) = RequestTransactionKey::from_request(orig_req, peer_addr) {
                         if let Some(tx) = edge_state.get_server_transaction(&key) {
@@ -1199,7 +1179,7 @@ pub(crate) async fn dispatch_response(
                     }
                 }
 
-                let caller_response = PendingDatagram::new(t.peer.clone(), rewritten_response);
+                let caller_response = PendingDatagram::new(caller_peer, rewritten_response);
                 let caller_response = match invite_response_order.as_ref() {
                     Some(order) => caller_response.with_invite_response_order(
                         Arc::clone(order),
@@ -1216,7 +1196,7 @@ pub(crate) async fn dispatch_response(
 
     match transaction {
         Some(transaction) => {
-            if transaction.peer == "local-originate" {
+            if transaction.dialogs.caller.peer.as_deref() == Some("local-originate") {
                 // Originated call response: register media target and ACK 200 OK.
                 if let Some(ep) = transaction.caller_relay_rtp.as_ref() {
                     let sdp_bytes = rewritten_sdp_bytes
@@ -1226,8 +1206,10 @@ pub(crate) async fn dispatch_response(
                         if let Err(e) = edge_state.media_relay.set_target(ep, &remote_ep) {
                             tracing::warn!(error = %e, "originate: failed to set relay target");
                         }
-                        if let Some(cid) = call_id.as_deref() {
-                            if let Some(mut t_mut) = edge_state.inbound_transactions.get_mut(cid) {
+                        if let Some(session_id) = session_key {
+                            if let Some(mut t_mut) =
+                                edge_state.inbound_transactions.get_mut(session_id)
+                            {
                                 t_mut.caller_rtp = Some(remote_ep);
                             }
                         }
@@ -1235,18 +1217,15 @@ pub(crate) async fn dispatch_response(
                 }
                 let mut datagrams = Vec::new();
                 if is_invite && (200..300).contains(&sip_response.status_code) {
-                    let request_uri = transaction
-                        .callee_contact
-                        .as_ref()
-                        .unwrap_or(&transaction.outbound_uri);
-                    let ack_bytes = outbound::build_success_response_ack(
+                    let ack_bytes = build_gateway_success_ack(
                         &sip_response,
-                        request_uri,
+                        &transaction.dialogs.gateway,
                         &edge_config.advertised_addr,
-                        call_id.as_deref().unwrap_or(""),
-                        &transaction.outbound_route_set,
                     );
-                    datagrams.push(PendingDatagram::new(peer.to_string(), ack_bytes));
+                    datagrams.push(PendingDatagram::new(
+                        gateway_peer(&transaction.dialogs.gateway, peer),
+                        ack_bytes,
+                    ));
                     // Emit CallAnswered event for the originated leg
                     if let Some(edge_arc) = edge_state.self_weak.get().and_then(|w| w.upgrade()) {
                         let cfg = edge_config.clone();
@@ -1279,74 +1258,78 @@ pub(crate) async fn dispatch_response(
                 return datagrams;
             }
 
-            let gateway_success_ack = if is_invite
-                && (200..300).contains(&sip_response.status_code)
-                && !raw_external_call_id.is_empty()
+            let gateway_success_ack = if is_invite && (200..300).contains(&sip_response.status_code)
             {
-                let request_uri = transaction
-                    .callee_contact
-                    .as_ref()
-                    .unwrap_or(&transaction.outbound_uri);
+                let ack_bytes = build_gateway_success_ack(
+                    &sip_response,
+                    &transaction.dialogs.gateway,
+                    &edge_config.advertised_addr,
+                );
                 Some(PendingDatagram::new(
-                    peer.to_string(),
-                    outbound::build_success_response_ack(
-                        &sip_response,
-                        request_uri,
-                        &edge_config.advertised_addr,
-                        &raw_external_call_id,
-                        &transaction.outbound_route_set,
-                    ),
+                    gateway_peer(&transaction.dialogs.gateway, peer),
+                    ack_bytes,
                 ))
             } else {
                 None
             };
-            let forwarded_bytes = response::forward_response_to_inbound_with_body_and_call_id(
+            let caller_peer = transaction.dialogs.caller.peer.clone().unwrap_or_default();
+            let peer_addr = caller_peer.parse::<SocketAddr>().ok();
+            let Some(inbound_request) = transaction.original_request.as_deref() else {
+                warn!(call_id = ?call_id, "cannot build caller response without inbound INVITE");
+                return gateway_success_ack.into_iter().collect();
+            };
+            let forwarded_bytes = response::build_inbound_leg_response(
                 &sip_response,
-                &transaction.vias,
-                &transaction.inbound_route_set,
+                inbound_request,
+                &edge_config.advertised_addr,
+                &transaction.dialogs.caller.local_tag,
                 rewritten_sdp_bytes
                     .as_deref()
                     .unwrap_or(sip_response.body.as_ref()),
-                call_id.as_deref(),
+                peer_addr,
             );
 
-            let mut delivered_by_server_transaction = false;
             if is_invite {
                 if let (Some(ref orig_req), Ok(peer_addr)) = (
                     &transaction.original_request,
-                    transaction.peer.parse::<SocketAddr>(),
+                    caller_peer.parse::<SocketAddr>(),
                 ) {
                     if let Some(key) = RequestTransactionKey::from_request(orig_req, peer_addr) {
                         if let Some(tx) = edge_state.get_server_transaction(&key) {
-                            let event = if sip_response.status_code < 200 {
-                                transaction::ServerTransactionEvent::UpdateLastProvisional(
-                                    forwarded_bytes.clone(),
-                                )
-                            } else {
-                                transaction::ServerTransactionEvent::Response(
-                                    forwarded_bytes.clone(),
-                                )
-                            };
-                            delivered_by_server_transaction =
-                                sip_response.status_code >= 200 && tx.send(event).await.is_ok();
+                            notify_invite_server_transaction(
+                                &tx,
+                                sip_response.status_code,
+                                forwarded_bytes.clone(),
+                            )
+                            .await;
                         }
                     }
                 }
             }
 
             let mut datagrams = gateway_success_ack.into_iter().collect::<Vec<_>>();
-            if !delivered_by_server_transaction {
-                let caller_response = PendingDatagram::new(transaction.peer, forwarded_bytes);
-                let caller_response = match invite_response_order.as_ref() {
-                    Some(order) => caller_response.with_invite_response_order(
-                        Arc::clone(order),
-                        response_cseq,
-                        sip_response.status_code,
-                    ),
-                    None => caller_response,
-                };
-                datagrams.push(caller_response);
+
+            // RFC 3261 Section 17.1.1.3: 当收到被叫发来的非 2xx (300-699) INVITE 响应时，
+            // 代理/B2BUA 必须立即向被叫发送 ACK 终止其 INVITE 服务端事务，防止被叫按 Timer G 疯狂重传非 2xx 响应！
+            if is_invite && sip_response.status_code >= 300 {
+                let ack_bytes =
+                    build_gateway_non_2xx_ack(&sip_response, &transaction.dialogs.gateway);
+                datagrams.push(PendingDatagram::new(
+                    gateway_peer(&transaction.dialogs.gateway, peer),
+                    ack_bytes,
+                ));
             }
+
+            let caller_response = PendingDatagram::new(caller_peer, forwarded_bytes);
+            let caller_response = match invite_response_order.as_ref() {
+                Some(order) => caller_response.with_invite_response_order(
+                    Arc::clone(order),
+                    response_cseq,
+                    sip_response.status_code,
+                ),
+                None => caller_response,
+            };
+            datagrams.push(caller_response);
             datagrams.extend(cancel_datagrams);
             datagrams
         }
@@ -1354,5 +1337,36 @@ pub(crate) async fn dispatch_response(
             warn!("received outbound SIP response without inbound transaction");
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::notify_invite_server_transaction;
+    use crate::sip::transaction::ServerTransactionEvent;
+
+    #[tokio::test]
+    async fn final_response_is_observed_without_a_second_immediate_send() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+
+        notify_invite_server_transaction(&tx, 200, b"SIP/2.0 200 OK\r\n\r\n".to_vec()).await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(ServerTransactionEvent::Response {
+                send_immediately: false,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn provisional_response_remains_owned_by_transport_dispatch() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+        notify_invite_server_transaction(&tx, 180, b"SIP/2.0 180 Ringing\r\n\r\n".to_vec()).await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(ServerTransactionEvent::UpdateLastProvisional(_))
+        ));
     }
 }

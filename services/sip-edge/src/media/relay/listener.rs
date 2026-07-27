@@ -256,8 +256,14 @@ pub(crate) async fn relay_media_port(
                     }
 
                     if let Some(target) = plan.target {
+                        let egress_socket = plan
+                            .egress_socket
+                            .as_deref()
+                            .unwrap_or_else(|| socket.as_ref());
                         // 优化一：非阻塞发送优先
-                        if let Err(error) = send_media_nonblocking(&socket, packet, target).await {
+                        if let Err(error) =
+                            send_media_nonblocking(egress_socket, packet, target).await
+                        {
                             fast_path_counters.record_send_error();
                             warn!(%error, %source, %target, local_port, "failed to relay RTP packet on fast path");
                         } else {
@@ -744,9 +750,14 @@ pub(crate) async fn relay_media_port(
                 .as_ref()
                 .map(pool::ReusablePacket::as_slice)
                 .unwrap_or(packet);
+            let egress_socket = plan
+                .egress_socket
+                .as_deref()
+                .unwrap_or_else(|| socket.as_ref());
 
             // 优化一：非阻塞发送优先
-            if let Err(error) = send_media_nonblocking(&socket, outbound_packet, target).await {
+            if let Err(error) = send_media_nonblocking(egress_socket, outbound_packet, target).await
+            {
                 relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
                 warn!(%error, %source, %target, local_port, packet_kind = packet_kind.label(), "failed to relay media packet");
             } else {

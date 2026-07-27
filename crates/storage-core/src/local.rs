@@ -42,7 +42,7 @@ impl StorageBackend for LocalStorage {
 
     async fn get(&self, key: &str) -> Result<Bytes, StorageError> {
         let path = self.resolve_path(key);
-        if !path.exists() {
+        if !fs::try_exists(&path).await.unwrap_or(false) {
             return Err(StorageError::NotFound(key.to_string()));
         }
         let data = fs::read(&path).await?;
@@ -51,7 +51,7 @@ impl StorageBackend for LocalStorage {
 
     async fn list(&self, prefix: &str) -> Result<Vec<FileInfo>, StorageError> {
         let dir = self.resolve_path(prefix);
-        if !dir.exists() {
+        if !fs::try_exists(&dir).await.unwrap_or(false) {
             return Ok(Vec::new());
         }
 
@@ -80,12 +80,14 @@ impl StorageBackend for LocalStorage {
     }
 
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
-        Ok(self.resolve_path(key).exists())
+        Ok(fs::try_exists(self.resolve_path(key))
+            .await
+            .unwrap_or(false))
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
         let path = self.resolve_path(key);
-        if path.exists() {
+        if fs::try_exists(&path).await.unwrap_or(false) {
             fs::remove_file(&path).await?;
         }
         Ok(())
@@ -93,7 +95,7 @@ impl StorageBackend for LocalStorage {
 
     async fn presign_get(&self, key: &str, _expires_secs: u64) -> Result<String, StorageError> {
         let path = self.resolve_path(key);
-        if !path.exists() {
+        if !fs::try_exists(&path).await.unwrap_or(false) {
             return Err(StorageError::NotFound(key.to_string()));
         }
         Ok(path.to_string_lossy().into_owned())

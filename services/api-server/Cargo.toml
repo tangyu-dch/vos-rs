@@ -10,7 +10,7 @@ name = "api-server"
 path = "src/main.rs"
 
 [dependencies]
-axum = { version = "0.7", features = ["macros", "multipart"] }
+axum = { version = "0.7", features = ["macros", "multipart", "ws"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -20,6 +20,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "time", "rust_decimal"] }
 cdr-core = { path = "../../crates/cdr-core" }
+call-core = { path = "../../crates/call-core" }
 rust_decimal = { version = "1.36", features = ["serde-float"] }
 anyhow = "1"
 time = { version = "0.3", features = ["parsing"] }

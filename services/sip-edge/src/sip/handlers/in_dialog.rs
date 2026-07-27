@@ -13,8 +13,8 @@ use super::{
 };
 use crate::config::EdgeConfig;
 use crate::edge_state::{
-    extract_uri_from_contact, parse_target_addr_from_route, sip_uri_from_peer, DialogLeg,
-    EdgeState, PendingDatagram,
+    extract_uri_from_contact, parse_target_addr_from_route, DialogLeg, DialogLegState, EdgeState,
+    PendingDatagram, TransferDialogState,
 };
 use crate::media;
 use crate::sip::{outbound, response};
@@ -42,16 +42,10 @@ pub(crate) async fn handle_in_dialog_request(
         )];
     };
 
-    let mut mutable_request = request;
+    let mutable_request = request;
 
-    let (transaction, source_leg, is_target) = {
-        let lookup_cid = edge_state
-            .bridged_transfers
-            .get(call_id.as_str())
-            .map(|r| r.clone());
-        let actual_cid = lookup_cid.as_deref().unwrap_or(call_id.as_str());
-
-        let Some(mut t) = edge_state.inbound_transactions.get_mut(actual_cid) else {
+    let (transaction, transaction_call_id, source_leg) = {
+        let Some(mut t) = edge_state.inbound_transactions.get_mut(call_id.as_str()) else {
             if matches!(&mutable_request.method, Method::Ack) {
                 return Vec::new();
             }
@@ -63,93 +57,37 @@ pub(crate) async fn handle_in_dialog_request(
             )];
         };
 
-        let is_target = t.transfer_call_id.as_deref() == Some(call_id.as_str());
-
-        let source_leg = if is_target {
-            let leg = if t.transferee_is_caller {
-                DialogLeg::Gateway
-            } else {
-                DialogLeg::Caller
-            };
-
-            // Rewrite Call-ID, From, To for original leg B
-            mutable_request.headers.replace(
-                HeaderName::new("call-id").unwrap(),
-                HeaderValue::new_owned(actual_cid.to_string()),
-            );
-            if let Some(orig_req) = &t.original_request {
-                let (from_val, to_val) = if t.transferee_is_caller {
-                    (
-                        orig_req.headers.get("to").cloned(),
-                        orig_req.headers.get("from").cloned(),
-                    )
-                } else {
-                    (
-                        orig_req.headers.get("from").cloned(),
-                        orig_req.headers.get("to").cloned(),
-                    )
-                };
-                if let Some(f) = from_val {
-                    mutable_request
-                        .headers
-                        .replace(HeaderName::new("from").unwrap(), f);
-                }
-                if let Some(o) = to_val {
-                    mutable_request
-                        .headers
-                        .replace(HeaderName::new("to").unwrap(), o);
-                }
+        let (source_leg, cseq_update) = match t.validate_in_dialog_request(&mutable_request, peer) {
+            Ok(result) => result,
+            Err(error) => {
+                return vec![PendingDatagram::new(
+                    peer.to_string(),
+                    response_for_dialog_validation_error(&mutable_request, &error),
+                )];
             }
-
-            leg
-        } else {
-            let is_bridged = t.transfer_call_id.is_some();
-
-            let (leg, cseq_update) = match t.validate_in_dialog_request(&mutable_request, peer) {
-                Ok(result) => result,
-                Err(error) => {
-                    return vec![PendingDatagram::new(
-                        peer.to_string(),
-                        response_for_dialog_validation_error(&mutable_request, &error),
-                    )];
-                }
-            };
-
-            // Update cseq outside of validation
-            if let Some(cseq) = cseq_update {
-                match leg {
-                    DialogLeg::Caller => t.last_inbound_cseq = Some(cseq),
-                    DialogLeg::Gateway => t.last_outbound_cseq = Some(cseq),
-                }
-            }
-
-            if is_bridged {
-                // Rewrite Call-ID, From, To for target leg C
-                if let Some(ref tf_cid) = t.transfer_call_id {
-                    mutable_request.headers.insert(
-                        HeaderName::new("call-id").unwrap(),
-                        HeaderValue::new_owned(tf_cid.clone()),
-                    );
-                }
-                if let Some(ref tf_from) = t.transfer_from_header {
-                    mutable_request.headers.insert(
-                        HeaderName::new("from").unwrap(),
-                        HeaderValue::new_owned(tf_from.clone()),
-                    );
-                }
-                if let Some(ref tf_to) = t.transfer_to_header {
-                    mutable_request.headers.insert(
-                        HeaderName::new("to").unwrap(),
-                        HeaderValue::new_owned(tf_to.clone()),
-                    );
-                }
-            }
-
-            leg
         };
 
-        (t.clone(), source_leg, is_target)
+        if let Some(cseq) = cseq_update {
+            match source_leg {
+                DialogLeg::Caller => t.dialogs.caller.remote_cseq = Some(cseq),
+                DialogLeg::Gateway => t.dialogs.gateway.remote_cseq = Some(cseq),
+                DialogLeg::Transfer => {
+                    if let Some(transfer) = &mut t.transfer_dialog {
+                        transfer.dialog.remote_cseq = Some(cseq);
+                    }
+                }
+            }
+        }
+
+        let caller_call_id = t.dialogs.caller.call_id.clone();
+        (t.clone(), caller_call_id, source_leg)
     };
+
+    // A B2BUA terminates ACK on the receiving leg. The peer leg ACK is generated from that
+    // leg's own INVITE client transaction when its final response arrives.
+    if matches!(&mutable_request.method, Method::Ack) {
+        return Vec::new();
+    }
 
     let mut datagrams = Vec::new();
     match &mutable_request.method {
@@ -183,27 +121,30 @@ pub(crate) async fn handle_in_dialog_request(
                 None
             };
 
-            let cid = mutable_request
-                .headers
-                .get("call-id")
-                .map(|val| val.as_str())
-                .unwrap_or("missing-call-id");
-            let dtmf_digits = edge_state.media_relay.get_dtmf_digits(cid);
+            let media_session_id = transaction.session_id.as_str();
+            let dtmf_digits = edge_state.media_relay.get_dtmf_digits(media_session_id);
             if let Some(digits) = &dtmf_digits {
-                info!(call_id = cid, digits = %digits, "collected DTMF digits for call");
+                info!(
+                    session_id = media_session_id,
+                    digits = %digits,
+                    "collected DTMF digits for call"
+                );
             }
-            edge_state.media_relay.clear_dtmf_digits(cid);
+            edge_state.media_relay.clear_dtmf_digits(media_session_id);
 
             // Collect DTMF audit events for persistence to the detail table.
-            let dtmf_events = edge_state.media_relay.take_dtmf_events(cid);
+            let mut dtmf_events = edge_state.media_relay.take_dtmf_events(media_session_id);
             if !dtmf_events.is_empty() {
                 info!(
-                    call_id = cid,
+                    session_id = media_session_id,
                     count = dtmf_events.len(),
                     "collected DTMF audit events for call"
                 );
                 if let Some(db) = edge_state.db_store.clone() {
-                    let call_id = cid.to_string();
+                    let call_id = transaction.dialogs.caller.call_id.clone();
+                    for event in &mut dtmf_events {
+                        event.call_id.clone_from(&call_id);
+                    }
                     tokio::spawn(async move {
                         if let Err(error) = db.insert_dtmf_events_batch(&dtmf_events).await {
                             warn!(%error, %call_id, "failed to persist DTMF audit events");
@@ -211,43 +152,31 @@ pub(crate) async fn handle_in_dialog_request(
                     });
                 }
             } else {
-                edge_state.media_relay.clear_dtmf_events(cid);
+                edge_state.media_relay.clear_dtmf_events(media_session_id);
             }
 
-            // Clean up bridged mappings
-            if transaction.transfer_call_id.is_some() {
-                if let Some(ref tf_cid) = transaction.transfer_call_id {
-                    edge_state.bridged_transfers.remove(tf_cid);
-                }
-                let lookup_cid = edge_state
-                    .bridged_transfers
-                    .get(call_id.as_str())
-                    .map(|r| r.clone());
-                let actual_cid = lookup_cid.as_deref().unwrap_or(call_id.as_str());
-                edge_state.bridged_transfers.remove(actual_cid);
-            }
-
+            let mut termination_request = mutable_request.clone();
+            termination_request.headers.replace(
+                HeaderName::new("call-id").unwrap(),
+                HeaderValue::new_owned(transaction_call_id.clone()),
+            );
             match edge_state.call_manager.handle_inbound_termination(
-                &mutable_request,
+                &termination_request,
                 metrics,
                 dtmf_digits,
             ) {
                 Ok(outcome) => {
                     // Decrement active call count for the gateway.
-                    let call_id_str = mutable_request
-                        .headers
-                        .get("call-id")
-                        .map(|v| v.as_str())
-                        .unwrap_or("");
-                    if let Some(gw_id) = edge_state.call_manager.current_gateway_id(call_id_str) {
+                    if let Some(gw_id) = edge_state
+                        .call_manager
+                        .current_gateway_id(&transaction_call_id)
+                    {
                         edge_state.gateway_health.decrement_active(&gw_id);
                         let status = edge_state.gateway_health.get_gateway_status(&gw_id);
                         crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
                     }
 
                     crate::billing_settlement::settle_completed_call(edge_state, &outcome.call_id);
-
-                    edge_state.clear_media_targets(&transaction);
 
                     // 如果是会议呼叫（单腿 UAS 呼叫），直接在本地终结并返回 200 OK，不转发给其他任何节点
                     let out_user = transaction.outbound_uri.user.as_deref().unwrap_or("");
@@ -305,7 +234,7 @@ pub(crate) async fn handle_in_dialog_request(
                                     .await;
                             });
                         }
-                        edge_state.inbound_transactions.remove(call_id.as_str());
+                        edge_state.teardown_call_transaction(&transaction_call_id);
 
                         datagrams.push(PendingDatagram::new(
                             peer.to_string(),
@@ -314,11 +243,15 @@ pub(crate) async fn handle_in_dialog_request(
                         return datagrams;
                     }
 
-                    if transaction.transfer_call_id.is_some() {
-                        let transferee_port = if transaction.transferee_is_caller {
-                            transaction.caller_relay_rtp.as_ref().map(|ep| ep.port)
-                        } else {
-                            transaction.gateway_relay_rtp.as_ref().map(|ep| ep.port)
+                    if let Some(transfer) = &transaction.transfer_dialog {
+                        let transferee_port = match transfer.transferee_leg {
+                            DialogLeg::Caller => {
+                                transaction.caller_relay_rtp.as_ref().map(|ep| ep.port)
+                            }
+                            DialogLeg::Gateway => {
+                                transaction.gateway_relay_rtp.as_ref().map(|ep| ep.port)
+                            }
+                            DialogLeg::Transfer => None,
                         };
                         if let Some(tp) = transferee_port {
                             if let Some(cp) = edge_state.media_relay.peer_port_for(tp) {
@@ -333,11 +266,18 @@ pub(crate) async fn handle_in_dialog_request(
                     ));
                 }
                 Err(error) => {
+                    // 即使 call_manager 找不到记录（UnknownCall），也必须把 200 OK 发回给发送方
+                    // 并继续转发 BYE 给对端，否则另一方的呼叫永远无法挂断。
+                    warn!(
+                        call_id = call_id.as_str(),
+                        %error,
+                        source_leg = ?source_leg,
+                        "handle_inbound_termination failed; still forwarding BYE to peer leg"
+                    );
                     datagrams.push(PendingDatagram::new(
                         peer.to_string(),
-                        response::error_for_call_error(&mutable_request, &error),
+                        response::ok_for_request(&mutable_request),
                     ));
-                    return datagrams;
                 }
             }
         }
@@ -348,14 +288,9 @@ pub(crate) async fn handle_in_dialog_request(
                 .map(|v| v.as_str())
                 .unwrap_or("");
             if let Some(digit) = parse_sip_info_dtmf(content_type, &mutable_request.body) {
-                let cid = mutable_request
-                    .headers
-                    .get("call-id")
-                    .map(|v| v.as_str())
-                    .unwrap_or("");
-                if !cid.is_empty() {
-                    edge_state.media_relay.register_info_dtmf_digit(cid, digit);
-                }
+                edge_state
+                    .media_relay
+                    .register_info_dtmf_digit(&transaction.session_id, digit);
             }
 
             datagrams.push(PendingDatagram::new(
@@ -476,7 +411,7 @@ pub(crate) async fn handle_in_dialog_request(
 
                 let target_relay_rtp = match edge_state
                     .media_relay
-                    .allocate_endpoint_for_call(&edge_config.media, call_id.as_str())
+                    .allocate_endpoint_for_call(&edge_config.media, &transaction.session_id)
                 {
                     Ok(ep) => ep,
                     Err(error) => {
@@ -503,9 +438,19 @@ pub(crate) async fn handle_in_dialog_request(
                     }
                 };
 
-                let transferee_relay_rtp = match source_leg {
-                    DialogLeg::Caller => transaction.gateway_relay_rtp.clone(),
-                    DialogLeg::Gateway => transaction.caller_relay_rtp.clone(),
+                let transferee_leg = match source_leg {
+                    DialogLeg::Caller => DialogLeg::Gateway,
+                    DialogLeg::Gateway => DialogLeg::Caller,
+                    DialogLeg::Transfer => transaction
+                        .transfer_dialog
+                        .as_ref()
+                        .map(|transfer| transfer.transferee_leg)
+                        .unwrap_or(DialogLeg::Caller),
+                };
+                let transferee_relay_rtp = match transferee_leg {
+                    DialogLeg::Caller => transaction.caller_relay_rtp.clone(),
+                    DialogLeg::Gateway => transaction.gateway_relay_rtp.clone(),
+                    DialogLeg::Transfer => None,
                 };
 
                 if let Some(transferee_relay) = &transferee_relay_rtp {
@@ -514,7 +459,31 @@ pub(crate) async fn handle_in_dialog_request(
                         .pair_ports(target_relay_rtp.port, transferee_relay.port);
                 }
 
-                let transfer_call_id = format!("transfer-{}-{}", call_id.as_str(), local_cseq);
+                let transfer_call_id = format!("vosrs-transfer-{}", uuid::Uuid::new_v4().simple());
+                let transferee_dialog = match transferee_leg {
+                    DialogLeg::Caller => &transaction.dialogs.caller,
+                    DialogLeg::Gateway => &transaction.dialogs.gateway,
+                    DialogLeg::Transfer => {
+                        warn!(call_id = %call_id, "invalid transfer-to-transfer dialog linkage");
+                        return datagrams;
+                    }
+                };
+                let target_addr = outbound::target_addr_for(&outbound_uri);
+                let transfer_dialog = TransferDialogState {
+                    dialog: DialogLegState {
+                        call_id: transfer_call_id.clone(),
+                        local_uri: transferee_dialog.remote_uri.clone(),
+                        remote_uri: target_uri.clone(),
+                        local_tag: format!("vosrs-t-{}", uuid::Uuid::new_v4().simple()),
+                        remote_tag: None,
+                        local_cseq: 1,
+                        remote_cseq: None,
+                        route_set: Vec::new(),
+                        remote_target: outbound_uri.clone(),
+                        peer: Some(target_addr.clone()),
+                    },
+                    transferee_leg,
+                };
 
                 let refer_sub = crate::edge_state::ReferSubscription {
                     refer_to: target_uri.to_string(),
@@ -529,7 +498,6 @@ pub(crate) async fn handle_in_dialog_request(
                         .map(|v| v.as_str().to_string())
                         .unwrap_or_default(),
                     notify_cseq: local_cseq,
-                    transfer_call_id: transfer_call_id.clone(),
                     referrer_peer: peer.to_string(),
                     refer_cseq: mutable_request
                         .headers
@@ -541,30 +509,17 @@ pub(crate) async fn handle_in_dialog_request(
                 };
 
                 {
-                    if let Some(mut t_mut) =
-                        edge_state.inbound_transactions.get_mut(call_id.as_str())
+                    if let Some(mut t_mut) = edge_state
+                        .inbound_transactions
+                        .get_mut(&transaction.session_id)
                     {
                         t_mut.refer_subscription = Some(refer_sub);
+                        t_mut.transfer_dialog = Some(transfer_dialog.clone());
                     }
                 }
-
                 edge_state
-                    .refer_transfers
-                    .insert(transfer_call_id.clone(), call_id.as_str().to_string());
-
-                let from_header = match source_leg {
-                    DialogLeg::Caller => mutable_request
-                        .headers
-                        .get("to")
-                        .map(|v| v.as_str())
-                        .unwrap_or(""),
-                    DialogLeg::Gateway => mutable_request
-                        .headers
-                        .get("from")
-                        .map(|v| v.as_str())
-                        .unwrap_or(""),
-                };
-                let to_header = refer_to_str.unwrap_or("");
+                    .inbound_transactions
+                    .index_dialog(&transaction.session_id, &transfer_call_id);
 
                 let sdp_body = format!(
                     "v=0\r\no=- 0 0 IN IP4 {addr}\r\ns=-\r\nc=IN IP4 {addr}\r\nt=0 0\r\nm=audio {port} RTP/AVP 0 8 101\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\n",
@@ -591,17 +546,12 @@ pub(crate) async fn handle_in_dialog_request(
                 };
 
                 let invite_bytes = outbound::build_transfer_invite(
-                    &transfer_call_id,
-                    from_header,
-                    to_header,
-                    1,
+                    &transfer_dialog.dialog,
                     &edge_config.advertised_addr,
-                    &outbound_uri,
                     sdp_body.as_bytes(),
                     replaces_header_val.as_deref(),
                 );
 
-                let target_addr = outbound::target_addr_for(&outbound_uri);
                 datagrams.push(PendingDatagram::new(target_addr, invite_bytes));
                 return datagrams;
             } else {
@@ -633,98 +583,76 @@ pub(crate) async fn handle_in_dialog_request(
         _ => {}
     }
 
-    let (request_uri, route_set, target) =
-        if transaction.transfer_call_id.is_some() {
-            if is_target {
-                if transaction.transferee_is_caller {
-                    let uri = transaction
-                        .caller_contact
-                        .clone()
-                        .unwrap_or_else(|| sip_uri_from_peer(&transaction.peer));
-                    (uri, Vec::new(), transaction.peer.clone())
-                } else {
-                    let uri = transaction
-                        .callee_contact
-                        .clone()
-                        .unwrap_or_else(|| transaction.outbound_uri.clone());
-                    let target = if !transaction.outbound_route_set.is_empty() {
-                        parse_target_addr_from_route(&transaction.outbound_route_set[0])
-                            .unwrap_or_else(|| {
-                                if transaction.callee_behind_nat {
-                                    transaction.outbound_peer.clone().unwrap_or_else(|| {
-                                        outbound::target_addr_for(&transaction.outbound_uri)
-                                    })
-                                } else {
-                                    outbound::target_addr_for(&transaction.outbound_uri)
-                                }
-                            })
-                    } else if transaction.callee_behind_nat {
-                        transaction
-                            .outbound_peer
-                            .clone()
-                            .unwrap_or_else(|| outbound::target_addr_for(&uri))
-                    } else {
-                        outbound::target_addr_for(&uri)
-                    };
-                    (uri, transaction.outbound_route_set.clone(), target)
-                }
-            } else {
-                let uri = transaction
-                    .transfer_contact
-                    .clone()
-                    .unwrap_or_else(|| transaction.outbound_uri.clone());
-                let target = transaction
-                    .transfer_peer
-                    .clone()
-                    .unwrap_or_else(|| outbound::target_addr_for(&uri));
-                (uri, Vec::new(), target)
-            }
-        } else {
-            match source_leg {
-                DialogLeg::Caller => {
-                    let request_uri = transaction
-                        .callee_contact
-                        .clone()
-                        .unwrap_or_else(|| transaction.outbound_uri.clone());
-                    let target = if !transaction.outbound_route_set.is_empty() {
-                        parse_target_addr_from_route(&transaction.outbound_route_set[0])
-                            .unwrap_or_else(|| {
-                                if transaction.callee_behind_nat {
-                                    transaction.outbound_peer.clone().unwrap_or_else(|| {
-                                        outbound::target_addr_for(&transaction.outbound_uri)
-                                    })
-                                } else {
-                                    outbound::target_addr_for(&transaction.outbound_uri)
-                                }
-                            })
-                    } else if transaction.callee_behind_nat {
-                        transaction
-                            .outbound_peer
-                            .clone()
-                            .unwrap_or_else(|| outbound::target_addr_for(&request_uri))
-                    } else {
-                        outbound::target_addr_for(&request_uri)
-                    };
-                    (request_uri, transaction.outbound_route_set.clone(), target)
-                }
-                DialogLeg::Gateway => {
-                    let request_uri = transaction
-                        .caller_contact
-                        .clone()
-                        .unwrap_or_else(|| sip_uri_from_peer(&transaction.peer));
-                    let target = if !transaction.inbound_route_set.is_empty() {
-                        parse_target_addr_from_route(&transaction.inbound_route_set[0])
-                            .unwrap_or_else(|| transaction.peer.clone())
-                    } else {
-                        transaction.peer.clone()
-                    };
-                    (request_uri, transaction.inbound_route_set.clone(), target)
-                }
-            }
+    let target_dialog = {
+        let Some(mut current) = edge_state
+            .inbound_transactions
+            .get_mut(transaction.session_id.as_str())
+        else {
+            let error = call_error_for_unknown_request(&mutable_request);
+            datagrams.push(PendingDatagram::new(
+                peer.to_string(),
+                response::error_for_call_error(&mutable_request, &error),
+            ));
+            return datagrams;
         };
+        let target_leg = match source_leg {
+            DialogLeg::Caller
+                if current
+                    .transfer_dialog
+                    .as_ref()
+                    .is_some_and(|transfer| transfer.transferee_leg == DialogLeg::Caller) =>
+            {
+                DialogLeg::Transfer
+            }
+            DialogLeg::Gateway
+                if current
+                    .transfer_dialog
+                    .as_ref()
+                    .is_some_and(|transfer| transfer.transferee_leg == DialogLeg::Gateway) =>
+            {
+                DialogLeg::Transfer
+            }
+            DialogLeg::Caller => DialogLeg::Gateway,
+            DialogLeg::Gateway => DialogLeg::Caller,
+            DialogLeg::Transfer => current
+                .transfer_dialog
+                .as_ref()
+                .map(|transfer| transfer.transferee_leg)
+                .unwrap_or(DialogLeg::Caller),
+        };
+        let dialog = match target_leg {
+            DialogLeg::Caller => Some(&mut current.dialogs.caller),
+            DialogLeg::Gateway => Some(&mut current.dialogs.gateway),
+            DialogLeg::Transfer => current
+                .transfer_dialog
+                .as_mut()
+                .map(|transfer| &mut transfer.dialog),
+        };
+        let Some(dialog) = dialog else {
+            let error = call_error_for_unknown_request(&mutable_request);
+            datagrams.push(PendingDatagram::new(
+                peer.to_string(),
+                response::error_for_call_error(&mutable_request, &error),
+            ));
+            return datagrams;
+        };
+        if !matches!(&mutable_request.method, Method::Cancel) {
+            dialog.local_cseq = dialog.local_cseq.saturating_add(1);
+        }
+        dialog.clone()
+    };
+
+    let request_uri = target_dialog.remote_target.clone();
+    let target = target_dialog
+        .route_set
+        .first()
+        .and_then(|route| parse_target_addr_from_route(route))
+        .or_else(|| target_dialog.peer.clone())
+        .unwrap_or_else(|| outbound::target_addr_for(&request_uri));
+    let route_set = target_dialog.route_set.clone();
 
     let mut rewritten_sdp: Option<Vec<u8>> = None;
-    let is_bridged = transaction.transfer_call_id.is_some();
+    let is_bridged = transaction.transfer_dialog.is_some();
 
     if !is_bridged && matches!(&mutable_request.method, Method::Invite | Method::Update) {
         {
@@ -784,44 +712,22 @@ pub(crate) async fn handle_in_dialog_request(
         }
     }
 
-    // Topology Hiding: when forwarding a request from the caller toward the gateway,
-    // replace the inbound (internal) Call-ID with the external Call-ID the gateway knows.
-    // When forwarding from gateway toward caller, no rewrite is needed — the caller sees
-    // the internal Call-ID.
-    if matches!(source_leg, DialogLeg::Caller) {
-        let internal_cid = mutable_request
-            .headers
-            .get("call-id")
-            .map(|v| v.as_str().to_string())
-            .unwrap_or_default();
-        if let Some(external_cid) = edge_state.get_external_call_id(&internal_cid) {
-            mutable_request.headers.replace(
-                HeaderName::new("call-id").unwrap(),
-                HeaderValue::new_owned(external_cid.clone()),
-            );
-            debug!(
-                internal_cid,
-                external_cid, "topology hiding: rewrote Call-ID for in-dialog request to gateway"
-            );
-        }
-    }
-
-    let bytes = if let Some(body) = &rewritten_sdp {
-        outbound::build_outbound_in_dialog_request_with_body(
-            &mutable_request,
-            &request_uri,
-            &edge_config.advertised_addr,
-            &route_set,
-            body,
-        )
-    } else {
-        outbound::build_outbound_in_dialog_request(
-            &mutable_request,
-            &request_uri,
-            &edge_config.advertised_addr,
-            &route_set,
-        )
-    };
+    let outbound_body = rewritten_sdp
+        .as_deref()
+        .unwrap_or(mutable_request.body.as_ref());
+    let bytes = outbound::build_b2bua_in_dialog_request(
+        &mutable_request,
+        &request_uri,
+        &edge_config.advertised_addr,
+        &route_set,
+        &target_dialog.call_id,
+        &target_dialog.local_uri,
+        &target_dialog.local_tag,
+        &target_dialog.remote_uri,
+        target_dialog.remote_tag.as_deref(),
+        target_dialog.local_cseq,
+        outbound_body,
+    );
 
     // BYE/CANCEL 转发后立即清理事务：更新并发计数并从 map 中删除
     if matches!(&mutable_request.method, Method::Bye | Method::Cancel) {
@@ -872,9 +778,17 @@ pub(crate) async fn handle_in_dialog_request(
                 .await;
             });
         }
-        edge_state.inbound_transactions.remove(call_id.as_str());
+        edge_state.teardown_call_transaction(&transaction_call_id);
     }
 
+    if matches!(&mutable_request.method, Method::Bye | Method::Cancel) {
+        info!(
+            call_id = call_id.as_str(),
+            target = %target,
+            source_leg = ?source_leg,
+            "forwarding BYE/CANCEL to peer leg"
+        );
+    }
     datagrams.push(PendingDatagram::new(target, bytes));
     datagrams
 }

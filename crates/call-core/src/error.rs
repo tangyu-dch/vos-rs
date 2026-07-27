@@ -16,6 +16,7 @@ pub enum CallError {
     OutboundLegAlreadyExists,
     MissingOutboundLeg,
     CallerIdentityUnavailable(String),
+    WebhookRoutingError(String),
 }
 
 impl fmt::Display for CallError {
@@ -40,6 +41,7 @@ impl fmt::Display for CallError {
             Self::CallerIdentityUnavailable(reason) => {
                 write!(f, "caller identity unavailable: {reason}")
             }
+            Self::WebhookRoutingError(msg) => write!(f, "webhook routing error: {msg}"),
         }
     }
 }

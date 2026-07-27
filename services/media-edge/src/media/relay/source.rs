@@ -58,6 +58,24 @@ impl MediaRelayState {
         self.peer_ports.insert(first_port, second_port);
         self.peer_ports.insert(second_port, first_port);
 
+        let first_codec = self
+            .codecs
+            .get(&first_port)
+            .map(|e| *e)
+            .unwrap_or(rtp_core::AudioCodec::Pcmu);
+        let second_codec = self
+            .codecs
+            .get(&second_port)
+            .map(|e| *e)
+            .unwrap_or(rtp_core::AudioCodec::Pcmu);
+
+        let first_session =
+            media_core::RtpPortSession::new(first_port, Some(second_port), first_codec);
+        let second_session =
+            media_core::RtpPortSession::new(second_port, Some(first_port), second_codec);
+        self.port_sessions.insert(first_port, first_session);
+        self.port_sessions.insert(second_port, second_session);
+
         if let (Some(first_rtcp_port), Some(second_rtcp_port)) =
             (rtcp_port_for(first_port), rtcp_port_for(second_port))
         {
@@ -86,6 +104,9 @@ impl MediaRelayState {
     ) -> Option<SymmetricSourceUpdate> {
         let peer_port = *self.peer_ports.get(&relay_port)?;
         let previous_target = self.targets.insert(peer_port, source);
+        if let Some(session) = self.port_sessions.get(peer_port) {
+            session.set_target(source);
+        }
         if previous_target == Some(source) {
             return None;
         }

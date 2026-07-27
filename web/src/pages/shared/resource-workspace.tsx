@@ -9,10 +9,9 @@ import {
   Tooltip,
 } from '@heroui/react';
 import {
-  Plus, RefreshCw, Search, Eye, Pencil, Trash2, Download, Upload, FileText,
+  Plus, RefreshCw, Search, Eye, EyeOff, Pencil, Trash2, Download, Upload, FileText,
   CheckCircle2, Network, GitBranch, Wallet, PhoneCall, Settings, Cog,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/client';
 import {
   createResource, deleteResource, listResource, updateResource, type Entity,
@@ -20,6 +19,8 @@ import {
 import { listOptions, trunkRole } from '@/services/trunks';
 import { ErrorState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
+import { ExtensionDetailView } from '@/pages/numbers/extension-detail';
+import { TrunkDetailView } from '@/pages/trunks/trunk-detail';
 import {
   callDetailText, entityId, valueText, moneyText, durationSecondsText,
 } from '@/pages/shared/format';
@@ -122,6 +123,7 @@ export function FormControl({
         placeholder={field.placeholder}
         value={String(value ?? '')}
         onValueChange={(v) => onChange(v)}
+        autoComplete="new-password"
       />
     );
   }
@@ -145,6 +147,7 @@ export function FormControl({
       placeholder={field.placeholder}
       value={String(value ?? '')}
       onValueChange={(v) => onChange(v)}
+      autoComplete="off"
     />
   );
 }
@@ -176,6 +179,13 @@ export function resourceSaveValues(spec: ResourceSpec, values: Entity, editing: 
   const result = { ...values };
   if (spec.path === '/numbers') {
     result.direction = result.can_receive ? (result.can_present ? 'both' : 'inbound') : (result.can_present ? 'outbound' : 'disabled');
+  }
+  if ('account_id' in result) {
+    if (result.account_id === '' || result.account_id === undefined || result.account_id === null) {
+      delete result.account_id;
+    } else if (typeof result.account_id === 'string' && !isNaN(Number(result.account_id))) {
+      result.account_id = Number(result.account_id);
+    }
   }
   if (!editing) return result;
   spec.fields.filter((field) => field.kind === 'secret' && field.preserveEmptyOnEdit).forEach((field) => {
@@ -209,7 +219,7 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
   const [amount, setAmount] = useState<number>(100);
   const [fieldOptions, setFieldOptions] = useState<Record<string, SelectOptionSpec[]>>({});
   const [confirmRow, setConfirmRow] = useState<Entity | null>(null);
-  const navigate = useNavigate();
+  const [detailModalRow, setDetailModalRow] = useState<Entity | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
@@ -217,9 +227,31 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
   const load = useCallback(async (page = pagination.page) => {
     setLoading(true); setError('');
     try {
-      const result = await listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params });
-      setRows(result.items || []);
-      setPagination(result.pagination || { page, page_size: 20, total: result.items?.length || 0, total_pages: 1 });
+      if (spec.path === '/extensions') {
+        const [result, regRes, sysRes] = await Promise.all([
+          listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params }),
+          api.get<{ items: Entity[] }>('/registrations').catch(() => ({ items: [] as Entity[] })),
+          api.get<{ configs?: Record<string, string> }>('/system/configs').catch(() => ({ configs: {} })),
+        ]);
+        const onlineAors = new Set((regRes.items || []).map((r) => String(r.aor ?? '')));
+        const sysRealm = (sysRes?.configs as Record<string, string>)?.realm || 'vos-rs (默认)';
+        const items = (result.items || []).map((user) => {
+          const u = String(user.username ?? '');
+          const isOnline = onlineAors.has(u) || Array.from(onlineAors).some((aor) => aor.includes(`:${u}@`) || aor.includes(`:${u};`) || aor.endsWith(`:${u}`));
+          return {
+            ...user,
+            sip_domain: user.sip_domain || '127.0.0.1:5060',
+            realm: user.realm ? String(user.realm) : `${sysRealm} (继承系统)`,
+            registration_status: isOnline ? 'registered' : 'unregistered',
+          };
+        });
+        setRows(items);
+        setPagination(result.pagination || { page, page_size: 20, total: items.length, total_pages: 1 });
+      } else {
+        const result = await listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params });
+        setRows(result.items || []);
+        setPagination(result.pagination || { page, page_size: 20, total: result.items?.length || 0, total_pages: 1 });
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '加载失败');
     } finally {
@@ -310,12 +342,18 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
   useEffect(() => {
     const needsEgress = spec.fields.some((field) => field.optionsResource === 'egress-trunks');
     const needsSource = spec.fields.some((field) => field.optionsResource === 'allocation-source');
-    if (!needsEgress && !needsSource) return;
-    void Promise.all([listOptions('/trunks'), needsSource ? listOptions('/extensions') : Promise.resolve([])]).then(([trunks, extensions]) => setFieldOptions({
+    const needsAccounts = spec.fields.some((field) => field.optionsResource === 'accounts');
+    if (!needsEgress && !needsSource && !needsAccounts) return;
+    void Promise.all([
+      needsEgress || needsSource ? listOptions('/trunks') : Promise.resolve([]),
+      needsSource ? listOptions('/extensions') : Promise.resolve([]),
+      needsAccounts ? listOptions('/billing/accounts') : Promise.resolve([]),
+    ]).then(([trunks, extensions, accounts]) => setFieldOptions({
       owner_egress_trunk_id: trunks.filter((item) => trunkRole(item) === 'egress').map((item) => ({ label: String(item.id), value: String(item.id) })),
       allocation_trunks: trunks.filter((item) => trunkRole(item) === 'access').map((item) => ({ label: String(item.id), value: String(item.id) })),
       allocation_extensions: extensions.map((item) => ({ label: String(item.display_name ?? item.username), value: String(item.username) })),
-    })).catch(() => setFieldOptions({ owner_egress_trunk_id: [], allocation_trunks: [], allocation_extensions: [] }));
+      account_id: accounts.map((acc) => ({ label: `${acc.username} (余额: ¥${acc.balance ?? 0})`, value: String(acc.username) })),
+    })).catch(() => setFieldOptions({ owner_egress_trunk_id: [], allocation_trunks: [], allocation_extensions: [], account_id: [] }));
   }, [spec.path]);
 
   const optionsForField = (field: FieldSpec) => {
@@ -431,10 +469,24 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     visibleRows = visibleRows.filter((row) => (row.enabled === target || (row.enabled === undefined && target)));
   }
 
-  const visibleFields = spec.fields.filter((field) => field.kind !== 'secret').slice(0, 7);
+  const visibleFields = spec.fields.filter((field) => !field.showWhen || rows.some((row) => field.showWhen!(row))).slice(0, 7);
+
+  const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
+  const toggleSecretVisibility = (rowKey: string, fieldKey: string) => {
+    const key = `${rowKey}:${fieldKey}`;
+    setVisibleSecrets((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   const renderCell = (row: Entity, field: FieldSpec) => {
     let value = row[field.key];
+    if (field.key === 'registration_status') {
+      const registered = value === 'registered';
+      return (
+        <Chip size="sm" color={registered ? 'success' : 'default'} variant="flat" startContent={<span className={`w-1.5 h-1.5 rounded-full ${registered ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}>
+          {registered ? '已注册/在线' : '未注册/离线'}
+        </Chip>
+      );
+    }
     if (field.key === 'node_count') {
       value = Array.isArray(row.nodes) ? row.nodes.length : (row.node_count ?? 0);
     }
@@ -445,6 +497,29 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
         <Chip size="sm" color={positive ? 'success' : 'danger'} variant="flat">
           {callText ?? (typeof value === 'boolean' ? (value ? '启用' : '停用') : valueText(value))}
         </Chip>
+      );
+    }
+    if (field.kind === 'secret') {
+      const rowId = entityId(row, spec.idKey);
+      const secretKey = `${rowId}:${field.key}`;
+      const isVisible = Boolean(visibleSecrets[secretKey]);
+      const rawText = String(value ?? '');
+      return (
+        <div className="flex items-center gap-1.5 font-mono text-tiny">
+          <span>{isVisible ? (rawText || '—') : '••••••••'}</span>
+          {rawText && (
+            <Button
+              isIconOnly
+              size="sm"
+              variant="light"
+              className="w-6 h-6 min-w-6 text-default-400 hover:text-default-600"
+              onPress={() => toggleSecretVisibility(rowId, field.key)}
+              aria-label={isVisible ? '隐藏密码' : '显示密码'}
+            >
+              {isVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            </Button>
+          )}
+        </div>
       );
     }
     let text: string;
@@ -492,6 +567,7 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <Input
+                type="search"
                 placeholder="搜索当前列表..."
                 variant="bordered"
                 size="sm"
@@ -501,6 +577,8 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                 onValueChange={setQuery}
                 isClearable
                 onClear={() => setQuery('')}
+                autoComplete="none"
+                name="search_filter_query_input"
               />
               <Select
                 aria-label="状态筛选"
@@ -586,7 +664,7 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                           )}
                           {spec.detailPath && (
                             <Tooltip content="查看详情" placement="top" delay={300}>
-                              <Button isIconOnly size="sm" variant="light" onPress={() => navigate(`${spec.detailPath}/${entityId(row, spec.idKey)}`)} aria-label="查看详情">
+                              <Button isIconOnly size="sm" variant="light" onPress={() => setDetailModalRow(row)} aria-label="查看详情">
                                 <Eye className="w-4 h-4 text-default-500" />
                               </Button>
                             </Tooltip>
@@ -723,6 +801,33 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
         }}
         onClose={() => setConfirmRow(null)}
       />
+
+      <Modal
+        isOpen={Boolean(detailModalRow)}
+        onOpenChange={(open) => !open && setDetailModalRow(null)}
+        size="4xl"
+        scrollBehavior="inside"
+      >
+        <ModalContent>
+          <ModalHeader className="text-lg font-bold border-b border-divider flex items-center gap-2">
+            <span>{spec.title}详情 · {detailModalRow ? entityId(detailModalRow, spec.idKey) : ''}</span>
+          </ModalHeader>
+          <ModalBody className="p-6">
+            {detailModalRow && (
+              spec.path === '/extensions' ? (
+                <ExtensionDetailView id={entityId(detailModalRow, spec.idKey)} />
+              ) : (
+                <TrunkDetailView id={entityId(detailModalRow, spec.idKey)} />
+              )
+            )}
+          </ModalBody>
+          <ModalFooter className="border-t border-divider">
+            <Button color="primary" variant="flat" onPress={() => setDetailModalRow(null)}>
+              关闭
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       <Modal
         isOpen={isImportOpen}

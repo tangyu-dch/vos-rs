@@ -169,9 +169,21 @@ impl AuthConfig {
         let authorization = request
             .headers
             .get("authorization")
-            .or_else(|| request.headers.get("proxy-authorization"))?;
-        parse_digest_authorization(authorization.as_str())
-            .and_then(|params| params.get("username").cloned())
+            .or_else(|| request.headers.get("proxy-authorization"));
+        if let Some(auth_hdr) = authorization {
+            if let Some(username) = parse_digest_authorization(auth_hdr.as_str())
+                .and_then(|params| params.get("username").cloned())
+            {
+                return Some(username);
+            }
+        }
+        // 当首个 REGISTER 不包含 Authorization 头部时，从 From/To 头部提取用户名用于识别 Trunk 或用户
+        let header_val = request
+            .headers
+            .get("from")
+            .or_else(|| request.headers.get("to"))?;
+        let uri = crate::sip::registrar::parse_uri_from_header(header_val.as_str())?;
+        uri.user.as_deref().map(|u| u.to_string())
     }
 
     /// 查找 config.yaml 中的静态鉴权凭据。
@@ -308,7 +320,7 @@ impl DigestExpectation<'_> {
         };
 
         if realm != self.realm {
-            tracing::debug!(expected = %self.realm, got = %realm, "realm mismatch");
+            tracing::warn!(expected = %self.realm, got = %realm, "SIP Auth Realm 不匹配");
             return false;
         }
 
@@ -326,7 +338,7 @@ impl DigestExpectation<'_> {
         let expected = match params.get("qop") {
             Some(qop) => {
                 if qop != "auth" {
-                    tracing::debug!(got = %qop, "unsupported qop");
+                    tracing::warn!(got = %qop, "unsupported qop");
                     return false;
                 }
                 let Some(nc) = params.get("nc") else {
@@ -342,13 +354,15 @@ impl DigestExpectation<'_> {
 
         let result = response.eq_ignore_ascii_case(&expected);
         if !result {
-            tracing::debug!(
+            tracing::warn!(
+                username = %self.username,
                 expected = %expected,
                 got = %response,
                 method = %self.method,
                 uri = %uri,
+                ha1 = %ha1,
                 ha2 = %ha2,
-                "digest response mismatch"
+                "SIP Digest Auth 哈希计算结果不匹配 (密码或 Realm 错误)"
             );
         }
         result
