@@ -1,27 +1,23 @@
-pub(crate) mod billing_settlement;
+pub(crate) mod billing;
 pub(crate) mod cdr;
-pub(crate) mod cdr_spool;
 pub(crate) mod cluster;
 pub(crate) mod config;
 pub(crate) mod edge_state;
 mod manage;
 pub(crate) mod media;
-pub(crate) mod nats_cdr;
 pub(crate) mod net;
-pub(crate) mod number_routing;
 pub(crate) mod resource_lease;
 pub(crate) mod routing;
 pub(crate) mod security;
 pub(crate) mod sip;
 pub(crate) mod startup;
 pub(crate) mod timers;
-mod webhook_delivery;
 mod webhooks;
 
 pub(crate) use cdr::{cdr_sinks_from_config, flush_cdr_batch_with_retry_and_spool};
-pub(crate) use number_routing::{reload_number_routes, spawn_number_route_refresh};
 pub(crate) use routing::{
-    route_table_from_config, spawn_periodic_route_refresh, warm_hot_path_redis_cache,
+    reload_number_routes, route_table_from_config, spawn_number_route_refresh,
+    spawn_periodic_route_refresh, warm_hot_path_redis_cache,
 };
 pub(crate) use sip::client_transaction::spawn_client_transaction_retransmission;
 pub(crate) use sip::extract_call_id_fast;
@@ -185,9 +181,9 @@ async fn main() -> Result<(), AnyError> {
     let cdr_queue_capacity = edge_config.cdr_queue_capacity;
     let cdr_persistence_enabled = edge_config.cdr_persistence_enabled;
     let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
-    let cdr_spool = cdr_spool::CdrSpool::open(cdr_spool::configured_spool_dir())?;
+    let cdr_spool = cdr::CdrSpool::open(cdr::configured_spool_dir())?;
     let cdr_pipeline_metrics = cdr_spool.metrics();
-    let durable_cdr_sink = cdr_spool::DurableCdrSink::new(cdr_tx, cdr_spool.clone());
+    let durable_cdr_sink = cdr::DurableCdrSink::new(cdr_tx, cdr_spool.clone());
     let (call_manager, webhook_receiver) = if edge_config.webhooks.enabled {
         let (event_sender, event_receiver) =
             tokio::sync::mpsc::channel(edge_config.webhooks.queue_capacity);
@@ -305,7 +301,7 @@ async fn main() -> Result<(), AnyError> {
             }
         }
     });
-    cdr_spool::spawn_replay_loop(cdr_spool, Arc::clone(&cdr_sinks));
+    cdr::spawn_replay_loop(cdr_spool, Arc::clone(&cdr_sinks));
 
     let manage_addr = edge_config.manage_bind.clone();
     {

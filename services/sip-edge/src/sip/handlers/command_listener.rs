@@ -113,7 +113,7 @@ fn finalize_vci_hangup(edge_state: &EdgeState, call_id: &str, termination_reason
         .call_manager
         .try_terminate_call_with_reason(call_id, termination_reason)
     {
-        crate::billing_settlement::settle_completed_call(edge_state, &call_id_value);
+        crate::billing::settle_completed_call(edge_state, &call_id_value);
     } else {
         crate::resource_lease::release(edge_state, &call_id_value);
     }

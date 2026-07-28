@@ -1,7 +1,7 @@
-use crate::cdr_spool::CdrSpool;
+use crate::cdr::nats_sink::NatsCdrPublisher;
+use crate::cdr::spool::CdrSpool;
 use crate::config::EdgeConfig;
 use crate::edge_state::CdrSinks;
-use crate::nats_cdr::NatsCdrPublisher;
 use call_core::CallCdr;
 use cdr_core::PostgresCdrStore;
 use std::time::Duration;

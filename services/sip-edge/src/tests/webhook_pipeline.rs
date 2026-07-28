@@ -1,5 +1,5 @@
 use super::*;
-use crate::webhook_delivery::sign_payload;
+use crate::webhooks::sign_payload;
 use axum::{body::Bytes, http::HeaderMap, routing::post, Router};
 use call_core::{CallEvent, WEBHOOK_SCHEMA_VERSION};
 use std::sync::{

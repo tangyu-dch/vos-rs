@@ -4,7 +4,7 @@
 //! HTTP 签名投递、延迟重试和 Redis 投递结果记录。
 
 use crate::config::WebhookConfig;
-use crate::webhook_delivery::{deliver_event, record_delivery, retry_delay};
+use crate::webhooks::delivery::{deliver_event, record_delivery, retry_delay};
 use async_nats::jetstream::{self, consumer::PullConsumer, stream, AckKind};
 use call_core::WebhookEvent;
 use futures::StreamExt;
@@ -195,5 +195,5 @@ async fn process_message(
 }
 
 #[cfg(test)]
-#[path = "tests/webhook_pipeline.rs"]
+#[path = "../tests/webhook_pipeline.rs"]
 mod tests;

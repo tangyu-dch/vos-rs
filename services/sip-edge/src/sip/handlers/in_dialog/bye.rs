@@ -111,7 +111,7 @@ pub(super) async fn handle_bye_cancel_pre_forward(
                 crate::timers::persist_gateway_health(edge_state, gw_id.clone(), status);
             }
 
-            crate::billing_settlement::settle_completed_call(edge_state, &outcome.call_id);
+            crate::billing::settle_completed_call(edge_state, &outcome.call_id);
 
             // 如果是会议呼叫（单腿 UAS 呼叫），直接在本地终结并返回 200 OK，不转发给其他任何节点
             let out_user = transaction

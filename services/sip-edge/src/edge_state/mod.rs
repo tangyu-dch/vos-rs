@@ -84,7 +84,7 @@ use tokio::net::UdpSocket;
 /// [`transport`]、[`session`]、[`media`] 等子模块中）。
 pub(crate) struct EdgeState {
     pub(crate) call_manager: Arc<CallManager>,
-    pub(crate) cdr_pipeline_metrics: std::sync::OnceLock<Arc<crate::cdr_spool::CdrPipelineMetrics>>,
+    pub(crate) cdr_pipeline_metrics: std::sync::OnceLock<Arc<crate::cdr::CdrPipelineMetrics>>,
     pub(crate) gateway_health: GatewayHealthTracker,
     pub(crate) inbound_transactions: CallSessionStore,
     pub(crate) media_relay: MediaRelayState,

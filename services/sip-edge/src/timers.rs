@@ -152,7 +152,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                     .call_manager
                     .terminate_call_with_reason(&caller_call_id, &reason);
 
-                crate::billing_settlement::settle_completed_call(
+                crate::billing::settle_completed_call(
                     &edge_state,
                     &call_core::CallId::new(caller_call_id.clone()),
                 );

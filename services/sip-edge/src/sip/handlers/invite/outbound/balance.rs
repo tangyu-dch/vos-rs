@@ -79,7 +79,7 @@ pub(super) async fn enforce_balance_check(ctx: &OutboundContext<'_>) -> BalanceC
         }
         Some(check) if check.price_per_interval > 0.0 => {
             billing_pulse = Some((check.billing_interval_secs, check.price_per_interval));
-            calculated_max_duration = crate::billing_settlement::maximum_duration_secs(
+            calculated_max_duration = crate::billing::maximum_duration_secs(
                 check.balance + check.credit_limit,
                 check.billing_interval_secs,
                 check.price_per_interval,

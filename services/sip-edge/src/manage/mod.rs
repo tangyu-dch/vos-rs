@@ -203,7 +203,7 @@ async fn cdr_metrics(State(state): State<Arc<EdgeState>>) -> Json<CdrRuntimeMetr
         .cdr_pipeline_metrics
         .get()
         .map(|metrics| metrics.snapshot())
-        .unwrap_or(crate::cdr_spool::CdrPipelineSnapshot {
+        .unwrap_or(crate::cdr::CdrPipelineSnapshot {
             queue_overflow_total: 0,
             spooled_total: 0,
             replayed_total: 0,
@@ -261,10 +261,7 @@ async fn terminate(
     }
     state.call_manager.terminate_call(&caller_call_id);
 
-    crate::billing_settlement::settle_completed_call(
-        &state,
-        &call_core::CallId::new(caller_call_id),
-    );
+    crate::billing::settle_completed_call(&state, &call_core::CallId::new(caller_call_id));
 
     StatusCode::OK
 }

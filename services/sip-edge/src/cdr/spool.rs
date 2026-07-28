@@ -1,4 +1,4 @@
-use crate::cdr::flush_cdr_batch;
+use crate::cdr::pipeline::flush_cdr_batch;
 use crate::edge_state::CdrSinks;
 use call_core::{CallCdr, CdrSendError, CdrSink};
 use serde::Serialize;
@@ -450,7 +450,7 @@ mod tests {
         let spool = CdrSpool::open(directory.clone()).expect("open spool");
         let cdrs = vec![test_cdr("db-unavailable")];
 
-        crate::cdr::flush_cdr_batch_with_retry_policy(
+        crate::cdr::pipeline::flush_cdr_batch_with_retry_policy(
             &CdrSinks::default(),
             &spool,
             &cdrs,

@@ -61,7 +61,7 @@ pub(crate) struct OutboundRegState {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CdrSinks {
     pub(crate) postgres: Option<PostgresCdrStore>,
-    pub(crate) nats: Option<crate::nats_cdr::NatsCdrPublisher>,
+    pub(crate) nats: Option<crate::cdr::NatsCdrPublisher>,
 }
 
 /// REFER 转接订阅状态。

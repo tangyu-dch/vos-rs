@@ -286,12 +286,9 @@ pub(crate) async fn post_webhook_event(
             .unwrap_or_default()
             .as_secs()
             .to_string();
-        let signature = crate::webhook_delivery::sign_payload(
-            &edge_config.webhooks.signing_secret,
-            &timestamp,
-            &body,
-        )
-        .ok()?;
+        let signature =
+            crate::webhooks::sign_payload(&edge_config.webhooks.signing_secret, &timestamp, &body)
+                .ok()?;
 
         let client = get_http_client();
         let response = client
