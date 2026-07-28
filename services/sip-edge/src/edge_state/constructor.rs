@@ -16,6 +16,7 @@ use crate::media::MediaRelayState;
 use crate::sbc;
 use crate::sip::handlers::ivr_topology::VoiceEngineManager;
 use crate::sip::registrar::RegistrationStore;
+use crate::sip::subscription::SubscriptionStore;
 
 use super::gateway_identity::GatewayIdentityCache;
 use super::models::CallSessionStore;
@@ -62,6 +63,7 @@ impl EdgeState {
             inbound_transactions: CallSessionStore::default(),
             media_relay,
             registrar: tokio::sync::RwLock::new(RegistrationStore::new()),
+            subscription_store: SubscriptionStore::new(),
             db_store,
             client_transactions: crate::sip::client_transaction::ClientTransactionManager::new(),
             recent_inbound_invites: dashmap::DashMap::new(),

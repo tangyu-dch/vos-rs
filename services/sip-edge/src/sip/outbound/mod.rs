@@ -21,6 +21,7 @@ mod invite;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use helpers::{header_uri, token_fragment};
 pub use helpers::{is_forwardable_in_dialog_method, target_addr_for, target_addr_for_str};
 pub use in_dialog::{
     build_b2bua_in_dialog_request, build_gateway_options, build_notify_sipfrag,

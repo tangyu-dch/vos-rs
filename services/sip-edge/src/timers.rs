@@ -315,6 +315,50 @@ fn chrono_like_epoch_millis() -> u128 {
         .map_or(0, |duration| duration.as_millis())
 }
 
+/// 周期性清理过期的 SUBSCRIBE/NOTIFY 订阅，并向已过期订阅发送 terminated NOTIFY。
+///
+/// 清理间隔：生产 60 秒，测试 50 毫秒。
+pub(crate) fn spawn_subscription_prune_loop(
+    edge_state: Arc<EdgeState>,
+    socket: Arc<UdpSocket>,
+    edge_config: Arc<EdgeConfig>,
+) {
+    let scan_interval = if cfg!(test) {
+        Duration::from_millis(50)
+    } else {
+        Duration::from_secs(60)
+    };
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(scan_interval);
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+            let expired = edge_state
+                .subscription_store
+                .prune_expired(SystemTime::now())
+                .await;
+            if expired.is_empty() {
+                continue;
+            }
+            for subscription in expired {
+                let notify = crate::sip::handlers::subscribe::build_notify(
+                    &subscription,
+                    "",
+                    &crate::sip::subscription::SubscriptionState::Terminated {
+                        reason: Some("timeout"),
+                    },
+                    &edge_config,
+                );
+                if let Err(error) = socket.send_to(&notify, subscription.peer).await {
+                    warn!(%error, peer = %subscription.peer, "failed to send terminated NOTIFY");
+                }
+            }
+        }
+    });
+}
+
 pub(crate) fn record_probe_failure(edge_state: &EdgeState, gateway_id: &str, reason: String) {
     let prev_state = edge_state.gateway_health.circuit_state(gateway_id);
     edge_state.gateway_health.record_failure(gateway_id);

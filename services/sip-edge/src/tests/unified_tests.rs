@@ -173,6 +173,8 @@ fn edge_config() -> EdgeConfig {
         udp_workers_auto: false,
         udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+        sip_dscp: 0,
+        rtp_dscp: 0,
         balance_enforcement_enabled: false,
         ..Default::default()
     }
@@ -211,6 +213,8 @@ fn edge_config_with_auth() -> EdgeConfig {
         udp_workers_auto: false,
         udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+        sip_dscp: 0,
+        rtp_dscp: 0,
         balance_enforcement_enabled: false,
         ..Default::default()
     }
@@ -988,6 +992,8 @@ async fn invite_with_exhausted_rtp_ports_receives_service_unavailable() {
         udp_workers_auto: false,
         udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+        sip_dscp: 0,
+        rtp_dscp: 0,
         ..Default::default()
     };
     let body = concat!(
@@ -1077,6 +1083,8 @@ async fn outbound_failure_releases_rtp_port_lease() {
         udp_workers_auto: false,
         udp_receive_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
         udp_send_buffer_bytes: config::DEFAULT_UDP_BUFFER_BYTES,
+        sip_dscp: 0,
+        rtp_dscp: 0,
         ..Default::default()
     };
     let body = concat!(

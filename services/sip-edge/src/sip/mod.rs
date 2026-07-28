@@ -20,13 +20,14 @@
 //! | 模块 | 职责 |
 //! |------|------|
 //! | `dispatcher` | 入口：UDP 数据报分发 |
-//! | `handlers` | 业务逻辑：INVITE/BYE/CANCEL/INFO/REFER 处理 |
+//! | `handlers` | 业务逻辑：INVITE/BYE/CANCEL/INFO/REFER/SUBSCRIBE/NOTIFY 处理 |
 //! | `outbound` | 出站消息构建：INVITE/BYE/OPTIONS/NOTIFY |
 //! | `response` | 响应构建：100/180/200/4xx/5xx |
 //! | `transaction` | 事务状态机和重传 |
 //! | `dialog` | 对话管理和验证 |
 //! | `auth` | Digest Auth 认证 |
 //! | `registrar` | REGISTER 注册处理 |
+//! | `subscription` | SUBSCRIBE/NOTIFY 订阅状态管理 |
 
 pub(crate) mod auth;
 pub(crate) mod client_transaction;
@@ -39,6 +40,7 @@ pub(crate) mod outbound_reg;
 pub(crate) mod registrar;
 pub(crate) mod response;
 pub(crate) mod sip_flow;
+pub(crate) mod subscription;
 pub(crate) mod transaction;
 
 pub(crate) use auth::{AuthConfig, AuthDecision};

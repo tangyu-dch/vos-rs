@@ -19,11 +19,13 @@ pub mod ivr;
 pub mod ivr_topology;
 pub mod message;
 pub mod register;
+pub mod subscribe;
 
 pub(crate) use in_dialog::handle_in_dialog_request;
 pub(crate) use invite::handle_invite_request;
 pub(crate) use message::handle_out_of_dialog_message;
 pub(crate) use register::handle_register_request;
+pub(crate) use subscribe::{handle_notify_request, handle_subscribe_request};
 
 pub(crate) async fn handle_request(
     request: SipRequest,
@@ -40,6 +42,15 @@ pub(crate) async fn handle_request(
     // request to the opposite leg.
     if matches!(&request.method, Method::Ack) {
         return Vec::new();
+    }
+
+    // SUBSCRIBE/NOTIFY are handled out-of-dialog (RFC 6665) — subscribe.rs
+    // maintains its own dialog state and emits NOTIFY datagrams directly.
+    if matches!(&request.method, Method::Subscribe) {
+        return handle_subscribe_request(request, peer, edge_state, edge_config).await;
+    }
+    if matches!(&request.method, Method::Notify) {
+        return handle_notify_request(request, peer);
     }
 
     if matches!(&request.method, Method::Message) {

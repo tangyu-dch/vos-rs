@@ -61,7 +61,7 @@ pub(crate) use sip::{AuthDecision, ClientTransactionKey, RequestTransactionKey};
 #[allow(unused_imports)]
 pub(crate) use timers::{
     calculate_mos_for_legs, spawn_gateway_health_probe_loop, spawn_nat_keepalive_loop,
-    spawn_session_timer_watchdog,
+    spawn_session_timer_watchdog, spawn_subscription_prune_loop,
 };
 
 use call_core::CallManager;
@@ -154,7 +154,11 @@ async fn main() -> Result<(), AnyError> {
     }
 
     let edge_config = Arc::new(edge_config);
-    let socket = Arc::new(UdpSocket::bind(&bind_addr).await?);
+    // 先创建 std UDP socket 设置 DSCP，再转 tokio
+    let std_socket = std::net::UdpSocket::bind(&bind_addr)?;
+    net::apply_dscp(&std_socket, edge_config.sip_dscp);
+    std_socket.set_nonblocking(true)?;
+    let socket = Arc::new(UdpSocket::from_std(std_socket)?);
     let socket_addr = socket.local_addr()?;
     info!("SIP Edge UDP Listening on {}", socket_addr);
 
@@ -424,6 +428,11 @@ async fn main() -> Result<(), AnyError> {
         );
     }
     spawn_session_timer_watchdog(
+        Arc::clone(&edge_state),
+        Arc::clone(&socket),
+        Arc::clone(&edge_config),
+    );
+    spawn_subscription_prune_loop(
         Arc::clone(&edge_state),
         Arc::clone(&socket),
         Arc::clone(&edge_config),

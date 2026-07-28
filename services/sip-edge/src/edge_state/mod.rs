@@ -22,6 +22,7 @@
 //! | [`gateway_identity`] | Gateway 身份缓存（SocketAddr/IP → gateway_id） |
 //! | [`registration`] | REGISTER 注册查询缓存 |
 //! | [`server_transaction`] | 服务端事务表索引 |
+//! | (subscription_store) | SUBSCRIBE/NOTIFY 订阅状态（RFC 6665） |
 //!
 //! ## B2BUA 模型
 //!
@@ -64,6 +65,7 @@ use crate::media::MediaRelayState;
 use crate::sbc;
 use crate::sip::client_transaction::ClientTransactionManager;
 use crate::sip::registrar::RegistrationStore;
+use crate::sip::subscription::SubscriptionStore;
 use crate::sip::transaction::{self, InviteAckKey, RequestTransactionKey};
 
 use call_core::{CallManager, GatewayHealthTracker};
@@ -87,6 +89,8 @@ pub(crate) struct EdgeState {
     pub(crate) inbound_transactions: CallSessionStore,
     pub(crate) media_relay: MediaRelayState,
     pub(crate) registrar: tokio::sync::RwLock<RegistrationStore>,
+    /// SUBSCRIBE/NOTIFY 订阅状态（RFC 6665）。
+    pub(crate) subscription_store: SubscriptionStore,
     pub(crate) db_store: Option<cdr_core::PostgresCdrStore>,
     pub(crate) client_transactions: ClientTransactionManager,
     pub recent_inbound_invites: dashmap::DashMap<String, std::time::Instant>,
