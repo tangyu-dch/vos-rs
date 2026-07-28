@@ -80,10 +80,13 @@
 - 早期对话管理（forking 已实现，见 `sip/handlers/invite/outbound/dispatch.rs::fork_outbound_invites` 与 `edge_state/models.rs::fork_dialogs`，支持并行响铃与失败分支自动 CANCEL）。
 - 基于 Redis 存储共享的分布式注册、对话、事务及速率限制计数状态（集群高可用）。
 - 活动呼叫的 HA 副本同步与重启恢复。
-- SUBSCRIBE/NOTIFY 事件包。
 - 高级代理路由（基础拓扑隐藏已实现，见 `sip/outbound/invite.rs` 的 Call-ID 覆写与 Via 清理；Path/Service-Route 路由机制也已支持）。
 - 多租户域策略和每账户授权。
 - 呼叫、注册关系、事务、RTP 中继和 CDR 的高可用（HA）集群。
+
+已新增：
+
+- SUBSCRIBE/NOTIFY 事件包基础框架（RFC 6665）：`sip/subscription/` 模块提供订阅存储（按 `(event_package, aor)` 索引）、生命周期管理（创建/刷新/终止）、过期清理定时任务（60 秒扫描）与初始 NOTIFY 构造。支持 `presence`/`dialog`/`message-summary` 三种事件包，包含 PIDF/dialog-info+xml/simple-message-summary 公告体。后续可在此基础上集成 BLF 状态广播与 MWI 实时通知。
 
 ## RTP 和 SDP 协议覆盖范围
 
@@ -107,16 +110,17 @@
 - RTP 源地址绑定、反欺骗丢包计数和超时重新学习，可通过数据库参数 `rtp_anti_spoofing` 与 `rtp_source_relearn_secs` 配置。
 - RFC 2833/4733 `telephone-event` RTP DTMF 中继、按 RTP timestamp 去重后的按键重建、CDR `dtmf_digits` 写入以及 `dtmf_events` 媒体指标计数。
 - 可选的呼叫录音（通过数据库参数 `recording_enabled`（默认值为 `true`）），将中继的 PCMU/PCMA RTP 解码为单呼叫双声道 WAV 文件，并把 `local:` 录音地址写入通话 CDR。
+- DTMF 实时事件流：双源（RTP RFC 4733 + SIP INFO）采集 → NATS 实时发布 → WebSocket 推送前端（`/rwi/v1/ws`），BYE 时批量落库 `dtmf_events` 表，并支持失败/异常事件告警。
+- ptime/maxptime 协商：`sdp-core` 解析 `a=ptime` / `a=maxptime` 属性，SDP 重写时按本端能力协商并保留对端建议值。
 
 未完成：
 
 - SRTP/DTLS-SRTP：SDES `a=crypto` 已接入 SIP Edge 的 Offer/Answer 端口绑定、首包 SSRC 学习和 RTP Relay 加解密路径；端到端 SIPp 加密媒体回归场景已加入。DTLS-SRTP 握手和稳定网关环境下的完整压测仍未完成。
 - ICE connectivity checks、候选优选/切换、TURN allocation/refresh 以及 DTLS-SRTP 握手与密钥导出仍未完成；当前仅有 STUN 公网发现、SDP 参数解析和转发前校验。
-- 更完整的 DTMF 实时事件流、按租户策略控制以及失败/异常事件告警（注：DTMF 事件审计明细表已落库至 `dtmf_events`，媒体聚合指标已可通过管理 API 与 Prometheus `/metrics` 查询）。
-- 转码、编解码器首选策略、ptime/maxptime 协商、舒适噪音、静音抑制以及当前 PCMU/PCMA 路径之外的动态负载映射。
+- 转码、编解码器首选策略、舒适噪音、静音抑制以及当前 PCMU/PCMA 路径之外的动态负载映射。
 - 多个 `m=` 媒体部分、视频、T.38、RTP Bundle 及高级 Offer/Answer 行为。
 - 更稳健的单呼叫媒体销毁保障及分布式媒体中继协同。
-- 合法拦截（lawful intercept）接口、QoS/DSCP 标记以及更细粒度的按租户/按网关 Prometheus 指标导出。
+- 合法拦截（lawful intercept）接口以及更细粒度的按租户/按网关 Prometheus 指标导出。
 
 ## 推荐的后续步骤与演进路线图
 
