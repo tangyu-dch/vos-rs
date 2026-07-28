@@ -29,6 +29,18 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(CREATE_CDR_CALLEE_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
+    sqlx::query(CREATE_CDR_DIRECTION_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_CDR_STATUS_STARTED_AT_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_CDR_CALLER_STARTED_AT_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_CDR_CALLEE_STARTED_AT_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(CREATE_SIP_USERS_TABLE_SQL)
         .execute(&mut *tx)
         .await?;

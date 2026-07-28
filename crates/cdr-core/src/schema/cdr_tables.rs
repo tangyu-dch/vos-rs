@@ -58,6 +58,21 @@ pub(crate) const CREATE_CDR_CALLER_INDEX_SQL: &str =
 pub(crate) const CREATE_CDR_CALLEE_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_call_cdrs_callee ON call_cdrs (callee)";
 
+pub(crate) const CREATE_CDR_DIRECTION_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_call_cdrs_direction ON call_cdrs (direction)";
+
+/// 优化 CDR 列表查询：按状态筛选并按时间倒序分页。
+pub(crate) const CREATE_CDR_STATUS_STARTED_AT_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_call_cdrs_status_started_at ON call_cdrs (status, started_at DESC)";
+
+/// 优化按主叫 + 时间范围查询的报表场景。
+pub(crate) const CREATE_CDR_CALLER_STARTED_AT_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_call_cdrs_caller_started_at ON call_cdrs (caller, started_at DESC)";
+
+/// 优化按被叫 + 时间范围查询的报表场景。
+pub(crate) const CREATE_CDR_CALLEE_STARTED_AT_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_call_cdrs_callee_started_at ON call_cdrs (callee, started_at DESC)";
+
 pub(crate) const CREATE_DTMF_EVENTS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS dtmf_events (
     id BIGSERIAL PRIMARY KEY,
