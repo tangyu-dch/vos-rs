@@ -358,85 +358,184 @@ async fn stream_llm_response(
 
     messages.push(user_message_value);
 
-    let body = serde_json::json!({
-        "model": llm.model,
-        "temperature": llm.temperature,
-        "stream": true,
-        "tools": crate::copilot::get_copilot_tools_schema(),
-        "messages": messages
-    });
-
-    let resp = state
-        .llm_client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", llm.api_key))
-        .header("Content-Type", "application/json")
-        .header("Accept-Encoding", "identity")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| {
-            format!(
-                "HTTP 请求失败 (无法连接目标域名 {}, 请检查网络/代理/APIKey): {e}",
-                llm.base_url
-            )
-        })?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("LLM HTTP {status}: {}", truncate(&text, 300)));
-    }
-
-    // 逐 chunk 解析 SSE：`data: {json}\n\n`，以 `data: [DONE]` 结束
-    let mut byte_stream = resp.bytes_stream();
-    let mut buf = String::new();
+    // 工具调用循环：最多 3 轮，防止无限调用
+    const MAX_TOOL_ROUNDS: usize = 3;
+    let engine = TelecomCopilotEngine::new(state, active_llm.clone());
     let mut full_text = String::new();
 
-    while let Some(chunk_result) = byte_stream.next().await {
-        let chunk = match chunk_result {
-            Ok(c) => c,
-            Err(e) => {
-                if !full_text.is_empty() {
-                    tracing::warn!("LLM 流读取中途断开，但已成功接收部分分析内容: {e}");
-                    return Ok(full_text);
-                }
-                return Err(format!("读取 LLM 流失败: {e}"));
-            }
-        };
-        buf.push_str(&String::from_utf8_lossy(&chunk));
+    for round in 0..MAX_TOOL_ROUNDS {
+        let body = serde_json::json!({
+            "model": llm.model,
+            "temperature": llm.temperature,
+            "stream": true,
+            "tools": crate::copilot::get_copilot_tools_schema(),
+            "messages": messages
+        });
 
-        // 按换行符分割，处理完整的行
-        while let Some(newline_pos) = buf.find('\n') {
-            let line = buf[..newline_pos].trim().to_string();
-            buf = buf[newline_pos + 1..].to_string();
+        let resp = state
+            .llm_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", llm.api_key))
+            .header("Content-Type", "application/json")
+            .header("Accept-Encoding", "identity")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                format!(
+                    "HTTP 请求失败 (无法连接目标域名 {}, 请检查网络/代理/APIKey): {e}",
+                    llm.base_url
+                )
+            })?;
 
-            if line.is_empty() || line.starts_with(':') {
-                continue;
-            }
-            if let Some(json_str) = line.strip_prefix("data: ") {
-                if json_str.trim() == "[DONE]" {
-                    return Ok(full_text);
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("LLM HTTP {status}: {}", truncate(&text, 300)));
+        }
+
+        // 逐 chunk 解析 SSE：`data: {json}\n\n`，以 `data: [DONE]` 结束
+        let mut byte_stream = resp.bytes_stream();
+        let mut buf = String::new();
+        // 本轮工具调用累加器：OpenAI 流式格式中 tool_calls 分多个 chunk 到达
+        let mut pending_tool_calls: Vec<(String, String, String)> = Vec::new();
+        let mut finish_reason: Option<String> = None;
+
+        while let Some(chunk_result) = byte_stream.next().await {
+            let chunk = match chunk_result {
+                Ok(c) => c,
+                Err(e) => {
+                    if !full_text.is_empty() {
+                        tracing::warn!("LLM 流读取中途断开，但已成功接收部分分析内容: {e}");
+                        return Ok(full_text);
+                    }
+                    return Err(format!("读取 LLM 流失败: {e}"));
                 }
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    if let Some(content) = val
-                        .get("choices")
-                        .and_then(|c| c.get(0))
-                        .and_then(|c| c.get("delta"))
-                        .and_then(|d| d.get("content"))
-                        .and_then(|c| c.as_str())
-                    {
-                        if !content.is_empty() {
-                            full_text.push_str(content);
-                            send_event(tx, "delta", &serde_json::json!({ "text": content }))
-                                .await?;
+            };
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(newline_pos) = buf.find('\n') {
+                let line = buf[..newline_pos].trim().to_string();
+                buf = buf[newline_pos + 1..].to_string();
+
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
+                if let Some(json_str) = line.strip_prefix("data: ") {
+                    if json_str.trim() == "[DONE]" {
+                        break;
+                    }
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let choice = val.get("choices").and_then(|c| c.get(0));
+                        let delta = choice.and_then(|c| c.get("delta"));
+
+                        // 1) 文本内容
+                        if let Some(content) = delta
+                            .and_then(|d| d.get("content"))
+                            .and_then(|c| c.as_str())
+                        {
+                            if !content.is_empty() {
+                                full_text.push_str(content);
+                                send_event(tx, "delta", &serde_json::json!({ "text": content }))
+                                    .await?;
+                            }
+                        }
+
+                        // 2) 工具调用（流式累加）
+                        if let Some(tool_calls) = delta
+                            .and_then(|d| d.get("tool_calls"))
+                            .and_then(|t| t.as_array())
+                        {
+                            for tc in tool_calls {
+                                let index =
+                                    tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                while pending_tool_calls.len() <= index {
+                                    pending_tool_calls.push((
+                                        String::new(),
+                                        String::new(),
+                                        String::new(),
+                                    ));
+                                }
+                                if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
+                                    if !id.is_empty() {
+                                        pending_tool_calls[index].0 = id.to_string();
+                                    }
+                                }
+                                if let Some(func) = tc.get("function") {
+                                    if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                                        if !name.is_empty() {
+                                            pending_tool_calls[index].1 = name.to_string();
+                                        }
+                                    }
+                                    if let Some(args) =
+                                        func.get("arguments").and_then(|a| a.as_str())
+                                    {
+                                        pending_tool_calls[index].2.push_str(args);
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3) finish_reason
+                        if let Some(reason) = choice
+                            .and_then(|c| c.get("finish_reason"))
+                            .and_then(|f| f.as_str())
+                        {
+                            finish_reason = Some(reason.to_string());
                         }
                     }
                 }
             }
         }
+
+        // 非 tool_calls 结束 → LLM 已生成最终回答
+        if finish_reason.as_deref() != Some("tool_calls") || pending_tool_calls.is_empty() {
+            return Ok(full_text);
+        }
+
+        // 执行工具调用：先把 assistant tool_calls 消息加入上下文
+        let tool_calls_json: Vec<serde_json::Value> = pending_tool_calls
+            .iter()
+            .map(|(id, name, args)| {
+                let parsed_args = serde_json::from_str::<serde_json::Value>(args)
+                    .unwrap_or(serde_json::Value::Null);
+                serde_json::json!({
+                    "id": id,
+                    "type": "function",
+                    "function": { "name": name, "arguments": parsed_args }
+                })
+            })
+            .collect();
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "tool_calls": tool_calls_json
+        }));
+
+        for (id, name, args_str) in &pending_tool_calls {
+            let args = serde_json::from_str::<serde_json::Value>(args_str)
+                .unwrap_or(serde_json::Value::Null);
+            tracing::info!(round, tool = %name, "执行 LLM 工具调用");
+            let result = engine.execute_tool(name, &args).await;
+            let result_str = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+            messages.push(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "name": name,
+                "content": result_str
+            }));
+        }
+
+        tracing::info!(
+            round,
+            tool_count = pending_tool_calls.len(),
+            "工具执行完成，开始下一轮 LLM 调用"
+        );
     }
 
+    tracing::warn!(
+        rounds = MAX_TOOL_ROUNDS,
+        "达到最大工具调用轮数，停止工具调用循环"
+    );
     Ok(full_text)
 }
 

@@ -24,26 +24,19 @@
 //! - 录音使用独立线程池，避免阻塞 tokio runtime
 //! - Symmetric RTP 自动学习对端地址，支持 NAT 穿透
 
-#[allow(dead_code)]
-pub(crate) mod conference;
-#[allow(dead_code)]
+pub mod conference;
 pub(crate) mod config;
 pub(crate) mod crypto;
-#[allow(dead_code)]
 pub(crate) mod dtmf;
 pub(crate) mod live_transcode;
 pub(crate) mod metrics;
 pub(crate) mod recording;
 pub mod relay;
 pub(crate) mod rtcp_processor;
-#[allow(dead_code)]
 pub(crate) mod sdp;
 pub(crate) mod transcode;
 pub(crate) mod utils;
-#[allow(dead_code)]
 pub(crate) mod wav;
 
-#[allow(unused_imports)]
-pub use self::config::MediaConfig;
 pub use self::live_transcode::LiveTranscoder;
 pub use self::relay::MediaRelayState;

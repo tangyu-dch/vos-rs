@@ -296,7 +296,9 @@ export function CopilotPage() {
         setActiveModel(rec);
         currentModelId = rec.id;
       }
-    } catch {}
+    } catch {
+      // 活跃模型加载失败时使用默认模型，忽略错误
+    }
 
     const url = `/api/v1/copilot/sessions/${sessionId}/chat/stream`;
 

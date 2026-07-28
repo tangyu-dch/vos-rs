@@ -35,6 +35,7 @@ mod payload;
 mod port_lease;
 mod rtcp;
 mod srtp;
+mod t38;
 mod telephone_event;
 
 pub use buffer_pool::{PacketBufferPool, RecycledBuffer, ReusablePacket, PACKET_BUFFER_SIZE};
@@ -48,5 +49,9 @@ pub use rtcp::{RtcpPacket, RtcpPacketType, RtcpReceiverReport, RtcpReportBlock, 
 pub use srtp::{
     extract_srtp_config_from_dtls, SrtpConfig, SrtpContext, SrtpError, SrtpProfile,
     SrtpSessionManager,
+};
+pub use t38::{
+    seq_diff, seq_is_newer, UdptlBuilder, UdptlErrorRecovery, UdptlPacketView, UdptlRelay,
+    UDPTL_SEQ_MODULO, UDPTL_SEQ_THRESHOLD,
 };
 pub use telephone_event::TelephoneEvent;

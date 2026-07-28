@@ -66,6 +66,27 @@ impl RtpPacket {
         })
     }
 
+    /// 构造一个 RFC 3389 CN（舒适噪音）RTP 包。
+    ///
+    /// `cn_payload_type` 通常为 13，`payload` 为 CN 帧字节序列。
+    /// marker 位固定为 false。
+    pub fn build_cn(
+        cn_payload_type: u8,
+        sequence_number: u16,
+        timestamp: u32,
+        ssrc: u32,
+        payload: &[u8],
+    ) -> RtpResult<Vec<u8>> {
+        let packet = Self::new(
+            cn_payload_type,
+            sequence_number,
+            timestamp,
+            ssrc,
+            payload.to_vec(),
+        )?;
+        packet.encode()
+    }
+
     pub fn parse(raw: &[u8]) -> RtpResult<Self> {
         let view = RtpPacketView::parse(raw)?;
         let csrcs = view

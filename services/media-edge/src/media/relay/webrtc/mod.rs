@@ -1,12 +1,12 @@
 //! WebRTC ICE-Lite、DTLS 与 SRTP 媒体会话。
 
 mod dtls;
-mod ice;
+pub mod ice;
 mod session;
 mod srtp;
 
-pub use ice::IceCredentials;
-pub use session::{WebRtcSession, WebRtcSessionDescription};
+pub use ice::{parse_candidate_line, IceCredentials};
+pub use session::{WebRtcSession, WebRtcSessionDescription, WebRtcSessionDiagnostics};
 
 /// RFC 7983 定义的 DTLS 数据包识别。
 pub fn is_dtls_packet(packet: &[u8]) -> bool {

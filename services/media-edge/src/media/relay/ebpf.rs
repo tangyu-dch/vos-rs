@@ -63,6 +63,16 @@ impl XdpMediaEngine {
         self.is_loaded.load(Ordering::Relaxed)
     }
 
+    /// 返回绑定的网卡名称
+    pub fn iface_name(&self) -> &str {
+        &self.iface_name
+    }
+
+    /// 返回累计的 XDP 重定向次数
+    pub fn redirect_count(&self) -> u64 {
+        self.redirect_count.load(Ordering::Relaxed)
+    }
+
     /// 向 eBPF BPF_MAP_TYPE_HASH 写入一条 RTP 旁路转发规则
     pub fn register_rule(
         &self,
@@ -88,6 +98,7 @@ impl XdpMediaEngine {
 
         let mut map = self.rules_map.write().map_err(|e| e.to_string())?;
         map.insert(key, val);
+        self.redirect_count.fetch_add(1, Ordering::Relaxed);
         tracing::debug!(src = %src, local_port, target = %target, "eBPF XDP 规则已下发至内核 Map");
         Ok(())
     }
@@ -110,11 +121,6 @@ impl XdpMediaEngine {
     pub fn rule_count(&self) -> usize {
         self.rules_map.read().map(|m| m.len()).unwrap_or(0)
     }
-}
-
-/// 兼容对外 API 接口：加载 XDP 程序
-pub fn init_ebpf_xdp(iface: &str, _elf_bytes: &[u8]) -> Result<XdpMediaEngine, String> {
-    XdpMediaEngine::new(iface)
 }
 
 /// 注册 XDP 内核旁路规则
@@ -175,9 +181,9 @@ mod tests {
     }
 
     #[test]
-    fn test_init_ebpf_xdp_validation() {
-        assert!(init_ebpf_xdp("", &[]).is_err());
-        assert!(init_ebpf_xdp("eth0", &[]).is_ok());
+    fn test_xdp_engine_validation() {
+        assert!(XdpMediaEngine::new("").is_err());
+        assert!(XdpMediaEngine::new("eth0").is_ok());
     }
 
     #[test]

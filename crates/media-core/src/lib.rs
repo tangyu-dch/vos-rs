@@ -1,5 +1,6 @@
 //! Shared media-domain primitives used by signaling and standalone media services.
 
+pub mod comfort_noise;
 pub mod conference;
 pub mod config;
 pub mod crypto;

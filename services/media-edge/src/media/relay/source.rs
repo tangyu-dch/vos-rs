@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+use crate::media::metrics::RtcpQualitySnapshot;
+
 impl MediaRelayState {
     pub fn target_for_port(&self, relay_port: u16) -> Option<SocketAddr> {
         self.targets.get(&relay_port).map(|entry| *entry)
@@ -25,7 +28,8 @@ impl MediaRelayState {
         m
     }
 
-    #[allow(dead_code)]
+    /// 测试辅助方法：直接注入 RTCP 质量快照，用于验证指标聚合与降级告警逻辑。
+    #[cfg(test)]
     pub fn record_rtcp_reports_for_test(&self, relay_port: u16, quality: RtcpQualitySnapshot) {
         self.record_metric(relay_port, |metrics| {
             metrics.rtcp_quality = quality;
@@ -160,5 +164,41 @@ impl MediaRelayState {
             }
             metrics.rtcp_quality_degraded = degraded;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_rtcp_reports_for_test_updates_quality_metrics() {
+        let state = MediaRelayState::default();
+        let relay_port = 40000u16;
+
+        let snapshot = RtcpQualitySnapshot {
+            reports: 1,
+            sender_reports: 1,
+            receiver_reports: 0,
+            report_blocks: 0,
+            last_fraction_lost: Some(64),
+            max_fraction_lost: Some(64),
+            last_cumulative_lost: Some(10),
+            max_cumulative_lost: Some(10),
+            last_jitter: Some(30),
+            max_jitter: Some(30),
+            last_sender_report: Some(0x12345678),
+            delay_since_last_sender_report: Some(15),
+            last_rtt_ms: Some(50),
+            max_rtt_ms: Some(50),
+        };
+        state.record_rtcp_reports_for_test(relay_port, snapshot);
+
+        let metrics = state.metrics_for_port(relay_port);
+        assert_eq!(metrics.rtcp_quality.reports, 1);
+        assert_eq!(metrics.rtcp_quality.sender_reports, 1);
+        assert_eq!(metrics.rtcp_quality.last_jitter, Some(30));
+        assert_eq!(metrics.rtcp_quality.last_rtt_ms, Some(50));
+        assert!(metrics.rtcp_quality.reports > 0);
     }
 }

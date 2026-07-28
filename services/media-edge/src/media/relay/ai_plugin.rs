@@ -14,7 +14,7 @@ pub const AI_FRAME_PAYLOAD_SIZE: usize = 320; // 20ms, 8000Hz, 16bit mono PCM = 
 pub const AI_FRAME_TOTAL_SIZE: usize = AI_FRAME_HEADER_SIZE + AI_FRAME_PAYLOAD_SIZE;
 
 /// VOS-rs 与外部 AI 语音插件交互的标准二进制帧
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AiVoiceFrame {
     pub call_id: u32,
     pub seq: u32,
@@ -119,6 +119,19 @@ impl AiVoicePluginProxy {
             upstream_tx: up_tx,
             downstream_rx: Arc::new(tokio::sync::Mutex::new(down_rx)),
         })
+    }
+
+    /// 向 AI 插件上行通道推送一帧 PCM 音频（媒体面 → AI 插件）。
+    pub async fn send_upstream(&self, frame: AiVoiceFrame) -> Result<(), String> {
+        self.upstream_tx
+            .send(frame)
+            .await
+            .map_err(|e| format!("AI upstream channel closed: {e}"))
+    }
+
+    /// 尝试非阻塞地从下行通道获取一帧 TTS 音频（AI 插件 → 媒体面）。
+    pub async fn try_recv_downstream(&self) -> Option<AiVoiceFrame> {
+        self.downstream_rx.lock().await.try_recv().ok()
     }
 }
 

@@ -1,5 +1,6 @@
 mod direct_writer;
 
+#[cfg(test)]
 use rtp_core::RtpPacketView;
 use sdp_core::SdpError;
 use std::collections::HashSet;
@@ -60,7 +61,6 @@ pub fn recording_error(error: io::Error) -> MediaError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaError {
-    InvalidUtf8,
     InvalidEndpoint(String),
     PortRangeExhausted { port_min: u16, port_max: u16 },
     Recording(String),
@@ -72,7 +72,6 @@ pub enum MediaError {
 impl fmt::Display for MediaError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidUtf8 => write!(formatter, "SDP body is not valid UTF-8"),
             Self::InvalidEndpoint(endpoint) => {
                 write!(formatter, "invalid RTP endpoint: {endpoint}")
             }
@@ -198,7 +197,8 @@ impl MediaRelayState {
             .collect()
     }
 
-    #[allow(dead_code)]
+    /// 测试辅助方法：手动注入 RTP 包到录音通道，验证录音数据落盘正确性。
+    #[cfg(test)]
     pub(crate) fn record_rtp_packet(
         &self,
         relay_port: u16,

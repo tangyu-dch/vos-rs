@@ -74,15 +74,21 @@ impl MediaRelayState {
         self.mark_port_and_peer_features_changed(port);
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn start_monitoring(&self, port: u16, supervisor: SocketAddr) {
+    /// 为指定端口注册一个监控地址（旁听者）。
+    ///
+    /// 注册后，该端口收发的 RTP 包会被复制一份发送到 `supervisor` 地址，
+    /// 用于通话质检、实时监听与录音旁路。可通过 UDS `start_monitoring` 端点调用。
+    pub fn start_monitoring(&self, port: u16, supervisor: SocketAddr) {
         self.monitors.entry(port).or_default().push(supervisor);
         self.mark_relay_features_changed(port);
         tracing::info!(port, %supervisor, "started monitoring port");
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn stop_monitoring(&self, port: u16, supervisor: SocketAddr) {
+    /// 移除指定端口上的某个监控地址。
+    ///
+    /// 当最后一个监控者被移除时，自动清理该端口的 monitors 列表。
+    /// 可通过 UDS `stop_monitoring` 端点调用。
+    pub fn stop_monitoring(&self, port: u16, supervisor: SocketAddr) {
         let should_remove = if let Some(mut entry) = self.monitors.get_mut(&port) {
             entry.retain(|&x| x != supervisor);
             tracing::info!(port, %supervisor, "stopped monitoring port");
@@ -96,8 +102,10 @@ impl MediaRelayState {
         self.mark_relay_features_changed(port);
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn clear_monitors(&self, port: u16) {
+    /// 清除指定端口上的所有监控地址。
+    ///
+    /// 由 main.rs 的 `clear_monitors` UDS/HTTP 端点调用。
+    pub fn clear_monitors(&self, port: u16) {
         if self.monitors.remove(&port).is_some() {
             self.mark_relay_features_changed(port);
             tracing::info!(port, "cleared monitors for port");
@@ -187,8 +195,11 @@ impl MediaRelayState {
         self.mark_relay_features_changed(relay_port);
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn register_srtp_session(
+    /// 为指定端口注册已协商完成的 SDES-SRTP 会话。
+    ///
+    /// 当信令层已完成 SDP `a=crypto:` 协商并提取到 SSRC 时，通过此方法立即安装
+    /// SRTP 加解密上下文。可通过 UDS `register_srtp_session` 端点调用。
+    pub fn register_srtp_session(
         &self,
         relay_port: u16,
         suite: &str,
@@ -202,8 +213,12 @@ impl MediaRelayState {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn register_srtp_offer(&self, relay_port: u16, suite: &str, key_params: &str) {
+    /// 注册待定的 SDES-SRTP offer，等待首个 RTP 包携带的 SSRC 到达后自动激活。
+    ///
+    /// 当信令层仅拿到 `a=crypto:` 属性但尚未学到 SSRC 时调用。媒体转发循环在
+    /// `listener::relay_media_port` 中收到首个 RTP 包时会读取此 offer 并通过
+    /// `register_srtp_session` 完成激活。可通过 UDS `register_srtp_offer` 端点调用。
+    pub fn register_srtp_offer(&self, relay_port: u16, suite: &str, key_params: &str) {
         self.pending_srtp.insert(
             relay_port,
             PendingSrtpConfig {
@@ -224,7 +239,10 @@ impl MediaRelayState {
         self.mark_port_and_peer_features_changed(relay_port);
     }
 
-    #[allow(dead_code)]
+    /// 为指定端口注册音频编解码器，供媒体转发循环执行转码与录音解码。
+    ///
+    /// 由信令层在 SDP 协商完成后通过 UDS `register_port_codec` 端点调用，
+    /// 或在测试中通过 `MediaRelayState::register_port_codec` 直接注入。
     pub fn register_port_codec(&self, port: u16, codec: rtp_core::AudioCodec) {
         self.codecs.insert(port, codec);
         self.mark_port_and_peer_features_changed(port);

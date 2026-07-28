@@ -2,19 +2,21 @@
 //!
 //! 本模块实现基于 io_uring 异步 Ring 缓冲区的 UDP 数据包读写抽象，
 //! 绕过传统 recvfrom / sendto 系统调用的上下文切换，为万兆网卡提供 3000+ CPS 的极限收发支持。
+//!
+//! 当前为 macOS / 其他非 Linux 平台的占位实现（`poll_recv_batch` 永远返回空），
+//! 在 Linux 上可替换为真实的 `io-uring` crate 绑定。模块导出的 API 保持稳定，
+//! 调用方（`MediaRelayState`）可在启动时探测可用性并透明切换。
 
 use std::io;
 use std::net::SocketAddr;
 
 /// 操作系统 Socket 封装与 io_uring 描述符配置
-#[allow(dead_code)]
 pub struct IoUringUdpSocket {
     bind_addr: SocketAddr,
     queue_depth: u32,
     is_active: bool,
 }
 
-#[allow(dead_code)]
 impl IoUringUdpSocket {
     /// 创建并绑定 io_uring UDP 零拷贝通道
     pub fn bind(addr: SocketAddr, queue_depth: u32) -> io::Result<Self> {
@@ -36,9 +38,15 @@ impl IoUringUdpSocket {
         self.is_active
     }
 
+    /// 返回配置的 Ring 缓冲区队列深度
+    pub fn queue_depth(&self) -> u32 {
+        self.queue_depth
+    }
+
     /// 批量从 Ring 缓冲区提取就绪的 UDP 数据包
+    ///
+    /// 在非 Linux 平台或探活模式下使用预备分配的高速池
     pub fn poll_recv_batch(&self, max_packets: usize) -> Vec<(Vec<u8>, SocketAddr)> {
-        // 在非 Linux 平台或探活模式下使用预备分配的高速池
         Vec::with_capacity(max_packets)
     }
 }
@@ -61,7 +69,7 @@ mod tests {
     fn test_io_uring_udp_socket_properties() {
         let addr: SocketAddr = "192.168.1.100:5000".parse().unwrap();
         let socket = IoUringUdpSocket::bind(addr, 2048).unwrap();
-        assert_eq!(socket.queue_depth, 2048);
+        assert_eq!(socket.queue_depth(), 2048);
         assert!(socket.is_active());
     }
 }

@@ -1,6 +1,5 @@
 use serde::Deserialize;
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct MediaMetricsSnapshot {
     pub(crate) received_packets: u64,
@@ -16,6 +15,9 @@ pub struct MediaMetricsSnapshot {
     pub(crate) recording_queue_depth: u64,
     pub(crate) recording_queue_capacity: u64,
     pub(crate) recording_workers: u64,
+    /// 累计录音启动次数（sip-edge 在 `start_call_recording` 成功时 +1）。
+    #[serde(default)]
+    pub(crate) recordings_total: u64,
     pub(crate) dtmf_events: u64,
     pub(crate) rtcp_quality: RtcpQualitySnapshot,
     #[serde(default)]
@@ -38,6 +40,9 @@ pub struct CdrMetricsSnapshot {
     pub(crate) spool_failures_total: u64,
     pub(crate) pending_spool_records: u64,
     pub(crate) unrecoverable_dropped_total: u64,
+    /// 累计成功持久化的 CDR 数量。
+    #[serde(default)]
+    pub(crate) processed_total: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,10 +52,10 @@ pub(crate) struct RtcpQualitySnapshot {
     pub(crate) max_rtt_ms: Option<u32>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct RtcpQualityWindow {
     pub(crate) reports: u64,
+    /// 用于计算平均值的 RTCP 样本数（由 sip-edge 累计，越大代表平均值越稳定）。
     pub(crate) samples: u64,
     pub(crate) average_fraction_lost: Option<u8>,
     pub(crate) average_jitter: Option<u32>,

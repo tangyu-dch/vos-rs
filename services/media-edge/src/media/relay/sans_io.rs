@@ -28,7 +28,7 @@ pub struct SansIoRelayKernel {
 
 impl SansIoRelayKernel {
     /// 输入一个原始 UDP 数据包，进行无 I/O 路由决策
-    pub fn handle_packet(&self, packet: &[u8], _source: SocketAddr) -> RelayAction {
+    pub fn handle_packet(&self, packet: &[u8], source: SocketAddr) -> RelayAction {
         if packet.is_empty() {
             return RelayAction::Drop {
                 reason: "empty packet",
@@ -49,7 +49,7 @@ impl SansIoRelayKernel {
         }
 
         // 3. 解析 RTP 包头（作为基本完整性校验）
-        let _rtp = match RtpPacketView::parse(packet) {
+        let rtp = match RtpPacketView::parse(packet) {
             Ok(r) => r,
             Err(_) => {
                 return RelayAction::Drop {
@@ -58,6 +58,22 @@ impl SansIoRelayKernel {
             }
         };
 
+        // 3.1 若配置了期望的源端口，校验来源是否匹配（防止伪造 RTP 流）
+        if let Some(expected_peer_port) = self.peer_port {
+            if source.port() != expected_peer_port {
+                return RelayAction::Drop {
+                    reason: "source port mismatch",
+                };
+            }
+        }
+
+        // 3.2 DTMF 事件（RFC 4733 telephone-event）需上送控制面处理
+        if let Some(dtmf_pt) = self.dtmf_payload_type {
+            if rtp.payload_type == dtmf_pt {
+                return RelayAction::PassToUser;
+            }
+        }
+
         // 4. 路由与反射决策
         let Some(target) = self.target else {
             return RelayAction::Drop {
@@ -65,7 +81,9 @@ impl SansIoRelayKernel {
             };
         };
 
-        // 决策通过：执行纯字节数组转发，不进行任何 Socket I/O
+        // 决策通过：执行纯字节数组转发，不进行任何 Socket I/O。
+        // `local_port` 字段保留给调用方在日志/统计上下文中使用。
+        let _ = self.local_port;
         RelayAction::Forward {
             packet: packet.to_vec(),
             target,

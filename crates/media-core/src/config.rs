@@ -34,6 +34,10 @@ pub struct MediaConfig {
     pub recording_format: String,
     /// DSCP/TOS 值用于 RTP 媒体包标记（0=不设置，46=EF Expedited Forwarding）
     pub rtp_dscp: u8,
+    /// 是否启用 DTX/静音抑制（仅对 G.711 PCMA/PCMU 生效）。
+    ///
+    /// 启用后：静音期不转发原始 RTP，按 CN 帧间隔注入 RFC 3389 舒适噪音。
+    pub dtx_silence_suppression: bool,
 }
 
 impl MediaConfig {
@@ -75,6 +79,7 @@ impl MediaConfig {
             recording_max_duration_secs: DEFAULT_RECORDING_MAX_DURATION_SECS,
             recording_format: DEFAULT_RECORDING_FORMAT.to_string(),
             rtp_dscp: 0,
+            dtx_silence_suppression: false,
         }
     }
 

@@ -16,6 +16,8 @@ pub enum RtpError {
     RtcpCountOutOfRange(u8),
     RtcpInvalidReportLength,
     TelephoneEventPayloadTooShort,
+    /// UDPTL/T.38 包格式错误，携带具体描述。
+    InvalidPacketFormat(String),
 }
 
 impl fmt::Display for RtpError {
@@ -36,6 +38,9 @@ impl fmt::Display for RtpError {
             Self::RtcpInvalidReportLength => write!(f, "invalid RTCP report length"),
             Self::TelephoneEventPayloadTooShort => {
                 write!(f, "RTP telephone-event payload is too short")
+            }
+            Self::InvalidPacketFormat(message) => {
+                write!(f, "invalid packet format: {message}")
             }
         }
     }

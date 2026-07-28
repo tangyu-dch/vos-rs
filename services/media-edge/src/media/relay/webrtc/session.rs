@@ -6,7 +6,7 @@ use crate::media::rtcp_processor::MediaPacketKind;
 
 use super::{
     dtls::{DtlsIdentity, DtlsTransport},
-    ice::binding_success_response,
+    ice::{binding_success_response, CandidateSummary, IceAgent, RemoteCandidate},
     srtp::SrtpContexts,
     IceCredentials,
 };
@@ -26,6 +26,7 @@ pub struct WebRtcSession {
     ice: IceCredentials,
     dtls: Arc<DtlsTransport>,
     crypto: Arc<RwLock<Option<Arc<SrtpContexts>>>>,
+    ice_agent: Arc<tokio::sync::Mutex<IceAgent>>,
     pub ice_connected: Arc<std::sync::atomic::AtomicBool>,
     pub dtls_connected: Arc<std::sync::atomic::AtomicBool>,
     pub dtls_failed: Arc<std::sync::atomic::AtomicBool>,
@@ -38,8 +39,9 @@ impl WebRtcSession {
         socket: Arc<UdpSocket>,
     ) -> Result<(Self, WebRtcSessionDescription), String> {
         let identity = DtlsIdentity::generate()?;
+        let ice_credentials = IceCredentials::generate();
         let description = WebRtcSessionDescription {
-            ice: IceCredentials::generate(),
+            ice: ice_credentials.clone(),
             fingerprint_sha256: identity.fingerprint().to_string(),
             dtls_setup: "passive",
         };
@@ -47,6 +49,10 @@ impl WebRtcSession {
         let ice_connected = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let dtls_connected = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let dtls_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let ice_agent = Arc::new(tokio::sync::Mutex::new(IceAgent::new(
+            ice_credentials.username_fragment.clone(),
+        )));
 
         let dtls = Arc::new(DtlsTransport::start(
             socket,
@@ -61,6 +67,7 @@ impl WebRtcSession {
                 ice: description.ice.clone(),
                 dtls,
                 crypto,
+                ice_agent,
                 ice_connected,
                 dtls_connected,
                 dtls_failed,
@@ -69,13 +76,76 @@ impl WebRtcSession {
         ))
     }
 
+    /// 设置远端 SDP 中解析得到的 ICE 凭据与候选列表。
+    ///
+    /// 由信令层在收到远端 SDP answer/offer 后调用，将 `a=ice-ufrag` 与
+    /// `a=ice-pwd` 属性注入 ICE agent，供后续 STUN MESSAGE-INTEGRITY 校验使用。
+    pub async fn set_remote_ice_credentials(&self, ufrag: String, password: String) {
+        self.ice_agent
+            .lock()
+            .await
+            .set_remote_credentials(ufrag, password);
+    }
+
+    /// 添加从远端 SDP `a=candidate:` 行解析的候选地址。
+    ///
+    /// 信令层应遍历远端 SDP 中所有 `a=candidate:` 行，调用 `parse_candidate_line`
+    /// 解析后通过此方法注入。ICE agent 会去重并学习已知 peer 地址。
+    pub async fn add_remote_candidate(&self, candidate: RemoteCandidate) {
+        self.ice_agent.lock().await.add_remote_candidate(candidate);
+    }
+
     /// 校验 ICE Binding Request 并生成带完整性与指纹的成功响应。
+    ///
+    /// 同时更新 ICE agent 状态：
+    /// - 学习 peer-reflexive candidate（若源地址未知）
+    /// - 标记 selected candidate pair（若对端为 controlling role）
+    /// - 检测 ICE role conflict 并记录告警（RFC 8445 §7.3.1.1）
     pub async fn handle_stun_packet(
         &self,
         packet: &[u8],
         source: SocketAddr,
     ) -> Result<Vec<u8>, String> {
         let response = binding_success_response(packet, source, &self.ice)?;
+
+        // 更新 ICE agent 状态
+        let mut agent = self.ice_agent.lock().await;
+        agent.learn_or_match_peer_address(source);
+
+        // 解析 STUN 请求以检查 USE-CANDIDATE 与 role conflict
+        let mut request = stun::message::Message::new();
+        request.raw.clear();
+        request.raw.extend_from_slice(packet);
+        let request_valid = request.decode().is_ok();
+
+        if request_valid {
+            if agent.is_use_candidate(&request) {
+                agent.mark_selected(source);
+                if let Some(selected_addr) = agent.selected_remote_address() {
+                    tracing::info!(
+                        local_port = self.local_port,
+                        local_ufrag = agent.local_ufrag(),
+                        selected = %selected_addr,
+                        "ICE selected pair established (USE-CANDIDATE)"
+                    );
+                }
+            }
+            // RFC 8445 §7.3.1.1: 若对端发送 ICE-CONTROLLED 而本地也是 controlled
+            // （ICE-Lite），则发生 role conflict。ICE-Lite 实现保持 controlled 角色，
+            // 仅记录告警以辅助排障。
+            if agent.check_role_conflict(&request) {
+                tracing::warn!(
+                    local_port = self.local_port,
+                    local_ufrag = agent.local_ufrag(),
+                    %source,
+                    "ICE role conflict detected: both peers are controlled; \
+                     staying controlled as ICE-Lite per RFC 8445 §7.3.1.1"
+                );
+            }
+        }
+
+        drop(agent);
+
         self.dtls.set_peer(source).await;
         self.ice_connected
             .store(true, std::sync::atomic::Ordering::Release);
@@ -120,6 +190,42 @@ impl WebRtcSession {
             MediaPacketKind::Rtcp => contexts.encrypt_rtcp(packet).await,
         }
     }
+
+    /// 返回 ICE 连通性与远端候选的诊断快照，供运维监控端点使用。
+    pub async fn diagnostics(&self) -> WebRtcSessionDiagnostics {
+        let agent = self.ice_agent.lock().await;
+        WebRtcSessionDiagnostics {
+            local_port: self.local_port,
+            ice_connected: self
+                .ice_connected
+                .load(std::sync::atomic::Ordering::Acquire),
+            dtls_connected: self
+                .dtls_connected
+                .load(std::sync::atomic::Ordering::Acquire),
+            dtls_failed: self.dtls_failed.load(std::sync::atomic::Ordering::Acquire),
+            local_ufrag: agent.local_ufrag().to_string(),
+            remote_candidate_count: agent.remote_candidate_count(),
+            highest_priority_remote: agent
+                .highest_priority_candidate()
+                .map(|candidate| candidate.address),
+            remote_candidates: agent.candidate_summaries(),
+            selected_remote: agent.selected_remote_address(),
+        }
+    }
+}
+
+/// WebRTC 会话诊断信息，由 `WebRtcSession::diagnostics` 返回。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WebRtcSessionDiagnostics {
+    pub local_port: u16,
+    pub ice_connected: bool,
+    pub dtls_connected: bool,
+    pub dtls_failed: bool,
+    pub local_ufrag: String,
+    pub remote_candidate_count: usize,
+    pub highest_priority_remote: Option<SocketAddr>,
+    pub remote_candidates: Vec<CandidateSummary>,
+    pub selected_remote: Option<SocketAddr>,
 }
 
 #[cfg(test)]

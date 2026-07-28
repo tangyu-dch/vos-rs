@@ -3,30 +3,45 @@ use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::{exponential_buckets, Histogram};
 use prometheus_client::registry::Registry;
+use std::sync::atomic::AtomicU64;
 use std::sync::OnceLock;
 
 mod rtcp;
 mod snapshots;
 pub use snapshots::{CdrMetricsSnapshot, MediaMetricsSnapshot};
 
-#[allow(dead_code)]
+/// 仪表盘快照输入：用于在拉取 /metrics 时回填 dashboard 相关 Gauge。
+///
+/// 字段对齐 `cdr_core::DashboardStats`，但仅保留需要更新 Prometheus 的部分。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DashboardMetricsInput {
+    pub active_calls: i64,
+    pub total_calls_today: i64,
+    pub answered_calls_today: i64,
+    pub failed_calls_today: i64,
+    pub avg_mos: f64,
+    pub avg_loss_rate: f64,
+    pub avg_jitter_ms: f64,
+    pub registered_users: i64,
+    pub active_gateways: i64,
+}
+
+#[derive(Debug)]
 pub struct Metrics {
     pub registry: Registry,
     pub http_requests_total: Counter,
     pub http_request_duration_seconds: Histogram,
     pub active_calls: Gauge,
-    pub total_calls_today: Counter,
-    pub answered_calls_today: Counter,
-    pub failed_calls_today: Counter,
-    pub avg_mos: Gauge,
-    pub avg_loss_rate: Gauge,
-    pub avg_jitter_ms: Gauge,
+    pub total_calls_today: Gauge,
+    pub answered_calls_today: Gauge,
+    pub failed_calls_today: Gauge,
+    pub avg_mos: Gauge<f64, AtomicU64>,
+    pub avg_loss_rate: Gauge<f64, AtomicU64>,
+    pub avg_jitter_ms: Gauge<f64, AtomicU64>,
     pub registered_users: Gauge,
     pub active_gateways: Gauge,
-    #[allow(dead_code)]
-    pub recordings_total: Counter,
-    #[allow(dead_code)]
-    pub cdr_processed_total: Counter,
+    pub recordings_total: Gauge,
+    pub cdr_processed_total: Gauge,
     pub cdr_queue_overflow_total: Gauge,
     pub cdr_spooled_total: Gauge,
     pub cdr_replayed_total: Gauge,
@@ -50,6 +65,7 @@ pub struct Metrics {
     pub media_rtcp_max_jitter: Gauge,
     pub media_rtcp_max_rtt_ms: Gauge,
     pub media_rtcp_window_reports: Gauge,
+    pub media_rtcp_window_samples: Gauge,
     pub media_rtcp_window_average_loss_rate: Gauge,
     pub media_rtcp_window_average_jitter_ms: Gauge,
     pub media_rtcp_window_average_rtt_ms: Gauge,
@@ -88,38 +104,39 @@ impl Metrics {
         let active_calls = Gauge::default();
         registry.register("active_calls", "Current active calls", active_calls.clone());
 
-        let total_calls_today = Counter::default();
+        // 今日累计值每天 0 点重置，使用 Gauge 而非 Counter（Counter 仅单调递增）。
+        let total_calls_today = Gauge::default();
         registry.register(
             "total_calls_today",
-            "Total calls today",
+            "Total calls today (resets at midnight)",
             total_calls_today.clone(),
         );
 
-        let answered_calls_today = Counter::default();
+        let answered_calls_today = Gauge::default();
         registry.register(
             "answered_calls_today",
-            "Answered calls today",
+            "Answered calls today (resets at midnight)",
             answered_calls_today.clone(),
         );
 
-        let failed_calls_today = Counter::default();
+        let failed_calls_today = Gauge::default();
         registry.register(
             "failed_calls_today",
-            "Failed calls today",
+            "Failed calls today (resets at midnight)",
             failed_calls_today.clone(),
         );
 
-        let avg_mos = Gauge::default();
+        let avg_mos = Gauge::<f64, AtomicU64>::default();
         registry.register("avg_mos", "Average MOS score", avg_mos.clone());
 
-        let avg_loss_rate = Gauge::default();
+        let avg_loss_rate = Gauge::<f64, AtomicU64>::default();
         registry.register(
             "avg_loss_rate",
             "Average packet loss rate",
             avg_loss_rate.clone(),
         );
 
-        let avg_jitter_ms = Gauge::default();
+        let avg_jitter_ms = Gauge::<f64, AtomicU64>::default();
         registry.register(
             "avg_jitter_ms",
             "Average jitter in ms",
@@ -140,17 +157,17 @@ impl Metrics {
             active_gateways.clone(),
         );
 
-        let recordings_total = Counter::default();
+        let recordings_total = Gauge::default();
         registry.register(
             "recordings_total",
-            "Total recordings created",
+            "Total recordings created (sourced from sip-edge snapshots)",
             recordings_total.clone(),
         );
 
-        let cdr_processed_total = Counter::default();
+        let cdr_processed_total = Gauge::default();
         registry.register(
             "cdr_processed_total",
-            "Total CDR records processed",
+            "Total CDR records successfully persisted (sourced from sip-edge snapshots)",
             cdr_processed_total.clone(),
         );
         let cdr_queue_overflow_total = Gauge::default();
@@ -307,6 +324,12 @@ impl Metrics {
             "RTCP reports in the current quality window",
             media_rtcp_window_reports.clone(),
         );
+        let media_rtcp_window_samples = Gauge::default();
+        registry.register(
+            "media_rtcp_window_samples",
+            "RTCP samples used to compute window averages (higher = more stable)",
+            media_rtcp_window_samples.clone(),
+        );
         let media_rtcp_window_average_loss_rate = Gauge::default();
         registry.register(
             "media_rtcp_window_average_loss_rate_x10000",
@@ -403,6 +426,7 @@ impl Metrics {
             media_rtcp_max_jitter,
             media_rtcp_max_rtt_ms,
             media_rtcp_window_reports,
+            media_rtcp_window_samples,
             media_rtcp_window_average_loss_rate,
             media_rtcp_window_average_jitter_ms,
             media_rtcp_window_average_rtt_ms,
@@ -435,6 +459,38 @@ impl Metrics {
         metrics
             .cdr_unrecoverable_dropped_total
             .set(saturating_i64(snapshot.unrecoverable_dropped_total));
+        metrics
+            .cdr_processed_total
+            .set(saturating_i64(snapshot.processed_total));
+    }
+
+    /// 用仪表盘快照回填 active_calls / 今日呼叫计数 / MOS / 注册数 / 网关数。
+    ///
+    /// 由 `dashboard::get_dashboard_stats` 与 `dashboard::dashboard_events` 调用，
+    /// 确保这些 Gauge 在 `/metrics` 暴露时有真实数据。
+    pub fn update_dashboard_metrics(input: &DashboardMetricsInput) {
+        let metrics = Self::global();
+        metrics.active_calls.set(input.active_calls);
+        // Counter 语义上应单调递增；今日累计值每天会重置，故用 set 而非 inc。
+        // Prometheus 端会观察到下行，但与业务语义一致（"今日累计"）。
+        metrics.total_calls_today.set(input.total_calls_today);
+        metrics.answered_calls_today.set(input.answered_calls_today);
+        metrics.failed_calls_today.set(input.failed_calls_today);
+        metrics.avg_mos.set(input.avg_mos);
+        metrics.avg_loss_rate.set(input.avg_loss_rate);
+        metrics.avg_jitter_ms.set(input.avg_jitter_ms);
+        metrics.registered_users.set(input.registered_users);
+        metrics.active_gateways.set(input.active_gateways);
+    }
+
+    /// 记录一次 HTTP 请求：累计计数 + 观察延迟分布。
+    ///
+    /// 由 `audit_log` 中间件在每次请求结束时调用。即使请求被拒绝（4xx/5xx），
+    /// 也会经过中间件链，因此计数器能完整反映 HTTP 流量。
+    pub fn record_http_request(duration_secs: f64) {
+        let metrics = Self::global();
+        metrics.http_requests_total.inc();
+        metrics.http_request_duration_seconds.observe(duration_secs);
     }
 
     pub fn encode_metrics() -> String {

@@ -42,6 +42,12 @@ impl Metrics {
         metrics
             .media_recording_workers
             .set(saturating_i64(snapshot.recording_workers));
+        // 累计录音启动次数：Counter 只能 inc，不能 set；用 snapshot 与上次的差值增量。
+        // 但 Prometheus Counter 语义上应单调递增；此处直接 set 为快照值
+        // （sip-edge 端是 AtomicU64 累计，每次 start_call_recording +1，天然单调）。
+        metrics
+            .recordings_total
+            .set(saturating_i64(snapshot.recordings_total));
         metrics
             .media_dtmf_events
             .set(saturating_i64(snapshot.dtmf_events));
@@ -57,6 +63,9 @@ impl Metrics {
         metrics
             .media_rtcp_window_reports
             .set(saturating_i64(snapshot.rtcp_window.reports));
+        metrics
+            .media_rtcp_window_samples
+            .set(saturating_i64(snapshot.rtcp_window.samples));
         metrics.media_rtcp_window_average_loss_rate.set(
             i64::from(
                 snapshot
@@ -112,6 +121,7 @@ mod tests {
             recording_queue_depth: 12,
             recording_queue_capacity: 4096,
             recording_workers: 4,
+            recordings_total: 15,
             dtmf_events: 6,
             rtcp_quality: RtcpQualitySnapshot {
                 reports: 7,
@@ -130,6 +140,7 @@ mod tests {
         assert!(output.contains("media_recording_dropped_packets 4"));
         assert!(output.contains("media_recording_queue_depth 12"));
         assert!(output.contains("media_rtcp_max_rtt_ms 22"));
+        assert!(output.contains("recordings_total 15"));
     }
 
     #[test]
@@ -141,11 +152,13 @@ mod tests {
             spool_failures_total: 1,
             pending_spool_records: 2,
             unrecoverable_dropped_total: 0,
+            processed_total: 42,
         });
 
         let output = Metrics::encode_metrics();
         assert!(output.contains("cdr_queue_overflow_total 3"));
         assert!(output.contains("cdr_spool_pending_records 2"));
         assert!(output.contains("cdr_unrecoverable_dropped_total 0"));
+        assert!(output.contains("cdr_processed_total 42"));
     }
 }

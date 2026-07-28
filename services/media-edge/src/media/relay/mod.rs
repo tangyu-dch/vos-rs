@@ -19,34 +19,33 @@ use super::rtcp_processor::{
 pub use crate::media::config::{MediaConfig, DEFAULT_RTP_PORT_MIN};
 pub use crate::media::crypto::MediaCryptoSession;
 pub use crate::media::dtmf::DtmfState;
-pub use crate::media::metrics::{MediaRelayMetrics, RtcpQualitySnapshot, RtpReceiveStats};
+pub use crate::media::metrics::{MediaRelayMetrics, RtpReceiveStats};
 pub use crate::media::recording::{MediaError, RecordingLeg, RecordingPool};
 use crate::media::sdp::socket_addr_for_endpoint;
 pub use crate::media::utils::unix_timestamp_millis;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub mod affinity;
-#[allow(dead_code)]
 pub mod ai_plugin;
 mod allocation;
-#[allow(dead_code)]
 pub mod ebpf;
+pub use ebpf::XdpMediaEngine;
 mod listener;
 mod path;
-#[allow(dead_code)]
 mod playback;
 pub mod pool {
     pub use rtp_core::{PacketBufferPool, ReusablePacket};
 }
 pub mod io_uring;
-#[allow(dead_code)]
+/// Sans-I/O 纯函数式 RTP 转发状态机，仅用于单元测试与协议逻辑验证。
+/// 生产转发路径使用 `listener::relay_media_port`，该模块作为可移植参考实现保留。
+#[cfg(test)]
 pub mod sans_io;
 mod source;
 mod state;
 pub mod webrtc;
 
 pub(crate) use listener::relay_media_port;
-#[allow(unused_imports)]
 pub use listener::spawn_rtp_relay_listeners;
 use path::{FastPathCounters, RelayPath};
 

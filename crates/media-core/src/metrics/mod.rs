@@ -26,6 +26,8 @@ pub struct MediaRelayMetrics {
     pub recording_queue_depth: u64,
     pub recording_queue_capacity: u64,
     pub recording_workers: u64,
+    /// 累计录音启动次数（每次 `start_call_recording` 成功时 +1）。
+    pub recordings_total: u64,
     pub dtmf_events: u64,
     pub fast_path_packets: u64,
     pub webrtc_ice_connected: bool,
@@ -53,6 +55,7 @@ impl MediaRelayMetrics {
         self.recording_queue_depth += other.recording_queue_depth;
         self.recording_queue_capacity += other.recording_queue_capacity;
         self.recording_workers += other.recording_workers;
+        self.recordings_total += other.recordings_total;
         self.dtmf_events += other.dtmf_events;
         self.fast_path_packets += other.fast_path_packets;
         self.webrtc_ice_connected |= other.webrtc_ice_connected;

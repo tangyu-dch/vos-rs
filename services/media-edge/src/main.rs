@@ -1,4 +1,5 @@
 mod config;
+mod handlers;
 mod media;
 
 use axum::{
@@ -9,17 +10,27 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::media::config::MediaConfig;
+use crate::media::relay::ai_plugin::AiVoicePluginProxy;
+use crate::media::relay::io_uring::IoUringUdpSocket;
+use crate::media::relay::XdpMediaEngine;
 use crate::media::MediaRelayState;
 
 struct AppState {
     media_relay: MediaRelayState,
     control_token: String,
+    /// 已加载的 XDP 内核旁路引擎（按网卡名索引）。
+    xdp_engines: tokio::sync::Mutex<HashMap<String, XdpMediaEngine>>,
+    /// 活跃的 AI 语音插件代理会话（按会话 ID 索引）。
+    ai_proxies: tokio::sync::Mutex<HashMap<String, AiVoicePluginProxy>>,
+    /// 已初始化的 io_uring 零拷贝 UDP 通道（按绑定地址索引）。
+    io_uring_sockets: tokio::sync::Mutex<HashMap<SocketAddr, IoUringUdpSocket>>,
 }
 
 #[tokio::main]
@@ -39,6 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(AppState {
         media_relay,
         control_token: service_config.control_token,
+        xdp_engines: tokio::sync::Mutex::new(HashMap::new()),
+        ai_proxies: tokio::sync::Mutex::new(HashMap::new()),
+        io_uring_sockets: tokio::sync::Mutex::new(HashMap::new()),
     });
 
     let uds_path = service_config.uds_path;
@@ -53,9 +67,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "/unregister_webrtc_session",
             post(unregister_webrtc_session),
         )
+        .route(
+            "/set_remote_ice_credentials",
+            post(set_remote_ice_credentials),
+        )
+        .route("/add_remote_candidate", post(add_remote_candidate))
         .route("/clear_target", post(clear_target))
         .route("/start_call_recording", post(start_call_recording))
+        .route("/start_monitoring", post(start_monitoring))
+        .route("/stop_monitoring", post(stop_monitoring))
         .route("/clear_monitors", post(clear_monitors))
+        .route("/register_srtp_session", post(register_srtp_session))
+        .route("/register_srtp_offer", post(register_srtp_offer))
+        .route("/register_port_codec", post(register_port_codec))
+        .route("/start_playback", post(start_playback))
+        .route("/stop_playback", post(stop_playback))
+        .route("/start_relay_listeners", post(start_relay_listeners))
         .route("/metrics_for_port", post(metrics_for_port))
         .route("/metrics_totals", post(metrics_totals))
         .route(
@@ -66,6 +93,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/clear_dtmf_digits", post(clear_dtmf_digits))
         .route("/take_dtmf_events", post(take_dtmf_events))
         .route("/clear_dtmf_events", post(clear_dtmf_events))
+        // 扩展控制端点：WebRTC 诊断、会议管理、eBPF/XDP、AI 插件、io_uring、SIP INFO DTMF
+        .route("/webrtc_diagnostics", post(handlers::webrtc_diagnostics))
+        .route(
+            "/webrtc_diagnostics_all",
+            get(handlers::webrtc_diagnostics_all),
+        )
+        .route("/join_conference", post(handlers::join_conference))
+        .route("/leave_conference", post(handlers::leave_conference))
+        .route(
+            "/set_participant_mute",
+            post(handlers::set_participant_mute),
+        )
+        .route("/list_conferences", get(handlers::list_conferences))
+        .route("/conference_for_port", post(handlers::conference_for_port))
+        .route("/init_xdp", post(handlers::init_xdp))
+        .route("/register_xdp_rule", post(handlers::register_xdp_rule))
+        .route("/unregister_xdp_rule", post(handlers::unregister_xdp_rule))
+        .route("/xdp_status", post(handlers::xdp_status))
+        .route("/start_ai_plugin", post(handlers::start_ai_plugin))
+        .route("/send_ai_upstream", post(handlers::send_ai_upstream))
+        .route(
+            "/try_recv_ai_downstream",
+            post(handlers::try_recv_ai_downstream),
+        )
+        .route("/init_io_uring", post(handlers::init_io_uring))
+        .route("/poll_io_uring", post(handlers::poll_io_uring))
+        .route(
+            "/register_info_dtmf_digit",
+            post(handlers::register_info_dtmf_digit),
+        )
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             authorize_control,
@@ -689,4 +746,229 @@ async fn clear_dtmf_events(
 ) -> Json<bool> {
     state.media_relay.clear_dtmf_events(&payload.call_id);
     Json(true)
+}
+
+// ===== 监控（旁听）端点 =====
+
+#[derive(serde::Deserialize)]
+struct MonitorReq {
+    port: u16,
+    supervisor: SocketAddr,
+}
+
+async fn start_monitoring(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<MonitorReq>,
+) -> Json<bool> {
+    state
+        .media_relay
+        .start_monitoring(payload.port, payload.supervisor);
+    Json(true)
+}
+
+async fn stop_monitoring(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<MonitorReq>,
+) -> Json<bool> {
+    state
+        .media_relay
+        .stop_monitoring(payload.port, payload.supervisor);
+    Json(true)
+}
+
+// ===== SRTP / 编解码注册端点 =====
+
+#[derive(serde::Deserialize)]
+struct RegisterSrtpSessionReq {
+    relay_port: u16,
+    suite: String,
+    key_params: String,
+    ssrc: u32,
+}
+
+async fn register_srtp_session(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<RegisterSrtpSessionReq>,
+) -> Json<Result<bool, String>> {
+    match state.media_relay.register_srtp_session(
+        payload.relay_port,
+        &payload.suite,
+        &payload.key_params,
+        payload.ssrc,
+    ) {
+        Ok(()) => Json(Ok(true)),
+        Err(e) => Json(Err(e.to_string())),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RegisterSrtpOfferReq {
+    relay_port: u16,
+    suite: String,
+    key_params: String,
+}
+
+async fn register_srtp_offer(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<RegisterSrtpOfferReq>,
+) -> Json<bool> {
+    state
+        .media_relay
+        .register_srtp_offer(payload.relay_port, &payload.suite, &payload.key_params);
+    Json(true)
+}
+
+#[derive(serde::Deserialize)]
+struct RegisterPortCodecReq {
+    port: u16,
+    codec: rtp_core::AudioCodec,
+}
+
+async fn register_port_codec(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<RegisterPortCodecReq>,
+) -> Json<bool> {
+    state
+        .media_relay
+        .register_port_codec(payload.port, payload.codec);
+    Json(true)
+}
+
+// ===== WebRTC ICE 候选注入端点 =====
+
+#[derive(serde::Deserialize)]
+struct SetRemoteIceCredentialsReq {
+    port: u16,
+    ufrag: String,
+    password: String,
+}
+
+async fn set_remote_ice_credentials(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<SetRemoteIceCredentialsReq>,
+) -> Json<Result<bool, String>> {
+    let Some(session) = state
+        .media_relay
+        .webrtc_sessions
+        .get(&payload.port)
+        .map(|entry| entry.clone())
+    else {
+        return Json(Err(format!("端口 {} 未注册 WebRTC 会话", payload.port)));
+    };
+    session
+        .set_remote_ice_credentials(payload.ufrag, payload.password)
+        .await;
+    Json(Ok(true))
+}
+
+#[derive(serde::Deserialize)]
+struct AddRemoteCandidateReq {
+    port: u16,
+    /// SDP `a=candidate:` 行内容，由 `parse_candidate_line` 解析。
+    candidate_line: String,
+}
+
+async fn add_remote_candidate(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<AddRemoteCandidateReq>,
+) -> Json<Result<bool, String>> {
+    let candidate = match crate::media::relay::webrtc::parse_candidate_line(&payload.candidate_line)
+    {
+        Ok(c) => c,
+        Err(e) => return Json(Err(e)),
+    };
+    let Some(session) = state
+        .media_relay
+        .webrtc_sessions
+        .get(&payload.port)
+        .map(|entry| entry.clone())
+    else {
+        return Json(Err(format!("端口 {} 未注册 WebRTC 会话", payload.port)));
+    };
+    session.add_remote_candidate(candidate).await;
+    Json(Ok(true))
+}
+
+// ===== 音频播放（IVR/放音）端点 =====
+
+#[derive(serde::Deserialize)]
+struct StartPlaybackReq {
+    port: u16,
+    file_path: std::path::PathBuf,
+    mode: crate::media::relay::PlaybackMode,
+    loop_playback: bool,
+}
+
+async fn start_playback(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<StartPlaybackReq>,
+) -> Json<Result<bool, String>> {
+    match state
+        .media_relay
+        .start_playback(
+            payload.port,
+            payload.file_path,
+            payload.mode,
+            payload.loop_playback,
+        )
+        .await
+    {
+        Ok(()) => Json(Ok(true)),
+        Err(e) => Json(Err(e)),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct StopPlaybackReq {
+    port: u16,
+}
+
+async fn stop_playback(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<StopPlaybackReq>,
+) -> Json<bool> {
+    state.media_relay.stop_playback(payload.port);
+    Json(true)
+}
+
+// ===== RTP 中继监听器启动端点 =====
+
+#[derive(serde::Deserialize)]
+struct StartRelayListenersReq {
+    port_min: u16,
+    port_max: u16,
+    symmetric_rtp_learning: bool,
+    anti_spoofing: bool,
+    #[serde(default = "default_source_relearn_secs")]
+    source_relearn_after_secs: u64,
+}
+
+fn default_source_relearn_secs() -> u64 {
+    30
+}
+
+async fn start_relay_listeners(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(payload): Json<StartRelayListenersReq>,
+) -> Json<Result<usize, String>> {
+    let mut config = MediaConfig::new_with_symmetric_learning(
+        "0.0.0.0",
+        payload.port_min,
+        payload.port_max,
+        payload.symmetric_rtp_learning,
+    );
+    config.anti_spoofing = payload.anti_spoofing;
+    config.source_relearn_after_secs = payload.source_relearn_after_secs;
+    match crate::media::relay::spawn_rtp_relay_listeners(&config, state.media_relay.clone()).await {
+        Ok(handles) => {
+            let count = handles.len();
+            for handle in handles {
+                tokio::spawn(async move {
+                    let _ = handle.await;
+                });
+            }
+            Json(Ok(count))
+        }
+        Err(e) => Json(Err(e.to_string())),
+    }
 }

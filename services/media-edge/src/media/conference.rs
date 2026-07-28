@@ -14,7 +14,6 @@ use tracing::{debug, info};
 
 /// 会议参会成员状态
 pub struct ConferenceParticipant {
-    pub port: u16,
     pub codec: AudioCodec,
     pub target_addr: SocketAddr,
     pub socket: Arc<UdpSocket>,
@@ -88,6 +87,12 @@ pub struct ConferenceManager {
     pub port_to_conference: DashMap<u16, String>,
 }
 
+impl Default for ConferenceManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConferenceManager {
     pub fn new() -> Self {
         Self {
@@ -115,7 +120,6 @@ impl ConferenceManager {
 
         let mut conf = conf_arc.lock().await;
         let participant = ConferenceParticipant {
-            port,
             codec,
             target_addr,
             socket,
@@ -188,6 +192,28 @@ impl ConferenceManager {
                 }
             }
         }
+    }
+
+    /// 列出所有活跃会议 ID 及其参会人数，供运维监控端点使用。
+    pub fn list_conferences(&self) -> Vec<(String, usize)> {
+        self.conferences
+            .iter()
+            .map(|entry| {
+                let (id, count) = entry
+                    .value()
+                    .try_lock()
+                    .map(|conf| (conf.id.clone(), conf.participants.len()))
+                    .unwrap_or_else(|_| (entry.key().clone(), 0));
+                (id, count)
+            })
+            .collect()
+    }
+
+    /// 查询指定端口所属的会议 ID。
+    pub fn conference_for_port(&self, port: u16) -> Option<String> {
+        self.port_to_conference
+            .get(&port)
+            .map(|entry| entry.value().clone())
     }
 }
 

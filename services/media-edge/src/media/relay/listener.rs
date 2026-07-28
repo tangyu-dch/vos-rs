@@ -13,7 +13,13 @@ fn create_reuseport_socket(port: u16) -> io::Result<UdpSocket> {
     UdpSocket::from_std(std_socket)
 }
 
-#[allow(dead_code)]
+/// 启动端口范围内的 RTP/RTCP 中继监听器。
+///
+/// 为 `[port_min, port_max]` 中每个偶数端口创建 `SO_REUSEPORT` UDP socket，
+/// 并为 RTP 与 RTCP 端口分别 spawn `relay_media_port` 任务。
+///
+/// 该函数由 main.rs 在服务启动时调用，亦可通过 UDS `start_relay_listeners`
+/// 端点在运行时按需启动。
 pub async fn spawn_rtp_relay_listeners(
     config: &MediaConfig,
     relay: MediaRelayState,

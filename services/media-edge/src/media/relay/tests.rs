@@ -1,11 +1,9 @@
 use super::*;
-use crate::media::metrics::RtcpQualityWindow;
+use crate::media::metrics::{RtcpQualitySnapshot, RtcpQualityWindow};
 use crate::media::recording::{decode_pcma, decode_pcmu, new_recording_pool};
-use crate::media::sdp::{is_sdp_body, parse_sdp_rtp_endpoint, rewrite_sdp_body};
 use crate::media::utils::rtt_millis_from_compact_ntp;
 use rtp_core::SrtpConfig;
 use sdp_core::RtpEndpoint;
-use sip_core::{HeaderMap, HeaderName, HeaderValue};
 use std::{
     fs::{self, File},
     io::Write,
@@ -65,17 +63,6 @@ fn rtcp_quality_window_calculates_averages_and_mos() {
     assert_eq!(window.average_rtt_ms, Some(40));
     assert!(window.r_factor_x100.is_some());
     assert!(window.mos_x100.is_some());
-}
-
-#[test]
-fn detects_application_sdp_with_parameters() {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        HeaderName::new("Content-Type").unwrap(),
-        HeaderValue::new("application/sdp; charset=utf-8"),
-    );
-
-    assert!(is_sdp_body(&headers, b"v=0\r\n"));
 }
 
 #[tokio::test]
@@ -216,66 +203,6 @@ fn rotates_recording_when_segment_size_is_reached() {
     assert!(first_path.is_file());
     assert!(second_path.is_file());
     assert!(!second_path.with_extension("json").exists());
-}
-
-#[test]
-fn rewrites_sdp_body_for_relay_endpoint() {
-    let body = concat!(
-        "v=0\r\n",
-        "o=- 1 1 IN IP4 192.0.2.10\r\n",
-        "s=-\r\n",
-        "c=IN IP4 192.0.2.10\r\n",
-        "t=0 0\r\n",
-        "m=audio 49170 RTP/AVP 0 8 101\r\n",
-        "a=rtpmap:0 PCMU/8000\r\n",
-        "a=rtpmap:8 PCMA/8000\r\n",
-        "a=rtpmap:101 telephone-event/8000\r\n"
-    );
-
-    let rewritten =
-        rewrite_sdp_body(body.as_bytes(), RtpEndpoint::new("203.0.113.10", 40_000)).unwrap();
-    let rewritten = String::from_utf8(rewritten).unwrap();
-
-    assert!(rewritten.contains("c=IN IP4 203.0.113.10\r\n"));
-    assert!(rewritten.contains("m=audio 40000 RTP/AVP 0 8 101\r\n"));
-    assert!(rewritten.contains("a=rtpmap:0 PCMU/8000\r\n"));
-    assert!(rewritten.contains("a=rtpmap:8 PCMA/8000\r\n"));
-    assert!(rewritten.contains("a=rtpmap:101 telephone-event/8000\r\n"));
-}
-
-#[test]
-fn rejects_sdp_without_pcmu_or_pcma() {
-    let body = concat!(
-        "v=0\r\n",
-        "o=- 1 1 IN IP4 192.0.2.10\r\n",
-        "s=-\r\n",
-        "c=IN IP4 192.0.2.10\r\n",
-        "t=0 0\r\n",
-        "m=audio 49170 RTP/AVP 101\r\n",
-        "a=rtpmap:101 telephone-event/8000\r\n"
-    );
-
-    let error =
-        rewrite_sdp_body(body.as_bytes(), RtpEndpoint::new("203.0.113.10", 40_000)).unwrap_err();
-
-    assert!(error.to_string().contains("missing compatible audio codec"));
-}
-
-#[test]
-fn parses_original_sdp_rtp_endpoint() {
-    let body = concat!(
-        "v=0\r\n",
-        "o=- 1 1 IN IP4 192.0.2.10\r\n",
-        "s=-\r\n",
-        "c=IN IP4 192.0.2.10\r\n",
-        "t=0 0\r\n",
-        "m=audio 49170 RTP/AVP 0\r\n"
-    );
-
-    assert_eq!(
-        parse_sdp_rtp_endpoint(body.as_bytes()).unwrap(),
-        RtpEndpoint::new("192.0.2.10", 49170)
-    );
 }
 
 #[test]
