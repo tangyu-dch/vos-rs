@@ -183,6 +183,32 @@ impl SessionDescription {
         Ok(parameters)
     }
 
+    /// Returns the `a=ptime` value (milliseconds) advertised on the first audio RTP media section.
+    pub fn first_audio_ptime(&self) -> SdpResult<Option<u32>> {
+        let media_index = self.first_audio_rtp_media_index()?;
+        for line in self.attribute_lines(media_index) {
+            if let Some(value) = line.strip_prefix("a=ptime:") {
+                if let Ok(ptime) = value.trim().parse::<u32>() {
+                    return Ok(Some(ptime));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Returns the `a=maxptime` value (milliseconds) advertised on the first audio RTP media section.
+    pub fn first_audio_maxptime(&self) -> SdpResult<Option<u32>> {
+        let media_index = self.first_audio_rtp_media_index()?;
+        for line in self.attribute_lines(media_index) {
+            if let Some(value) = line.strip_prefix("a=maxptime:") {
+                if let Ok(maxptime) = value.trim().parse::<u32>() {
+                    return Ok(Some(maxptime));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     pub fn retain_first_audio_rtp_payloads(&mut self, payloads: &[String]) -> SdpResult<()> {
         let media_index = self.first_audio_rtp_media_index()?;
         let keep = payloads.iter().cloned().collect::<HashSet<_>>();
@@ -721,5 +747,57 @@ mod tests {
         let large_sdp = "v=0\r\n".repeat(1000); // 7000 bytes
         let result = SessionDescription::parse(&large_sdp);
         assert_eq!(result.unwrap_err(), SdpError::TooLarge);
+    }
+
+    #[test]
+    fn parse_ptime_and_maxptime() {
+        let sdp = "v=0\r\n\
+                   o=- 0 0 IN IP4 1.2.3.4\r\n\
+                   s=test\r\n\
+                   c=IN IP4 1.2.3.4\r\n\
+                   t=0 0\r\n\
+                   m=audio 40000 RTP/AVP 0 8\r\n\
+                   a=rtpmap:0 PCMU/8000\r\n\
+                   a=rtpmap:8 PCMA/8000\r\n\
+                   a=ptime:20\r\n\
+                   a=maxptime:60\r\n";
+        let session = SessionDescription::parse(sdp).unwrap();
+        assert_eq!(session.first_audio_ptime().unwrap(), Some(20));
+        assert_eq!(session.first_audio_maxptime().unwrap(), Some(60));
+    }
+
+    #[test]
+    fn parse_ptime_absent_returns_none() {
+        let sdp = "v=0\r\n\
+                   o=- 0 0 IN IP4 1.2.3.4\r\n\
+                   s=test\r\n\
+                   c=IN IP4 1.2.3.4\r\n\
+                   t=0 0\r\n\
+                   m=audio 40000 RTP/AVP 0 8\r\n\
+                   a=rtpmap:0 PCMU/8000\r\n";
+        let session = SessionDescription::parse(sdp).unwrap();
+        assert_eq!(session.first_audio_ptime().unwrap(), None);
+        assert_eq!(session.first_audio_maxptime().unwrap(), None);
+    }
+
+    #[test]
+    fn ptime_preserved_after_payload_retention() {
+        let sdp = "v=0\r\n\
+                   o=- 0 0 IN IP4 1.2.3.4\r\n\
+                   s=test\r\n\
+                   c=IN IP4 1.2.3.4\r\n\
+                   t=0 0\r\n\
+                   m=audio 40000 RTP/AVP 0 8 101\r\n\
+                   a=rtpmap:0 PCMU/8000\r\n\
+                   a=rtpmap:8 PCMA/8000\r\n\
+                   a=rtpmap:101 telephone-event/8000\r\n\
+                   a=ptime:20\r\n\
+                   a=maxptime:80\r\n";
+        let mut session = SessionDescription::parse(sdp).unwrap();
+        session
+            .retain_first_audio_rtp_payloads(&["0".to_string(), "101".to_string()])
+            .unwrap();
+        assert_eq!(session.first_audio_ptime().unwrap(), Some(20));
+        assert_eq!(session.first_audio_maxptime().unwrap(), Some(80));
     }
 }
