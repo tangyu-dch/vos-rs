@@ -7,7 +7,7 @@
 - SIP 控制面覆盖度：足以在 UDP 上运行基本的 B2BUA 呼叫流程。
 - RTP 媒体面覆盖度：足以通过 G.711 PCMU 和 PCMA 进行普通 RTP 中继。
 - SDP 音频媒体段 SDES-SRTP `a=crypto` 属性解析已加入 `sdp-core`，可提取 crypto tag、suite、key parameters 和 session parameters；`rtp-core` 已支持将 `inline:` key parameters 解码为 `SrtpConfig`。
-- 最主要的遗留差距：DTLS-SRTP 握手、完整 ICE/TURN 协商、多媒体段处理、集群状态/HA 以及运营商级转码与 QoS 控制。
+- 最主要的遗留差距：完整 ICE/TURN 协商、多媒体段中继处理、集群状态/HA 以及运营商级 QoS 控制。DTLS-SRTP 握手已落地于 `media-edge`。
 
 ## 当前本机性能基线
 
@@ -78,15 +78,17 @@
 未完成：
 
 - 早期对话管理（forking 已实现，见 `sip/handlers/invite/outbound/dispatch.rs::fork_outbound_invites` 与 `edge_state/models.rs::fork_dialogs`，支持并行响铃与失败分支自动 CANCEL）。
-- 基于 Redis 存储共享的分布式注册、对话、事务及速率限制计数状态（集群高可用）。
+- 基于 Redis 存储共享的分布式**对话与事务**状态（注册同步已实现，见下方"已新增"）。
 - 活动呼叫的 HA 副本同步与重启恢复。
 - 高级代理路由（基础拓扑隐藏已实现，见 `sip/outbound/invite.rs` 的 Call-ID 覆写与 Via 清理；Path/Service-Route 路由机制也已支持）。
-- 多租户域策略和每账户授权。
+- 多租户域策略和每账户授权（DB schema 已支持 `tenant_id` 字段，运行时策略与隔离鉴权未实现）。
 - 呼叫、注册关系、事务、RTP 中继和 CDR 的高可用（HA）集群。
 
 已新增：
 
 - SUBSCRIBE/NOTIFY 事件包基础框架（RFC 6665）：`sip/subscription/` 模块提供订阅存储（按 `(event_package, aor)` 索引）、生命周期管理（创建/刷新/终止）、过期清理定时任务（60 秒扫描）与初始 NOTIFY 构造。支持 `presence`/`dialog`/`message-summary` 三种事件包，包含 PIDF/dialog-info+xml/simple-message-summary 公告体。后续可在此基础上集成 BLF 状态广播与 MWI 实时通知。
+- REGISTER 注册状态跨节点同步：`cluster/registration_sync.rs` 通过有界队列 + 批量 Redis pipeline + TTL 续约实现集群间注册状态共享；`cluster/inter_node.rs` 基于 NATS request-reply + Redis flow table 完成跨节点 SIP 消息转发。
+- ICE/DTLS 握手状态监控指标：`api-server` 暴露 `webrtc_dtls_connected` / `webrtc_dtls_failed` Prometheus Gauge，`/manage/active-calls` 返回 per-session `dtls_connected` / `dtls_failed`，`media-edge` 按会话 OR 聚合并上报。
 
 ## RTP 和 SDP 协议覆盖范围
 
@@ -115,10 +117,10 @@
 
 未完成：
 
-- SRTP/DTLS-SRTP：SDES `a=crypto` 已接入 SIP Edge 的 Offer/Answer 端口绑定、首包 SSRC 学习和 RTP Relay 加解密路径；端到端 SIPp 加密媒体回归场景已加入。DTLS-SRTP 握手和稳定网关环境下的完整压测仍未完成。
-- ICE connectivity checks、候选优选/切换、TURN allocation/refresh 以及 DTLS-SRTP 握手与密钥导出仍未完成；当前仅有 STUN 公网发现、SDP 参数解析和转发前校验。
-- 转码、编解码器首选策略、舒适噪音、静音抑制以及当前 PCMU/PCMA 路径之外的动态负载映射。
-- 多个 `m=` 媒体部分、视频、T.38、RTP Bundle 及高级 Offer/Answer 行为。
+- SRTP/DTLS-SRTP：SDES `a=crypto` 已接入 SIP Edge 的 Offer/Answer 端口绑定、首包 SSRC 学习和 RTP Relay 加解密路径；端到端 SIPp 加密媒体回归场景已加入。**DTLS-SRTP 握手与密钥导出已在 `media-edge/src/media/relay/webrtc/dtls.rs` 落地**（自签名证书 + SHA-256 fingerprint + `webrtc_dtls` 握手 + `extract_session_keys_from_dtls`），稳定网关环境下的完整压测仍待补齐。
+- ICE connectivity checks、候选优选/切换、TURN allocation/refresh 仍未完成；当前仅有 ICE-Lite 被动响应（`media-edge/src/media/relay/webrtc/ice.rs` 对入站 STUN Binding Request 校验并回 BINDING_SUCCESS）、STUN 公网发现、SDP 参数解析和转发前校验。
+- 转码已部分落地：G.711 PCMA↔PCMU 原地转码、G.711↔Opus 实时转码（`media-core/src/live_transcode.rs`）与基于 RMS 能量的 RTP VAD 检测（`media-core/src/energy.rs`）已实现。**仍未完成**：舒适噪音（CN payload type 13/19）生成、DTX 不连续传输、G.729/G.722 等其他编解码器、编解码器首选策略协商、静音抑制（VAD 仅用于打日志，未驱动丢包）。
+- 多媒体段处理：SDP 多 `m=` 段解析、T.38/UDPTL 协议识别与策略级接受（`MediaNegotiationPolicy::AUDIO_OR_T38`）已支持。**仍未完成**：视频媒体 RTP 转发与编解码协商、T.38 传真 UDPTL 报文中继、RTP Bundle / mux 复用及高级 Offer/Answer 行为。
 - 更稳健的单呼叫媒体销毁保障及分布式媒体中继协同。
 - 合法拦截（lawful intercept）接口以及更细粒度的按租户/按网关 Prometheus 指标导出。
 
@@ -146,4 +148,4 @@
    - **核心目标**：提供 `/play`、`/mute`、`/status` 等 REST API 并在切换音源时确保 Marker Bit 与 SSRC 序列号/时间戳平滑过渡。
 
 ---
-*注：当前主线已经覆盖 UDP/TCP/TLS/WS 传输、事务与服务端重传状态机、SDP 重写、RTP/RTCP 中继（无锁端口池）、RTCP Receiver Report 生成、60 秒质量窗口与告警、RTP 源绑定、PRACK 校验、呼叫保持、SBC 安全防御、Path/Service-Route 路由、PCMU/PCMA 协商、RTP/SIP INFO DTMF + `dtmf_events` 审计明细表、录音 worker pool、录音保留/磁盘保护/分段轮转、可编程媒体注入（/play, /mute, /status）、WAV 自动重采样、SSRC 时间戳序列号平滑对齐、CDR、PostgreSQL 与 NATS 队列化（含 DLQ 与有毒消息策略）。DTLS-SRTP 握手、完整 ICE/TURN、多媒体段和 HA 集群仍未完成。*
+*注：当前主线已经覆盖 UDP/TCP/TLS/WS 传输、事务与服务端重传状态机、SDP 重写、RTP/RTCP 中继（无锁端口池）、RTCP Receiver Report 生成、60 秒质量窗口与告警、RTP 源绑定、PRACK 校验、呼叫保持、SBC 安全防御、Path/Service-Route 路由、PCMU/PCMA 协商、RTP/SIP INFO DTMF + `dtmf_events` 审计明细表、录音 worker pool、录音保留/磁盘保护/分段轮转、可编程媒体注入（/play, /mute, /status）、WAV 自动重采样、SSRC 时间戳序列号平滑对齐、CDR、PostgreSQL 与 NATS 队列化（含 DLQ 与有毒消息策略）、SDES-SRTP + DTLS-SRTP 握手与密钥导出（`media-edge`）、G.711↔Opus 实时转码与 VAD、跨节点 REGISTER 同步与 SIP 报文转发、WebRTC 握手状态 Prometheus 指标。**仍未完成**：完整 ICE connectivity checks / TURN 协商、CN/DTX/静音抑制、视频与 T.38 UDPTL 中继、分布式 Dialog/Transaction 状态复制与 HA 副本同步、多租户运行时策略。*

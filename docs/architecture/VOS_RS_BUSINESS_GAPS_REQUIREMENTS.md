@@ -8,7 +8,7 @@
 ## 目录
 1. [第一阶段：真实 SIP 信令捕获与可视化诊断 (SipFlow) ✅ 已完成](#1-第一阶段真实-sip-信令捕获与可视化诊断-sipflow-已完成)
 2. [第二阶段：流式可编程控制与 Webhook 引擎 (VCI) ✅ 已完成](#2-第二阶段流式可编程控制与-webhook-引擎-vci-已完成)
-3. [第三阶段：WebRTC 媒体安全接入与 WSS 信令支持 (已实现 / 待完善)](#3-第三阶段webrtc-媒体安全接入与-wss-信令支持-已实现--待完善)
+3. [第三阶段：WebRTC 媒体安全接入与 WSS 信令支持 (媒体面已完成 / 信令面待完善)](#3-第三阶段webrtc-媒体安全接入与-wss-信令支持-媒体面已完成--信令面待完善)
 4. [第四阶段：轻量级呼叫中心业务 (Queues & Conference) ✅ 已完成](#4-第四阶段轻量级呼叫中心业务-queues--conference-已完成)
 
 ---
@@ -63,23 +63,25 @@
 
 ---
 
-## 3. 第三阶段：WebRTC 媒体安全接入与 WSS 信令支持 (已实现 / 待完善)
+## 3. 第三阶段：WebRTC 媒体安全接入与 WSS 信令支持 (媒体面已完成 / 信令面待完善)
 
 ### 3.1 现状核查 (已实现部分)
 经代码库核查，VOS-RS 的 **media-edge 已经具备原生 WebRTC 媒体面处理能力**：
 - **ICE-Lite/STUN 协商**：`media-edge/src/media/relay/webrtc/ice.rs` 实现了完整的 STUN 报文识别与 Binding Request 验证响应。
-- **DTLS 安全握手**：`media-edge/src/media/relay/webrtc/dtls.rs` 基于 `webrtc_dtls` 库自动生成自签名证书并协商 SRTP 密钥材料。
+- **DTLS 安全握手**：`media-edge/src/media/relay/webrtc/dtls.rs` 基于 `webrtc_dtls` 库自动生成自签名证书并协商 SRTP 密钥材料（`Srtp_Aes128_Cm_Hmac_Sha1_80`），`extract_session_keys_from_dtls` 导出密钥。
 - **SRTP 加密解密**：`media-edge/src/media/relay/webrtc/srtp.rs` 实现了 RTP/RTCP 音频包的原地加密与解密。
 - **SDP 双向转译**：`sip-edge/src/media/sdp.rs` 提供了 `rewrite_webrtc_offer_for_legacy`（将 WebRTC 转换为传统 SIP 媒体）和 `build_webrtc_answer`（为浏览器构造 WebRTC SDP）的逻辑。
+- **ICE/DTLS 握手状态监控指标**：`api-server` 暴露 `webrtc_dtls_connected` / `webrtc_dtls_failed` Prometheus Gauge，`/manage/active-calls` 返回 per-session `dtls_connected` / `dtls_failed`，`media-edge` 按会话 OR 聚合并上报。
 
 ### 3.2 业务缺失 (待完善与优化点)
-尽管 WebRTC 媒体层已经打通，但仍存在以下**信令面与配置上的缺失**需要解决：
+尽管 WebRTC 媒体面已经打通，但**信令面与配置上**仍存在以下缺失需要解决：
 - **WebSocket (WS/WSS) 传输层稳定性**：
-  - 当前 `sip-edge` 启动时，WebSocket 监听容易因为未配置有效的 TLS 证书链而失败。
-  - 需要在 `config.yaml` 中完善 TLS 私钥/证书证书路径配置支持，并实现无缝的 WSS 代理与自动重连。
+  - 当前 `sip-edge` 已实现 TLS 客户端连接器、CA 证书链加载与 ALPN `sip/2.0` 协商（`net/transport.rs`），并支持 AI 媒体流的 WebSocket 客户端（`media/relay/stream.rs`）。
+  - **未实现**：SIP WSS 入站监听器（`main.rs` 未启动 WSS listener）；SIP 出站 WSS 连接建立（`edge_state/transport.rs` 仅查现有 channel，找不到即报错）；`SipStream` 枚举无 WSS 变体；自动重连机制；`handle_ws_connection` 仅在 `#[cfg(test)]` 下可用。
+  - 需要在 `config.yaml` 中完善 TLS 私钥/证书路径配置支持，并实现无缝的 WSS 代理与自动重连。
 - **ICE/DTLS 握手异常状态监控**：
-  - 在前端或 API 层面，缺乏展示特定通话 WebRTC 握手状态（ICE 成功、DTLS 握手中、SRTP 已激活）的诊断指标。
-  - 需要将媒体层状态（如 DTLS 失败原因、丢包率等）实时反馈给 `api-server` 并在“媒体指标”中展现。
+  - DTLS 成功/失败计数已暴露（见 3.1），但**未单独暴露 ICE connectivity check 状态指标**（当前仅 ICE-Lite 被动响应）。
+  - 需要补充更细粒度的握手阶段诊断（如 ICE 成功、DTLS 握手中、SRTP 已激活）和实时反馈到 `api-server` 的"媒体指标"中。
 
 ---
 
