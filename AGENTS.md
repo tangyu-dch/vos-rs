@@ -969,6 +969,8 @@ VOS_RS_UDP_WORKERS_AUTO=true               # 自适应 worker 数量
 | 文档索引 | `docs/README.md` | 全部文档导航 |
 | 架构设计 | `docs/architecture/ARCHITECTURE.md` | 系统架构、模块关系、关键代码路径 |
 | B2BUA 会话模型 | `docs/architecture/B2BUA_SESSION_MODEL.md` | session_id 主键模型（A/B-leg 统一索引） |
+| 多租户架构 | `docs/architecture/MULTI_TENANT_DESIGN.md` | 商户关联费率、分机关联商户、域→租户映射 |
+| RWI 实时控制台 | `docs/architecture/RWI_DESIGN.md` | WebSocket 双工通道、NATS 事件链路、媒体控制指令 |
 | 架构分析 | `docs/architecture/VOS_RS_ARCHITECTURE_ANALYSIS.md` | 完整架构分析 + VOS 对比 |
 | SIP/RTP 完整性 | `docs/architecture/rtp-sip-completeness.md` | 协议覆盖度 + 性能基线 |
 | NATS VCI 设计 | `docs/architecture/NATS_VCI_COMMAND_DESIGN.md` | VCI 2.0 命令规范 |
@@ -1013,3 +1015,8 @@ VOS_RS_UDP_WORKERS_AUTO=true               # 自适应 worker 数量
 8. [已完成] 缺少实时余额扣减 → **已引入 AtomicI64 CAS 内存预扣减缓存**
 9. [已完成] `api-server` 全量拆分 → **65 个 .rs 文件，其中 `system/system.rs` (560)、`copilot/mod.rs` (525)、`main.rs` (521) 3 个文件略超 500 行，待持续优化**
 10. [已完成] IVR 音频提示音文件上传能力 → **新增 `resources/prompts.rs` + 4 个端点**, 前端可通过 multipart 上传 wav/mp3 并通过 `/api/v1/ivr/prompts/:filename` 试听
+11. [已完成] 多租户架构 → **新增 `tenant` 模块 + `TenantRegistry` 内存注册表 + 域→租户映射**，商户关联费率、分机关联商户，详见 `docs/architecture/MULTI_TENANT_DESIGN.md`
+12. [已完成] RWI 实时控制台 → **新增 `rwi_ws` WebSocket 网关 + NATS 双主题事件链路 + 11 个媒体控制端点**，详见 `docs/architecture/RWI_DESIGN.md`
+13. [已完成] SUBSCRIBE/NOTIFY 事件包框架 → **RFC 6665 基础框架**，支持 presence/dialog/message-summary 三种事件包，DashMap 双索引
+14. [已完成] DSCP/QoS 标记配置 → **`performance.sip_dscp` / `performance.rtp_dscp`**，在 std socket 阶段设置 `IP_TOS`
+15. [已完成] SDP ptime/maxptime 属性解析 → **`sdp-core` 新增 `first_audio_ptime` / `first_audio_maxptime` 方法**

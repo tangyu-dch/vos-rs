@@ -9,13 +9,13 @@
 
 ```
                            ┌──────────────┐
-                           │  Web 前端     │  React 18 + Arco Design + ECharts
+                           │  Web 前端     │  React 18 + HeroUI v2 + Tailwind v4 + ECharts
                            │  (端口 3000)  │
                            └──────┬───────┘
-                                  │ HTTP
+                                  │ HTTP / WebSocket
                            ┌──────▼───────┐
-                           │  api-server  │  Axum REST (端口 8080)
-                           │  CDR查询/管理 │  30+ REST 端点
+                           │  api-server  │  Axum REST (端口 8081) + RWI WebSocket
+                           │  CDR查询/管理 │  65+ REST 端点 + /rwi/v1/ws 实时控制台
                            └──────┬───────┘
                                   │ SQLx
                            ┌──────▼───────┐
@@ -37,14 +37,15 @@
 
 | 模块 | 行数 | 语言 |
 |------|------|------|
-| sip-edge | ~27,000 | Rust |
-| call-core | ~350 | Rust |
-| cdr-core | ~1,850 | Rust |
-| storage-core | ~400 | Rust |
-| api-server | ~500 | Rust |
-| cdr-worker | ~100 | Rust |
-| 前端 | ~8,000 | TypeScript/React |
-| **合计** | **~38,000** | |
+| sip-edge | ~35,000 | Rust |
+| call-core | ~1,200 | Rust |
+| cdr-core | ~2,800 | Rust |
+| sdp-core / sip-core / rtp-core | ~2,500 | Rust |
+| storage-core / media-core | ~1,500 | Rust |
+| api-server | ~6,500 | Rust |
+| cdr-worker | ~400 | Rust |
+| 前端 | ~18,000 | TypeScript/React |
+| **合计** | **~68,000** | |
 
 ---
 

@@ -103,7 +103,22 @@ api_server:
     financier_password: "financier"
 
 # ==========================================
-# 4. cdr-worker 话单入库消费者服务配置
+# 4. 多租户（商户）配置
+# ==========================================
+# 详见 docs/architecture/MULTI_TENANT_DESIGN.md
+tenant:
+  enabled: false              # 默认 false，所有呼叫走默认策略（向后兼容）
+  refresh_interval_secs: 60   # 租户注册表刷新周期（秒），0 = 禁用自动刷新
+
+# ==========================================
+# 5. 性能与 QoS 标记配置
+# ==========================================
+performance:
+  sip_dscp: 0                 # SIP 信令包 DSCP 标记（0=不设置, 46=EF, 34=AF41）
+  rtp_dscp: 0                 # RTP 媒体包 DSCP 标记（0=不设置, 46=EF Expedited Forwarding）
+
+# ==========================================
+# 6. cdr-worker 话单入库消费者服务配置
 # ==========================================
 cdr_worker:
   queue:

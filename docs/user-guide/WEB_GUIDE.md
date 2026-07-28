@@ -1,6 +1,6 @@
 # VOS-RS Web 控制台与管理 API 开发指引
 
-本指引涵盖 `vos-rs` 管理后台的各个功能模块、前端 React（Vite + TS + Arco Design）项目架构以及后台 REST API 与可编程媒体 API 接口细节。
+本指引涵盖 `vos-rs` 管理后台的各个功能模块、前端 React（Vite + TS + HeroUI v2 + Tailwind v4）项目架构以及后台 REST API 与可编程媒体 API 接口细节。
 
 中继字段、路由排序、健康检查、故障切换和配置示例详见
 [《VOS-RS 中继与路由配置指南》](./ROUTING_TRUNK_GUIDE.md)。
@@ -16,7 +16,7 @@
 
 ```text
 vos-rs/
-├── web/                       # 前端项目 (React 18 + TS + Arco Design + ECharts)
+├── web/                       # 前端项目 (React 18 + TS + HeroUI v2 + Tailwind v4 + ECharts)
 │   ├── src/
 │   │   ├── pages/             # 页面组件（仪表盘、话单、路由、计费、录音等）
 │   │   ├── services/          # 后端 REST API 请求层
@@ -41,7 +41,7 @@ cd web
 npm install
 
 # 2. 启动本地开发服务，默认在 http://localhost:3000 启动
-# 该端口已预配置了向后端 api-server (默认 8080 端口) 的 /api 代理
+# 该端口已预配置了向后端 api-server (默认 8081 端口) 的 /api 代理
 npm run dev
 ```
 
@@ -161,7 +161,75 @@ GET /manage/calls/:call_id/status
 
 ---
 
-## 五、开发者故障排查指南
+## 五、租户管理（多租户商户模型）
+
+当 `config.yaml` 中 `tenant.enabled=true` 时启用多租户架构，实现"商户关联费率、分机关联商户"的业务模型。完整设计详见
+[《多租户架构设计》](../architecture/MULTI_TENANT_DESIGN.md)。
+
+### 1. 租户列表与 CRUD
+
+路径：**系统安全 → 租户管理**（`/system/tenants`，仅 admin 角色可见）
+
+| 操作 | 端点 | 说明 |
+|:---|:---|:---|
+| 列表 | `GET /api/v1/tenants` | 支持分页、关键词过滤、`enabled` 过滤、CSV 导出 |
+| 创建 | `POST /api/v1/tenants` | `id` 可由调用方指定或服务端生成 UUID v4 |
+| 详情 | `GET /api/v1/tenants/:id` | 含计费账户关联信息 |
+| 更新 | `PUT /api/v1/tenants/:id` | 修改名称、域、配额、跨租户策略等 |
+| 删除 | `DELETE /api/v1/tenants/:id` | 启用中的租户不可删除 |
+| 启停 | `POST /api/v1/tenants/:id/enabled` | 切换启用状态 |
+
+### 2. 关联计费账户
+
+`PUT /api/v1/tenants/:id/billing-account` 将租户关联到 `billing_accounts.id`，该租户下所有通话统一计费到此账户。
+
+### 3. 关键字段说明
+
+| 字段 | 说明 |
+|:---|:---|
+| `domain` | SIP From 头中的域，用于呼叫入站时映射到租户（UNIQUE） |
+| `max_concurrent_calls` | 最大并发通话数，超限返回 503 |
+| `max_cps` | 每秒最大呼叫数，滑动窗口 1 秒 |
+| `cross_tenant_policy` | 跨租户呼叫策略：`allow` / `deny` / `allow_if_same_domain`（默认） |
+| `recording_enabled` | 录音覆盖开关：`true/false` 覆盖全局，`null` 沿用全局 |
+| `allowed_gateway_ids` | 允许的中继白名单（JSONB 数组） |
+
+---
+
+## 六、实时控制台（RWI）
+
+路径：**运行中心 → 实时控制**（`/rwi`）
+
+实时控制台通过 WebSocket 双工通道推送通话全生命周期事件，并支持下发控制指令。完整设计详见
+[《RWI 实时控制台设计》](../architecture/RWI_DESIGN.md)。
+
+### 1. 页面布局
+
+- **顶部 KPI**：并发通话数 / 响铃中 / 已接通 / 链路延迟（毫秒）
+- **左侧通话列表**：实时展示活跃通话卡片，按开始时间倒序
+- **右侧详情面板**：基本信息 / 实时事件 / 媒体质量
+- **操作弹窗**：强插 / 播报 / 监听 / 转接 / 挂断
+
+### 2. WebSocket 连接
+
+- 端点：`ws://<api-server>:8081/rwi/v1/ws?access_token=<JWT>`
+- 心跳：30 秒间隔发送 `{type:'ping'}`，10 秒未收到 Pong 视为断开
+- 自动重连：指数退避（1s 起，最大 30s）
+- 认证：浏览器 WebSocket API 无法设置自定义 Header，通过 query 参数 `access_token` 传递 JWT
+
+### 3. 控制指令
+
+| 指令 | 后端端点 | 说明 |
+|:---|:---|:---|
+| 强插 | `POST /manage/calls/:call_id/barge-in` | 模式：`listen_only` / `speak_only` / `listen_and_speak` |
+| 播报 | `POST /manage/calls/:call_id/play` | 向主叫/被叫/双方播放音频文件 |
+| 监听 | `POST /manage/calls/:call_id/stream` | 将 RTP 流转发到指定 WebSocket URL |
+| 转接 | `POST /manage/calls/:call_id/transfer` | 盲转或征询转 |
+| 挂断 | `POST /manage/calls/:call_id/terminate` | 强制断开通话 |
+
+---
+
+## 七、开发者故障排查指南
 
 1.  **数据库连接出错**
     确保启动各个二进制前，正确配置了环境变量：

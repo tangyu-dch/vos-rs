@@ -11,6 +11,8 @@ docs/
 ├── architecture/          # 系统架构设计与技术方案文档
 │   ├── ARCHITECTURE.md                        # 整体软件架构与分层设计
 │   ├── B2BUA_SESSION_MODEL.md                 # B2BUA session_id 主键模型（A/B-leg 统一会话索引）
+│   ├── MULTI_TENANT_DESIGN.md                 # 多租户架构设计（商户关联费率，分机关联商户）
+│   ├── RWI_DESIGN.md                          # RWI 实时控制台设计（WebSocket 双工通道 + NATS 事件链路）
 │   ├── VOS_RS_ARCHITECTURE_ANALYSIS.md        # 与商业竞品的详细架构分析对比
 │   ├── rtp-sip-completeness.md                # RTP/SIP 协议完整性评估与性能基线
 │   ├── NATS_VCI_COMMAND_DESIGN.md             # NATS 会话控制协议与 VCI 2.0 命令设计规范
@@ -46,6 +48,8 @@ docs/
 |:---|:---|
 | [ARCHITECTURE.md](./architecture/ARCHITECTURE.md) | 整体平台分层架构、信令面与媒体面分离设计、关键代码路径 |
 | [B2BUA_SESSION_MODEL.md](./architecture/B2BUA_SESSION_MODEL.md) | B2BUA `session_id` 主键模型：A/B-leg Call-ID → session_id → media_session 三级索引 |
+| [MULTI_TENANT_DESIGN.md](./architecture/MULTI_TENANT_DESIGN.md) | 多租户架构：域→租户映射、运行时策略快照、计费账户关联、零侵入降级 |
+| [RWI_DESIGN.md](./architecture/RWI_DESIGN.md) | RWI 实时控制台：NATS 双主题事件链路、WebSocket 双工通道、媒体控制指令 |
 | [VOS_RS_ARCHITECTURE_ANALYSIS.md](./architecture/VOS_RS_ARCHITECTURE_ANALYSIS.md) | 与昆石 VOS 的逐项对比分析，含模块清单与已实现/差距项 |
 | [rtp-sip-completeness.md](./architecture/rtp-sip-completeness.md) | RTP/SIP 协议覆盖范围评估、本机性能基线与演进路线图 |
 | [NATS_VCI_COMMAND_DESIGN.md](./architecture/NATS_VCI_COMMAND_DESIGN.md) | VCI 2.0 基于 NATS 的同步交互式控制与带外异步指令设计规范 |
