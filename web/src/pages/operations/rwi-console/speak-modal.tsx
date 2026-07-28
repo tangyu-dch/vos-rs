@@ -53,7 +53,7 @@ export function SpeakModal({ isOpen, onClose, speakText, onTextChange, onSubmit 
           <Button variant="flat" onPress={onClose}>
             取消
           </Button>
-          <Button color="secondary" onPress={onSubmit} startContent={<Send className="w-4 h-4" />}>
+          <Button color="primary" onPress={onSubmit} startContent={<Send className="w-4 h-4" />}>
             确认发送播报
           </Button>
         </ModalFooter>

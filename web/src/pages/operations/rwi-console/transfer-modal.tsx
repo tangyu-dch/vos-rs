@@ -15,11 +15,11 @@ export function TransferModal({ isOpen, onClose, transferTarget, onTargetChange,
       <ModalContent>
         <ModalHeader className="flex items-center gap-2">
           <PhoneForwarded className="w-5 h-5 text-success" />
-          <span>执行 SIP REFER 呼叫转移 (Transfer)</span>
+          <span>执行呼叫转移</span>
         </ModalHeader>
         <ModalBody className="gap-3">
           <p className="text-xs text-default-500">
-            将当前通话盲转 (Blind Transfer) 至座席分机、队列或外部 PSTN 中继号码。
+            将当前通话盲转至座席分机、队列或外部中继号码。
           </p>
           <Input
             label="目标分机 / 号码"

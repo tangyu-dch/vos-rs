@@ -8,7 +8,7 @@ import {
 import {
   LayoutDashboard, PhoneCall, Users, BookOpen, GitBranch, GitFork, Bot, Radio,
   Grid, Server, ShieldCheck, ShieldAlert, Settings, LogOut, ChevronDown, Menu as MenuIcon, Activity, Cpu,
-  Sun, Moon, ChevronsLeft, ChevronsRight, User as UserIcon,
+  Sun, Moon, ChevronsLeft, ChevronsRight, User as UserIcon, Building2,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
@@ -31,21 +31,21 @@ interface NavGroup {
 const groups: NavGroup[] = [
   { label: '运行中心', icon: <Activity className="w-3.5 h-3.5" />, items: [
     { to: '/overview', label: '运行总览', icon: <LayoutDashboard className="w-4 h-4" /> },
-    { to: '/rwi', label: 'RWI 实时控制台', icon: <Radio className="w-4 h-4" /> },
+    { to: '/rwi', label: '实时控制', icon: <Radio className="w-4 h-4" /> },
     { to: '/copilot', label: '智能助手', icon: <Bot className="w-4 h-4" /> },
     { to: '/calls/active', label: '活跃通话', icon: <PhoneCall className="w-4 h-4" /> },
   ] },
-  { label: '号码与分机', icon: <Users className="w-3.5 h-3.5" />, items: [
+  { label: '号码分机', icon: <Users className="w-3.5 h-3.5" />, items: [
     { to: '/extensions', label: '分机管理', icon: <Users className="w-4 h-4" /> },
     { to: '/numbers', label: '号码管理', icon: <BookOpen className="w-4 h-4" /> },
     { to: '/did-destinations', label: '呼入目标', icon: <GitBranch className="w-4 h-4" /> },
   ] },
   { label: '呼叫中心', icon: <Grid className="w-3.5 h-3.5" />, items: [
-    { to: '/ivr', label: 'IVR 导航', icon: <GitBranch className="w-4 h-4" /> },
+    { to: '/ivr', label: '语音导航', icon: <GitBranch className="w-4 h-4" /> },
     { to: '/queues', label: '呼叫队列', icon: <Grid className="w-4 h-4" /> },
     { to: '/agents', label: '座席监控', icon: <Users className="w-4 h-4" /> },
   ] },
-  { label: '中继与路由', icon: <Server className="w-3.5 h-3.5" />, items: [
+  { label: '中继路由', icon: <Server className="w-3.5 h-3.5" />, items: [
     { to: '/routing', label: '路由策略', icon: <GitFork className="w-4 h-4" /> },
     { to: '/trunks/access', label: '接入中继', icon: <Server className="w-4 h-4" /> },
     { to: '/trunks/egress', label: '落地中继', icon: <Server className="w-4 h-4" /> },
@@ -60,10 +60,11 @@ const groups: NavGroup[] = [
     { to: '/billing/rates', label: '费率管理', icon: <Grid className="w-4 h-4" /> },
     { to: '/billing/transactions', label: '账务流水', icon: <BookOpen className="w-4 h-4" /> },
   ] },
-  { label: '系统与安全', icon: <ShieldCheck className="w-3.5 h-3.5" />, items: [
+  { label: '系统安全', icon: <ShieldCheck className="w-3.5 h-3.5" />, items: [
     { to: '/security', label: '安全策略', icon: <ShieldCheck className="w-4 h-4" /> },
     { to: '/infrastructure', label: '集群节点', icon: <ShieldAlert className="w-4 h-4" /> },
-    { to: '/settings/llm', label: 'LLM 配置', icon: <Cpu className="w-4 h-4" /> },
+    { to: '/tenants', label: '租户管理', icon: <Building2 className="w-4 h-4" /> },
+    { to: '/settings/llm', label: '模型配置', icon: <Cpu className="w-4 h-4" /> },
     { to: '/settings', label: '系统设置', icon: <Settings className="w-4 h-4" /> },
   ] },
 ];
@@ -224,8 +225,8 @@ export default function ConsoleShell({ children }: { children: ReactNode }) {
         </div>
         {!hidden && (
           <div className="min-w-0">
-            <strong className="block text-small font-bold tracking-tight text-foreground leading-tight truncate">VOS Console</strong>
-            <small className="block text-tiny font-medium text-primary tracking-wider">SOFTSWITCH v1.0</small>
+            <strong className="block text-small font-bold tracking-tight text-foreground leading-tight truncate">话务平台</strong>
+            <small className="block text-tiny font-medium text-primary tracking-wider">软交换 v1.0</small>
           </div>
         )}
       </div>
@@ -299,7 +300,7 @@ export default function ConsoleShell({ children }: { children: ReactNode }) {
             <div className="hidden lg:flex items-center gap-1.5 font-mono text-[11px] mr-1">
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-content2 border border-default-200/60 text-default-600">
                 <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-                SIP节点 <strong className="text-foreground font-bold">{clusterStats.sipNodes}</strong>
+                信令节点 <strong className="text-foreground font-bold">{clusterStats.sipNodes}</strong>
               </span>
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-content2 border border-default-200/60 text-default-600">
                 媒体节点 <strong className="text-foreground font-bold">{clusterStats.mediaNodes}</strong>
@@ -308,7 +309,7 @@ export default function ConsoleShell({ children }: { children: ReactNode }) {
                 活跃并发 <strong className="text-success font-bold">{clusterStats.activeCalls}</strong>
               </span>
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-content2 border border-default-200/60 text-default-600">
-                CPS <strong className="text-primary font-bold">{clusterStats.cps}</strong>
+                每秒呼叫 <strong className="text-primary font-bold">{clusterStats.cps}</strong>
               </span>
             </div>
 
