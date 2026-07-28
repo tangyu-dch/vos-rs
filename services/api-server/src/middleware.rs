@@ -3,32 +3,23 @@ use crate::system::auth::{role_allows, Claims};
 use crate::AppState;
 use axum::{extract::State, http::HeaderValue};
 use jsonwebtoken::{decode, DecodingKey, Validation};
+use percent_encoding::percent_decode_str;
 use uuid::Uuid;
 
 /// JWT 认证中间件：验证请求中的 Bearer Token 并检查 RBAC 权限。
+///
+/// 对于浏览器无法设置自定义 Header 的 WebSocket 升级端点（`/rwi/v1/ws`），
+/// 额外支持从 query 参数 `access_token` 提取 Bearer Token。
 pub(crate) async fn jwt_auth(
     State(state): State<AppState>,
     mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, ApiError> {
-    let auth_header = req
-        .headers()
-        .get("authorization")
-        .and_then(|h| h.to_str().ok());
+    let token = extract_bearer_token(&req)?;
 
-    let Some(auth_str) = auth_header else {
-        return Err(ApiError::unauthorized("缺少凭证".to_string()));
-    };
-
-    if !auth_str.starts_with("Bearer ") {
-        return Err(ApiError::unauthorized("凭证格式不正确".to_string()));
-    }
-
-    let token = &auth_str[7..];
     let validation = Validation::default();
-
     match decode::<Claims>(
-        token,
+        &token,
         &DecodingKey::from_secret(&state.jwt_secret),
         &validation,
     ) {
@@ -46,6 +37,45 @@ pub(crate) async fn jwt_auth(
         }
         Err(e) => Err(ApiError::unauthorized(format!("无效 Token: {}", e))),
     }
+}
+
+/// 从请求中提取 Bearer Token。
+///
+/// 优先从 `Authorization` Header 提取；对于 WebSocket 升级端点
+/// （浏览器无法设置自定义 Header），回退到 query 参数 `access_token`。
+fn extract_bearer_token(req: &axum::extract::Request) -> Result<String, ApiError> {
+    // 优先从 Authorization Header 提取
+    if let Some(auth_str) = req
+        .headers()
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+    {
+        if !auth_str.starts_with("Bearer ") {
+            return Err(ApiError::unauthorized("凭证格式不正确".to_string()));
+        }
+        return Ok(auth_str[7..].to_string());
+    }
+
+    // WebSocket 升级端点：从 query 参数 access_token 提取
+    let path = req.uri().path();
+    if path == "/rwi/v1/ws" {
+        if let Some(query) = req.uri().query() {
+            for pair in query.split('&') {
+                let mut kv = pair.splitn(2, '=');
+                if kv.next() == Some("access_token") {
+                    if let Some(value) = kv.next() {
+                        let decoded = percent_decode_str(value)
+                            .decode_utf8()
+                            .map(|cow| cow.into_owned())
+                            .unwrap_or_else(|_| value.to_string());
+                        return Ok(decoded);
+                    }
+                }
+            }
+        }
+    }
+
+    Err(ApiError::unauthorized("缺少凭证".to_string()))
 }
 
 /// 对审计请求体中的敏感字段做递归脱敏。
@@ -100,6 +130,7 @@ pub(crate) async fn audit_log(
     let method = req.method().clone();
     let uri = req.uri().clone();
     let query_params = uri.query().map(|q| q.to_string());
+    let request_started_at = std::time::Instant::now();
     let request_id = req
         .headers()
         .get("x-request-id")
@@ -169,6 +200,11 @@ pub(crate) async fn audit_log(
 
     let response = next.run(req).await;
     let status = response.status();
+
+    // 记录 HTTP 指标：累计请求计数 + 观察延迟分布
+    let elapsed_secs = request_started_at.elapsed().as_secs_f64();
+    crate::system::metrics::Metrics::record_http_request(elapsed_secs);
+
     let store = state.store.clone();
     let audit_request_id = request_id.clone();
     let audit_username = username.clone();
