@@ -105,6 +105,14 @@ sip_edge:
     advertised_addr: "127.0.0.1:5060"
     manage_bind: "127.0.0.1:8082"
     ws_bind: "0.0.0.0:5062"
+    # WSS (WebSocket Secure) SIP 信令监听地址，启用后浏览器 WebRTC 客户端可通过 wss:// 接入
+    # wss_bind: "0.0.0.0:5061"
+    # TLS 证书与私钥路径（PEM 格式），WSS 与 TLS 传输共用
+    # tls_cert_path: "/path/to/cert.pem"
+    # tls_key_path: "/path/to/key.pem"
+    # tls_ca_path: "/path/to/ca.pem"
+    # tls_server_name: "sip.example.com"
+    # tls_insecure_skip_verify: false
   routing:
     default_gateway: "127.0.0.1:5190"
     database_routes_enabled: false

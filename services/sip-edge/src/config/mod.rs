@@ -57,6 +57,10 @@ pub struct EdgeConfig {
     /// DSCP/TOS 值用于 RTP 媒体包标记（0 表示不设置，46=EF Expedited Forwarding）
     pub rtp_dscp: u8,
     pub ws_bind_addr: Option<String>,
+    /// WebSocket Secure (WSS) SIP 信令监听地址，例如 "0.0.0.0:5061"。
+    /// 配置后 sip-edge 会启动 TLS 加密的 WebSocket SIP 信令入站监听器，
+    /// 用于浏览器 WebRTC 客户端接入。
+    pub wss_bind_addr: Option<String>,
     pub internal_secret: String,
     pub bootstrap_auth_users: Option<String>,
     pub cdr_queue_capacity: usize,

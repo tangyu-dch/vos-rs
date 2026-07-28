@@ -61,6 +61,7 @@ impl Default for EdgeConfig {
             sip_dscp: 0,
             rtp_dscp: 0,
             ws_bind_addr: None,
+            wss_bind_addr: None,
             internal_secret: "internal-dev-secret".to_string(),
             bootstrap_auth_users: None,
             cdr_queue_capacity: 4096,

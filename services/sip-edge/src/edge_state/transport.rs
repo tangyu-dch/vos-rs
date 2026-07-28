@@ -25,10 +25,45 @@ use tracing::{debug, error};
 use crate::cluster::{flow_key, FlowRecord};
 use crate::config::EdgeConfig;
 use crate::handle_datagram;
-use crate::net::{create_tls_connector, handle_stream_connection, SipStream, Transport};
+use crate::net::{
+    create_tls_connector, handle_stream_connection, handle_ws_connection, SipStream, Transport,
+};
 
 use super::models::PendingDatagram;
 use super::EdgeState;
+
+/// 生成符合 RFC 6455 的 16 字节随机 Base64 Sec-WebSocket-Key。
+fn generate_ws_key() -> String {
+    use rand::Rng as _;
+    let mut key = [0u8; 16];
+    rand::thread_rng().fill(&mut key);
+    base64_encode(&key)
+}
+
+/// 简易 Base64 编码（避免引入 base64 crate 的额外依赖开销）。
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((n >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(n & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
 
 impl EdgeState {
     /// 将 cluster egress 流量转发给真正的 flow owner 节点。
@@ -311,12 +346,166 @@ impl EdgeState {
                         }
                     }
                 }
-                Transport::Ws | Transport::Wss => {
-                    error!(%target_addr, "no active WebSocket connection found for outbound datagram");
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::NotConnected,
-                        "no active WebSocket connection",
-                    ))
+                Transport::Ws => {
+                    debug!(%target_addr, "establishing new outbound WebSocket (WS) connection");
+                    match TcpStream::connect(target_addr).await {
+                        Ok(tcp_stream) => {
+                            use tokio_tungstenite::client_async;
+
+                            let ws_request = tokio_tungstenite::tungstenite::handshake::client::Request::builder()
+                                .method("GET")
+                                .uri(format!("ws://{target_addr}/"))
+                                .header("Host", target_addr.to_string())
+                                .header("Connection", "Upgrade")
+                                .header("Upgrade", "websocket")
+                                .header("Sec-WebSocket-Version", "13")
+                                .header("Sec-WebSocket-Key", generate_ws_key())
+                                .body(())
+                                .map_err(|e| std::io::Error::other(format!("invalid WS request: {e}")))?;
+
+                            match client_async(ws_request, tcp_stream).await {
+                                Ok((ws_stream, _response)) => {
+                                    let (tx, rx) = tokio::sync::mpsc::channel(100);
+                                    self.register_tcp_connection(target_addr, tx.clone());
+
+                                    let state_clone = Arc::clone(self);
+                                    let config_clone = edge_config.clone();
+                                    tokio::spawn(handle_ws_connection(
+                                        ws_stream,
+                                        target_addr,
+                                        tx.clone(),
+                                        rx,
+                                        move |msg_bytes, peer_addr, connection_tx| {
+                                            let state = Arc::clone(&state_clone);
+                                            let config = config_clone.clone();
+                                            let fut: std::pin::Pin<
+                                                Box<dyn std::future::Future<Output = ()> + Send>,
+                                            > = Box::pin(async move {
+                                                let datagrams = handle_datagram(
+                                                    &msg_bytes, peer_addr, &state, &config,
+                                                )
+                                                .await;
+                                                for d in datagrams {
+                                                    let _ = connection_tx.send(d.bytes).await;
+                                                }
+                                            });
+                                            fut
+                                        },
+                                    ));
+
+                                    let _ = tx.send(datagram.bytes).await;
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    error!(%target_addr, error = %e, "failed to establish outbound WebSocket (WS) handshake");
+                                    Err(std::io::Error::new(
+                                        std::io::ErrorKind::ConnectionRefused,
+                                        e,
+                                    ))
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!(%target_addr, error = %e, "failed to connect TCP for WebSocket (WS)");
+                            Err(e)
+                        }
+                    }
+                }
+                Transport::Wss => {
+                    debug!(%target_addr, "establishing new outbound WebSocket Secure (WSS) connection");
+                    match TcpStream::connect(target_addr).await {
+                        Ok(tcp_stream) => {
+                            let connector = create_tls_connector(
+                                edge_config.tls_ca_path.as_deref(),
+                                edge_config.tls_insecure_skip_verify,
+                            )
+                            .map_err(|e| {
+                                std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
+                            })?;
+                            let domain = match &edge_config.tls_server_name {
+                                Some(name) => ServerName::try_from(name.clone()).map_err(|_| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidInput,
+                                        format!("invalid TLS server name: {name}"),
+                                    )
+                                })?,
+                                None => ServerName::from(target_addr.ip()),
+                            };
+                            match connector.connect(domain, tcp_stream).await {
+                                Ok(tls_stream) => {
+                                    use tokio_tungstenite::client_async_tls;
+
+                                    let ws_request = tokio_tungstenite::tungstenite::handshake::client::Request::builder()
+                                        .method("GET")
+                                        .uri(format!("wss://{target_addr}/"))
+                                        .header("Host", target_addr.to_string())
+                                        .header("Connection", "Upgrade")
+                                        .header("Upgrade", "websocket")
+                                        .header("Sec-WebSocket-Version", "13")
+                                        .header("Sec-WebSocket-Key", generate_ws_key())
+                                        .body(())
+                                        .map_err(|e| std::io::Error::other(format!("invalid WSS request: {e}")))?;
+
+                                    match client_async_tls(ws_request, tls_stream).await {
+                                        Ok((ws_stream, _response)) => {
+                                            let (tx, rx) = tokio::sync::mpsc::channel(100);
+                                            self.register_tcp_connection(target_addr, tx.clone());
+
+                                            let state_clone = Arc::clone(self);
+                                            let config_clone = edge_config.clone();
+                                            tokio::spawn(handle_ws_connection(
+                                                ws_stream,
+                                                target_addr,
+                                                tx.clone(),
+                                                rx,
+                                                move |msg_bytes, peer_addr, connection_tx| {
+                                                    let state = Arc::clone(&state_clone);
+                                                    let config = config_clone.clone();
+                                                    let fut: std::pin::Pin<
+                                                        Box<
+                                                            dyn std::future::Future<Output = ()>
+                                                                + Send,
+                                                        >,
+                                                    > = Box::pin(async move {
+                                                        let datagrams = handle_datagram(
+                                                            &msg_bytes, peer_addr, &state, &config,
+                                                        )
+                                                        .await;
+                                                        for d in datagrams {
+                                                            let _ =
+                                                                connection_tx.send(d.bytes).await;
+                                                        }
+                                                    });
+                                                    fut
+                                                },
+                                            ));
+
+                                            let _ = tx.send(datagram.bytes).await;
+                                            Ok(())
+                                        }
+                                        Err(e) => {
+                                            error!(%target_addr, error = %e, "failed to establish outbound WebSocket Secure (WSS) handshake");
+                                            Err(std::io::Error::new(
+                                                std::io::ErrorKind::ConnectionRefused,
+                                                e,
+                                            ))
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(%target_addr, error = %e, "failed to establish outbound WSS TLS handshake");
+                                    Err(std::io::Error::new(
+                                        std::io::ErrorKind::ConnectionRefused,
+                                        e,
+                                    ))
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!(%target_addr, error = %e, "failed to connect TCP for WSS");
+                            Err(e)
+                        }
+                    }
                 }
                 Transport::Udp => {
                     fallback_socket

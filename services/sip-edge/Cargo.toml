@@ -26,7 +26,7 @@ rustls-pki-types = "1"
 rustls = "0.23"
 rustls-native-certs = "0.8"
 rustls-pemfile = "2"
-tokio-tungstenite = "0.21"
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
 futures = "0.3"
 axum = { version = "0.7", features = ["macros"] }
 tower-http = { version = "0.5", features = ["cors"] }
@@ -45,6 +45,9 @@ sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"                                                  # ICE credential 随机生成
 sherpa-rs = { git = "https://github.com/thewh1teagle/sherpa-rs", features = ["tts", "download-binaries"], optional = true } # IVR TTS/ASR 引擎 (sherpa-onnx 绑定)
+
+[dev-dependencies]
+rcgen = "0.13"
 
 [features]
 default = ["enterprise"]

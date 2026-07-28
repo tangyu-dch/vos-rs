@@ -7,9 +7,10 @@ pub(crate) mod upnp;
 pub(crate) use pool::{BufferPool, PooledBuffer};
 
 pub(crate) use nat::{run_stun_discovery, run_upnp_port_mapping};
-#[cfg(test)]
-pub use transport::handle_ws_connection;
-pub use transport::{create_tls_connector, handle_stream_connection, SipStream, Transport};
+pub use transport::{
+    create_tls_connector, handle_stream_connection, handle_ws_connection, serve_ws_listener,
+    serve_wss_listener, SipStream, Transport,
+};
 
 /// 在 Unix 平台上为 UDP socket 设置 IP_TOS（DSCP 标记）。
 ///

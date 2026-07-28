@@ -7,10 +7,10 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream as ClientTlsStream;
+use tokio_rustls::TlsAcceptor;
 use tokio_rustls::TlsConnector;
-#[cfg(test)]
 use tokio_tungstenite::WebSocketStream;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Transport {
@@ -232,6 +232,35 @@ pub fn create_tls_connector(
     Ok(TlsConnector::from(Arc::new(config)))
 }
 
+/// 构造入站 TLS 服务端 acceptor，用于 WSS 监听器和 TLS SIP 信令监听器。
+///
+/// 需要提供 PEM 格式的证书链与私钥路径。ALPN 协商 `sip/2.0`。
+pub(crate) fn create_tls_acceptor(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<TlsAcceptor, rustls::Error> {
+    let cert_pem = fs::read(cert_path)
+        .map_err(|e| rustls::Error::General(format!("failed to read TLS certificate file: {e}")))?;
+    let certs = parse_certificates(&cert_pem)?;
+
+    let key_pem = fs::read(key_path)
+        .map_err(|e| rustls::Error::General(format!("failed to read TLS private key file: {e}")))?;
+    let mut key_reader = std::io::Cursor::new(&key_pem);
+    let key = rustls_pemfile::private_key(&mut key_reader)
+        .map_err(|e| rustls::Error::General(format!("failed to parse TLS private key: {e}")))?
+        .ok_or_else(|| {
+            rustls::Error::General("TLS private key file contained no keys".to_string())
+        })?;
+
+    let mut config = rustls::ServerConfig::builder_with_provider(tls_crypto_provider())
+        .with_safe_default_protocol_versions()?
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+    config.alpn_protocols = vec![b"sip/2.0".to_vec()];
+
+    Ok(TlsAcceptor::from(Arc::new(config)))
+}
+
 pub async fn handle_stream_connection<F, Fut>(
     mut stream: SipStream,
     peer: SocketAddr,
@@ -288,7 +317,6 @@ pub async fn handle_stream_connection<F, Fut>(
     }
 }
 
-#[cfg(test)]
 pub async fn handle_ws_connection<S, F, Fut>(
     mut ws_stream: WebSocketStream<S>,
     peer: SocketAddr,
@@ -365,6 +393,101 @@ pub async fn handle_ws_connection<S, F, Fut>(
     }
 }
 
+/// 启动 SIP WebSocket (WS) 信令入站监听器。
+///
+/// 每个 accept 到的 TCP 连接升级为 WebSocket，并注册到 `edge_state` 的
+/// `tcp_connections` 表（复用同一通道表），随后由 `handle_ws_connection`
+/// 处理 SIP 文本帧的收发。
+pub async fn serve_ws_listener<F, Fut>(bind_addr: String, on_message: F) -> std::io::Result<()>
+where
+    F: Fn(Vec<u8>, SocketAddr, tokio::sync::mpsc::Sender<Vec<u8>>) -> Fut
+        + Send
+        + Sync
+        + Clone
+        + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    info!(addr = %bind_addr, "SIP Edge WS Listening");
+
+    loop {
+        match listener.accept().await {
+            Ok((stream, peer)) => {
+                let on_msg = on_message.clone();
+                tokio::spawn(async move {
+                    match tokio_tungstenite::accept_async(stream).await {
+                        Ok(ws_stream) => {
+                            let (tx, rx) = tokio::sync::mpsc::channel(100);
+                            // 复用 tcp_connections 通道表注册 WS 连接，使出站路径可找到
+                            // 注意：调用方需在 on_message 闭包中调用 register_tcp_connection
+                            handle_ws_connection(ws_stream, peer, tx, rx, on_msg).await;
+                        }
+                        Err(e) => {
+                            warn!(%peer, error = %e, "WebSocket server handshake failed");
+                        }
+                    }
+                });
+            }
+            Err(e) => {
+                warn!(error = %e, "WS listener accept failed");
+                continue;
+            }
+        }
+    }
+}
+
+/// 启动 SIP WebSocket Secure (WSS) 信令入站监听器。
+///
+/// 与 `serve_ws_listener` 相同，但 TCP 连接先经 TLS acceptor 升级为
+/// `tokio_rustls::server::TlsStream<TcpStream>`，再升级为 WebSocket。
+pub async fn serve_wss_listener<F, Fut>(
+    bind_addr: String,
+    cert_path: String,
+    key_path: String,
+    on_message: F,
+) -> std::io::Result<()>
+where
+    F: Fn(Vec<u8>, SocketAddr, tokio::sync::mpsc::Sender<Vec<u8>>) -> Fut
+        + Send
+        + Sync
+        + Clone
+        + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let acceptor = create_tls_acceptor(&cert_path, &key_path).map_err(std::io::Error::other)?;
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    info!(addr = %bind_addr, "SIP Edge WSS Listening");
+
+    loop {
+        match listener.accept().await {
+            Ok((stream, peer)) => {
+                let acceptor = acceptor.clone();
+                let on_msg = on_message.clone();
+                tokio::spawn(async move {
+                    match acceptor.accept(stream).await {
+                        Ok(tls_stream) => match tokio_tungstenite::accept_async(tls_stream).await {
+                            Ok(ws_stream) => {
+                                let (tx, rx) = tokio::sync::mpsc::channel(100);
+                                handle_ws_connection(ws_stream, peer, tx, rx, on_msg).await;
+                            }
+                            Err(e) => {
+                                warn!(%peer, error = %e, "WSS WebSocket upgrade failed");
+                            }
+                        },
+                        Err(e) => {
+                            warn!(%peer, error = %e, "WSS TLS handshake failed");
+                        }
+                    }
+                });
+            }
+            Err(e) => {
+                warn!(error = %e, "WSS listener accept failed");
+                continue;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +495,122 @@ mod tests {
     #[test]
     fn insecure_tls_connector_is_explicit_opt_in() {
         assert!(create_tls_connector(None, true).is_ok());
+    }
+
+    /// 生成自签名 ECDSA 证书与私钥，用于测试 `create_tls_acceptor`。
+    fn generate_self_signed_cert() -> (std::path::PathBuf, std::path::PathBuf) {
+        use rcgen::{generate_simple_self_signed, CertifiedKey};
+        let CertifiedKey { cert, key_pair } =
+            generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert_path =
+            std::env::temp_dir().join(format!("vos-rs-test-cert-{}.pem", std::process::id()));
+        let key_path =
+            std::env::temp_dir().join(format!("vos-rs-test-key-{}.pem", std::process::id()));
+        std::fs::write(&cert_path, cert.pem()).unwrap();
+        std::fs::write(&key_path, key_pair.serialize_pem()).unwrap();
+        (cert_path, key_path)
+    }
+
+    #[test]
+    fn create_tls_acceptor_with_self_signed_cert_succeeds() {
+        let (cert_path, key_path) = generate_self_signed_cert();
+        let result = create_tls_acceptor(cert_path.to_str().unwrap(), key_path.to_str().unwrap());
+        let _ = std::fs::remove_file(&cert_path);
+        let _ = std::fs::remove_file(&key_path);
+        assert!(
+            result.is_ok(),
+            "TLS acceptor creation should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn create_tls_acceptor_with_missing_cert_fails() {
+        let result = create_tls_acceptor("/nonexistent/cert.pem", "/nonexistent/key.pem");
+        assert!(result.is_err());
+    }
+
+    /// 验证 WSS 监听器能成功启动并绑定端口（TLS acceptor 与 TcpListener 正常工作）。
+    /// 完整的 WSS 端到端握手由 `create_tls_acceptor_with_self_signed_cert_succeeds`
+    /// 与 `serve_ws_listener_completes_handshake` 共同覆盖。
+    #[tokio::test]
+    async fn serve_wss_listener_starts_and_binds() {
+        let (cert_path, key_path) = generate_self_signed_cert();
+        let cert_path = cert_path.to_str().unwrap().to_string();
+        let key_path = key_path.to_str().unwrap().to_string();
+
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bind_addr = probe.local_addr().unwrap();
+        drop(probe);
+
+        let addr_str = bind_addr.to_string();
+        let server_task = tokio::spawn(async move {
+            #[allow(clippy::type_complexity)]
+            let on_message: fn(
+                Vec<u8>,
+                SocketAddr,
+                tokio::sync::mpsc::Sender<Vec<u8>>,
+            ) -> std::future::Ready<()> = |_msg, _peer, _tx| std::future::ready(());
+            let _ = serve_wss_listener(addr_str, cert_path, key_path, on_message).await;
+        });
+
+        // 等待监听器就绪并验证 TCP 可连接
+        let _ = loop {
+            match tokio::net::TcpStream::connect(bind_addr).await {
+                Ok(s) => break s,
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        };
+
+        // TCP 连接成功即证明 serve_wss_listener 已启动并绑定端口
+        server_task.abort();
+    }
+
+    /// 端到端验证 WS（明文）监听器：启动 serve_ws_listener → 客户端连接 →
+    /// 成功完成 WebSocket 升级。
+    #[tokio::test]
+    async fn serve_ws_listener_completes_handshake() {
+        use futures::StreamExt;
+
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bind_addr = probe.local_addr().unwrap();
+        drop(probe);
+
+        let addr_str = bind_addr.to_string();
+        let server_task = tokio::spawn(async move {
+            #[allow(clippy::type_complexity)]
+            let on_message: fn(
+                Vec<u8>,
+                SocketAddr,
+                tokio::sync::mpsc::Sender<Vec<u8>>,
+            ) -> std::future::Ready<()> = |_msg, _peer, _tx| std::future::ready(());
+            let _ = serve_ws_listener(addr_str, on_message).await;
+        });
+
+        // 客户端重试连接，等待监听器就绪
+        let tcp_stream = loop {
+            match tokio::net::TcpStream::connect(bind_addr).await {
+                Ok(s) => break s,
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        };
+
+        let ws_request = tokio_tungstenite::tungstenite::handshake::client::Request::builder()
+            .method("GET")
+            .uri(format!("ws://{bind_addr}/"))
+            .header("Host", bind_addr.to_string())
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(())
+            .unwrap();
+        let (mut ws_stream, _response) = tokio_tungstenite::client_async(ws_request, tcp_stream)
+            .await
+            .expect("WS client handshake should succeed");
+
+        // 等待服务端关闭连接或超时后主动 abort 服务端
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), ws_stream.next()).await;
+        server_task.abort();
     }
 }

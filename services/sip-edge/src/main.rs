@@ -268,6 +268,74 @@ async fn main() -> Result<(), AnyError> {
         });
     }
 
+    // 启动 SIP WebSocket (WS) 信令入站监听器（如已配置 ws_bind）
+    if let Some(ws_bind) = edge_config.ws_bind_addr.clone() {
+        let edge_state_ws = Arc::clone(&edge_state);
+        let config_ws = Arc::clone(&edge_config);
+        tokio::spawn(async move {
+            let on_message =
+                move |msg_bytes: Vec<u8>,
+                      peer: std::net::SocketAddr,
+                      connection_tx: tokio::sync::mpsc::Sender<Vec<u8>>| {
+                    let state = Arc::clone(&edge_state_ws);
+                    let config = Arc::clone(&config_ws);
+                    let fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                        Box::pin(async move {
+                            // 注册 WS 入站连接，使后续出站路径可复用此通道
+                            state.register_tcp_connection(peer, connection_tx.clone());
+                            let datagrams =
+                                crate::handle_datagram(&msg_bytes, peer, &state, &config).await;
+                            for d in datagrams {
+                                let _ = connection_tx.send(d.bytes).await;
+                            }
+                        });
+                    fut
+                };
+            if let Err(e) = net::serve_ws_listener(ws_bind, on_message).await {
+                warn!(error = %e, "SIP WS listener terminated");
+            }
+        });
+    }
+
+    // 启动 SIP WebSocket Secure (WSS) 信令入站监听器（如已配置 wss_bind 与 TLS 证书）
+    if let Some(wss_bind) = edge_config.wss_bind_addr.clone() {
+        match (&edge_config.tls_cert_path, &edge_config.tls_key_path) {
+            (Some(cert_path), Some(key_path)) => {
+                let edge_state_wss = Arc::clone(&edge_state);
+                let config_wss = Arc::clone(&edge_config);
+                let cert = cert_path.clone();
+                let key = key_path.clone();
+                tokio::spawn(async move {
+                    let on_message = move |msg_bytes: Vec<u8>,
+                                          peer: std::net::SocketAddr,
+                                          connection_tx: tokio::sync::mpsc::Sender<Vec<u8>>| {
+                        let state = Arc::clone(&edge_state_wss);
+                        let config = Arc::clone(&config_wss);
+                        let fut: std::pin::Pin<
+                            Box<dyn std::future::Future<Output = ()> + Send>,
+                        > = Box::pin(async move {
+                            state.register_tcp_connection(peer, connection_tx.clone());
+                            let datagrams =
+                                crate::handle_datagram(&msg_bytes, peer, &state, &config).await;
+                            for d in datagrams {
+                                let _ = connection_tx.send(d.bytes).await;
+                            }
+                        });
+                        fut
+                    };
+                    if let Err(e) = net::serve_wss_listener(wss_bind, cert, key, on_message).await {
+                        warn!(error = %e, "SIP WSS listener terminated");
+                    }
+                });
+            }
+            _ => {
+                warn!(
+                    "wss_bind configured but tls_cert_path or tls_key_path missing; skipping WSS listener"
+                );
+            }
+        }
+    }
+
     resource_lease::spawn_renewal_loop(Arc::clone(&edge_state));
 
     let num_workers = if edge_config.udp_workers_auto {

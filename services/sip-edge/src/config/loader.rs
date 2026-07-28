@@ -193,13 +193,13 @@ impl EdgeConfig {
             sbc_rate_limit_capacity: security_section.sbc_rate_limit_capacity.unwrap_or(2000.0),
             sbc_rate_limit_fill_rate: security_section.sbc_rate_limit_fill_rate.unwrap_or(500.0),
             sbc_max_concurrency: security_section.sbc_max_concurrency.unwrap_or(2000),
-            tls_cert_path: None,
-            tls_key_path: None,
+            tls_cert_path: net_section.tls_cert_path,
+            tls_key_path: net_section.tls_key_path,
             tls_bind_addr: None,
-            tls_allow_test_certificate: false,
-            tls_ca_path: None,
-            tls_insecure_skip_verify: false,
-            tls_server_name: None,
+            tls_allow_test_certificate: net_section.tls_allow_test_certificate.unwrap_or(false),
+            tls_ca_path: net_section.tls_ca_path,
+            tls_insecure_skip_verify: net_section.tls_insecure_skip_verify.unwrap_or(false),
+            tls_server_name: net_section.tls_server_name,
             udp_workers: performance_section
                 .udp_workers
                 .unwrap_or_else(|| num_cpus::get().max(1)),
@@ -213,6 +213,7 @@ impl EdgeConfig {
             sip_dscp: performance_section.sip_dscp.unwrap_or(0),
             rtp_dscp: performance_section.rtp_dscp.unwrap_or(0),
             ws_bind_addr: net_section.ws_bind,
+            wss_bind_addr: net_section.wss_bind,
             internal_secret: security_section
                 .internal_secret
                 .unwrap_or_else(|| "internal-dev-secret".to_string()),

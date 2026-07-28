@@ -61,6 +61,13 @@ pub(super) struct NetworkSection {
     pub(super) advertised_addr: Option<String>,
     pub(super) manage_bind: Option<String>,
     pub(super) ws_bind: Option<String>,
+    pub(super) wss_bind: Option<String>,
+    pub(super) tls_cert_path: Option<String>,
+    pub(super) tls_key_path: Option<String>,
+    pub(super) tls_ca_path: Option<String>,
+    pub(super) tls_server_name: Option<String>,
+    pub(super) tls_allow_test_certificate: Option<bool>,
+    pub(super) tls_insecure_skip_verify: Option<bool>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
