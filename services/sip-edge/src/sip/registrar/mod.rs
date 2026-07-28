@@ -28,12 +28,11 @@ mod error;
 mod helpers;
 mod store;
 
-// `RegisterError` is the return error type of `RegistrationStore::handle_register`
-// and therefore part of this module's public API, but no caller names it
-// explicitly. Re-export it so external code *can* name it if needed.
-#[allow(unused_imports)]
-pub use error::RegisterError;
-pub use store::RegistrationStore;
+// `RegistrationStore` 在外部 sip-edge 代码中被引用；`RegisterError` 仅在测试中
+// 通过名称断言，故以 `#[cfg(test)]` 限定避免 unused_imports 告警。
+#[cfg(test)]
+pub(crate) use error::RegisterError;
+pub(crate) use store::RegistrationStore;
 
 pub(crate) use helpers::{canonical_aor, parse_uri_from_header};
 
@@ -65,10 +64,7 @@ pub struct RegisterOutcome {
 mod tests {
     use super::{RegisterError, RegistrationStore};
     use sip_core::{parse_message, SipRequest};
-    use std::{
-        net::SocketAddr,
-        time::{Duration, SystemTime},
-    };
+    use std::time::{Duration, SystemTime};
 
     #[tokio::test]
     async fn registers_contact_and_returns_active_binding() {
@@ -281,10 +277,5 @@ mod tests {
             panic!("expected request");
         };
         request.into_owned()
-    }
-
-    #[allow(dead_code)]
-    fn peer() -> SocketAddr {
-        "192.0.2.10:5060".parse().unwrap()
     }
 }

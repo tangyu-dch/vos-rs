@@ -1,4 +1,3 @@
-use rtp_core::RtpPacketView;
 use sdp_core::SdpError;
 use std::collections::HashSet;
 use std::error::Error;
@@ -154,6 +153,10 @@ impl MediaRelayState {
         );
         self.mark_relay_features_changed(caller_relay_port);
         self.mark_relay_features_changed(gateway_relay_port);
+        // 累计录音启动次数：在 caller 端口上 +1（避免双端口重复计数）
+        self.record_metric(caller_relay_port, |metrics| {
+            metrics.recordings_total += 1;
+        });
 
         Ok(Some(wav_path))
     }
@@ -194,6 +197,10 @@ impl MediaRelayState {
             }),
         )
         .map_err(MediaError::Io)?;
+        // 远程录音也累计 recordings_total
+        self.record_metric(caller_relay_port, |metrics| {
+            metrics.recordings_total += 1;
+        });
         Ok(Some(wav_path))
     }
 
@@ -247,11 +254,11 @@ impl MediaRelayState {
             .collect()
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn record_rtp_packet(
         &self,
         relay_port: u16,
-        packet: RtpPacketView<'_>,
+        packet: rtp_core::RtpPacketView<'_>,
     ) -> Result<bool, MediaError> {
         let Some(recording) = self.recordings.get(&relay_port).map(|value| value.clone()) else {
             return Ok(false);

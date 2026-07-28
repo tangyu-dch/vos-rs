@@ -27,11 +27,10 @@ use tracing::error;
 use crate::config::EdgeConfig;
 use crate::edge_state::EdgeState;
 
-// 重导出所有命令参数类型，便于外部构造 CommandAction。
-#[allow(unused_imports)]
-pub use commands::{
-    CallCommand, CommandAction, DialParams, GatherParams, HangupParams, PlayParams, StreamParams,
-};
+// 重导出对外构造 CommandAction 所需的类型。
+// `StreamParams` 被 interactive_control 子模块通过绝对路径引用，必须重导出。
+// `PlayParams` / `GatherParams` 仅在 media_command_handlers 子模块内部使用，不重导出。
+pub(crate) use commands::{CallCommand, CommandAction, DialParams, HangupParams, StreamParams};
 
 /// VCI 命令入口：依据 action 类型分发到具体处理器。
 pub async fn handle_command(

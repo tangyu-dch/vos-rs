@@ -53,6 +53,15 @@ pub(super) struct SipEdgeConfigSection {
     pub(super) dynamic_config: Option<DynamicConfigSection>,
     pub(super) billing: Option<BillingSection>,
     pub(super) webhooks: Option<WebhookSection>,
+    pub(super) tenant: Option<TenantSection>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+pub(super) struct TenantSection {
+    /// 多租户隔离是否启用（默认 false，即所有呼叫走默认策略）。
+    pub(super) enabled: Option<bool>,
+    /// 从 PostgreSQL 重新加载 tenants 表的周期（秒）。0 = 禁用自动刷新。
+    pub(super) refresh_interval_secs: Option<u64>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -148,4 +157,8 @@ pub(super) struct RoutingSection {
 pub(super) struct NatTraversalSection {
     pub(super) stun_server: Option<String>,
     pub(super) upnp_enabled: Option<bool>,
+    pub(super) turn_server: Option<String>,
+    pub(super) turn_username: Option<String>,
+    pub(super) turn_password: Option<String>,
+    pub(super) turn_realm: Option<String>,
 }

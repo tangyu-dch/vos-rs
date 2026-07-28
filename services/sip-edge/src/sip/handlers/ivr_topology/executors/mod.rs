@@ -7,8 +7,6 @@
 //! - [`voice`]：tts / asr（当前为 stub，TTS/ASR 引擎后续阶段接入）
 //! - [`ai`]：ai_agent（当前为 stub，LLM 接入后续阶段实现）
 
-#![allow(unused_variables)]
-
 use super::types::*;
 use crate::{EdgeConfig, EdgeState};
 use sip_core::SipRequest;
@@ -25,25 +23,25 @@ pub mod voice;
 /// # Arguments
 /// * `node_type` - 节点类型枚举
 /// * `node` - 拓扑节点（含 config JSON）
-/// * `graph` - 拓扑图索引（用于查询后续节点）
+/// * `_graph` - 拓扑图索引（保留以备后续节点需要查询后续节点列表时使用，当前由引擎层统一处理）
 /// * `context` - 当前通话的执行上下文
 /// * `a_port` - A-leg 本地媒体端口
-/// * `caller_peer` - 主叫 socket 地址
-/// * `template_request` - 触发 IVR 的原始 SIP 请求（用于转接模板）
+/// * `_caller_peer` - 主叫 socket 地址（保留以备后续节点需要回传 SIP 响应时使用）
+/// * `_template_request` - 触发 IVR 的原始 SIP 请求（保留：转接由引擎层 `execute_transfer` 复用此模板）
 /// * `edge_state` - 边缘节点共享状态
 /// * `edge_config` - 边缘节点配置
 //
 // 参数数量由现有 [`crate::sip::handlers::ivr_topology::engine::execute`] 调用约定决定，
-// 暂不允许拆分；与原 stub 实现保持一致。
+// 暂不允许拆分；下划线前缀表示"接口契约保留参数"，区别于 allow 注解的全局屏蔽。
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch(
     node_type: IvrNodeType,
     node: &TopologyNode,
-    graph: &TopologyGraph,
+    _graph: &TopologyGraph,
     context: &mut IvrExecutionContext,
     a_port: u16,
-    caller_peer: SocketAddr,
-    template_request: &SipRequest,
+    _caller_peer: SocketAddr,
+    _template_request: &SipRequest,
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
 ) -> NodeExecuteResult {

@@ -30,6 +30,7 @@ import { RoutesPage } from '@/pages/system/routes';
 import { SecurityPage } from '@/pages/system/security';
 import { InfrastructurePage } from '@/pages/system/infrastructure';
 import { SettingsPage } from '@/pages/system/settings';
+import { TenantsPage } from '@/pages/system/tenants';
 import { LlmConfigPage } from '@/pages/settings/llm-config';
 
 import { CopilotPage } from '@/pages/operations/copilot';
@@ -74,6 +75,7 @@ function PrivateConsole() {
           <Route path="/billing/transactions" element={<ProtectedPage path="/billing/transactions"><TransactionsPage /></ProtectedPage>} />
           <Route path="/security" element={<ProtectedPage path="/security"><SecurityPage /></ProtectedPage>} />
           <Route path="/infrastructure" element={<ProtectedPage path="/infrastructure"><InfrastructurePage /></ProtectedPage>} />
+          <Route path="/tenants" element={<ProtectedPage path="/tenants"><TenantsPage /></ProtectedPage>} />
           <Route path="/settings" element={<ProtectedPage path="/settings"><SettingsPage /></ProtectedPage>} />
           <Route path="/settings/llm" element={<ProtectedPage path="/settings"><LlmConfigPage /></ProtectedPage>} />
           <Route path="*" element={<Navigate to="/overview" replace />} />

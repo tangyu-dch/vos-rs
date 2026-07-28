@@ -10,7 +10,9 @@ mod conference;
 mod media_control;
 mod metrics;
 mod monitor;
+mod registrations;
 mod sbc;
+mod tenants;
 
 use axum::{
     extract::State,
@@ -78,6 +80,7 @@ pub async fn serve(
         .route("/manage/cluster/drain", post(cluster::cluster_drain))
         .route("/manage/cluster/resume", post(cluster::cluster_resume))
         .route("/manage/calls/:call_id/terminate", post(calls::terminate))
+        .route("/manage/calls/:call_id/transfer", post(calls::transfer))
         .route("/manage/route-preview", get(calls::route_preview))
         .route("/manage/media-metrics", get(metrics::media_metrics))
         .route("/manage/cdr-metrics", get(metrics::cdr_metrics))
@@ -88,6 +91,11 @@ pub async fn serve(
         )
         .route("/manage/calls/:call_id/mute", post(media_control::mute))
         .route("/manage/calls/:call_id/unmute", post(media_control::unmute))
+        .route(
+            "/manage/calls/:call_id/barge-in",
+            post(media_control::barge_in),
+        )
+        .route("/manage/calls/:call_id/stream", post(media_control::stream))
         .route(
             "/manage/calls/:call_id/status",
             get(call_status::call_status),
@@ -117,6 +125,13 @@ pub async fn serve(
             post(conference::mute_conference_participant),
         )
         .route("/manage/sbc/rules", post(sbc::update_sbc_rules))
+        .route("/manage/tenants", get(tenants::list_tenants))
+        .route("/manage/tenants/count", get(tenants::tenant_count))
+        .route(
+            "/manage/outbound-registrations",
+            get(registrations::list_outbound_registrations),
+        )
+        .route("/manage/turn/status", get(metrics::turn_status))
         .route_layer(axum::middleware::from_fn_with_state(
             ManageAuthSecret(internal_secret),
             internal_auth,

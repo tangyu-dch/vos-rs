@@ -1,7 +1,10 @@
 use super::accept::accept_media_source;
-use super::helpers::send_media_nonblocking;
+use super::helpers::{send_media_nonblocking, send_media_with_turn};
 use super::symmetric::track_symmetric_source;
 use super::*;
+
+/// G.711 20ms 帧时长（毫秒），用于 DTX 时间累计。
+const G711_FRAME_DURATION_MS: u32 = 20;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_media_port(
@@ -12,6 +15,7 @@ pub(crate) async fn relay_media_port(
     anti_spoofing: bool,
     source_relearn_after_secs: u64,
     packet_kind: MediaPacketKind,
+    dtx_silence_suppression: bool,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut buffer = vec![0_u8; MAX_RTP_DATAGRAM_SIZE];
@@ -36,6 +40,15 @@ pub(crate) async fn relay_media_port(
         } else {
             None
         };
+    // DTX/静音抑制控制器，仅在 dtx_silence_suppression=true 时启用。
+    let mut dtx_controller = if dtx_silence_suppression {
+        Some(media_core::comfort_noise::DtxController::with_default_config())
+    } else {
+        None
+    };
+    let mut last_rtp_sequence: u16 = 0;
+    let mut last_rtp_timestamp: u32 = 0;
+    let mut dtx_codec_known = false;
 
     loop {
         let (mut size, mut source) = tokio::select! {
@@ -76,6 +89,11 @@ pub(crate) async fn relay_media_port(
                     } else {
                         None
                     };
+                // 编解码或对端变更时重置 DTX 状态机，避免 CN 帧时间戳错位
+                if let Some(controller) = dtx_controller.as_mut() {
+                    controller.reset();
+                    dtx_codec_known = false;
+                }
             }
 
             let use_fast_path = packet_kind == MediaPacketKind::Rtp && plan.path == RelayPath::Fast;
@@ -135,6 +153,7 @@ pub(crate) async fn relay_media_port(
                     .unwrap_or(false);
 
                 let mut drop_packet = false;
+                let mut suppress_for_dtx = false;
                 if !is_pass_through {
                     // 优化：仅当配置了 DTMF 探测时才解析 RTP 包，并移除无用的 rtp_stats.observe
                     if let Ok(rtp) = RtpPacketView::parse(packet) {
@@ -144,6 +163,38 @@ pub(crate) async fn relay_media_port(
                             energy_detector.process_packet(rtp.payload, codec);
                             if energy_detector.is_talking() {
                                 debug!(local_port, "RTP VAD 语音活动检测：正在说话");
+                            }
+
+                            // DTX/静音抑制：仅对 G.711 PCMA/PCMU 生效
+                            if let Some(controller) = dtx_controller.as_mut() {
+                                if matches!(
+                                    codec,
+                                    rtp_core::AudioCodec::Pcma | rtp_core::AudioCodec::Pcmu
+                                ) {
+                                    if !dtx_codec_known {
+                                        controller.configure_cn(rtp.ssrc, 13);
+                                        dtx_codec_known = true;
+                                    }
+                                    let rms = compute_pcm_rms(rtp.payload, codec);
+                                    let decision =
+                                        controller.process_frame(rms, G711_FRAME_DURATION_MS);
+                                    last_rtp_sequence = rtp.sequence_number;
+                                    last_rtp_timestamp = rtp.timestamp;
+                                    if matches!(
+                                        decision,
+                                        media_core::comfort_noise::DtxDecision::Suppress
+                                    ) {
+                                        suppress_for_dtx = true;
+                                        relay.record_metric(local_port, |metrics| {
+                                            metrics.dropped_invalid_packets += 1
+                                        });
+                                        debug!(
+                                            local_port,
+                                            noise_db = controller.noise_db(),
+                                            "DTX 静音抑制：丢弃原始 RTP 包"
+                                        );
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -167,14 +218,61 @@ pub(crate) async fn relay_media_port(
                         );
                     }
 
-                    if let Some(target) = plan.target {
+                    // DTX 抑制时不转发原始 RTP；同时尝试发送 CN 帧
+                    if suppress_for_dtx {
+                        if let Some(controller) = dtx_controller.as_mut() {
+                            if controller.should_emit_cn() {
+                                if let Some((payload, seq, ts, ssrc, pt)) = controller
+                                    .emit_cn_frame(
+                                        plan.codec.unwrap_or(rtp_core::AudioCodec::Pcma),
+                                        last_rtp_timestamp,
+                                        last_rtp_sequence,
+                                    )
+                                {
+                                    if let Ok(cn_rtp) =
+                                        rtp_core::RtpPacket::build_cn(pt, seq, ts, ssrc, &payload)
+                                    {
+                                        if let Some(target) = plan.target {
+                                            let egress_socket = plan
+                                                .egress_socket
+                                                .as_deref()
+                                                .unwrap_or_else(|| socket.as_ref());
+                                            if let Err(error) = send_media_with_turn(
+                                                &relay,
+                                                local_port,
+                                                egress_socket,
+                                                &cn_rtp,
+                                                target,
+                                                plan.turn_client.as_ref(),
+                                            )
+                                            .await
+                                            {
+                                                fast_path_counters.record_send_error();
+                                                warn!(%error, %target, local_port, "failed to send CN frame");
+                                            } else {
+                                                fast_path_counters.record_forwarded();
+                                                debug!(local_port, "已注入 CN 舒适噪音帧");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if let Some(target) = plan.target {
                         let egress_socket = plan
                             .egress_socket
                             .as_deref()
                             .unwrap_or_else(|| socket.as_ref());
-                        // 优化一：非阻塞发送优先
-                        if let Err(error) =
-                            send_media_nonblocking(egress_socket, packet, target).await
+                        // 优化一：非阻塞发送优先；TURN 启用时走中继路径
+                        if let Err(error) = send_media_with_turn(
+                            &relay,
+                            local_port,
+                            egress_socket,
+                            packet,
+                            target,
+                            plan.turn_client.as_ref(),
+                        )
+                        .await
                         {
                             fast_path_counters.record_send_error();
                             warn!(%error, %source, %target, local_port, "failed to relay RTP packet on fast path");
@@ -667,8 +765,16 @@ pub(crate) async fn relay_media_port(
                 .as_deref()
                 .unwrap_or_else(|| socket.as_ref());
 
-            // 优化一：非阻塞发送优先
-            if let Err(error) = send_media_nonblocking(egress_socket, outbound_packet, target).await
+            // 优化一：非阻塞发送优先；TURN 启用时走中继路径
+            if let Err(error) = send_media_with_turn(
+                &relay,
+                local_port,
+                egress_socket,
+                outbound_packet,
+                target,
+                plan.turn_client.as_ref(),
+            )
+            .await
             {
                 relay.record_metric(local_port, |metrics| metrics.send_errors += 1);
                 warn!(%error, %source, %target, local_port, packet_kind = packet_kind.label(), "failed to relay media packet");
@@ -692,4 +798,25 @@ pub(crate) async fn relay_media_port(
     }
 
     fast_path_counters.flush(&relay, local_port);
+}
+
+/// 计算 G.711 payload 解码后的 PCM 样本 RMS（线性值）。
+///
+/// 用于 DTX 静音判定。其他编解码器返回 0（视为静音，但 DTX 控制器会跳过非 G.711）。
+fn compute_pcm_rms(payload: &[u8], codec: rtp_core::AudioCodec) -> f64 {
+    if payload.is_empty() {
+        return 0.0;
+    }
+    let sum_squares = match codec {
+        rtp_core::AudioCodec::Pcma => payload.iter().fold(0.0_f64, |sum, &byte| {
+            let sample = f64::from(crate::media::recording::decode_pcma(byte));
+            sum + sample * sample
+        }),
+        rtp_core::AudioCodec::Pcmu => payload.iter().fold(0.0_f64, |sum, &byte| {
+            let sample = f64::from(crate::media::recording::decode_pcmu(byte));
+            sum + sample * sample
+        }),
+        _ => return 0.0,
+    };
+    (sum_squares / payload.len() as f64).sqrt()
 }

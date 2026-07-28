@@ -234,13 +234,14 @@ pub(crate) async fn handle_in_dialog_request(
 
     // BYE/CANCEL 转发后立即清理事务：更新并发计数并从 map 中删除
     if matches!(&mutable_request.method, Method::Bye | Method::Cancel) {
-        bye::forward_bye_cancel_cleanup(
+        let blf_datagrams = bye::forward_bye_cancel_cleanup(
             edge_state,
             edge_config,
             &transaction,
             &transaction_call_id,
             call_id.as_str(),
         );
+        datagrams.extend(blf_datagrams);
     }
 
     if matches!(&mutable_request.method, Method::Bye | Method::Cancel) {

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-use crate::{ApiError, AppState};
+use crate::{system::metrics::DashboardMetricsInput, ApiError, AppState};
 
 /// 活跃通话列表缓存：2 秒 TTL，避免 summary / monitoring-extras / telemetry loop
 /// 在同一时刻重复请求 sip-edge 的 /manage/active-calls 全量接口。
@@ -124,6 +124,19 @@ pub async fn get_dashboard_stats(
         .map_err(|e| ApiError {
             error: e.to_string(),
         })?;
+
+    // 将仪表盘快照同步到 Prometheus Gauge，保证 /metrics 端点暴露真实数据
+    crate::system::metrics::Metrics::update_dashboard_metrics(&DashboardMetricsInput {
+        active_calls: stats.active_calls,
+        total_calls_today: stats.today_total_calls,
+        answered_calls_today: stats.today_answered_calls,
+        failed_calls_today: stats.today_failed_calls,
+        avg_mos: stats.avg_mos.unwrap_or(0.0),
+        avg_loss_rate: stats.avg_loss_rate.unwrap_or(0.0),
+        avg_jitter_ms: stats.avg_jitter_ms.unwrap_or(0.0),
+        registered_users: stats.registered_users,
+        active_gateways: stats.active_gateways,
+    });
 
     let now = time::OffsetDateTime::now_utc()
         .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC));

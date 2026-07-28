@@ -5,4 +5,4 @@ mod pipeline;
 
 pub(crate) use delivery::sign_payload;
 
-pub use pipeline::start_pipeline;
+pub use pipeline::{start_pipeline, start_rwi_broadcast};

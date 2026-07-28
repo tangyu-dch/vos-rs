@@ -4,10 +4,11 @@ use sip_core::SipResponse;
 use tracing::debug;
 
 use crate::config::EdgeConfig;
-use crate::edge_state::EdgeState;
+use crate::edge_state::{EdgeState, PendingDatagram};
 
 /// 处理 2xx 成功响应：触发 CallAnswered webhook、记录 established_at、解析 Session-Expires。
 ///
+/// 返回 BLF NOTIFY 数据报（呼叫建立时向订阅者广播 dialog 状态）。
 /// 注意：原代码中 `established_at` 在 L783-787 与 L816-823 有重复设置，本函数保留原样不修改。
 pub(crate) fn handle_2xx_success(
     sip_response: &SipResponse,
@@ -15,7 +16,7 @@ pub(crate) fn handle_2xx_success(
     edge_config: &EdgeConfig,
     session_key: Option<&str>,
     call_id: Option<&str>,
-) {
+) -> Vec<PendingDatagram> {
     if sip_response.status_code >= 200 && sip_response.status_code < 300 {
         if let Some(cid) = call_id {
             let is_invite_local = sip_response
@@ -68,6 +69,33 @@ pub(crate) fn handle_2xx_success(
                     }
                 });
             }
+            // BLF: 首次建立呼叫时触发 dialog 状态广播（confirmed）
+            let mut blf_datagrams = Vec::new();
+            if is_invite_local {
+                let was_established = edge_state
+                    .inbound_transactions
+                    .get(session_key.unwrap_or(cid))
+                    .map(|t| t.established_at.is_some())
+                    .unwrap_or(false);
+                if !was_established {
+                    if let Some(transaction) = edge_state
+                        .inbound_transactions
+                        .get(session_key.unwrap_or(cid))
+                    {
+                        let caller_aor = transaction.dialogs.caller.remote_uri.to_string();
+                        let callee_aor = transaction.dialogs.caller.local_uri.to_string();
+                        blf_datagrams =
+                            crate::sip::handlers::subscribe::trigger_dialog_state_change(
+                                edge_state,
+                                edge_config,
+                                &caller_aor,
+                                &callee_aor,
+                                cid,
+                                crate::sip::handlers::subscribe::DialogStateChange::Established,
+                            );
+                    }
+                }
+            }
             if let Some(mut t_mut) = edge_state
                 .inbound_transactions
                 .get_mut(session_key.unwrap_or(cid))
@@ -112,6 +140,8 @@ pub(crate) fn handle_2xx_success(
                     t_mut.established_at = Some(Instant::now());
                 }
             }
+            return blf_datagrams;
         }
     }
+    Vec::new()
 }

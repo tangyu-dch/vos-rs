@@ -695,6 +695,16 @@ impl CallManager {
         }
     }
 
+    /// 注入租户上下文到 Call，用于按租户查找专属费率与结算。
+    ///
+    /// 在 INVITE 入站解析阶段（resolution）调用，将 `TenantContext.tenant_id`
+    /// 写入 Call，使后续余额校验与结算能优先匹配租户专属费率。
+    pub fn set_call_tenant(&self, call_id: &CallId, tenant_id: Option<String>) {
+        if let Some(mut call) = self.calls.get_mut(call_id) {
+            call.tenant_id = tenant_id;
+        }
+    }
+
     /// 设置呼叫的候选路由，供并行振铃/分机组使用。
     pub fn set_candidates(&self, call_id: &CallId, candidates: Vec<SelectedRoute>) {
         if let Some(mut call) = self.calls.get_mut(call_id) {

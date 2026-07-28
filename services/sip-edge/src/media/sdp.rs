@@ -200,7 +200,10 @@ pub fn validate_media_negotiation(body: &[u8]) -> Result<(), MediaError> {
         .map_err(map_sdp_error)
 }
 
-#[allow(dead_code)]
+/// 测试辅助：改写 SDP body 中的 RTP 端点。
+///
+/// 生产路径使用 `rewrite_sdp_and_extract_endpoint`，此函数仅供单元测试覆盖 SDP 改写语义。
+#[cfg(test)]
 pub fn rewrite_sdp_body(body: &[u8], endpoint: RtpEndpoint) -> Result<Vec<u8>, MediaError> {
     shared_sdp::rewrite_sdp_body(body, endpoint).map_err(map_sdp_error)
 }

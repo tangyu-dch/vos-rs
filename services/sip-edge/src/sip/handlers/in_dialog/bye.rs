@@ -133,6 +133,7 @@ pub(super) async fn handle_bye_cancel_pre_forward(
                 if let Some(ref uname) = username {
                     edge_state.decrement_user_concurrency(uname);
                 }
+                edge_state.decrement_tenant_concurrency(transaction.tenant.as_ref());
                 let duration_secs = transaction
                     .established_at
                     .map(|i| i.elapsed().as_secs())
@@ -219,17 +220,17 @@ pub(super) async fn handle_bye_cancel_pre_forward(
 }
 
 /// Post-forward BYE/CANCEL cleanup: decrement user concurrency, emit CallFinished
-/// webhook, and tear down the call transaction.
+/// webhook, tear down the call transaction, and broadcast BLF terminated state.
 ///
 /// Invoked only after the B2BUA request has been built and pushed to the datagrams
-/// vector by the orchestrator.
+/// vector by the orchestrator. Returns BLF NOTIFY datagrams to be sent by the caller.
 pub(super) fn forward_bye_cancel_cleanup(
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
     transaction: &InboundTransaction,
     transaction_call_id: &str,
     call_id: &str,
-) {
+) -> Vec<PendingDatagram> {
     let username: Option<String> = transaction
         .original_request
         .as_ref()
@@ -237,10 +238,27 @@ pub(super) fn forward_bye_cancel_cleanup(
     if let Some(ref uname) = username {
         edge_state.decrement_user_concurrency(uname);
     }
+    edge_state.decrement_tenant_concurrency(transaction.tenant.as_ref());
     let duration_secs = transaction
         .established_at
         .map(|i| i.elapsed().as_secs())
         .unwrap_or(0);
+
+    // BLF: 仅在呼叫确实建立过后才广播 terminated 状态，避免对未接通呼叫误发通知
+    let blf_datagrams = if transaction.established_at.is_some() {
+        let caller_aor = transaction.dialogs.caller.remote_uri.to_string();
+        let callee_aor = transaction.dialogs.caller.local_uri.to_string();
+        crate::sip::handlers::subscribe::trigger_dialog_state_change(
+            edge_state,
+            edge_config,
+            &caller_aor,
+            &callee_aor,
+            call_id,
+            crate::sip::handlers::subscribe::DialogStateChange::Terminated,
+        )
+    } else {
+        Vec::new()
+    };
     if edge_config.webhooks.control_mode == "http" || edge_config.webhooks.control_mode == "nats" {
         let edge_state_clone = edge_state
             .self_weak
@@ -276,4 +294,5 @@ pub(super) fn forward_bye_cancel_cleanup(
         });
     }
     edge_state.teardown_call_transaction(transaction_call_id);
+    blf_datagrams
 }

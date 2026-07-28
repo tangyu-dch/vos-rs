@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -159,5 +160,80 @@ pub(crate) fn run_upnp_port_mapping(bind_addr: &str, edge_config: &crate::config
         }
     } else {
         warn!("UPnP: no gateway found on network, port mapping disabled");
+    }
+}
+
+/// 启动 TURN 中继客户端：解析配置、创建 ALLOCATE、启动后台 REFRESH 续约。
+///
+/// 返回 `Some(TurnClient)` 表示成功分配 relayed 地址；`None` 表示未配置或分配失败。
+/// 调用方应将结果注入 `EdgeState` 供媒体路径使用。
+pub(crate) async fn run_turn_bootstrap(
+    edge_config: &crate::config::EdgeConfig,
+) -> Option<Arc<crate::net::turn_client::TurnClient>> {
+    let server_str = edge_config.turn_server.as_ref()?;
+    let cleaned = server_str
+        .trim_start_matches("turn:")
+        .trim_start_matches("turns:");
+    let server_addr: SocketAddr = match cleaned.parse() {
+        Ok(addr) => addr,
+        Err(_) => {
+            // 尝试解析为 host:port
+            let parts: Vec<&str> = cleaned.rsplitn(2, ':').collect();
+            if parts.len() == 2 {
+                match format!("{}:{}", parts[1], parts[0]).parse::<SocketAddr>() {
+                    Ok(addr) => addr,
+                    Err(_) => {
+                        warn!(server = %server_str, "TURN: invalid server address format");
+                        return None;
+                    }
+                }
+            } else {
+                warn!(server = %server_str, "TURN: server address missing port");
+                return None;
+            }
+        }
+    };
+
+    let username = edge_config.turn_username.clone().unwrap_or_default();
+    let password = edge_config.turn_password.clone().unwrap_or_default();
+    let realm = edge_config.turn_realm.clone().unwrap_or_default();
+
+    if username.is_empty() || password.is_empty() {
+        warn!(
+            server = %server_addr,
+            "TURN: username or password missing, skipping allocation"
+        );
+        return None;
+    }
+
+    info!(server = %server_addr, realm = %realm, "TURN bootstrap enabled");
+
+    let config = crate::net::turn_client::TurnClientConfig {
+        server_addr,
+        username,
+        password,
+        realm,
+    };
+
+    match crate::net::turn_client::TurnClient::new(config).await {
+        Ok(client) => match client.allocate().await {
+            Ok(allocation) => {
+                info!(
+                    relayed = %allocation.relayed_address,
+                    mapped = %allocation.mapped_address,
+                    lifetime = allocation.lifetime_secs,
+                    "TURN allocation established"
+                );
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                warn!(error = %e, server = %server_addr, "TURN allocation failed");
+                None
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, server = %server_addr, "TURN client creation failed");
+            None
+        }
     }
 }

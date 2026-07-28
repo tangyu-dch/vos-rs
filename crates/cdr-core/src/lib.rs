@@ -19,6 +19,7 @@ pub use call_core::CdrAuditSnapshot;
 pub use models::*;
 pub use store::copilot::{AppendCopilotMessageInput, CopilotMessage, CopilotSession};
 pub use store::llm_config::{LlmConfigRecord, UpsertLlmConfigInput};
+pub use store::tenant::{TenantRecord, UpsertTenantInput};
 pub use termination_models::*;
 pub use utils::current_hhmm;
 

@@ -18,6 +18,8 @@ pub struct RateBody {
     pub billing_interval_secs: Option<i32>,
     pub price_per_interval: Option<Decimal>,
     pub description: Option<String>,
+    /// 关联租户 ID（可空，NULL 表示全局费率）。
+    pub tenant_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -27,6 +29,8 @@ pub struct RateUpdate {
     pub billing_interval_secs: Option<i32>,
     pub price_per_interval: Option<Decimal>,
     pub description: Option<String>,
+    /// 更新关联租户 ID（可空，显式传空字符串清除关联）。
+    pub tenant_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,33 +127,52 @@ fn resolve_rate(
     Ok((interval_secs, price, equivalent_per_minute))
 }
 
+/// 费率列表查询参数，支持 `?tenant_id=xxx` 过滤。
+#[derive(Debug, Deserialize)]
+pub struct RateListQuery {
+    #[serde(flatten)]
+    pub page: PageQuery,
+    /// 按租户 ID 过滤（不传则返回全部费率，含全局与租户专属）。
+    pub tenant_id: Option<String>,
+}
+
 pub async fn list_rates(
     State(state): State<AppState>,
-    Query(query): Query<PageQuery>,
+    Query(query): Query<RateListQuery>,
 ) -> Result<axum::response::Response, E> {
-    let (page, page_size, offset) = normalize_page(&query);
-    let (items, total) = tokio::try_join!(
-        state.store.list_rates_page(page_size, offset),
-        state.store.count_rates(),
-    )
-    .map_err(err)?;
+    let (page, page_size, offset) = normalize_page(&query.page);
 
-    if query.export.unwrap_or(false) {
+    // 按租户过滤：tenant_id=xxx 时仅返回该租户专属费率（不含全局）
+    let (items, total) = if let Some(ref tid) = query.tenant_id {
+        let items = state.store.list_rates_by_tenant(tid).await.map_err(err)?;
+        let total = items.len() as i64;
+        (items, total)
+    } else {
+        tokio::try_join!(
+            state.store.list_rates_page(page_size, offset),
+            state.store.count_rates(),
+        )
+        .map_err(err)?
+    };
+
+    if query.page.export.unwrap_or(false) {
         let headers = vec![
             "费率标识",
             "前缀号码",
             "每分钟费率",
             "计费周期(秒)",
             "单周期价格",
+            "租户ID",
         ];
         let mut rows = Vec::new();
-        for item in items {
+        for item in &items {
             rows.push(vec![
                 item.id.clone(),
                 item.prefix.clone(),
                 item.rate_per_minute.to_string(),
                 item.billing_interval_secs.to_string(),
                 item.price_per_interval.to_string(),
+                item.tenant_id.clone().unwrap_or_default(),
             ]);
         }
         return Ok(crate::system::utils::to_csv_response(
@@ -179,18 +202,16 @@ pub async fn create_rate(
         b.price_per_interval,
     )?;
     validate_prefix(&b.prefix)?;
-    state
-        .store
-        .upsert_rate(
-            &b.id,
-            &b.prefix,
-            equivalent,
-            interval,
-            price,
-            b.description.as_deref(),
-        )
-        .await
-        .map_err(err)?;
+    let input = cdr_core::RateUpsert {
+        id: &b.id,
+        prefix: &b.prefix,
+        rate_per_minute: equivalent,
+        billing_interval_secs: interval,
+        price_per_interval: price,
+        description: b.description.as_deref(),
+        tenant_id: b.tenant_id.as_deref(),
+    };
+    state.store.upsert_rate(&input).await.map_err(err)?;
     crate::system::hot_cache::rebuild_billing_rates(&state)
         .await
         .map_err(|error| err(error.error))?;
@@ -208,18 +229,16 @@ pub async fn update_rate(
         b.price_per_interval,
     )?;
     validate_prefix(&b.prefix)?;
-    state
-        .store
-        .upsert_rate(
-            &id,
-            &b.prefix,
-            equivalent,
-            interval,
-            price,
-            b.description.as_deref(),
-        )
-        .await
-        .map_err(err)?;
+    let input = cdr_core::RateUpsert {
+        id: &id,
+        prefix: &b.prefix,
+        rate_per_minute: equivalent,
+        billing_interval_secs: interval,
+        price_per_interval: price,
+        description: b.description.as_deref(),
+        tenant_id: b.tenant_id.as_deref(),
+    };
+    state.store.upsert_rate(&input).await.map_err(err)?;
     crate::system::hot_cache::rebuild_billing_rates(&state)
         .await
         .map_err(|error| err(error.error))?;
@@ -273,14 +292,78 @@ pub async fn list_accounts(
         ));
     }
 
+    // 批量加载关联租户摘要：按 billing_account_id 分组，避免 N+1 查询
+    let account_ids: Vec<i64> = items.iter().map(|a| a.id).collect();
+    let tenant_map = load_tenants_by_account_ids(&state, &account_ids)
+        .await
+        .unwrap_or_default();
+
+    let items_with_tenants: Vec<serde_json::Value> = items
+        .into_iter()
+        .map(|account| {
+            let tenants = tenant_map.get(&account.id).cloned().unwrap_or_default();
+            serde_json::json!({
+                "id": account.id,
+                "username": account.username,
+                "balance": account.balance,
+                "credit_limit": account.credit_limit,
+                "currency": account.currency,
+                "created_at": account.created_at,
+                "associated_tenants": tenants,
+            })
+        })
+        .collect();
+
     use axum::response::IntoResponse;
     Ok(Json(PaginatedResponse {
-        items,
+        items: items_with_tenants,
         total,
         page,
         page_size,
     })
     .into_response())
+}
+
+/// 批量按计费账户 ID 加载关联租户摘要（id + name + domain）。
+///
+/// 返回 HashMap<billing_account_id, Vec<TenantSummary>>，用于在账户列表中
+/// 一次性展示所有关联租户，避免对每个账户单独查询。
+async fn load_tenants_by_account_ids(
+    state: &AppState,
+    account_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, Vec<serde_json::Value>>, sqlx::Error> {
+    if account_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    #[derive(sqlx::FromRow)]
+    struct TenantSummary {
+        billing_account_id: i64,
+        id: String,
+        name: String,
+        domain: String,
+        enabled: bool,
+    }
+    let rows: Vec<TenantSummary> = sqlx::query_as(
+        "SELECT billing_account_id, id, name, domain, enabled FROM tenants \
+         WHERE billing_account_id = ANY($1) ORDER BY domain ASC",
+    )
+    .bind(account_ids)
+    .fetch_all(state.store.pool())
+    .await?;
+
+    let mut map: std::collections::HashMap<i64, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        map.entry(row.billing_account_id)
+            .or_default()
+            .push(serde_json::json!({
+                "id": row.id,
+                "name": row.name,
+                "domain": row.domain,
+                "enabled": row.enabled,
+            }));
+    }
+    Ok(map)
 }
 
 pub async fn credit_account(

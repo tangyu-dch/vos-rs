@@ -22,7 +22,7 @@ import { message } from '@/utils/toast';
 import { ExtensionDetailView } from '@/pages/numbers/extension-detail';
 import { TrunkDetailView } from '@/pages/trunks/trunk-detail';
 import {
-  callDetailText, entityId, valueText, moneyText, durationSecondsText,
+  callDetailText, datetimeText, entityId, valueText, moneyText, durationSecondsText,
 } from '@/pages/shared/format';
 import type { FieldSpec, ResourceSpec, SelectOptionSpec } from '@/pages/shared/types';
 
@@ -162,6 +162,17 @@ export function resourceFormValues(spec: ResourceSpec, row: Entity | null): Enti
         can_present: row.can_present ?? ['outbound', 'both', 'bidirectional'].includes(direction),
       };
     }
+    if (spec.path === '/tenants') {
+      // 后端返回 { tenant: {...}, billing_account }，平铺 tenant 字段并提取计费账户摘要
+      const tenant = (row.tenant as Entity | undefined) ?? {};
+      const billingAccount = row.billing_account as Entity | undefined;
+      return {
+        ...tenant,
+        billing_account_summary: billingAccount
+          ? `${billingAccount.username} (余额: ¥${billingAccount.balance ?? 0})`
+          : '—',
+      };
+    }
     return { ...row };
   }
   return spec.fields.reduce<Entity>((defaults, field) => {
@@ -187,6 +198,22 @@ export function resourceSaveValues(spec: ResourceSpec, values: Entity, editing: 
       result.account_id = Number(result.account_id);
     }
   }
+  if ('billing_account_id' in result) {
+    if (result.billing_account_id === '' || result.billing_account_id === undefined || result.billing_account_id === null) {
+      delete result.billing_account_id;
+    } else if (typeof result.billing_account_id === 'string' && !isNaN(Number(result.billing_account_id))) {
+      result.billing_account_id = Number(result.billing_account_id);
+    }
+  }
+  // tenant_id 空字符串清除关联（后端期望 null 或不传表示全局）
+  if ('tenant_id' in result) {
+    if (result.tenant_id === '' || result.tenant_id === undefined || result.tenant_id === null) {
+      delete result.tenant_id;
+    }
+  }
+  // 移除仅用于展示的关联摘要字段，避免回传后端
+  delete result.billing_account_summary;
+  delete result.associated_tenants_summary;
   if (!editing) return result;
   spec.fields.filter((field) => field.kind === 'secret' && field.preserveEmptyOnEdit).forEach((field) => {
     if (result[field.key] === '' || result[field.key] === undefined) delete result[field.key];
@@ -243,6 +270,35 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
             sip_domain: user.sip_domain || '127.0.0.1:5060',
             realm: user.realm ? String(user.realm) : `${sysRealm} (继承系统)`,
             registration_status: isOnline ? 'registered' : 'unregistered',
+          };
+        });
+        setRows(items);
+        setPagination(result.pagination || { page, page_size: 20, total: items.length, total_pages: 1 });
+      } else if (spec.path === '/tenants') {
+        // 租户列表：后端返回 { tenant, billing_account }，平铺 tenant 字段为行数据
+        const result = await listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params });
+        const items = (result.items || []).map((row) => {
+          const tenant = (row.tenant as Entity | undefined) ?? {};
+          const billingAccount = row.billing_account as Entity | undefined;
+          return {
+            ...tenant,
+            billing_account_summary: billingAccount
+              ? `${billingAccount.username} (余额: ¥${billingAccount.balance ?? 0})`
+              : '—',
+          };
+        });
+        setRows(items);
+        setPagination(result.pagination || { page, page_size: 20, total: items.length, total_pages: 1 });
+      } else if (spec.path === '/billing/accounts') {
+        // 计费账户列表：后端返回 associated_tenants 数组，平铺为展示字段
+        const result = await listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params });
+        const items = (result.items || []).map((row) => {
+          const tenants = Array.isArray(row.associated_tenants) ? row.associated_tenants as Entity[] : [];
+          return {
+            ...row,
+            associated_tenants_summary: tenants.length > 0
+              ? tenants.map((t) => String(t.name ?? t.id ?? '')).join('、')
+              : '—',
           };
         });
         setRows(items);
@@ -343,17 +399,25 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     const needsEgress = spec.fields.some((field) => field.optionsResource === 'egress-trunks');
     const needsSource = spec.fields.some((field) => field.optionsResource === 'allocation-source');
     const needsAccounts = spec.fields.some((field) => field.optionsResource === 'accounts');
-    if (!needsEgress && !needsSource && !needsAccounts) return;
+    const needsTenants = spec.fields.some((field) => field.optionsResource === 'tenants');
+    if (!needsEgress && !needsSource && !needsAccounts && !needsTenants) return;
     void Promise.all([
       needsEgress || needsSource ? listOptions('/trunks') : Promise.resolve([]),
       needsSource ? listOptions('/extensions') : Promise.resolve([]),
       needsAccounts ? listOptions('/billing/accounts') : Promise.resolve([]),
-    ]).then(([trunks, extensions, accounts]) => setFieldOptions({
+      needsTenants ? listOptions('/tenants') : Promise.resolve([]),
+    ]).then(([trunks, extensions, accounts, tenants]) => setFieldOptions({
       owner_egress_trunk_id: trunks.filter((item) => trunkRole(item) === 'egress').map((item) => ({ label: String(item.id), value: String(item.id) })),
       allocation_trunks: trunks.filter((item) => trunkRole(item) === 'access').map((item) => ({ label: String(item.id), value: String(item.id) })),
       allocation_extensions: extensions.map((item) => ({ label: String(item.display_name ?? item.username), value: String(item.username) })),
       account_id: accounts.map((acc) => ({ label: `${acc.username} (余额: ¥${acc.balance ?? 0})`, value: String(acc.username) })),
-    })).catch(() => setFieldOptions({ owner_egress_trunk_id: [], allocation_trunks: [], allocation_extensions: [], account_id: [] }));
+      billing_account_id: accounts.map((acc) => ({ label: `${acc.username} (余额: ¥${acc.balance ?? 0})`, value: String(acc.id) })),
+      tenant_id: tenants.map((item) => {
+        // 后端 /tenants 列表返回 { tenant: {...}, billing_account }，需提取嵌套租户对象
+        const tenant = (item.tenant as Entity | undefined) ?? item;
+        return { label: String(tenant.name ?? tenant.id ?? item.id ?? ''), value: String(tenant.id ?? item.id ?? '') };
+      }),
+    })).catch(() => setFieldOptions({ owner_egress_trunk_id: [], allocation_trunks: [], allocation_extensions: [], account_id: [], billing_account_id: [], tenant_id: [] }));
   }, [spec.path]);
 
   const optionsForField = (field: FieldSpec) => {
@@ -490,6 +554,15 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     if (field.key === 'node_count') {
       value = Array.isArray(row.nodes) ? row.nodes.length : (row.node_count ?? 0);
     }
+    if (field.key === 'tenant_id') {
+      // 所属商户：空值显示"全局费率"（费率）或"全局"（分机），有值显示商户名称
+      if (value === undefined || value === null || value === '') {
+        return <span className="text-default-400">{spec.path === '/billing/rates' ? '全局费率' : '全局'}</span>;
+      }
+      const tenantOptions = fieldOptions.tenant_id || [];
+      const matched = tenantOptions.find((option) => option.value === String(value));
+      return <span className="text-default-600">{matched?.label ?? valueText(value)}</span>;
+    }
     const callText = spec.path === '/calls' ? callDetailText(value, field.key) : undefined;
     if (['status', 'state', 'enabled', 'health'].includes(field.key)) {
       const positive = ['active', 'online', 'registered', 'healthy', 'answered', 'enabled', 'closed', true].includes(value as never);
@@ -525,6 +598,7 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     let text: string;
     if (callText) text = callText;
     else if (field.kind === 'duration') text = durationSecondsText(value);
+    else if (field.kind === 'datetime') text = datetimeText(value);
     else if (moneyFields.has(field.key)) text = moneyText(value);
     else if (field.kind === 'select') {
       const options = (field.options || fieldOptions[field.key] || []).map((option) => typeof option === 'string' ? { label: option, value: option } : option);

@@ -9,5 +9,6 @@ pub mod number;
 pub mod registration;
 pub mod route;
 pub mod sip_flow;
+pub mod tenant;
 pub mod termination;
 pub mod user;

@@ -168,7 +168,8 @@ impl<'a> TelecomCopilotEngine<'a> {
                 "{:x}",
                 md5::compute(format!("{username}:{realm}:{password}").as_bytes())
             );
-            match self.state.store.insert_user(username, &ha1).await {
+            // CSV 批量导入暂不关联租户（保持向后兼容）；如有需要可在表头增加 tenant_id 列扩展。
+            match self.state.store.insert_user(username, &ha1, None).await {
                 Ok(_) => {
                     let _ =
                         crate::system::hot_cache::set_auth_user(self.state, username, &ha1).await;
@@ -338,12 +339,16 @@ impl<'a> TelecomCopilotEngine<'a> {
             let id = format!("rate_{}", prefix);
 
             let dec = Decimal::from_f64_retain(rate_val).unwrap_or_default();
-            match self
-                .state
-                .store
-                .upsert_rate(&id, prefix, dec, 60, dec, Some("由 Copilot 批量导入"))
-                .await
-            {
+            let input = cdr_core::RateUpsert {
+                id: &id,
+                prefix,
+                rate_per_minute: dec,
+                billing_interval_secs: 60,
+                price_per_interval: dec,
+                description: Some("由 Copilot 批量导入"),
+                tenant_id: None,
+            };
+            match self.state.store.upsert_rate(&input).await {
                 Ok(_) => imported += 1,
                 Err(_) => skipped += 1,
             }

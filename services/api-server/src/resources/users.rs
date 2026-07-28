@@ -11,11 +11,15 @@ use crate::{normalize_page, ApiError, AppState, PageQuery, PaginatedResponse};
 pub struct CreateUserRequest {
     pub username: String,
     pub password: String,
+    /// 关联租户 ID（可空，不传则不关联租户）。
+    pub tenant_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserRequest {
     pub password: String,
+    /// 更新关联租户 ID（可空，不传则保留原值）。
+    pub tenant_id: Option<String>,
 }
 
 pub async fn list_users(
@@ -32,11 +36,12 @@ pub async fn list_users(
     })?;
 
     if query.export.unwrap_or(false) {
-        let headers = vec!["SIP分机号", "创建时间"];
+        let headers = vec!["SIP分机号", "租户ID", "创建时间"];
         let mut rows = Vec::new();
-        for item in items {
+        for item in &items {
             rows.push(vec![
                 item.username.clone(),
+                item.tenant_id.clone().unwrap_or_default(),
                 item.created_at.map(|t| t.to_string()).unwrap_or_default(),
             ]);
         }
@@ -69,12 +74,15 @@ pub async fn create_user(
     );
     state
         .store
-        .insert_user(&req.username, &ha1)
+        .insert_user(&req.username, &ha1, req.tenant_id.as_deref())
         .await
         .map_err(|e| ApiError {
             error: e.to_string(),
         })?;
     crate::system::hot_cache::set_auth_user(&state, &req.username, &ha1).await?;
+    // 同步更新 Redis 中的分机-租户映射，使热路径能按租户查找费率
+    crate::system::hot_cache::set_extension_tenant(&state, &req.username, req.tenant_id.as_deref())
+        .await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -91,12 +99,15 @@ pub async fn update_user(
     );
     state
         .store
-        .insert_user(&username, &ha1)
+        .insert_user(&username, &ha1, req.tenant_id.as_deref())
         .await
         .map_err(|e| ApiError {
             error: e.to_string(),
         })?;
     crate::system::hot_cache::set_auth_user(&state, &username, &ha1).await?;
+    // 同步更新 Redis 中的分机-租户映射
+    crate::system::hot_cache::set_extension_tenant(&state, &username, req.tenant_id.as_deref())
+        .await?;
     Ok(StatusCode::OK)
 }
 
@@ -127,6 +138,8 @@ pub async fn delete_user(
         })?;
     if deleted {
         crate::system::hot_cache::delete_auth_user(&state, &username).await?;
+        // 同步删除 Redis 中的分机-租户映射
+        crate::system::hot_cache::set_extension_tenant(&state, &username, None).await?;
         Ok(StatusCode::OK)
     } else {
         Ok(StatusCode::NOT_FOUND)

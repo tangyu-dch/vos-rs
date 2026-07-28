@@ -302,14 +302,15 @@ pub async fn import_rates(
         })?;
 
         sqlx::query(
-            "INSERT INTO billing_rates (id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description) VALUES ($1,$2,$3,$4,$5,$6) \
-             ON CONFLICT (id) DO UPDATE SET prefix=EXCLUDED.prefix, rate_per_minute=EXCLUDED.rate_per_minute, billing_interval_secs=EXCLUDED.billing_interval_secs, price_per_interval=EXCLUDED.price_per_interval, description=EXCLUDED.description"
+            "INSERT INTO billing_rates (id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7) \
+             ON CONFLICT (id) DO UPDATE SET prefix=EXCLUDED.prefix, rate_per_minute=EXCLUDED.rate_per_minute, billing_interval_secs=EXCLUDED.billing_interval_secs, price_per_interval=EXCLUDED.price_per_interval, description=EXCLUDED.description, tenant_id=EXCLUDED.tenant_id"
         )
         .bind(id)
         .bind(prefix)
         .bind(rate)
         .bind(interval)
         .bind(price)
+        .bind(None::<&str>)
         .bind(None::<&str>)
         .execute(&mut *tx)
         .await

@@ -8,7 +8,6 @@ use tokio::sync::RwLock;
 
 use super::types::{
     default_expires_seconds, normalize_expires, EventPackage, Subscription, SubscriptionId,
-    SubscriptionState,
 };
 
 /// 订阅操作错误。
@@ -50,18 +49,6 @@ impl SubscriptionStore {
         Self::default()
     }
 
-    /// 当前活跃订阅总数。
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        self.by_id.len()
-    }
-
-    /// 是否为空。
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.by_id.is_empty()
-    }
-
     /// 创建或刷新一条订阅。
     ///
     /// - 若 `expires_secs == 0`，视为终止订阅，调用方应使用 [`Self::remove`].
@@ -99,7 +86,6 @@ impl SubscriptionStore {
     }
 
     /// 返回某个 AOR 上指定事件包的全部活跃订阅。
-    #[allow(dead_code)]
     pub fn subscribers_for(&self, event_package: EventPackage, aor: &str) -> Vec<Subscription> {
         let key = (event_package, aor.to_string());
         let Some(ids) = self.by_aor.get(&key) else {
@@ -124,20 +110,6 @@ impl SubscriptionStore {
             .into_iter()
             .filter_map(|id| self.remove(&id))
             .collect()
-    }
-
-    /// 获取某条订阅的当前状态头值（基于剩余有效期）。
-    #[allow(dead_code)]
-    pub fn state_for(&self, id: &SubscriptionId, now: SystemTime) -> Option<SubscriptionState> {
-        let subscription = self.by_id.get(id)?;
-        let remaining = subscription.remaining_seconds(now);
-        if remaining == 0 {
-            Some(SubscriptionState::Terminated {
-                reason: Some("timeout"),
-            })
-        } else {
-            Some(SubscriptionState::Active { expires: remaining })
-        }
     }
 }
 
@@ -170,6 +142,16 @@ pub fn parse_subscribe_request(
 /// 测试辅助：用于单元测试的存储构造。
 #[cfg(test)]
 impl SubscriptionStore {
+    /// 当前活跃订阅总数。
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    /// 是否为空。
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+
     pub fn contains(&self, id: &SubscriptionId) -> bool {
         self.by_id.contains_key(id)
     }

@@ -54,7 +54,7 @@ impl<'a> TelecomCopilotEngine<'a> {
             "{:x}",
             md5::compute(format!("{username}:{realm}:{password}").as_bytes())
         );
-        match self.state.store.insert_user(username, &ha1).await {
+        match self.state.store.insert_user(username, &ha1, None).await {
             Ok(_) => {
                 let _ = crate::system::hot_cache::set_auth_user(self.state, username, &ha1).await;
                 json!({ "success": true, "message": format!("分机账号 `{}` 创建成功", username) })
@@ -66,7 +66,12 @@ impl<'a> TelecomCopilotEngine<'a> {
     pub(crate) async fn tool_delete_extension(&self, args: &Value) -> Value {
         let username = args.get("username").and_then(|v| v.as_str()).unwrap_or("");
         match self.state.store.delete_user(username).await {
-            Ok(_) => json!({ "success": true, "message": format!("分机账号 {} 已删除", username) }),
+            Ok(_) => {
+                let _ = crate::system::hot_cache::delete_auth_user(self.state, username).await;
+                let _ = crate::system::hot_cache::set_extension_tenant(self.state, username, None)
+                    .await;
+                json!({ "success": true, "message": format!("分机账号 {} 已删除", username) })
+            }
             Err(e) => json!({ "success": false, "error": e.to_string() }),
         }
     }

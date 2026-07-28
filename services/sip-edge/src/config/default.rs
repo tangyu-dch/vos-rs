@@ -28,6 +28,10 @@ impl Default for EdgeConfig {
             manage_bind: "127.0.0.1:8082".to_string(),
             stun_server: None,
             upnp_enabled: false,
+            turn_server: None,
+            turn_username: None,
+            turn_password: None,
+            turn_realm: None,
             database_url: None,
             database_max_connections: 10,
             redis_max_connections: 10,
@@ -78,6 +82,8 @@ impl Default for EdgeConfig {
             sipflow_retention_days: 7,
             sip_transaction_timeout_secs: 32,
             sip_t1_initial_ms: 500,
+            tenant_enabled: false,
+            tenant_refresh_interval_secs: 60,
         }
     }
 }

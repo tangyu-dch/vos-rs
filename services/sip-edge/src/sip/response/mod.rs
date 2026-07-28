@@ -26,16 +26,12 @@ mod headers;
 mod invite;
 
 pub(crate) use builders::build_inbound_leg_response;
-#[allow(unused_imports)]
-pub use builders::build_response_with_owned_headers_and_peer;
 pub use builders::{
     accepted_202_for_request, build_response_with_owned_headers, error_for_call_error,
     not_acceptable_for_request, ok_for_request, response_100_trying,
     response_503_service_unavailable, service_unavailable_for_request,
 };
 pub use handling::{OutboundInvitePlan, RequestHandling};
-#[allow(unused_imports)]
-pub use headers::patch_via_rport_and_received;
 pub use invite::{
     response_for_invite_to_uri_with_direction, response_for_request_with_health,
     response_for_request_with_health_and_direction,

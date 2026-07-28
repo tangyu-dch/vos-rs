@@ -267,11 +267,6 @@ impl Route {
         self.endpoint_priority = endpoint_priority;
         self
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn matches(&self, destination: &str) -> bool {
-        destination.starts_with(&self.prefix)
-    }
 }
 
 /// 选中的路由：路由引擎最终选择的路由条目。

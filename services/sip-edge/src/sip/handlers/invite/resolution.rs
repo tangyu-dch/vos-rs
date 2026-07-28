@@ -6,6 +6,7 @@ use tracing::warn;
 use crate::config::EdgeConfig;
 use crate::edge_state::{EdgeState, PendingDatagram};
 use crate::sip::{response, AuthDecision};
+use crate::tenant::TenantContext;
 
 use super::super::proxy_unauthorized_for_request;
 
@@ -18,6 +19,8 @@ pub(super) struct CallResolution {
     pub call_direction: call_core::CallDirection,
     pub request_number: String,
     pub inbound_did_destination: Option<cdr_core::DidDestination>,
+    /// 已解析的租户上下文（若 tenant_enabled=false 则为 anonymous）。
+    pub tenant_ctx: TenantContext,
 }
 
 /// 检查单用户并发上限，返回 `Some(datagrams)` 表示呼叫被拒绝。
@@ -54,6 +57,92 @@ pub(super) fn check_user_concurrency(
     }
 }
 
+/// 解析多租户上下文（若 TenantRegistry 未注入则返回 anonymous）。
+pub(super) async fn resolve_tenant_context_pub(
+    request: &SipRequest,
+    edge_state: &EdgeState,
+) -> TenantContext {
+    let Some(registry) = edge_state.tenant_registry() else {
+        return TenantContext::anonymous();
+    };
+    let from_header = request
+        .headers
+        .get("from")
+        .map(|v| v.as_str())
+        .unwrap_or("");
+    registry.context_for_from_header(from_header).await
+}
+
+/// 检查租户级并发/CPS 限额，返回 `Some(datagrams)` 表示呼叫被拒绝。
+///
+/// 应在 `check_user_concurrency` 之后、`resolve_call_source` 之前调用。
+/// 若 `tenant_registry` 未注入或租户未配置限额，直接放行。
+pub(super) async fn check_tenant_limits(
+    request: &SipRequest,
+    peer: SocketAddr,
+    edge_state: &EdgeState,
+) -> Option<(Vec<PendingDatagram>, TenantContext)> {
+    let tenant_ctx = resolve_tenant_context_pub(request, edge_state).await;
+    if !tenant_ctx.is_bound() {
+        return None;
+    }
+
+    if let Some(reason) = edge_state.check_tenant_concurrency(&tenant_ctx) {
+        warn!(
+            tenant_id = tenant_ctx.tenant_id_str(),
+            tenant_name = tenant_ctx.tenant_name_str(),
+            %reason,
+            "rejecting INVITE due to tenant concurrency limit"
+        );
+        return Some((
+            vec![PendingDatagram::new(
+                peer.to_string(),
+                response::build_response_with_owned_headers(
+                    request,
+                    486,
+                    "Busy Here - Tenant Concurrency Limit Exceeded",
+                    &[(
+                        "X-VOS-RS-Error".to_string(),
+                        format!(
+                            "Tenant {} concurrency limit exceeded",
+                            tenant_ctx.tenant_id_str()
+                        ),
+                    )],
+                    "",
+                ),
+            )],
+            tenant_ctx,
+        ));
+    }
+
+    if let Some(reason) = edge_state.check_tenant_cps(&tenant_ctx) {
+        warn!(
+            tenant_id = tenant_ctx.tenant_id_str(),
+            tenant_name = tenant_ctx.tenant_name_str(),
+            %reason,
+            "rejecting INVITE due to tenant CPS limit"
+        );
+        return Some((
+            vec![PendingDatagram::new(
+                peer.to_string(),
+                response::build_response_with_owned_headers(
+                    request,
+                    503,
+                    "Service Unavailable - Tenant CPS Limit Exceeded",
+                    &[(
+                        "X-VOS-RS-Error".to_string(),
+                        format!("Tenant {} CPS limit exceeded", tenant_ctx.tenant_id_str()),
+                    )],
+                    "Retry-After: 1",
+                ),
+            )],
+            tenant_ctx,
+        ));
+    }
+
+    None
+}
+
 /// 解析出口网关、呼叫方向与呼叫源（trunk/extension）。
 ///
 /// 返回 `Ok(CallResolution)` 表示继续后续流程，返回 `Err(datagrams)` 表示被拒绝。
@@ -62,6 +151,7 @@ pub(super) async fn resolve_call_source(
     peer: SocketAddr,
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
+    tenant_ctx: &TenantContext,
 ) -> Result<CallResolution, Vec<PendingDatagram>> {
     let transport = if request
         .headers
@@ -84,6 +174,33 @@ pub(super) async fn resolve_call_source(
     let inbound_did_destination = egress_trunk_id
         .as_ref()
         .and_then(|_| edge_state.did_destination(&request_number));
+
+    // 租户网关白名单检查：仅在租户已绑定且出口网关已确定时生效
+    if let Some(reason) = edge_state.check_tenant_gateway(tenant_ctx, egress_trunk_id.as_deref()) {
+        warn!(
+            tenant_id = tenant_ctx.tenant_id_str(),
+            gateway_id = ?egress_trunk_id,
+            %reason,
+            "rejecting INVITE due to tenant gateway whitelist"
+        );
+        return Err(vec![PendingDatagram::new(
+            peer.to_string(),
+            response::build_response_with_owned_headers(
+                request,
+                403,
+                "Forbidden - Tenant Gateway Not Allowed",
+                &[(
+                    "X-VOS-RS-Error".to_string(),
+                    format!(
+                        "Tenant {} does not allow gateway {}",
+                        tenant_ctx.tenant_id_str(),
+                        egress_trunk_id.as_deref().unwrap_or("unknown")
+                    ),
+                )],
+                "",
+            ),
+        )]);
+    }
 
     let mut call_source: Option<call_core::CallSource> = None;
 
@@ -242,11 +359,19 @@ pub(super) async fn resolve_call_source(
     }
 
     let source = call_source.expect("source must be resolved here");
-    let billing_account = if source.source_type == "extension" {
-        Some(source.source_id.clone())
-    } else {
-        edge_state.resolve_trunk_billing_account(&source.source_id)
-    };
+    // 计费账户优先级：租户策略 > per-user/per-trunk
+    // 当租户策略指定了 billing_account_id 时，强制使用该账户进行结算，
+    // 覆盖 per-user/per-trunk 的默认行为（适用于预付费租户或统一计费场景）。
+    let billing_account = edge_state
+        .tenant_billing_account(Some(tenant_ctx))
+        .map(|id| id.to_string())
+        .or_else(|| {
+            if source.source_type == "extension" {
+                Some(source.source_id.clone())
+            } else {
+                edge_state.resolve_trunk_billing_account(&source.source_id)
+            }
+        });
 
     Ok(CallResolution {
         source,
@@ -256,10 +381,14 @@ pub(super) async fn resolve_call_source(
         call_direction,
         request_number,
         inbound_did_destination,
+        tenant_ctx: tenant_ctx.clone(),
     })
 }
 
 /// 检查跨租户域隔离，返回 `Some(datagrams)` 表示呼叫被拒绝。
+///
+/// 当 `EdgeState.tenant_registry` 已注入时，使用多租户策略（基于 TenantPolicy）。
+/// 否则回退到旧的"同域 + 注册命中"启发式判断，保持向后兼容。
 pub(super) async fn check_cross_tenant(
     request: &SipRequest,
     peer: SocketAddr,
@@ -268,12 +397,63 @@ pub(super) async fn check_cross_tenant(
 ) -> Option<Vec<PendingDatagram>> {
     let caller_dom = caller_domain.as_ref()?;
     let callee_domain = request.uri.host.to_string();
-    let caller_dom_no_port = caller_dom.split(':').next().unwrap_or(caller_dom);
-    let callee_dom_no_port = callee_domain.split(':').next().unwrap_or(&callee_domain);
+    let caller_dom_no_port = caller_dom
+        .split(':')
+        .next()
+        .unwrap_or(caller_dom)
+        .to_string();
+    let callee_dom_no_port = callee_domain
+        .split(':')
+        .next()
+        .unwrap_or(&callee_domain)
+        .to_string();
     if callee_dom_no_port == caller_dom_no_port {
         return None;
     }
 
+    // 优先使用多租户策略（若已注入 TenantRegistry）
+    if let Some(registry) = edge_state.tenant_registry() {
+        let from_header = request
+            .headers
+            .get("from")
+            .map(|v| v.as_str())
+            .unwrap_or("");
+        let ctx = registry.context_for_from_header(from_header).await;
+        if ctx.is_bound() {
+            if !ctx.allows_cross_tenant_call_to(&callee_domain) {
+                warn!(
+                    tenant_id = ctx.tenant_id_str(),
+                    tenant_name = ctx.tenant_name_str(),
+                    caller_domain = ctx.domain_str(),
+                    caller = %from_header,
+                    callee_domain = %callee_domain,
+                    policy = ?ctx.policy.cross_tenant_policy,
+                    "cross-tenant call denied by tenant policy"
+                );
+                return Some(vec![PendingDatagram::new(
+                    peer.to_string(),
+                    response::build_response_with_owned_headers(
+                        request,
+                        403,
+                        "Forbidden - Cross-Tenant Calling Disabled",
+                        &[(
+                            "X-VOS-RS-Error".to_string(),
+                            format!(
+                                "Tenant {} policy denies cross-tenant calling",
+                                ctx.tenant_id_str()
+                            ),
+                        )],
+                        "",
+                    ),
+                )]);
+            }
+            // 策略允许，继续后续流程
+            return None;
+        }
+        // 未绑定租户：若域命中了注册表中的 contact（本地分机），仍走旧逻辑拒绝
+    }
+
+    // 回退：旧的"同域 + 注册命中"启发式
     let registered_contact = edge_state.lookup_destination_contact(&request.uri).await;
     if registered_contact.is_some() {
         warn!(

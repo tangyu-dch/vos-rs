@@ -171,6 +171,7 @@ impl MediaRelayState {
                 .insert(rtcp_port, Arc::clone(&rtcp_socket));
 
             let rtp_learning = config.symmetric_rtp_learning;
+            let dtx_silence_suppression = config.dtx_silence_suppression;
             tokio::spawn(relay_media_port(
                 rtp_socket,
                 port,
@@ -179,6 +180,7 @@ impl MediaRelayState {
                 config.anti_spoofing,
                 config.source_relearn_after_secs,
                 MediaPacketKind::Rtp,
+                dtx_silence_suppression,
                 rtp_rx,
             ));
             tokio::spawn(relay_media_port(
@@ -189,6 +191,7 @@ impl MediaRelayState {
                 config.anti_spoofing,
                 config.source_relearn_after_secs,
                 MediaPacketKind::Rtcp,
+                dtx_silence_suppression,
                 rtcp_rx,
             ));
             self.active_loops.insert(port, vec![rtp_tx, rtcp_tx]);

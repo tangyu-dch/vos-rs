@@ -8,6 +8,8 @@ export interface ExtensionWorkspaceData {
   numbers: Entity[];
   credential?: Entity;
   system_config?: { realm?: string; sip_domain?: string };
+  /** 关联租户信息（含 id/name/domain/billing_account_id/enabled），无关联时为 undefined */
+  tenant?: Entity;
 }
 
 export async function getExtensionWorkspace(username: string): Promise<ExtensionWorkspaceData> {
@@ -18,6 +20,7 @@ export async function getExtensionWorkspace(username: string): Promise<Extension
     numbers: Array.isArray(result.numbers) ? result.numbers as Entity[] : [],
     credential: result.credential as Entity | undefined,
     system_config: result.system_config as { realm?: string; sip_domain?: string } | undefined,
+    tenant: result.tenant && typeof result.tenant === 'object' ? result.tenant as Entity : undefined,
   };
 }
 

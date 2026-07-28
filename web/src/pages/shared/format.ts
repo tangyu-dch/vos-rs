@@ -27,6 +27,18 @@ const durationSecondsText = (value: unknown) => {
   });
 };
 
+/// 格式化 ISO 8601 / RFC 3339 字符串或时间戳为本地可读时间。
+/// 后端 `time::serde::rfc3339` 输出形如 "2026-07-28T10:30:00Z"。
+const datetimeText = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return '—';
+  const str = String(value);
+  const date = new Date(str);
+  if (!Number.isNaN(date.getTime())) {
+    return date.toLocaleString('zh-CN', { hour12: false });
+  }
+  return str;
+};
+
 const callDetailLabels: Record<string, string> = {
   call_id: '通话 ID', caller: '主叫号码', callee: '被叫号码', started_at_ms: '开始时间',
   answered_at_ms: '接通时间', ended_at_ms: '结束时间', duration_ms: '通话时长',
@@ -78,4 +90,4 @@ export function callDetailText(value: unknown, key?: string): string {
 
 export const entityId = (entity: Entity, key: string) => String(entity[key] ?? entity.id ?? '');
 
-export { valueText, moneyText, durationSecondsText };
+export { valueText, moneyText, durationSecondsText, datetimeText };

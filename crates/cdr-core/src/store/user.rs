@@ -3,25 +3,42 @@ use crate::PostgresCdrStore;
 use sqlx::Row;
 
 impl PostgresCdrStore {
-    pub async fn insert_user(&self, username: &str, password: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO sip_users (username, password) VALUES ($1, $2) ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password")
-            .bind(username)
-            .bind(password)
-            .execute(&self.pool)
-            .await?;
+    /// 插入或更新 SIP 用户，可选关联租户。
+    ///
+    /// `tenant_id` 为 `Some` 时设置租户关联；为 `None` 时通过 `COALESCE` 保留已有租户关联，
+    /// 因此 `update_user` 场景传 `None` 不会清除已设置的 tenant_id。
+    pub async fn insert_user(
+        &self,
+        username: &str,
+        password: &str,
+        tenant_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO sip_users (username, password, tenant_id) VALUES ($1, $2, $3) \
+             ON CONFLICT (username) DO UPDATE SET \
+                password = EXCLUDED.password, \
+                tenant_id = COALESCE(EXCLUDED.tenant_id, sip_users.tenant_id)",
+        )
+        .bind(username)
+        .bind(password)
+        .bind(tenant_id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
     pub async fn list_users(&self) -> Result<Vec<SipUser>, sqlx::Error> {
-        let rows = sqlx::query("SELECT username, created_at FROM sip_users ORDER BY username")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query("SELECT username, tenant_id, created_at FROM sip_users ORDER BY username")
+                .fetch_all(&self.pool)
+                .await?;
         let mut users = Vec::with_capacity(rows.len());
         for row in rows {
             users.push(SipUser {
                 username: row.get(0),
                 password: None,
-                created_at: row.get(1),
+                tenant_id: row.get(1),
+                created_at: row.get(2),
             });
         }
         Ok(users)
@@ -34,7 +51,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<SipUser>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT username, created_at FROM sip_users ORDER BY username LIMIT $1 OFFSET $2",
+            "SELECT username, tenant_id, created_at FROM sip_users ORDER BY username LIMIT $1 OFFSET $2",
         )
         .bind(limit)
         .bind(offset)
@@ -45,7 +62,27 @@ impl PostgresCdrStore {
             .map(|row| SipUser {
                 username: row.get(0),
                 password: None,
-                created_at: row.get(1),
+                tenant_id: row.get(1),
+                created_at: row.get(2),
+            })
+            .collect())
+    }
+
+    /// 按租户 ID 读取 SIP 用户列表。
+    pub async fn list_users_by_tenant(&self, tenant_id: &str) -> Result<Vec<SipUser>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT username, tenant_id, created_at FROM sip_users WHERE tenant_id = $1 ORDER BY username",
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SipUser {
+                username: row.get(0),
+                password: None,
+                tenant_id: row.get(1),
+                created_at: row.get(2),
             })
             .collect())
     }
@@ -76,8 +113,13 @@ impl PostgresCdrStore {
     }
 
     /// 读取全部 SIP 用户凭据，用于启动时预热 Redis 鉴权缓存。
-    pub async fn list_user_credentials(&self) -> Result<Vec<(String, String)>, sqlx::Error> {
-        sqlx::query_as("SELECT username, password FROM sip_users ORDER BY username")
+    ///
+    /// 返回 `(username, password, tenant_id)` 三元组，`tenant_id` 用于预热
+    /// `vos_rs:auth:extension_tenants` 映射，使热路径能按分机关联租户查费率。
+    pub async fn list_user_credentials(
+        &self,
+    ) -> Result<Vec<(String, String, Option<String>)>, sqlx::Error> {
+        sqlx::query_as("SELECT username, password, tenant_id FROM sip_users ORDER BY username")
             .fetch_all(&self.pool)
             .await
     }

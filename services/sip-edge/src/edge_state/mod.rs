@@ -48,6 +48,7 @@ pub(crate) mod models;
 pub(crate) mod registration;
 pub(crate) mod server_transaction;
 pub(crate) mod session;
+pub(crate) mod tenant;
 pub(crate) mod transport;
 pub(crate) mod types;
 pub(crate) mod uri_utils;
@@ -150,4 +151,13 @@ pub(crate) struct EdgeState {
     /// IVR TTS/ASR 引擎管理器 (惰性初始化, 由 main.rs 启动阶段注入)
     pub(crate) voice_engine:
         std::sync::OnceLock<Arc<crate::sip::handlers::ivr_topology::VoiceEngineManager>>,
+    /// 多租户注册表（惰性初始化，仅在 tenant_enabled=true 时注入）。
+    pub(crate) tenant_registry: std::sync::OnceLock<Arc<crate::tenant::TenantRegistry>>,
+    /// 按租户 ID 跟踪活跃并发通话数（仅在 tenant_enabled 时使用）。
+    pub(crate) tenant_concurrency: dashmap::DashMap<String, u32>,
+    /// 按租户 ID 跟踪最近一秒内的呼叫发起数（CPS 限速，滑动窗口）。
+    pub(crate) tenant_cps_window: dashmap::DashMap<String, Vec<std::time::Instant>>,
+    /// TURN 中继客户端（惰性初始化，仅在配置 TURN 服务器时注入）。
+    /// 用于 Symmetric NAT 环境下的 RTP/RTCP 媒体中继。
+    pub(crate) turn_client: std::sync::OnceLock<Arc<crate::net::turn_client::TurnClient>>,
 }

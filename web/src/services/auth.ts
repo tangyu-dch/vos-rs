@@ -51,7 +51,7 @@ export function roleLabel(role: UserRole): string {
 
 export function canAccessPage(role: UserRole, path: string): boolean {
   if (role === 'admin') return true;
-  if (path.startsWith('/extensions') || path.startsWith('/infrastructure') || path === '/settings') return false;
+  if (path.startsWith('/extensions') || path.startsWith('/infrastructure') || path.startsWith('/tenants') || path === '/settings') return false;
   if (path.startsWith('/billing/')) return role === 'financier';
   if (['/numbers', '/did-destinations', '/trunks', '/routing', '/caller-pools', '/egress-groups', '/security'].some((prefix) => path.startsWith(prefix))) return role === 'operator';
   return path === '/overview' || path.startsWith('/calls') || path === '/rwi';

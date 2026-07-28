@@ -102,17 +102,28 @@ pub(crate) fn build_register_request(
         format!("{}:5060", config.advertised_addr)
     };
 
+    // 根据 OutboundRegState.transport 选择 SIP Via/Contact 中的传输协议标识。
+    // 空值或缺省值回退到 UDP，保持向后兼容。
+    let transport_proto_owned = if reg_state.transport.is_empty() {
+        "UDP".to_string()
+    } else {
+        reg_state.transport.to_ascii_uppercase()
+    };
+    let transport_proto = transport_proto_owned.as_str();
+    let transport_proto_lower = transport_proto.to_ascii_lowercase();
+
     let mut request = format!(
         "REGISTER sip:{} SIP/2.0\r\n\
-         Via: SIP/2.0/UDP {};branch=z9hG4bK-{}\r\n\
+         Via: SIP/2.0/{} {};branch=z9hG4bK-{}\r\n\
          From: <sip:{}@{}>;tag={}\r\n\
          To: <sip:{}@{}>\r\n\
          Call-ID: {}\r\n\
          CSeq: {} REGISTER\r\n\
          Max-Forwards: 70\r\n\
-         Contact: <sip:{}@{};transport=udp>\r\n\
+         Contact: <sip:{}@{};transport={}>\r\n\
          Expires: {}\r\n",
         reg_state.host,
+        transport_proto,
         local_contact,
         &uuid::Uuid::new_v4().to_string()[..8],
         reg_state.username,
@@ -124,6 +135,7 @@ pub(crate) fn build_register_request(
         reg_state.cseq,
         reg_state.username,
         local_contact,
+        transport_proto_lower,
         reg_state.expires
     );
 

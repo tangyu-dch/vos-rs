@@ -36,6 +36,7 @@ pub(crate) fn protected_routes(state: AppState) -> Router<AppState> {
         .merge(infrastructure_routes())
         .merge(call_center_routes())
         .merge(ivr_routes())
+        .merge(tenant_routes())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::audit_log,

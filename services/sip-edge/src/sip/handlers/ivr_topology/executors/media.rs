@@ -63,12 +63,21 @@ pub async fn execute_record(
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
 ) -> NodeExecuteResult {
-    // 录音功能未全局启用时直接走 default 端口
-    if !edge_config.media.recording_enabled {
+    // 录音决策：租户策略优先于全局配置
+    // - 租户 recording_enabled=Some(true)  → 强制录音（即使全局未启用）
+    // - 租户 recording_enabled=Some(false) → 强制不录音
+    // - 租户 recording_enabled=None         → 沿用全局 media.recording_enabled
+    let tenant_ctx = edge_state
+        .inbound_transactions
+        .get(&context.call_id)
+        .and_then(|t| t.tenant.clone());
+    let recording_enabled = edge_state
+        .tenant_recording_override(tenant_ctx.as_ref(), edge_config.media.recording_enabled);
+    if !recording_enabled {
         warn!(
             call_id = %context.call_id,
             node_id = %node.id,
-            "录音功能全局未启用, record 节点跳过"
+            "录音功能未启用（全局或租户策略关闭）, record 节点跳过"
         );
         return NodeExecuteResult::Continue {
             port: "default".to_string(),

@@ -9,7 +9,9 @@ use crate::{
     copilot::history as copilot_history,
     copilot::stream as copilot_stream,
     dashboard, details, llm_configs, recording,
-    resources::{call_center, gateways, ivr_menus, numbers, prompts, registrations, routes, users},
+    resources::{
+        call_center, gateways, ivr_menus, numbers, prompts, registrations, routes, tenants, users,
+    },
     system::{audit, system},
     termination, AppState,
 };
@@ -372,5 +374,27 @@ pub(super) fn ivr_routes() -> Router<AppState> {
         .route(
             "/api/v1/ivr/prompts/:filename",
             get(prompts::get_prompt).delete(prompts::delete_prompt),
+        )
+}
+
+pub(super) fn tenant_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/v1/tenants",
+            get(tenants::list_tenants).post(tenants::create_tenant),
+        )
+        .route(
+            "/api/v1/tenants/:id",
+            get(tenants::get_tenant)
+                .put(tenants::update_tenant)
+                .delete(tenants::delete_tenant),
+        )
+        .route(
+            "/api/v1/tenants/:id/enabled",
+            post(tenants::toggle_tenant_enabled),
+        )
+        .route(
+            "/api/v1/tenants/:id/billing-account",
+            put(tenants::associate_billing_account),
         )
 }

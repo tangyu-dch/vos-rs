@@ -105,7 +105,10 @@ pub(crate) async fn flush_cdr_batch_with_retry_policy(
         }
     }
 
-    if !success {
+    if success {
+        // 累计成功持久化的 CDR 数量，供 Prometheus /manage/cdr-metrics 暴露
+        spool.metrics().record_processed(batch.len() as u64);
+    } else {
         match spool.append_batch(batch) {
             Ok(()) => info!(
                 count = batch.len(),

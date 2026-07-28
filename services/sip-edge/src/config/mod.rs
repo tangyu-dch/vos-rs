@@ -22,6 +22,14 @@ pub struct EdgeConfig {
     pub manage_bind: String,
     pub stun_server: Option<String>,
     pub upnp_enabled: bool,
+    /// TURN 服务器地址（如 `turn:turn.example.com:3478`）。配置后启用 TURN 中继预分配。
+    pub turn_server: Option<String>,
+    /// TURN 长期凭证用户名。
+    pub turn_username: Option<String>,
+    /// TURN 长期凭证密码。
+    pub turn_password: Option<String>,
+    /// TURN 鉴权 Realm（部分服务器可省略，由 401 响应返回）。
+    pub turn_realm: Option<String>,
     pub database_url: Option<String>,
     pub database_max_connections: u32,
     pub redis_max_connections: u32,
@@ -80,6 +88,10 @@ pub struct EdgeConfig {
     pub sip_transaction_timeout_secs: u64,
     /// SIP 事务 T1 重传初始间隔毫秒（RFC 3261 默认 500ms）。
     pub sip_t1_initial_ms: u64,
+    /// 多租户隔离是否启用。默认 false，所有呼叫走默认策略（向后兼容）。
+    pub tenant_enabled: bool,
+    /// 从 PostgreSQL 重新加载 tenants 表的周期（秒）。0 = 禁用自动刷新。
+    pub tenant_refresh_interval_secs: u64,
 }
 
 impl EdgeConfig {

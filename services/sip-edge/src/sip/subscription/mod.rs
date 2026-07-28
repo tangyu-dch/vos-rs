@@ -22,8 +22,10 @@ mod store;
 mod types;
 
 pub(crate) use store::{parse_subscribe_request, SubscriptionStore, SubscriptionStoreError};
-#[allow(unused_imports)]
+// `normalize_expires` 仅在 store 子模块内部使用，故不在此重导出。
 pub(crate) use types::{
-    default_expires_seconds, expires_at_from, normalize_expires, EventPackage, Subscription,
-    SubscriptionId, SubscriptionState,
+    default_expires_seconds, expires_at_from, EventPackage, Subscription, SubscriptionState,
 };
+// `SubscriptionId` 仅供订阅模块内部与单元测试构造 `Subscription` 使用。
+#[cfg(test)]
+pub(crate) use types::SubscriptionId;

@@ -20,6 +20,7 @@ pub(super) struct CdrRuntimeMetrics {
     spool_failures_total: u64,
     pending_spool_records: u64,
     unrecoverable_dropped_total: u64,
+    processed_total: u64,
 }
 
 pub(super) async fn cdr_metrics(State(state): State<Arc<EdgeState>>) -> Json<CdrRuntimeMetrics> {
@@ -33,6 +34,7 @@ pub(super) async fn cdr_metrics(State(state): State<Arc<EdgeState>>) -> Json<Cdr
             replayed_total: 0,
             spool_failures_total: 0,
             pending_spool_records: 0,
+            processed_total: 0,
         });
     Json(CdrRuntimeMetrics {
         queue_overflow_total: snapshot.queue_overflow_total,
@@ -41,5 +43,38 @@ pub(super) async fn cdr_metrics(State(state): State<Arc<EdgeState>>) -> Json<Cdr
         spool_failures_total: snapshot.spool_failures_total,
         pending_spool_records: snapshot.pending_spool_records,
         unrecoverable_dropped_total: state.call_manager.dropped_cdr_count(),
+        processed_total: snapshot.processed_total,
     })
+}
+
+/// TURN 中继状态：返回当前 allocation 的 relayed/mapped 地址与剩余 lifetime。
+///
+/// 未配置 TURN 服务器时返回 `enabled=false`。
+pub(super) async fn turn_status(State(state): State<Arc<EdgeState>>) -> Json<serde_json::Value> {
+    // 优先从 EdgeState 读取（与媒体路径共享同一实例）
+    let turn_client = state.turn_client();
+    if let Some(client) = turn_client {
+        let allocation = client.allocation().await;
+        let (relayed, mapped, lifetime) = match allocation {
+            Some(a) => (
+                Some(a.relayed_address.to_string()),
+                Some(a.mapped_address.to_string()),
+                Some(a.lifetime_secs),
+            ),
+            None => (None, None, None),
+        };
+        // 同时检查媒体路径是否已注入（用于诊断注入失败的场景）
+        let media_injected = state.media_relay.turn_client().is_some();
+        Json(serde_json::json!({
+            "enabled": true,
+            "relayed_address": relayed,
+            "mapped_address": mapped,
+            "lifetime_secs": lifetime,
+            "media_path_injected": media_injected,
+        }))
+    } else {
+        Json(serde_json::json!({
+            "enabled": false,
+        }))
+    }
 }

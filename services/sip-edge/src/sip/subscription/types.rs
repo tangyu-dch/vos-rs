@@ -54,7 +54,8 @@ impl SubscriptionId {
         Self(value.into())
     }
 
-    #[allow(dead_code)]
+    /// 测试辅助：返回 ID 字符串切片。
+    #[cfg(test)]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -124,7 +125,6 @@ pub struct Subscription {
 
 impl Subscription {
     /// 计算剩余有效期（秒），已过期返回 0。
-    #[allow(dead_code)]
     pub fn remaining_seconds(&self, now: SystemTime) -> u32 {
         match self.expires_at.duration_since(now) {
             Ok(duration) => duration.as_secs().min(u32::MAX as u64) as u32,

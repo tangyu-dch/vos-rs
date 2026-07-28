@@ -91,9 +91,19 @@ pub(crate) async fn handle_invite_request(
         return rejection;
     }
 
+    // 5b. 租户级并发/CPS 限额检查（仅在 tenant_enabled 时生效）
+    let tenant_ctx = match resolution::check_tenant_limits(&request, peer, edge_state).await {
+        Some((rejection, _ctx)) => return rejection,
+        None => resolution::resolve_tenant_context_pub(&request, edge_state).await,
+    };
+    // 记录一次租户 CPS 事件（用于滑动窗口，仅在限额存在时生效）
+    edge_state.record_tenant_cps(&tenant_ctx);
+
     // 6. 解析呼叫源（trunk/extension、出口网关、呼叫方向、计费账户）
     let call_resolution =
-        match resolution::resolve_call_source(&request, peer, edge_state, edge_config).await {
+        match resolution::resolve_call_source(&request, peer, edge_state, edge_config, &tenant_ctx)
+            .await
+        {
             Ok(resolution) => resolution,
             Err(rejection) => return rejection,
         };
@@ -151,6 +161,7 @@ pub(crate) async fn handle_invite_request(
         registered_contact: &route_preparation.registered_contact,
         response: routing_outcome.response,
         outbound_invite: routing_outcome.outbound_invite,
+        tenant_ctx: &call_resolution.tenant_ctx,
     };
 
     outbound::dispatch_outbound_invite(ctx).await

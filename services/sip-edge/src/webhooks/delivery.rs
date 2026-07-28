@@ -155,7 +155,7 @@ pub(crate) fn retry_delay(base_ms: u64, attempt: u64) -> Duration {
     Duration::from_millis(base_ms.saturating_mul(2_u64.pow(exponent)))
 }
 
-fn event_type(event: &call_core::CallEvent) -> &'static str {
+pub(crate) fn event_type(event: &call_core::CallEvent) -> &'static str {
     match event {
         call_core::CallEvent::CallInitiated { .. } => "call_initiated",
         call_core::CallEvent::CallOriginated { .. } => "call_originated",

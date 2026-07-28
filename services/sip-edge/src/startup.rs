@@ -90,7 +90,8 @@ pub async fn seed_database_defaults(
                     let username = username.trim();
                     let password = password.trim();
                     if !username.is_empty() {
-                        db.insert_user(username, password).await?;
+                        // 引导用户不关联租户，保持向后兼容。
+                        db.insert_user(username, password, None).await?;
                         info!(username, "seeded SIP user into database");
                     }
                 }

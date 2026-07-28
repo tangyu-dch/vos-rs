@@ -94,6 +94,7 @@ pub(super) async fn handle_originate(
         invite_response_order: Arc::new(tokio::sync::Mutex::new(
             crate::edge_state::InviteResponseOrder::default(),
         )),
+        tenant: None,
     };
 
     edge_state.inbound_transactions.insert(tx);

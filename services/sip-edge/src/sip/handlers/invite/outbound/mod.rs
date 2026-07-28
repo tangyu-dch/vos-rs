@@ -7,6 +7,7 @@ use crate::config::EdgeConfig;
 use crate::edge_state::{EdgeState, PendingDatagram};
 use crate::sip::registrar::RegistrationContact;
 use crate::sip::response;
+use crate::tenant::TenantContext;
 
 mod balance;
 mod dispatch;
@@ -30,6 +31,8 @@ pub(super) struct OutboundContext<'a> {
     pub registered_contact: &'a Option<RegistrationContact>,
     pub response: Vec<u8>,
     pub outbound_invite: Option<response::OutboundInvitePlan>,
+    /// 已解析的租户上下文（来自 resolution 阶段，避免二次查询）。
+    pub tenant_ctx: &'a TenantContext,
 }
 
 /// 执行计费账户设置、余额校验、资源租约、SDP 改写与出站 INVITE 分发。
@@ -59,14 +62,24 @@ pub(super) async fn dispatch_outbound_invite(mut ctx: OutboundContext<'_>) -> Ve
     build_and_send_outbound(&ctx, calculated_max_duration, lease_call_id).await
 }
 
-/// 设置计费账户到 CallManager，供 CDR 写入使用。
+/// 设置计费账户与租户上下文到 CallManager，供 CDR 与结算使用。
 fn set_billing_account(ctx: &OutboundContext<'_>) {
     if ctx.outbound_invite.is_some() {
         if let Some(call_id) = ctx.request.headers.get("call-id") {
-            ctx.edge_state.call_manager.set_billing_account(
-                &call_core::CallId::new(call_id.as_str()),
-                ctx.billing_account.clone(),
-            );
+            let call_id = call_core::CallId::new(call_id.as_str());
+            ctx.edge_state
+                .call_manager
+                .set_billing_account(&call_id, ctx.billing_account.clone());
+            // 将 TenantContext 上的 tenant_id 注入到 Call，
+            // 使结算阶段能按租户查找专属费率。
+            let tenant_id = if ctx.tenant_ctx.is_bound() {
+                ctx.tenant_ctx.tenant_id.clone()
+            } else {
+                None
+            };
+            ctx.edge_state
+                .call_manager
+                .set_call_tenant(&call_id, tenant_id);
         }
     }
 }

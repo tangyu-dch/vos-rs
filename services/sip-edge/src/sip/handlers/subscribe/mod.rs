@@ -339,7 +339,6 @@ fn generate_local_tag(call_id: &str, from_tag: &str) -> String {
 ///
 /// 用于呼叫状态变化时广播 BLF 状态。调用方提供公告体，函数负责为每个订阅者构造
 /// NOTIFY 数据报。
-#[allow(dead_code)]
 pub(crate) fn notify_subscribers(
     store: &SubscriptionStore,
     event_package: EventPackage,
@@ -366,6 +365,90 @@ pub(crate) fn notify_subscribers(
         let notify = build_notify(&subscription, body, &state, edge_config);
         datagrams.push(PendingDatagram::new(subscription.peer.to_string(), notify));
     }
+    datagrams
+}
+
+/// BLF 通知触发的对话框状态。
+#[derive(Clone, Copy)]
+pub(crate) enum DialogStateChange {
+    /// 呼叫建立（200 OK 后）。
+    Established,
+    /// 呼叫终止（BYE/CANCEL 后）。
+    Terminated,
+}
+
+impl DialogStateChange {
+    fn state_token(&self) -> &'static str {
+        match self {
+            Self::Established => "confirmed",
+            Self::Terminated => "terminated",
+        }
+    }
+}
+
+/// 构造 RFC 4235 `dialog-info+xml` 公告体。
+fn dialog_info_xml_body(aor: &str, call_id: &str, change: DialogStateChange) -> String {
+    let state = change.state_token();
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\"\n\
+         version=\"1\" state=\"full\" entity=\"{aor}\">\n\
+         <dialog id=\"{call_id}\" call-id=\"{call_id}\" direction=\"initiator\">\n\
+         <state>{state}</state>\n\
+         </dialog>\n\
+         </dialog-info>"
+    )
+}
+
+/// 在呼叫状态变更时触发 BLF 广播，向主叫与被叫 AOR 的订阅者发送 NOTIFY。
+///
+/// 该函数同时向 `EventPackage::Dialog` 订阅者广播 RFC 4235 dialog-info+xml 公告体。
+/// 返回的待发送数据报应由调用方通过 UDP socket 发出。
+pub(crate) fn trigger_dialog_state_change(
+    edge_state: &EdgeState,
+    edge_config: &EdgeConfig,
+    caller_aor: &str,
+    callee_aor: &str,
+    call_id: &str,
+    change: DialogStateChange,
+) -> Vec<PendingDatagram> {
+    let now = SystemTime::now();
+    let mut datagrams = Vec::new();
+
+    let caller_body = dialog_info_xml_body(caller_aor, call_id, change);
+    datagrams.extend(notify_subscribers(
+        &edge_state.subscription_store,
+        EventPackage::Dialog,
+        caller_aor,
+        &caller_body,
+        edge_config,
+        now,
+    ));
+
+    // 被叫与主叫可能指向同一 AOR（分机自呼），避免重复发送
+    if callee_aor != caller_aor {
+        let callee_body = dialog_info_xml_body(callee_aor, call_id, change);
+        datagrams.extend(notify_subscribers(
+            &edge_state.subscription_store,
+            EventPackage::Dialog,
+            callee_aor,
+            &callee_body,
+            edge_config,
+            now,
+        ));
+    }
+
+    if !datagrams.is_empty() {
+        debug!(
+            call_id,
+            caller_aor,
+            callee_aor,
+            change = change.state_token(),
+            count = datagrams.len(),
+            "BLF dialog state notification dispatched"
+        );
+    }
+
     datagrams
 }
 

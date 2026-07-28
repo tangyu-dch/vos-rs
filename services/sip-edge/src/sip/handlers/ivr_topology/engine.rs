@@ -229,19 +229,70 @@ async fn execute_transfer(
     .await;
 }
 
-/// 等待 DTMF 输入 (stub: 后续阶段接入媒体层 DTMF 检测)
-#[allow(unused_variables)]
+/// 等待 DTMF 输入：轮询媒体层 `dtmf_accumulators`，按 max_digits / terminator / timeout 终止。
+///
+/// 实现细节：
+/// 1. 通过 `inbound_transactions` 查找 wire Call-ID 对应的 B2BUA session_id
+///    (媒体层 `dtmf_accumulators` / `dtmf_event_log` 按 session_id 索引)
+/// 2. 以 100ms 间隔轮询 `get_dtmf_digits`，累计到 `max_digits` 或遇到 `terminator` 立即返回
+/// 3. 若呼叫已被挂断（`inbound_transactions` 中无对应记录）则返回已收集到的 digits
 async fn wait_for_dtmf(
     edge_state: &EdgeState,
     call_id: &str,
-    a_port: u16,
+    _a_port: u16,
     max_digits: u8,
     timeout_secs: u32,
     terminator: Option<char>,
 ) -> String {
-    // TODO: 接入媒体层的 DTMF 检测
-    let _ = edge_state;
-    String::new()
+    let session_id = match edge_state
+        .inbound_transactions
+        .get(call_id)
+        .map(|t| t.session_id.clone())
+    {
+        Some(id) => id,
+        None => {
+            warn!(call_id, "wait_for_dtmf: 未找到 transaction, 返回空 digits");
+            return String::new();
+        }
+    };
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64);
+    let mut collected = String::new();
+
+    loop {
+        if collected.len() >= max_digits as usize {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            info!(call_id, %collected, "wait_for_dtmf: 超时, 返回已收集 digits");
+            break;
+        }
+
+        // 呼叫已挂断则退出
+        if !edge_state.inbound_transactions.contains_key(call_id) {
+            info!(call_id, %collected, "wait_for_dtmf: 呼叫已结束, 返回已收集 digits");
+            break;
+        }
+
+        if let Some(digits) = edge_state.media_relay.get_dtmf_digits(&session_id) {
+            if digits.len() > collected.len() {
+                // 取新增的 digit
+                if let Some(new_digit) = digits.chars().nth(collected.len()) {
+                    if Some(new_digit) == terminator {
+                        collected.push(new_digit);
+                        info!(call_id, %collected, "wait_for_dtmf: 遇到终止符, 返回");
+                        break;
+                    }
+                    collected.push(new_digit);
+                    info!(call_id, %collected, "wait_for_dtmf: 收到按键");
+                }
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    collected
 }
 
 /// 等待 ASR 输入
@@ -252,7 +303,6 @@ async fn wait_for_dtmf(
 ///
 /// 当前实现：媒体层音频收集 API 尚未对接，临时返回空文本并记录 warning，
 /// 后续阶段接入 RTP 监听/缓冲后即可通过 `asr_engine.recognize(&samples, sample_rate)` 完成识别。
-#[allow(unused_variables)]
 async fn wait_for_asr(
     edge_state: &EdgeState,
     call_id: &str,

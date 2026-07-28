@@ -2,9 +2,19 @@ pub(crate) const CREATE_SIP_USERS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS sip_users (
     username TEXT PRIMARY KEY,
     password TEXT NOT NULL,
+    tenant_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
+
+/// sip_users 添加 tenant_id 字段，引用 tenants(id)。
+///
+/// 可空（NULL 表示分机未关联租户，向后兼容旧数据）。
+pub(crate) const MIGRATE_SIP_USERS_TENANT_SQL: &str =
+    "ALTER TABLE sip_users ADD COLUMN IF NOT EXISTS tenant_id TEXT";
+
+pub(crate) const CREATE_SIP_USERS_TENANT_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_sip_users_tenant ON sip_users (tenant_id)";
 
 pub(crate) const CREATE_SIP_GATEWAYS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS sip_gateways (
@@ -127,3 +137,30 @@ pub(crate) const CREATE_ROUTES_PREFIX_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_sip_routes_prefix ON sip_routes (prefix)";
 pub(crate) const CREATE_ROUTES_GATEWAY_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_sip_routes_gateway ON sip_routes (gateway_id)";
+
+/// 多租户表：按 SIP 域名映射到 tenant_id 与运行时策略。
+///
+/// `enabled=FALSE` 的租户不会被加载到内存注册表，等价于不存在。
+/// `cross_tenant_policy` 取值：`allow` / `deny` / `allow_if_same_domain`。
+pub(crate) const CREATE_TENANTS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS tenants (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    domain TEXT UNIQUE NOT NULL,
+    max_concurrent_calls INTEGER NOT NULL DEFAULT 0,
+    max_cps INTEGER NOT NULL DEFAULT 0,
+    cross_tenant_policy TEXT NOT NULL DEFAULT 'allow_if_same_domain',
+    recording_enabled BOOLEAN,
+    allowed_gateway_ids JSONB,
+    billing_account_id BIGINT,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+pub(crate) const CREATE_TENANTS_DOMAIN_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_tenants_domain ON tenants (domain) WHERE enabled = TRUE";
+
+pub(crate) const CREATE_TENANTS_ENABLED_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_tenants_enabled ON tenants (enabled)";

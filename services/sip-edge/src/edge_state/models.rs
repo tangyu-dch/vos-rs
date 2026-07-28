@@ -188,6 +188,9 @@ pub(crate) struct InboundTransaction {
     pub(crate) max_duration_secs: Option<u32>,
     pub(crate) established_at: Option<Instant>,
     pub(crate) invite_response_order: Arc<Mutex<InviteResponseOrder>>,
+    /// 多租户上下文：在 INVITE 入站时解析得到，贯穿呼叫生命周期。
+    /// None 表示未启用多租户隔离（tenant_enabled=false）或未关联租户。
+    pub(crate) tenant: Option<crate::tenant::TenantContext>,
 }
 
 /// Stores B2BUA sessions by an internal session ID and resolves either dialog Call-ID to it.

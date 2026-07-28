@@ -111,6 +111,10 @@ impl EdgeState {
             call_caller_addrs: dashmap::DashMap::new(),
             matched_call_ids: dashmap::DashMap::new(),
             voice_engine: std::sync::OnceLock::new(),
+            tenant_registry: std::sync::OnceLock::new(),
+            tenant_concurrency: dashmap::DashMap::new(),
+            tenant_cps_window: dashmap::DashMap::new(),
+            turn_client: std::sync::OnceLock::new(),
         }
     }
 
@@ -157,5 +161,25 @@ impl EdgeState {
 
     pub(crate) fn set_cluster_egress(&self, egress: ClusterEgress) {
         let _ = self.cluster_egress.set(egress);
+    }
+
+    /// 注入多租户注册表（仅在启动阶段调用一次）。
+    pub(crate) fn set_tenant_registry(&self, registry: Arc<crate::tenant::TenantRegistry>) {
+        let _ = self.tenant_registry.set(registry);
+    }
+
+    /// 获取多租户注册表（未注入时返回 None，调用方应使用默认策略降级）。
+    pub(crate) fn tenant_registry(&self) -> Option<Arc<crate::tenant::TenantRegistry>> {
+        self.tenant_registry.get().cloned()
+    }
+
+    /// 注入 TURN 中继客户端（仅在启动阶段调用一次）。
+    pub(crate) fn set_turn_client(&self, client: Arc<crate::net::turn_client::TurnClient>) {
+        let _ = self.turn_client.set(client);
+    }
+
+    /// 获取 TURN 中继客户端（未配置 TURN 服务器时返回 None）。
+    pub(crate) fn turn_client(&self) -> Option<Arc<crate::net::turn_client::TurnClient>> {
+        self.turn_client.get().cloned()
     }
 }

@@ -92,6 +92,7 @@ async fn test_execute_ivr_action_pstn_transfer() {
         invite_response_order: Arc::new(tokio::sync::Mutex::new(
             crate::edge_state::InviteResponseOrder::default(),
         )),
+        tenant: None,
     };
     edge_state.inbound_transactions.insert(dummy_transaction);
 
@@ -254,6 +255,7 @@ async fn test_execute_ivr_action_menu_retry() {
         invite_response_order: Arc::new(tokio::sync::Mutex::new(
             crate::edge_state::InviteResponseOrder::default(),
         )),
+        tenant: None,
     });
 
     let template_request = SipRequest {

@@ -140,6 +140,7 @@ pub(crate) async fn handle_out_of_dialog_message(
             invite_response_order: Arc::new(tokio::sync::Mutex::new(
                 crate::edge_state::InviteResponseOrder::default(),
             )),
+            tenant: None,
         });
     }
 

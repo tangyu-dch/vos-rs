@@ -8,10 +8,12 @@ export const extensions: ResourceSpec = {
   idKey: 'username', detailPath: '/extensions', createLabel: '新建分机',
   fields: [
     { key: 'username', label: '分机号', required: true, placeholder: '例如 1001' },
+    { key: 'tenant_id', label: '所属商户', kind: 'select', optionsResource: 'tenants', placeholder: '选择所属商户（留空为全局）' },
     { key: 'registration_status', label: '注册状态', readonly: true },
     { key: 'sip_domain', label: '注册服务器', readonly: true },
     { key: 'realm', label: '鉴权域 (Realm)', readonly: true },
     { key: 'password', label: 'SIP 密码', kind: 'secret', required: true, preserveEmptyOnEdit: true, placeholder: '编辑时保留空表示不修改密码' },
+    { key: 'created_at', label: '创建时间', readonly: true, kind: 'datetime' },
   ],
 };
 
@@ -63,14 +65,15 @@ export const numbers: ResourceSpec = {
 };
 
 export const accounts: ResourceSpec = {
-  title: '计费账户', description: '查看余额、授信额度、币种和账户可用状态。', path: '/billing/accounts',
+  title: '计费账户', description: '查看余额、授信额度、币种、账户可用状态及关联租户。', path: '/billing/accounts',
   idKey: 'username', readOnly: true, action: 'credit',
   fields: [
     { key: 'username', label: '账户' },
     { key: 'balance', label: '余额', kind: 'number' },
     { key: 'credit_limit', label: '授信额度', kind: 'number' },
     { key: 'currency', label: '币种' },
-    { key: 'created_at', label: '创建时间' },
+    { key: 'associated_tenants_summary', label: '关联租户', readonly: true },
+    { key: 'created_at', label: '创建时间', readonly: true, kind: 'datetime' },
   ],
 };
 
@@ -80,9 +83,12 @@ export const rates: ResourceSpec = {
   fields: [
     { key: 'id', label: '费率 ID', required: true },
     { key: 'prefix', label: '号码前缀', placeholder: '留空表示默认费率' },
+    { key: 'tenant_id', label: '所属商户', kind: 'select', optionsResource: 'tenants', placeholder: '留空为全局费率' },
     { key: 'billing_interval_secs', label: '计费周期（秒）', kind: 'number', min: 1, required: true, defaultValue: 60 },
     { key: 'price_per_interval', label: '周期价格（元）', kind: 'number', min: 0.001, required: true, defaultValue: 0.5 },
+    { key: 'rate_per_minute', label: '等效每分钟费率（元）', readonly: true, kind: 'number' },
     { key: 'description', label: '说明', kind: 'textarea', fullWidth: true },
+    { key: 'created_at', label: '创建时间', readonly: true, kind: 'datetime' },
   ],
 };
 
@@ -98,7 +104,7 @@ export const transactions: ResourceSpec = {
     { key: 'price_per_interval', label: '周期价格（元）' },
     { key: 'amount', label: '金额（元）' },
     { key: 'balance_after', label: '余额（元）' },
-    { key: 'created_at', label: '发生时间' },
+    { key: 'created_at', label: '发生时间', kind: 'datetime' },
   ],
 };
 
@@ -168,5 +174,37 @@ export const ivrMenus: ResourceSpec = {
     { key: 'timeout_secs', label: '全局超时 (秒)', kind: 'number', required: true, defaultValue: 30, min: 1 },
     { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
     { key: 'description', label: '流程描述', kind: 'textarea', fullWidth: true, placeholder: '简要描述此 IVR 流程的用途' },
+  ],
+};
+
+export const tenants: ResourceSpec = {
+  title: '租户管理',
+  description: '维护多租户隔离策略、并发/CPS 上限、网关白名单与统一计费账户关联。',
+  path: '/tenants',
+  idKey: 'id',
+  createLabel: '新建租户',
+  fields: [
+    { key: 'name', label: '租户名称', required: true, placeholder: '例如 客户A-售前中心' },
+    { key: 'domain', label: '租户域', required: true, placeholder: '例如 tenant-a.example.com' },
+    { key: 'billing_account_summary', label: '关联计费账户', readonly: true },
+    { key: 'max_concurrent_calls', label: '最大并发', kind: 'number', defaultValue: 100, min: 0 },
+    { key: 'max_cps', label: '最大 CPS', kind: 'number', defaultValue: 10, min: 0 },
+    {
+      key: 'cross_tenant_policy',
+      label: '跨租户策略',
+      kind: 'select',
+      required: true,
+      defaultValue: 'allow_if_same_domain',
+      options: [
+        { label: '同域允许', value: 'allow_if_same_domain' },
+        { label: '全部允许', value: 'allow' },
+        { label: '全部拒绝', value: 'deny' },
+      ],
+    },
+    { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
+    // 以下字段仅在编辑表单中显示，不作为表格列（visibleFields 截断后不显示）
+    { key: 'id', label: '租户 ID', readonly: true, placeholder: '创建后由系统生成 UUID' },
+    { key: 'recording_enabled', label: '启用录音', kind: 'switch', defaultValue: true },
+    { key: 'billing_account_id', label: '计费账户', kind: 'select', optionsResource: 'accounts', placeholder: '选择租户统一计费账户' },
   ],
 };

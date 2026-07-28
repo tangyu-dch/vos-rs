@@ -324,7 +324,7 @@ pub(crate) async fn dispatch_response(
             .map(|r| r.clone())
     });
 
-    success_2xx::handle_2xx_success(
+    let blf_datagrams = success_2xx::handle_2xx_success(
         &sip_response,
         edge_state,
         edge_config,
@@ -433,7 +433,7 @@ pub(crate) async fn dispatch_response(
         return datagrams;
     }
 
-    caller_response::build_caller_response(
+    let mut datagrams = caller_response::build_caller_response(
         &sip_response,
         peer,
         edge_state,
@@ -447,7 +447,10 @@ pub(crate) async fn dispatch_response(
         response_cseq,
         cancel_datagrams,
     )
-    .await
+    .await;
+    // 将 BLF 通知数据报附加到响应后发送（仅 2xx INVITE 首次建立时非空）
+    datagrams.extend(blf_datagrams);
+    datagrams
 }
 
 #[cfg(test)]

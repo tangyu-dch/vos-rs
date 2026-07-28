@@ -1,5 +1,5 @@
 use crate::models::{
-    BillingAccount, BillingRate, CreditAccountOutcome, LedgerEntry, ReconcileResult,
+    BillingAccount, BillingRate, CreditAccountOutcome, LedgerEntry, RateUpsert, ReconcileResult,
 };
 use crate::utils;
 use crate::PostgresCdrStore;
@@ -11,7 +11,7 @@ use tracing::warn;
 impl PostgresCdrStore {
     pub async fn list_rates(&self) -> Result<Vec<BillingRate>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, created_at FROM billing_rates \
+            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, tenant_id, created_at FROM billing_rates \
              ORDER BY length(prefix) DESC, prefix",
         )
         .fetch_all(&self.pool)
@@ -25,7 +25,8 @@ impl PostgresCdrStore {
                 billing_interval_secs: row.get(3),
                 price_per_interval: row.get(4),
                 description: row.get(5),
-                created_at: row.get(6),
+                tenant_id: row.get(6),
+                created_at: row.get(7),
             });
         }
         Ok(rates)
@@ -38,7 +39,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<BillingRate>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, created_at \
+            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, tenant_id, created_at \
               FROM billing_rates ORDER BY length(prefix) DESC, prefix LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -54,7 +55,35 @@ impl PostgresCdrStore {
                 billing_interval_secs: row.get(3),
                 price_per_interval: row.get(4),
                 description: row.get(5),
-                created_at: row.get(6),
+                tenant_id: row.get(6),
+                created_at: row.get(7),
+            })
+            .collect())
+    }
+
+    /// 按租户 ID 读取费率列表（仅返回该租户的专属费率，不含全局费率）。
+    pub async fn list_rates_by_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<BillingRate>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, tenant_id, created_at \
+              FROM billing_rates WHERE tenant_id = $1 ORDER BY length(prefix) DESC, prefix",
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| BillingRate {
+                id: row.get(0),
+                prefix: row.get(1),
+                rate_per_minute: row.get(2),
+                billing_interval_secs: row.get(3),
+                price_per_interval: row.get(4),
+                description: row.get(5),
+                tenant_id: row.get(6),
+                created_at: row.get(7),
             })
             .collect())
     }
@@ -67,25 +96,18 @@ impl PostgresCdrStore {
         Ok(row.0)
     }
 
-    pub async fn upsert_rate(
-        &self,
-        id: &str,
-        prefix: &str,
-        rate_per_minute: Decimal,
-        billing_interval_secs: i32,
-        price_per_interval: Decimal,
-        description: Option<&str>,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn upsert_rate(&self, input: &RateUpsert<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO billing_rates (id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description) VALUES ($1,$2,$3,$4,$5,$6) \
-             ON CONFLICT (id) DO UPDATE SET prefix=EXCLUDED.prefix, rate_per_minute=EXCLUDED.rate_per_minute, billing_interval_secs=EXCLUDED.billing_interval_secs, price_per_interval=EXCLUDED.price_per_interval, description=EXCLUDED.description",
+            "INSERT INTO billing_rates (id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7) \
+             ON CONFLICT (id) DO UPDATE SET prefix=EXCLUDED.prefix, rate_per_minute=EXCLUDED.rate_per_minute, billing_interval_secs=EXCLUDED.billing_interval_secs, price_per_interval=EXCLUDED.price_per_interval, description=EXCLUDED.description, tenant_id=EXCLUDED.tenant_id",
         )
-        .bind(id)
-        .bind(prefix)
-        .bind(rate_per_minute)
-        .bind(billing_interval_secs)
-        .bind(price_per_interval)
-        .bind(description)
+        .bind(input.id)
+        .bind(input.prefix)
+        .bind(input.rate_per_minute)
+        .bind(input.billing_interval_secs)
+        .bind(input.price_per_interval)
+        .bind(input.description)
+        .bind(input.tenant_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -102,18 +124,19 @@ impl PostgresCdrStore {
     // ===== 计费：账户 =====
     pub async fn list_accounts(&self) -> Result<Vec<BillingAccount>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT username, CAST(balance AS NUMERIC), CAST(credit_limit AS NUMERIC), currency, created_at FROM billing_accounts ORDER BY username",
+            "SELECT id, username, CAST(balance AS NUMERIC), CAST(credit_limit AS NUMERIC), currency, created_at FROM billing_accounts ORDER BY username",
         )
         .fetch_all(&self.pool)
         .await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             out.push(BillingAccount {
-                username: row.get(0),
-                balance: row.get(1),
-                credit_limit: row.get(2),
-                currency: row.get(3),
-                created_at: row.get(4),
+                id: row.get(0),
+                username: row.get(1),
+                balance: row.get(2),
+                credit_limit: row.get(3),
+                currency: row.get(4),
+                created_at: row.get(5),
             });
         }
         Ok(out)
@@ -126,7 +149,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<BillingAccount>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT username, CAST(balance AS NUMERIC), CAST(credit_limit AS NUMERIC), currency, created_at FROM billing_accounts \
+            "SELECT id, username, CAST(balance AS NUMERIC), CAST(credit_limit AS NUMERIC), currency, created_at FROM billing_accounts \
              ORDER BY username LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -136,11 +159,12 @@ impl PostgresCdrStore {
         Ok(rows
             .into_iter()
             .map(|row| BillingAccount {
-                username: row.get(0),
-                balance: row.get(1),
-                credit_limit: row.get(2),
-                currency: row.get(3),
-                created_at: row.get(4),
+                id: row.get(0),
+                username: row.get(1),
+                balance: row.get(2),
+                credit_limit: row.get(3),
+                currency: row.get(4),
+                created_at: row.get(5),
             })
             .collect())
     }
@@ -209,6 +233,7 @@ impl PostgresCdrStore {
         &self,
         username: &str,
         callee: &str,
+        tenant_id: Option<&str>,
     ) -> Result<(bool, Decimal, Decimal), sqlx::Error> {
         let balance: Decimal = sqlx::query_scalar(
             "SELECT COALESCE(CAST(balance AS NUMERIC), 0.0) FROM billing_accounts WHERE username=$1",
@@ -218,12 +243,16 @@ impl PostgresCdrStore {
         .await?
         .unwrap_or(Decimal::ZERO);
 
+        // 费率查找：优先匹配租户专属费率（tenant_id = $3），回退到全局费率（tenant_id IS NULL）。
         let rate: Decimal = sqlx::query_scalar(
             "SELECT COALESCE(CAST(rate_per_minute AS NUMERIC), 0.0) FROM billing_rates \
-              WHERE $2 LIKE prefix || '%' ORDER BY length(prefix) DESC LIMIT 1",
+              WHERE $2 LIKE prefix || '%' \
+              AND ($3::text IS NULL AND tenant_id IS NULL OR tenant_id = $3) \
+              ORDER BY tenant_id IS NULL ASC, length(prefix) DESC LIMIT 1",
         )
         .bind(username)
         .bind(callee)
+        .bind(tenant_id)
         .fetch_optional(&self.pool)
         .await?
         .unwrap_or(Decimal::ZERO);
@@ -238,6 +267,7 @@ impl PostgresCdrStore {
         username: &str,
         callee: &str,
         duration_ms: i64,
+        tenant_id: Option<&str>,
     ) -> Result<Option<Decimal>, sqlx::Error> {
         if username.is_empty() || duration_ms <= 0 {
             return Ok(None);
@@ -252,11 +282,15 @@ impl PostgresCdrStore {
             return Ok(None);
         }
 
+        // 费率查找：优先匹配租户专属费率（tenant_id = $2），回退到全局费率（tenant_id IS NULL）。
         let rate: Option<(i32, Decimal)> = sqlx::query_as(
             "SELECT billing_interval_secs, price_per_interval FROM billing_rates \
-              WHERE $1 LIKE prefix || '%' ORDER BY length(prefix) DESC LIMIT 1",
+              WHERE $1 LIKE prefix || '%' \
+              AND ($2::text IS NULL AND tenant_id IS NULL OR tenant_id = $2) \
+              ORDER BY tenant_id IS NULL ASC, length(prefix) DESC LIMIT 1",
         )
         .bind(callee)
+        .bind(tenant_id)
         .fetch_optional(&self.pool)
         .await?;
 

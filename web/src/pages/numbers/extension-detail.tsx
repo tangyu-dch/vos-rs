@@ -205,6 +205,15 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
             <WorkspaceField label="鉴权域 (Realm)">
               <Input variant="bordered" value={realm} isDisabled />
             </WorkspaceField>
+            <WorkspaceField label="所属商户">
+              <Input
+                variant="bordered"
+                isDisabled
+                value={data?.tenant?.name
+                  ? `${String(data.tenant.name)}${data.tenant.enabled === false ? '（已停用）' : ''}`
+                  : '全局（未关联商户）'}
+              />
+            </WorkspaceField>
             <WorkspaceField label="凭据鉴权状态">
               <Input
                 variant="bordered"

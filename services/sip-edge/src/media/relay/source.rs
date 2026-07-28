@@ -132,7 +132,7 @@ impl MediaRelayState {
         })
     }
 
-    pub(super) fn record_metric(
+    pub(crate) fn record_metric(
         &self,
         relay_port: u16,
         update: impl FnOnce(&mut MediaRelayMetrics),

@@ -73,12 +73,16 @@ impl<'a> TelecomCopilotEngine<'a> {
             return json!({ "success": false, "error": "费率 ID 与前缀不能为空" });
         }
         let rate_dec = Decimal::from_f64_retain(rate).unwrap_or_default();
-        match self
-            .state
-            .store
-            .upsert_rate(id, prefix, rate_dec, 60, rate_dec, None)
-            .await
-        {
+        let input = cdr_core::RateUpsert {
+            id,
+            prefix,
+            rate_per_minute: rate_dec,
+            billing_interval_secs: 60,
+            price_per_interval: rate_dec,
+            description: None,
+            tenant_id: None,
+        };
+        match self.state.store.upsert_rate(&input).await {
             Ok(_) => {
                 json!({ "success": true, "message": format!("费率规则 {} (前缀: {}, 费率: {}/分) 设置成功", id, prefix, rate) })
             }

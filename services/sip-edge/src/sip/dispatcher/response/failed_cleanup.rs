@@ -21,17 +21,21 @@ pub(crate) fn handle_failed_state(
         }
         if !is_reinvite_response {
             if let Some(cid) = call_id {
-                let username = edge_state
+                let session_key_owned = session_key.unwrap_or(cid).to_string();
+                let (username, tenant_ctx) = edge_state
                     .inbound_transactions
-                    .get(session_key.unwrap_or(cid))
-                    .and_then(|tx| {
-                        tx.original_request.as_ref().and_then(|req| {
+                    .get(&session_key_owned)
+                    .map(|tx| {
+                        let username = tx.original_request.as_ref().and_then(|req| {
                             crate::edge_state::EdgeState::username_from_request(req)
-                        })
-                    });
+                        });
+                        (username, tx.tenant.clone())
+                    })
+                    .unwrap_or((None, None));
                 if let Some(ref uname) = username {
                     edge_state.decrement_user_concurrency(uname);
                 }
+                edge_state.decrement_tenant_concurrency(tenant_ctx.as_ref());
                 if !outcome.gateway_id.is_empty() {
                     edge_state
                         .gateway_health

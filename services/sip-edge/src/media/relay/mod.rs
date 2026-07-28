@@ -149,6 +149,11 @@ pub struct MediaRelayState {
     pub(crate) monitors: Arc<DashMap<u16, Vec<SocketAddr>>>,
     pub(crate) buffer_pool: Arc<pool::PacketBufferPool>,
     pub(crate) storage: Option<Arc<dyn storage_core::StorageBackend>>,
+    /// TURN 中继客户端（启动阶段注入，仅在 Symmetric NAT 环境下配置时存在）。
+    /// 转发循环通过 [`Self::turn_client`] 读取，对非本地目标自动走中继路径。
+    pub(crate) turn_client: Arc<std::sync::OnceLock<Arc<crate::net::turn_client::TurnClient>>>,
+    /// 已为对端地址创建 CREATE-PERMISSION 的集合，避免每包重复请求。
+    pub(crate) turn_authorized_peers: Arc<DashMap<u16, SocketAddr>>,
 }
 
 impl Clone for MediaRelayState {
@@ -183,6 +188,8 @@ impl Clone for MediaRelayState {
             monitors: Arc::clone(&self.monitors),
             buffer_pool: Arc::clone(&self.buffer_pool),
             storage: self.storage.clone(),
+            turn_client: Arc::clone(&self.turn_client),
+            turn_authorized_peers: Arc::clone(&self.turn_authorized_peers),
         }
     }
 }

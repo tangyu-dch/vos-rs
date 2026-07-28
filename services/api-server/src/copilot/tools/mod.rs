@@ -16,7 +16,6 @@ use super::{
     generate_ascii_ladder, push_section, truncate, CopilotIntent, Payload, TelecomCopilotEngine,
 };
 
-#[allow(dead_code)]
 fn urlencoding_str(s: &str) -> String {
     s.as_bytes()
         .iter()
@@ -31,7 +30,11 @@ fn urlencoding_str(s: &str) -> String {
 }
 
 impl<'a> TelecomCopilotEngine<'a> {
-    #[allow(dead_code)]
+    /// LLM 工具调用分发器：根据工具名执行对应业务工具并返回 JSON 结果。
+    ///
+    /// 在流式 LLM 对话中，当模型返回 `tool_calls` 时，由 `stream.rs` 的
+    /// tool-call 处理循环调用此方法执行工具，再将结果以 `tool` 角色消息
+    /// 回填到 LLM 上下文，让模型生成最终自然语言回答。
     pub async fn execute_tool(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
         match name {
             "vos_get_dashboard_stats" => self.tool_get_dashboard_stats().await,

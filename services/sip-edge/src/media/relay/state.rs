@@ -52,6 +52,8 @@ impl MediaRelayState {
             monitors: Arc::new(DashMap::new()),
             buffer_pool: Arc::new(pool::PacketBufferPool::new(MEDIA_PACKET_POOL_CAPACITY)),
             storage,
+            turn_client: Arc::new(std::sync::OnceLock::new()),
+            turn_authorized_peers: Arc::new(DashMap::new()),
         }
     }
 
@@ -445,6 +447,36 @@ impl MediaRelayState {
         if let Some(peer_port) = peer_port {
             self.mark_relay_features_changed(peer_port);
         }
+        // 清理 TURN 权限缓存：端口释放后对应的 peer 不再需要中继权限
+        self.turn_authorized_peers.remove(&rtp_port);
+        if let Some(peer_port) = peer_port {
+            self.turn_authorized_peers.remove(&peer_port);
+        }
+    }
+
+    /// 注入 TURN 中继客户端（仅在启动阶段调用一次）。
+    ///
+    /// 调用后，转发循环会自动将发往非本地目标的 RTP/RTCP 包通过 TURN 中继发送，
+    /// 并在首次发送前为对端地址创建 CREATE-PERMISSION。
+    pub(crate) fn set_turn_client(&self, client: Arc<crate::net::turn_client::TurnClient>) {
+        let _ = self.turn_client.set(client);
+    }
+
+    /// 读取 TURN 中继客户端（未配置时返回 `None`）。
+    pub(crate) fn turn_client(&self) -> Option<Arc<crate::net::turn_client::TurnClient>> {
+        self.turn_client.get().cloned()
+    }
+
+    /// 判断指定端口的对端是否已创建过 TURN CREATE-PERMISSION。
+    pub(crate) fn turn_peer_authorized(&self, relay_port: u16, peer: SocketAddr) -> bool {
+        self.turn_authorized_peers
+            .get(&relay_port)
+            .is_some_and(|entry| *entry == peer)
+    }
+
+    /// 标记指定端口的对端已创建 TURN CREATE-PERMISSION。
+    pub(crate) fn mark_turn_peer_authorized(&self, relay_port: u16, peer: SocketAddr) {
+        self.turn_authorized_peers.insert(relay_port, peer);
     }
 }
 

@@ -92,6 +92,27 @@ pub(super) async fn handle_hangup(
         {
             edge_state.decrement_user_concurrency(&username);
         }
+        edge_state.decrement_tenant_concurrency(tx.tenant.as_ref());
+
+        // BLF: 呼叫通过管理 API 终止时，广播 dialog terminated 状态
+        if tx.established_at.is_some() {
+            let caller_aor = tx.dialogs.caller.remote_uri.to_string();
+            let callee_aor = tx.dialogs.caller.local_uri.to_string();
+            let blf_datagrams = crate::sip::handlers::subscribe::trigger_dialog_state_change(
+                edge_state,
+                edge_config,
+                &caller_aor,
+                &callee_aor,
+                &caller_call_id,
+                crate::sip::handlers::subscribe::DialogStateChange::Terminated,
+            );
+            for datagram in blf_datagrams {
+                let _ = edge_state
+                    .send_sip_datagram(datagram, socket, edge_config)
+                    .await;
+            }
+        }
+
         finalize_vci_hangup(edge_state, &caller_call_id, &termination_reason);
         return;
     }

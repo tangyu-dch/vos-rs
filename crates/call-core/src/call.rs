@@ -214,6 +214,12 @@ pub struct Call {
     pub(crate) caller_identity_alternatives: Vec<(CallerIdentity, Vec<SelectedRoute>)>,
     /// Billing account resolved from the authenticated source when the call starts.
     pub billing_account: Option<String>,
+    /// 关联的租户 ID（可空，None 表示未关联租户，使用全局费率）。
+    ///
+    /// 由 INVITE 入站解析阶段从 `TenantContext` 注入，用于：
+    /// - 余额校验时按租户查找专属费率（热路径优先租户费率，回退到全局）
+    /// - 通话结算时按租户查找专属费率
+    pub tenant_id: Option<String>,
     /// Routing and billing decisions frozen for the final CDR.
     pub audit: CdrAuditSnapshot,
 }
@@ -277,6 +283,7 @@ impl Call {
             caller_identity: None,
             caller_identity_alternatives: Vec::new(),
             billing_account: None,
+            tenant_id: None,
             audit: CdrAuditSnapshot::default(),
         })
     }

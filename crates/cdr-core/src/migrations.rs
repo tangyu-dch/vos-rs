@@ -72,6 +72,22 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(CREATE_ROUTES_GATEWAY_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
+    sqlx::query(CREATE_TENANTS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_TENANTS_DOMAIN_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_TENANTS_ENABLED_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    // tenants 表创建后再为 sip_users 添加 tenant_id 列与索引（引用 tenants(id)）
+    sqlx::query(MIGRATE_SIP_USERS_TENANT_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_SIP_USERS_TENANT_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(MIGRATION_ADD_ROUTE_WEIGHT)
         .execute(&mut *tx)
         .await?;
@@ -115,6 +131,14 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     for migration_sql in MIGRATE_BILLING_ACCOUNTS_SQL {
         sqlx::query(migration_sql).execute(&mut *tx).await?;
     }
+
+    // billing_rates 添加 tenant_id 列与索引（NULL 表示全局费率）
+    sqlx::query(MIGRATE_BILLING_RATES_TENANT_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_BILLING_RATES_TENANT_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
 
     sqlx::query(ADD_GATEWAY_ACCOUNT_FOREIGN_KEY_SQL)
         .execute(&mut *tx)

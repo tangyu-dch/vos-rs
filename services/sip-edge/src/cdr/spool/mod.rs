@@ -19,6 +19,8 @@ pub(crate) struct CdrPipelineMetrics {
     replayed_total: AtomicU64,
     spool_failures_total: AtomicU64,
     pending_spool_records: AtomicU64,
+    /// 累计成功写入持久化 sink（PostgreSQL/NATS）的 CDR 数量。
+    processed_total: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -28,6 +30,7 @@ pub(crate) struct CdrPipelineSnapshot {
     pub(crate) replayed_total: u64,
     pub(crate) spool_failures_total: u64,
     pub(crate) pending_spool_records: u64,
+    pub(crate) processed_total: u64,
 }
 
 impl CdrPipelineMetrics {
@@ -38,7 +41,13 @@ impl CdrPipelineMetrics {
             replayed_total: self.replayed_total.load(Ordering::Relaxed),
             spool_failures_total: self.spool_failures_total.load(Ordering::Relaxed),
             pending_spool_records: self.pending_spool_records.load(Ordering::Relaxed),
+            processed_total: self.processed_total.load(Ordering::Relaxed),
         }
+    }
+
+    /// 累加已成功持久化的 CDR 数量。
+    pub(crate) fn record_processed(&self, count: u64) {
+        self.processed_total.fetch_add(count, Ordering::Relaxed);
     }
 }
 
@@ -207,6 +216,8 @@ impl CdrSpool {
         self.metrics
             .replayed_total
             .fetch_add(count, Ordering::Relaxed);
+        // 重放成功的 CDR 也计入 processed_total
+        self.metrics.record_processed(count);
         saturating_sub(&self.metrics.pending_spool_records, count);
         Ok(())
     }

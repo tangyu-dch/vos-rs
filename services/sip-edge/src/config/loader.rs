@@ -97,6 +97,7 @@ impl EdgeConfig {
         let dynamic_config_section = edge_section.dynamic_config.unwrap_or_default();
         let billing_section = edge_section.billing.unwrap_or_default();
         let webhook_config = edge_section.webhooks.unwrap_or_default().into_config();
+        let tenant_section = edge_section.tenant.unwrap_or_default();
         let cluster = edge_section.cluster.unwrap_or_default();
         let media_cluster = MediaClusterConfig {
             allocation_strategy: media_section.allocation_strategy.unwrap_or_default(),
@@ -166,6 +167,10 @@ impl EdgeConfig {
                 .unwrap_or_else(|| "127.0.0.1:8082".to_string()),
             stun_server: nat_section.stun_server,
             upnp_enabled: nat_section.upnp_enabled.unwrap_or(false),
+            turn_server: nat_section.turn_server,
+            turn_username: nat_section.turn_username,
+            turn_password: nat_section.turn_password,
+            turn_realm: nat_section.turn_realm,
             database_url,
             database_max_connections: db_section.max_connections.unwrap_or(10),
             redis_max_connections: redis_section.max_connections.unwrap_or(10),
@@ -239,6 +244,8 @@ impl EdgeConfig {
                 .sip_transaction_timeout_secs
                 .unwrap_or(32),
             sip_t1_initial_ms: performance_section.sip_t1_initial_ms.unwrap_or(500),
+            tenant_enabled: tenant_section.enabled.unwrap_or(false),
+            tenant_refresh_interval_secs: tenant_section.refresh_interval_secs.unwrap_or(60),
         }
     }
 }

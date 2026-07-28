@@ -82,6 +82,20 @@ pub(super) async fn build_and_send_outbound(
         calculated_max_duration,
     );
 
+    // 注入多租户上下文到会话（使用 resolution 阶段已解析的 tenant_ctx，避免二次查询）
+    // 并递增租户并发计数（仅在租户已绑定且配置了并发上限时生效）。
+    if ctx.tenant_ctx.is_bound() {
+        debug!(
+            session_id = ctx.session_id,
+            tenant_id = ctx.tenant_ctx.tenant_id_str(),
+            tenant_name = ctx.tenant_ctx.tenant_name_str(),
+            "associated call with tenant"
+        );
+        ctx.edge_state
+            .set_session_tenant(ctx.session_id, ctx.tenant_ctx.clone());
+        ctx.edge_state.increment_tenant_concurrency(ctx.tenant_ctx);
+    }
+
     let mut datagrams = vec![PendingDatagram::new(
         ctx.peer.to_string(),
         ctx.response.clone(),

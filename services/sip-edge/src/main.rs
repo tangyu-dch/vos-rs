@@ -12,6 +12,7 @@ pub(crate) mod runtime;
 pub(crate) mod security;
 pub(crate) mod sip;
 pub(crate) mod startup;
+pub(crate) mod tenant;
 pub(crate) mod timers;
 mod webhooks;
 
@@ -20,36 +21,36 @@ pub(crate) use routing::{
     reload_number_routes, route_table_from_config, spawn_number_route_refresh,
     spawn_periodic_route_refresh, warm_hot_path_redis_cache,
 };
-#[allow(unused_imports)]
-pub(crate) use sip::client_transaction::spawn_client_transaction_retransmission;
 pub(crate) use sip::extract_call_id_fast;
 pub(crate) use startup::{
     config_logging_filter, init_tracing, seed_database_defaults, validate_bootstrap_config,
     validate_runtime_security,
 };
 
-// Re-export for backward compatibility with inline module references.
-// 部分重导出仅被 #[cfg(test)] 模块通过 super:: 路径引用，标注 allow 避免非测试构建告警。
-#[allow(unused_imports)]
-pub(crate) use edge_state::*;
-#[allow(unused_imports)]
-pub(crate) use net::transport;
-#[allow(unused_imports)]
+// `EdgeState` 在 main.rs 中通过 `EdgeState::with_media_relay_and_db` 等构造函数直接使用，
+// 必须从 `edge_state` 模块重导出。
+pub(crate) use edge_state::EdgeState;
+// `handle_datagram` / `sbc` 在 main.rs / edge_state 内被非测试代码引用。
 pub(crate) use security::sbc;
-#[allow(unused_imports)]
-pub(crate) use sip::auth;
 pub(crate) use sip::handle_datagram;
-#[allow(unused_imports)]
-pub(crate) use sip::response;
-#[allow(unused_imports)]
-pub(crate) use sip::{AuthDecision, ClientTransactionKey};
-
-#[allow(unused_imports)]
-pub(crate) use timers::calculate_mos_for_legs;
+// 计时器后台任务在 main 中启动。
 pub(crate) use timers::{
     spawn_gateway_health_probe_loop, spawn_nat_keepalive_loop, spawn_session_timer_watchdog,
     spawn_subscription_prune_loop,
 };
+
+// 以下重导出仅服务于 `#[cfg(test)] mod tests` 中 `super::` 路径引用，
+// 非测试构建不会引用，故以 `#[cfg(test)]` 限定避免 unused_imports 告警。
+#[cfg(test)]
+pub(crate) use edge_state::CdrSinks;
+#[cfg(test)]
+pub(crate) use sip::client_transaction::spawn_client_transaction_retransmission;
+#[cfg(test)]
+pub(crate) use sip::{auth, response};
+#[cfg(test)]
+pub(crate) use sip::{AuthDecision, ClientTransactionKey};
+#[cfg(test)]
+pub(crate) use timers::calculate_mos_for_legs;
 
 use call_core::CallManager;
 use config::EdgeConfig;
@@ -138,6 +139,9 @@ async fn main() -> Result<(), AnyError> {
         net::run_upnp_port_mapping(&bind_addr, &edge_config);
     }
 
+    // TURN 中继预分配（如果配置了 TURN 服务器）
+    let turn_client = net::run_turn_bootstrap(&edge_config).await;
+
     let edge_config = Arc::new(edge_config);
     // 先创建 std UDP socket 设置 DSCP，再转 tokio
     let std_socket = std::net::UdpSocket::bind(&bind_addr)?;
@@ -173,9 +177,17 @@ async fn main() -> Result<(), AnyError> {
     let cdr_spool = cdr::CdrSpool::open(cdr::configured_spool_dir())?;
     let cdr_pipeline_metrics = cdr_spool.metrics();
     let durable_cdr_sink = cdr::DurableCdrSink::new(cdr_tx, cdr_spool.clone());
-    let (call_manager, webhook_receiver) = if edge_config.webhooks.enabled {
+    let (call_manager, event_receiver) = if edge_config.webhooks.enabled {
+        // Webhook 启用：创建 event sink，启动完整 pipeline（内部含 RWI 广播）
         let (event_sender, event_receiver) =
             tokio::sync::mpsc::channel(edge_config.webhooks.queue_capacity);
+        (
+            CallManager::new_with_event_sink(route_table, durable_cdr_sink, event_sender),
+            Some(event_receiver),
+        )
+    } else if edge_config.nats_url.is_some() {
+        // Webhook 未启用但 NATS 可用：创建 event sink，仅启动 RWI 实时事件广播
+        let (event_sender, event_receiver) = tokio::sync::mpsc::channel(4096);
         (
             CallManager::new_with_event_sink(route_table, durable_cdr_sink, event_sender),
             Some(event_receiver),
@@ -184,18 +196,24 @@ async fn main() -> Result<(), AnyError> {
         (CallManager::new(route_table, durable_cdr_sink), None)
     };
 
-    if let Some(event_receiver) = webhook_receiver {
+    if let Some(event_receiver) = event_receiver {
         let nats_url = edge_config
             .nats_url
             .as_deref()
-            .ok_or("启用 Webhook 时必须在 config.yaml 配置 connections.nats.url")?;
-        webhooks::start_pipeline(
-            edge_config.webhooks.clone(),
-            nats_url,
-            redis_client.clone(),
-            event_receiver,
-        )
-        .await?;
+            .ok_or("启用 Webhook 或 RWI 广播时必须在 config.yaml 配置 connections.nats.url")?;
+        if edge_config.webhooks.enabled {
+            // Webhook 完整流水线（含 JetStream 持久化 + HTTP 投递 + RWI 广播）
+            webhooks::start_pipeline(
+                edge_config.webhooks.clone(),
+                nats_url,
+                redis_client.clone(),
+                event_receiver,
+            )
+            .await?;
+        } else {
+            // 仅 RWI 实时事件广播（无 Webhook 投递）
+            webhooks::start_rwi_broadcast(nats_url, event_receiver).await?;
+        }
     }
 
     let edge_state = Arc::new(EdgeState::with_media_relay_and_db(
@@ -210,6 +228,13 @@ async fn main() -> Result<(), AnyError> {
         .set(cdr_pipeline_metrics)
         .ok();
     edge_state.self_weak.set(Arc::downgrade(&edge_state)).ok();
+
+    // 注入 TURN 中继客户端（如果启动阶段成功分配了 relayed 地址）
+    if let Some(turn) = turn_client {
+        edge_state.set_turn_client(turn.clone());
+        media_relay.set_turn_client(turn);
+        info!("TURN 中继客户端已注入媒体转发路径，对非本地目标将自动走中继");
+    }
 
     if let Some(nats_url) = edge_config.nats_url.as_deref() {
         match async_nats::connect(nats_url).await {
@@ -244,6 +269,24 @@ async fn main() -> Result<(), AnyError> {
             edge_config.nats_url.clone(),
         );
         seed_database_defaults(db, &edge_config).await?;
+
+        // 多租户注册表初始化：仅在 tenant_enabled=true 时启用
+        if edge_config.tenant_enabled {
+            let tenant_store = tenant::TenantStore::new(db.pool().clone());
+            let tenant_registry = Arc::new(tenant::TenantRegistry::new(tenant_store));
+            let loaded = tenant_registry.refresh().await;
+            info!(loaded, "tenant registry initialized");
+            let refresh_interval = edge_config.tenant_refresh_interval_secs;
+            Arc::clone(&tenant_registry).spawn_refresh_loop(refresh_interval);
+            edge_state.set_tenant_registry(tenant_registry);
+            info!(
+                enabled = edge_config.tenant_enabled,
+                refresh_secs = refresh_interval,
+                "multi-tenant isolation enabled"
+            );
+        } else {
+            info!("multi-tenant isolation disabled (tenant_enabled=false)");
+        }
     }
 
     let sip_flow_tx = sip::sip_flow::SipFlowWriter::start(Arc::clone(&edge_state), 10000);
@@ -454,6 +497,12 @@ async fn main() -> Result<(), AnyError> {
         if let Err(error) = heartbeat.unregister().await {
             warn!(%error, "failed to unregister SIP cluster node during shutdown");
         }
+    }
+
+    // 释放 TURN allocation（lifetime=0），避免服务器端资源泄漏
+    if let Some(turn) = edge_state.turn_client() {
+        info!("releasing TURN allocation during shutdown");
+        turn.destroy().await;
     }
 
     let _ = cdr_shutdown_tx.send(());

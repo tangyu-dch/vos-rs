@@ -49,6 +49,25 @@ pub(crate) async fn extension(
         .into_iter()
         .find(|user| user.username == username)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "extension not found".to_string()))?;
+
+    // 加载分机关联的租户信息（若 tenant_id 不为空）
+    let tenant_info: Option<serde_json::Value> = if let Some(ref tid) = user.tenant_id {
+        match state.store.get_tenant(tid).await {
+            Ok(Some(tenant)) => Some(json!({
+                "id": tenant.id,
+                "name": tenant.name,
+                "domain": tenant.domain,
+                "billing_account_id": tenant.billing_account_id,
+                "enabled": tenant.enabled,
+            })),
+            _ => Some(
+                json!({ "id": tid, "name": null, "domain": null, "billing_account_id": null, "enabled": false }),
+            ),
+        }
+    } else {
+        None
+    };
+
     let registrations = registrations
         .into_iter()
         .filter(|registration| aor_username(&registration.aor) == username)
@@ -72,6 +91,7 @@ pub(crate) async fn extension(
 
     Ok(Json(json!({
         "extension": user,
+        "tenant": tenant_info,
         "credential": {"configured": true, "storage": "digest_ha1"},
         "registrations": registrations,
         "numbers": numbers,

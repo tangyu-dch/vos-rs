@@ -56,11 +56,19 @@ pub(crate) fn settle_completed_call(edge_state: &EdgeState, call_id: &CallId) {
         return;
     }
     let callee = call.inbound.remote_uri.user.unwrap_or_default();
+    // 结算时使用 Call 上已注入的 tenant_id，按租户查找专属费率（回退全局）。
+    let tenant_id = call.tenant_id.clone();
     let call_id = call_id.as_str().to_string();
     let redis_connection = edge_state.redis_connection();
     tokio::spawn(async move {
         match db
-            .settle_call(&call_id, &account, &callee, duration_ms)
+            .settle_call(
+                &call_id,
+                &account,
+                &callee,
+                duration_ms,
+                tenant_id.as_deref(),
+            )
             .await
         {
             Ok(Some(balance)) => {

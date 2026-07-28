@@ -41,10 +41,16 @@ pub(super) async fn enforce_balance_check(ctx: &OutboundContext<'_>) -> BalanceC
             billing_pulse,
         };
     };
+    // 从 TenantContext 提取 tenant_id，按租户查找专属费率（未命中时 redis_balance_check 会自动回退到全局）。
+    let tenant_id = if ctx.tenant_ctx.is_bound() {
+        ctx.tenant_ctx.tenant_id.as_deref()
+    } else {
+        None
+    };
 
     match ctx
         .edge_state
-        .redis_balance_check(caller_user, callee)
+        .redis_balance_check(caller_user, callee, tenant_id)
         .await
     {
         Some(check) if !check.account_found => {

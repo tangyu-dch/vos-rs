@@ -55,10 +55,10 @@ pub(super) async fn run_ivr_menu_loop(
         let timeout = Duration::from_secs(timeout_secs as u64);
         let mut accum = String::new();
         let mut retries = 0;
-        #[allow(unused_assignments)]
-        let mut next_menu_id: Option<String> = None;
 
-        loop {
+        // 内层 loop 命中菜单跳转时通过 `break Some(menu_id)` 携带目标，
+        // 其他退出路径均直接 `return`，因此 `next_menu_id` 在 break 后必有值。
+        let next_menu_id: Option<String> = loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
 
             // 检查呼叫是否已被挂断或清理
@@ -93,8 +93,7 @@ pub(super) async fn run_ivr_menu_loop(
 
                         if action.action_type == "menu" {
                             info!(call_id = %call_id, target = %action.action_target, "执行 IVR 菜单跳转动作");
-                            next_menu_id = Some(action.action_target.clone());
-                            break;
+                            break Some(action.action_target.clone());
                         } else {
                             execute_ivr_action(
                                 &edge_state,
@@ -132,7 +131,7 @@ pub(super) async fn run_ivr_menu_loop(
                     .terminate_call_with_reason(&call_id, "IVR Timeout");
                 return;
             }
-        }
+        };
 
         if let Some(menu_id) = next_menu_id {
             if let Some(new_menu) = edge_state

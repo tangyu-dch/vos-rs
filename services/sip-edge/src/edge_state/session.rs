@@ -199,11 +199,29 @@ impl EdgeState {
             invite_response_order: Arc::new(
                 tokio::sync::Mutex::new(InviteResponseOrder::default()),
             ),
+            tenant: None,
         });
 
         // 记录该用户新增一路活跃并发通话
         if let Some(username) = Self::username_from_request(request) {
             self.increment_user_concurrency(&username);
+        }
+    }
+
+    /// 为已存在的会话注入租户上下文。
+    ///
+    /// 在 INVITE 入站处理流程中，`remember_inbound_invite` 之后调用，
+    /// 使后续 CDR / 计费 / 跨租户策略可读取 tenant 信息。
+    /// 若 session_id 不存在或已设置 tenant，则忽略。
+    pub(crate) fn set_session_tenant(
+        &self,
+        session_id: &str,
+        tenant: crate::tenant::TenantContext,
+    ) {
+        if let Some(mut tx) = self.inbound_transactions.get_mut(session_id) {
+            if tx.tenant.is_none() {
+                tx.tenant = Some(tenant);
+            }
         }
     }
 
@@ -216,7 +234,3 @@ impl EdgeState {
         Some(transaction)
     }
 }
-
-/// 防止 `Method` 在某些 feature 组合下未被引用。
-#[allow(unused_imports)]
-use sip_core::Method as _MethodMarker;

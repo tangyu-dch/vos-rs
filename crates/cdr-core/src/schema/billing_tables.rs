@@ -95,9 +95,19 @@ CREATE TABLE IF NOT EXISTS billing_rates (
     billing_interval_secs INTEGER NOT NULL DEFAULT 60 CHECK (billing_interval_secs > 0),
     price_per_interval NUMERIC(20, 8) NOT NULL DEFAULT 0,
     description TEXT,
+    tenant_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
+
+/// billing_rates 添加 tenant_id 字段。
+///
+/// 可空（NULL 表示全局费率，对所有租户生效）。
+pub(crate) const MIGRATE_BILLING_RATES_TENANT_SQL: &str =
+    "ALTER TABLE billing_rates ADD COLUMN IF NOT EXISTS tenant_id TEXT";
+
+pub(crate) const CREATE_BILLING_RATES_TENANT_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_billing_rates_tenant ON billing_rates (tenant_id)";
 
 pub(crate) const CREATE_BILLING_ACCOUNTS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS billing_accounts (

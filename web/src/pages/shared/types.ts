@@ -3,7 +3,7 @@
 
 import type { Entity } from '@/services/resources';
 
-export type FieldKind = 'text' | 'textarea' | 'number' | 'duration' | 'switch' | 'select' | 'secret';
+export type FieldKind = 'text' | 'textarea' | 'number' | 'duration' | 'switch' | 'select' | 'secret' | 'datetime';
 
 export interface SelectOptionSpec {
   label: string;
@@ -16,7 +16,7 @@ export interface FieldSpec {
   kind?: FieldKind;
   required?: boolean;
   options?: Array<string | SelectOptionSpec>;
-  optionsResource?: 'egress-trunks' | 'allocation-source' | 'accounts';
+  optionsResource?: 'egress-trunks' | 'allocation-source' | 'accounts' | 'tenants';
   readonly?: boolean;
   defaultValue?: unknown;
   fullWidth?: boolean;

@@ -38,7 +38,6 @@ pub(crate) struct IvrAction {
 ///
 /// 由 `outbound_reg` 模块维护，用于周期性向远端网关发起 REGISTER。
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct OutboundRegState {
     pub(crate) gateway_id: String,
     pub(crate) host: String,

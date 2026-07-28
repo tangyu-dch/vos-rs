@@ -38,6 +38,7 @@ pub async fn spawn_rtp_relay_listeners(
             config.anti_spoofing,
             config.source_relearn_after_secs,
             packet_kind,
+            config.dtx_silence_suppression,
             rx,
         ));
         handles.push(handle);

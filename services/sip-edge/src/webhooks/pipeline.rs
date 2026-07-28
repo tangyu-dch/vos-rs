@@ -4,7 +4,7 @@
 //! HTTP 签名投递、延迟重试和 Redis 投递结果记录。
 
 use crate::config::WebhookConfig;
-use crate::webhooks::delivery::{deliver_event, record_delivery, retry_delay};
+use crate::webhooks::delivery::{deliver_event, event_type, record_delivery, retry_delay};
 use async_nats::jetstream::{self, consumer::PullConsumer, stream, AckKind};
 use call_core::WebhookEvent;
 use futures::StreamExt;
@@ -14,6 +14,13 @@ use tracing::{error, info, warn};
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
+/// RWI 实时事件广播使用的 NATS 主题前缀。
+///
+/// `sip-edge` 在把 WebhookEvent 持久化到 JetStream 的同时，也会把同一份事件
+/// 以 `vos_rs.call.{event_type}` 的主题发布到普通 NATS 核心，供 `api-server`
+/// 的 RWI WebSocket 网关订阅并转发给前端实时控制台。
+const RWI_EVENT_SUBJECT_PREFIX: &str = "vos_rs.call.";
+
 /// 启动 Webhook NATS 发布器和 HTTP 投递消费者。
 pub async fn start_pipeline(
     config: WebhookConfig,
@@ -22,15 +29,46 @@ pub async fn start_pipeline(
     receiver: mpsc::Receiver<WebhookEvent>,
 ) -> Result<(), AnyError> {
     validate_config(&config)?;
-    let (jetstream, consumer) = connect_consumer(nats_url, &config).await?;
+    let (jetstream, consumer, nats_client) = connect_consumer(nats_url, &config).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(config.request_timeout_ms))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let redis_connection = redis_client.get_multiplexed_tokio_connection().await?;
 
-    spawn_publisher(jetstream.clone(), config.clone(), receiver);
+    spawn_publisher(jetstream.clone(), nats_client, config.clone(), receiver);
     spawn_delivery_consumer(consumer, client, redis_connection, config);
+    Ok(())
+}
+
+/// 启动独立的 RWI 事件广播任务（不依赖 Webhook 启用）。
+///
+/// 当 Webhook 未启用但需要 RWI 实时控制台时调用此函数。
+/// 它会从 `receiver` 消费 `WebhookEvent`，并将事件以
+/// `vos_rs.call.{event_type}` 主题发布到普通 NATS 核心，
+/// 供 `api-server` 的 RWI WebSocket 网关订阅。
+pub async fn start_rwi_broadcast(
+    nats_url: &str,
+    mut receiver: mpsc::Receiver<WebhookEvent>,
+) -> Result<(), AnyError> {
+    let nats_client = async_nats::connect(nats_url).await?;
+    tokio::spawn(async move {
+        while let Some(event) = receiver.recv().await {
+            let rwi_subject = format!("{RWI_EVENT_SUBJECT_PREFIX}{}", event_type(&event.event));
+            let event_id = event.event_id.clone();
+            match serde_json::to_vec(&event) {
+                Ok(payload) => {
+                    if let Err(error) = nats_client.publish(rwi_subject, payload.into()).await {
+                        warn!(event_id = %event_id, %error, "RWI 事件广播到 NATS 失败");
+                    }
+                }
+                Err(error) => {
+                    error!(event_id = %event_id, %error, "RWI 事件序列化失败");
+                }
+            }
+        }
+    });
+    info!("RWI 事件广播任务已启动（独立模式，无 Webhook 投递）");
     Ok(())
 }
 
@@ -54,9 +92,9 @@ fn validate_config(config: &WebhookConfig) -> Result<(), AnyError> {
 async fn connect_consumer(
     nats_url: &str,
     config: &WebhookConfig,
-) -> Result<(jetstream::Context, PullConsumer), AnyError> {
+) -> Result<(jetstream::Context, PullConsumer, async_nats::Client), AnyError> {
     let client = async_nats::connect(nats_url).await?;
-    let jetstream = jetstream::new(client);
+    let jetstream = jetstream::new(client.clone());
     let stream = jetstream
         .get_or_create_stream(stream::Config {
             name: config.stream.clone(),
@@ -77,25 +115,36 @@ async fn connect_consumer(
             },
         )
         .await?;
-    Ok((jetstream, consumer))
+    Ok((jetstream, consumer, client))
 }
 
 fn spawn_publisher(
     jetstream: jetstream::Context,
+    nats_client: async_nats::Client,
     config: WebhookConfig,
     mut receiver: mpsc::Receiver<WebhookEvent>,
 ) {
     tokio::spawn(async move {
         while let Some(event) = receiver.recv().await {
+            // 先取事件类型用于 RWI 主题，再序列化（payload 之后会被 move 进 publish_with_retry）
+            let rwi_subject = format!("{RWI_EVENT_SUBJECT_PREFIX}{}", event_type(&event.event));
+            let event_id = event.event_id.clone();
             let payload = match serde_json::to_vec(&event) {
                 Ok(payload) => payload,
                 Err(error) => {
-                    error!(event_id = %event.event_id, %error, "Webhook 事件序列化失败");
+                    error!(event_id = %event_id, %error, "Webhook 事件序列化失败");
                     continue;
                 }
             };
-            if let Err(error) = publish_with_retry(&jetstream, &config, payload).await {
-                error!(event_id = %event.event_id, %error, "Webhook 事件写入 NATS 失败");
+
+            // 持久化到 JetStream（用于 HTTP Webhook 投递与重试）
+            if let Err(error) = publish_with_retry(&jetstream, &config, payload.clone()).await {
+                error!(event_id = %event_id, %error, "Webhook 事件写入 NATS 失败");
+            }
+
+            // 同时广播到普通 NATS 主题，供 RWI WebSocket 网关实时订阅
+            if let Err(error) = nats_client.publish(rwi_subject, payload.into()).await {
+                warn!(event_id = %event_id, %error, "RWI 事件广播到 NATS 失败");
             }
         }
     });

@@ -32,6 +32,9 @@ pub(super) struct RelayPlan {
     pub(super) websocket: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
     pub(super) peer_playback_exclusive: bool,
     pub(super) muted: bool,
+    /// TURN 中继客户端引用（仅在配置了 TURN 服务器时存在）。
+    /// 转发循环据此决定是否走中继路径。
+    pub(super) turn_client: Option<Arc<crate::net::turn_client::TurnClient>>,
 }
 
 /// 快路径按批次回写指标，避免每个 RTP 包都获取 DashMap 分片锁。
@@ -173,6 +176,7 @@ impl MediaRelayState {
             websocket,
             peer_playback_exclusive,
             muted,
+            turn_client: self.turn_client.get().cloned(),
         }
     }
 

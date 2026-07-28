@@ -33,7 +33,9 @@ impl IpNet {
         Ok(Self { ip, mask_len })
     }
 
-    #[allow(dead_code)]
+    /// 判断地址是否落在网段内。
+    ///
+    /// 用于 access_trunk 接入认证时的 CIDR 匹配。
     pub fn contains(&self, other: &IpAddr) -> bool {
         match (self.ip, other) {
             (IpAddr::V4(net_v4), IpAddr::V4(other_v4)) => {

@@ -110,6 +110,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                     let username = tx.original_request.as_ref().and_then(|request| {
                         crate::edge_state::EdgeState::username_from_request(request)
                     });
+                    let tenant_ctx = tx.tenant.clone();
                     let datagrams =
                         dialog_request::build_session_byes(tx, &edge_config.advertised_addr);
                     warn!(
@@ -120,6 +121,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                         session_id,
                         caller_call_id,
                         username,
+                        tenant_ctx,
                         reason.to_string(),
                         datagrams,
                     ));
@@ -127,7 +129,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                 calls
             };
 
-            for (session_id, caller_call_id, username, reason, datagrams) in expired {
+            for (session_id, caller_call_id, username, tenant_ctx, reason, datagrams) in expired {
                 for datagram in datagrams {
                     let _ = edge_state
                         .send_sip_datagram(datagram, &socket, &edge_config)
@@ -137,6 +139,7 @@ pub(crate) fn spawn_session_timer_watchdog(
                 if let Some(ref uname) = username {
                     edge_state.decrement_user_concurrency(uname);
                 }
+                edge_state.decrement_tenant_concurrency(tenant_ctx.as_ref());
                 // Clean up the transaction and call state
                 edge_state.teardown_call_transaction(&session_id);
                 // Decrement active call count for the gateway before terminating.

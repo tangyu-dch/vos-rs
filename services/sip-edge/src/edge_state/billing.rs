@@ -46,10 +46,15 @@ pub(crate) fn build_balance_check(
 
 impl EdgeState {
     /// 从 Redis 一次读取账户余额与最长前缀费率。
+    ///
+    /// 当 `tenant_id` 为 `Some` 时，会先查询租户专属费率 hash
+    /// (`vos_rs:billing:tenant_rates:{tenant_id}` 等)。若租户专属费率未命中，
+    /// 自动回退到全局费率 hash (`vos_rs:billing:rates` 等)。
     pub(crate) async fn redis_balance_check(
         &self,
         username: &str,
         callee: &str,
+        tenant_id: Option<&str>,
     ) -> Option<RedisBalanceCheck> {
         let mut connection = self.redis_connection()?;
         let prefixes = (0..=callee.len())
@@ -57,6 +62,86 @@ impl EdgeState {
             .filter(|index| callee.is_char_boundary(*index))
             .map(|index| &callee[..index])
             .collect::<Vec<_>>();
+
+        // 当 tenant_id 为 Some 时，先查询租户专属费率；若命中则直接返回。
+        if let Some(tid) = tenant_id {
+            if let Some(check) = self
+                .query_tenant_balance_check(&mut connection, username, &prefixes, tid)
+                .await
+            {
+                return Some(check);
+            }
+        }
+        // 回退到全局费率。
+        self.query_global_balance_check(&mut connection, username, &prefixes)
+            .await
+    }
+
+    /// 查询租户专属费率 hash，命中则返回 `Some`，未命中返回 `None`（用于回退到全局）。
+    async fn query_tenant_balance_check<C>(
+        &self,
+        connection: &mut C,
+        username: &str,
+        prefixes: &[&str],
+        tenant_id: &str,
+    ) -> Option<RedisBalanceCheck>
+    where
+        C: redis::aio::ConnectionLike + Send,
+    {
+        let mut pipeline = redis::pipe();
+        pipeline
+            .cmd("HGET")
+            .arg("vos_rs:billing:balances")
+            .arg(username)
+            .cmd("HGET")
+            .arg("vos_rs:billing:credit_limits")
+            .arg(username)
+            .cmd("HMGET")
+            .arg(format!("vos_rs:billing:tenant_intervals:{tenant_id}"));
+        for prefix in prefixes {
+            pipeline.arg(prefix);
+        }
+        pipeline
+            .cmd("HMGET")
+            .arg(format!("vos_rs:billing:tenant_prices:{tenant_id}"));
+        for prefix in prefixes {
+            pipeline.arg(prefix);
+        }
+        pipeline
+            .cmd("HMGET")
+            .arg(format!("vos_rs:billing:tenant_rates:{tenant_id}"));
+        for prefix in prefixes {
+            pipeline.arg(prefix);
+        }
+        let (balance, credit_limit, intervals, prices, legacy_rates): RedisBillingPipelineResult =
+            pipeline.query_async(connection).await.ok()?;
+        let pulse = intervals
+            .into_iter()
+            .zip(prices)
+            .find_map(|(interval, price)| interval.zip(price));
+        let legacy_rate = legacy_rates.into_iter().flatten().next();
+        // 仅在命中费率（pulse 或 legacy_rate 有值）时返回，否则交由全局回退。
+        if pulse.is_none() && legacy_rate.is_none() {
+            return None;
+        }
+        Some(build_balance_check(
+            balance,
+            credit_limit,
+            pulse,
+            legacy_rate,
+        ))
+    }
+
+    /// 查询全局费率 hash（向后兼容路径）。
+    async fn query_global_balance_check<C>(
+        &self,
+        connection: &mut C,
+        username: &str,
+        prefixes: &[&str],
+    ) -> Option<RedisBalanceCheck>
+    where
+        C: redis::aio::ConnectionLike + Send,
+    {
         let mut pipeline = redis::pipe();
         pipeline
             .cmd("HGET")
@@ -67,19 +152,19 @@ impl EdgeState {
             .arg(username)
             .cmd("HMGET")
             .arg("vos_rs:billing:intervals");
-        for prefix in &prefixes {
+        for prefix in prefixes {
             pipeline.arg(prefix);
         }
         pipeline.cmd("HMGET").arg("vos_rs:billing:prices");
-        for prefix in &prefixes {
+        for prefix in prefixes {
             pipeline.arg(prefix);
         }
         pipeline.cmd("HMGET").arg("vos_rs:billing:rates");
-        for prefix in &prefixes {
+        for prefix in prefixes {
             pipeline.arg(prefix);
         }
         let (balance, credit_limit, intervals, prices, legacy_rates): RedisBillingPipelineResult =
-            pipeline.query_async(&mut connection).await.ok()?;
+            pipeline.query_async(connection).await.ok()?;
         let pulse = intervals
             .into_iter()
             .zip(prices)
