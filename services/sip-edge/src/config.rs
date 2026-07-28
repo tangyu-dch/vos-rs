@@ -105,6 +105,10 @@ pub struct EdgeConfig {
     pub udp_workers_auto: bool,
     pub udp_receive_buffer_bytes: usize,
     pub udp_send_buffer_bytes: usize,
+    /// DSCP/TOS 值用于 SIP UDP 信令包标记（0 表示不设置，46=EF, 34=AF41）
+    pub sip_dscp: u8,
+    /// DSCP/TOS 值用于 RTP 媒体包标记（0 表示不设置，46=EF Expedited Forwarding）
+    pub rtp_dscp: u8,
     pub ws_bind_addr: Option<String>,
     pub internal_secret: String,
     pub bootstrap_auth_users: Option<String>,
@@ -287,6 +291,8 @@ struct PerformanceSection {
     udp_workers_auto: Option<bool>,
     udp_receive_buffer_bytes: Option<usize>,
     udp_send_buffer_bytes: Option<usize>,
+    sip_dscp: Option<u8>,
+    rtp_dscp: Option<u8>,
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -422,6 +428,7 @@ impl EdgeConfig {
         );
         media.anti_spoofing = media_section.anti_spoofing.unwrap_or(true);
         media.source_relearn_after_secs = media_section.source_relearn_secs.unwrap_or(30);
+        media.rtp_dscp = performance_section.rtp_dscp.unwrap_or(0);
         media.recording_enabled = recording_section.enabled.unwrap_or(false);
         media.recording_dir = recording_section
             .directory
@@ -514,6 +521,8 @@ impl EdgeConfig {
             udp_send_buffer_bytes: performance_section
                 .udp_send_buffer_bytes
                 .unwrap_or(DEFAULT_UDP_BUFFER_BYTES),
+            sip_dscp: performance_section.sip_dscp.unwrap_or(0),
+            rtp_dscp: performance_section.rtp_dscp.unwrap_or(0),
             ws_bind_addr: net_section.ws_bind,
             internal_secret: security_section
                 .internal_secret
@@ -662,6 +671,16 @@ impl EdgeConfig {
         if let Some(val) = get_val!("udp_send_buffer_bytes").await {
             if let Ok(v) = val.parse() {
                 self.udp_send_buffer_bytes = v;
+            }
+        }
+        if let Some(val) = get_val!("sip_dscp").await {
+            if let Ok(v) = val.parse() {
+                self.sip_dscp = v;
+            }
+        }
+        if let Some(val) = get_val!("rtp_dscp").await {
+            if let Ok(v) = val.parse() {
+                self.rtp_dscp = v;
             }
         }
         if let Some(val) = get_val!("cdr_queue_capacity").await {
@@ -859,6 +878,8 @@ impl Default for EdgeConfig {
             udp_workers_auto: false,
             udp_receive_buffer_bytes: DEFAULT_UDP_BUFFER_BYTES,
             udp_send_buffer_bytes: DEFAULT_UDP_BUFFER_BYTES,
+            sip_dscp: 0,
+            rtp_dscp: 0,
             ws_bind_addr: None,
             internal_secret: "internal-dev-secret".to_string(),
             bootstrap_auth_users: None,

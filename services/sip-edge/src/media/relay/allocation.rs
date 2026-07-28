@@ -150,6 +150,10 @@ impl MediaRelayState {
                 return Err(MediaError::Io(error.to_string()));
             }
 
+            // 设置 RTP DSCP/TOS 标记（QoS）
+            crate::net::apply_dscp(&rtp_std, config.rtp_dscp);
+            crate::net::apply_dscp(&rtcp_std, config.rtp_dscp);
+
             let rtp_socket = tokio::net::UdpSocket::from_std(rtp_std).map_err(|error| {
                 self.leased_rtp_ports.remove(port);
                 MediaError::Io(error.to_string())

@@ -32,6 +32,8 @@ pub struct MediaConfig {
     pub recording_max_duration_secs: u64,
     /// Completed recording format: `wav`, `opus`, or `amr`.
     pub recording_format: String,
+    /// DSCP/TOS 值用于 RTP 媒体包标记（0=不设置，46=EF Expedited Forwarding）
+    pub rtp_dscp: u8,
 }
 
 impl MediaConfig {
@@ -72,6 +74,7 @@ impl MediaConfig {
             recording_max_file_bytes: DEFAULT_RECORDING_MAX_FILE_BYTES,
             recording_max_duration_secs: DEFAULT_RECORDING_MAX_DURATION_SECS,
             recording_format: DEFAULT_RECORDING_FORMAT.to_string(),
+            rtp_dscp: 0,
         }
     }
 
