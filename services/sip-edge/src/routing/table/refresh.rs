@@ -1,4 +1,3 @@
-use crate::config::EdgeConfig;
 use crate::edge_state::{AccessIpRule, EdgeState};
 use crate::security::sbc::IpNet;
 use call_core::{
@@ -7,15 +6,13 @@ use call_core::{
     RuntimeEgressPolicy, RuntimeSourcePolicy,
 };
 use cdr_core::PostgresCdrStore;
-use sip_core::SipUri;
 use std::collections::HashMap;
-use std::io;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::warn;
 
-type AnyError = Box<dyn std::error::Error + Send + Sync>;
+use super::helpers::{now_hhmm_or_current, route_time_is_active};
+use super::AnyError;
 
 pub(crate) async fn reload_routes_from_database(
     edge_state: &EdgeState,
@@ -376,112 +373,6 @@ async fn refresh_access_sources(
     Ok(())
 }
 
-fn now_hhmm_or_current() -> String {
-    cdr_core::current_hhmm().unwrap_or_else(|| "00:00".to_string())
-}
-
-fn route_time_is_active(
-    now: Option<&str>,
-    time_start: Option<&str>,
-    time_end: Option<&str>,
-) -> bool {
-    let (Some(now), Some(start), Some(end)) = (now, time_start, time_end) else {
-        return true;
-    };
-
-    if start <= end {
-        now >= start && now <= end
-    } else {
-        // A window such as 22:00-06:00 crosses midnight.
-        now >= start || now <= end
-    }
-}
-
-pub(crate) async fn warm_hot_path_redis_cache(
-    edge_state: &EdgeState,
-    db: Option<&PostgresCdrStore>,
-) -> Result<(), AnyError> {
-    let Some(db) = db else {
-        return Ok(());
-    };
-    let Some(mut connection) = edge_state.redis_connection() else {
-        return Err(std::io::Error::other("Redis connection is not initialized").into());
-    };
-    let (credentials, trunk_creds, rates, accounts) = tokio::try_join!(
-        db.list_user_credentials(),
-        db.list_trunk_credentials(),
-        db.list_rates(),
-        db.list_accounts(),
-    )?;
-
-    let mut pipeline = redis::pipe();
-    pipeline
-        .atomic()
-        .del("vos_rs:auth:extensions")
-        .ignore()
-        .del("vos_rs:auth:trunks")
-        .ignore()
-        .del("vos_rs:billing:rates")
-        .ignore()
-        .del("vos_rs:billing:intervals")
-        .ignore()
-        .del("vos_rs:billing:prices")
-        .ignore()
-        .del("vos_rs:billing:balances")
-        .ignore()
-        .del("vos_rs:billing:credit_limits")
-        .ignore();
-    for (username, password) in credentials {
-        pipeline
-            .hset("vos_rs:auth:extensions", username, password)
-            .ignore();
-    }
-    for (_trunk_id, username, password) in trunk_creds {
-        pipeline
-            .hset("vos_rs:auth:trunks", username, password)
-            .ignore();
-    }
-    for rate in rates {
-        pipeline
-            .hset(
-                "vos_rs:billing:rates",
-                &rate.prefix,
-                rate.rate_per_minute.to_string(),
-            )
-            .ignore()
-            .hset(
-                "vos_rs:billing:intervals",
-                &rate.prefix,
-                rate.billing_interval_secs,
-            )
-            .ignore()
-            .hset(
-                "vos_rs:billing:prices",
-                &rate.prefix,
-                rate.price_per_interval.to_string(),
-            )
-            .ignore();
-    }
-    for account in accounts {
-        pipeline
-            .hset(
-                "vos_rs:billing:balances",
-                &account.username,
-                account.balance.to_string(),
-            )
-            .ignore()
-            .hset(
-                "vos_rs:billing:credit_limits",
-                &account.username,
-                account.credit_limit.to_string(),
-            )
-            .ignore();
-    }
-    pipeline.query_async::<()>(&mut connection).await?;
-    info!("Redis hot-path caches warmed from PostgreSQL");
-    Ok(())
-}
-
 pub(crate) fn spawn_periodic_route_refresh(edge_state: Arc<EdgeState>, db: PostgresCdrStore) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -493,68 +384,4 @@ pub(crate) fn spawn_periodic_route_refresh(edge_state: Arc<EdgeState>, db: Postg
             }
         }
     });
-}
-
-pub(crate) fn route_table_from_config(config: &EdgeConfig) -> Result<RouteTable, AnyError> {
-    if config.default_gateway.is_empty() {
-        return Ok(RouteTable::default());
-    }
-
-    let target = parse_gateway_target("default", &config.default_gateway)?;
-    Ok(RouteTable::new(vec![Route::new(
-        "default", "", 100, target,
-    )]))
-}
-
-pub(crate) fn parse_gateway_target(gateway_id: &str, raw: &str) -> Result<RouteTarget, AnyError> {
-    let value = raw.trim();
-    if value.is_empty() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "sip_edge.routing.default_gateway must not be empty",
-        )));
-    }
-
-    let uri = if value.starts_with("sip:") || value.starts_with("sips:") {
-        SipUri::from_str(value)
-    } else {
-        SipUri::from_str(&format!("sip:{value}"))
-    }
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-
-    Ok(RouteTarget::new(gateway_id, uri.host, uri.port))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::route_time_is_active;
-
-    #[test]
-    fn route_time_window_supports_same_day_and_overnight_ranges() {
-        assert!(route_time_is_active(
-            Some("12:00"),
-            Some("09:00"),
-            Some("18:00")
-        ));
-        assert!(!route_time_is_active(
-            Some("08:59"),
-            Some("09:00"),
-            Some("18:00")
-        ));
-        assert!(route_time_is_active(
-            Some("23:30"),
-            Some("22:00"),
-            Some("06:00")
-        ));
-        assert!(route_time_is_active(
-            Some("05:30"),
-            Some("22:00"),
-            Some("06:00")
-        ));
-        assert!(!route_time_is_active(
-            Some("12:00"),
-            Some("22:00"),
-            Some("06:00")
-        ));
-    }
 }

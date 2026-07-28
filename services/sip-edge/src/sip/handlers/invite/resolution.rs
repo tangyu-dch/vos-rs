@@ -123,12 +123,19 @@ pub(super) async fn resolve_call_source(
                 && destination.target_type != "extension_group"
                 && destination.target_type != "ivr"
             {
+                // 数据库 schema 已限制 target_type ∈ {extension, extension_group, ivr, reject}，
+                // 走到此分支意味着数据异常，返回 500 并记录告警以便排查。
+                warn!(
+                    target_type = %destination.target_type,
+                    number = %request_number,
+                    "DID 目标类型不在支持集合中，疑似数据异常"
+                );
                 return Err(vec![PendingDatagram::new(
                     peer.to_string(),
                     response::build_response_with_owned_headers(
                         request,
-                        501,
-                        "Not Implemented - DID Target",
+                        500,
+                        "Internal Server Error - Invalid DID Target Type",
                         &[],
                         "",
                     ),

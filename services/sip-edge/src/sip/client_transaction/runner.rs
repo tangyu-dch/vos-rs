@@ -50,12 +50,12 @@ async fn run_client_transaction(
     let initial_t1 = if cfg!(test) {
         Duration::from_millis(5)
     } else {
-        Duration::from_millis(500)
+        Duration::from_millis(edge_config.sip_t1_initial_ms.max(50))
     };
     let transaction_timeout = if cfg!(test) {
         Duration::from_millis(50)
     } else {
-        Duration::from_secs(32)
+        Duration::from_secs(edge_config.sip_transaction_timeout_secs.max(1))
     };
     let mut retransmit_interval = initial_t1;
     let retransmit_timer = tokio::time::sleep(retransmit_interval);

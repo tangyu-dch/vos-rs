@@ -171,7 +171,11 @@ async fn ensure_source_exists(
                 .map_err(database)?
         }
         "extension_group" => {
-            return Err(invalid("分机群组尚未接入运行时，请选择接入中继或分机"));
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM extension_groups WHERE id=$1)")
+                .bind(source_id)
+                .fetch_one(state.store.pool())
+                .await
+                .map_err(database)?
         }
         _ => return Err(invalid("来源类型不受支持")),
     };

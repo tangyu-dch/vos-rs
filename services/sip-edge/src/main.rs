@@ -8,17 +8,19 @@ pub(crate) mod media;
 pub(crate) mod net;
 pub(crate) mod resource_lease;
 pub(crate) mod routing;
+pub(crate) mod runtime;
 pub(crate) mod security;
 pub(crate) mod sip;
 pub(crate) mod startup;
 pub(crate) mod timers;
 mod webhooks;
 
-pub(crate) use cdr::{cdr_sinks_from_config, flush_cdr_batch_with_retry_and_spool};
+pub(crate) use cdr::cdr_sinks_from_config;
 pub(crate) use routing::{
     reload_number_routes, route_table_from_config, spawn_number_route_refresh,
     spawn_periodic_route_refresh, warm_hot_path_redis_cache,
 };
+#[allow(unused_imports)]
 pub(crate) use sip::client_transaction::spawn_client_transaction_retransmission;
 pub(crate) use sip::extract_call_id_fast;
 pub(crate) use startup::{
@@ -26,52 +28,39 @@ pub(crate) use startup::{
     validate_runtime_security,
 };
 
-// Re-export for backward compatibility with inline module references
+// Re-export for backward compatibility with inline module references.
+// 部分重导出仅被 #[cfg(test)] 模块通过 super:: 路径引用，标注 allow 避免非测试构建告警。
 #[allow(unused_imports)]
 pub(crate) use edge_state::*;
 #[allow(unused_imports)]
-pub(crate) use net::stun_client;
-#[allow(unused_imports)]
 pub(crate) use net::transport;
-#[allow(unused_imports)]
-pub(crate) use net::upnp;
 #[allow(unused_imports)]
 pub(crate) use security::sbc;
 #[allow(unused_imports)]
 pub(crate) use sip::auth;
-#[allow(unused_imports)]
-pub(crate) use sip::dialog;
-#[allow(unused_imports)]
 pub(crate) use sip::handle_datagram;
-#[allow(unused_imports)]
-pub(crate) use sip::outbound;
-#[allow(unused_imports)]
-pub(crate) use sip::registrar::RegisterOutcome;
 #[allow(unused_imports)]
 pub(crate) use sip::response;
 #[allow(unused_imports)]
-pub(crate) use sip::transaction;
-#[allow(unused_imports)]
-pub(crate) use sip::{AuthDecision, ClientTransactionKey, RequestTransactionKey};
+pub(crate) use sip::{AuthDecision, ClientTransactionKey};
 
 #[allow(unused_imports)]
+pub(crate) use timers::calculate_mos_for_legs;
 pub(crate) use timers::{
-    calculate_mos_for_legs, spawn_gateway_health_probe_loop, spawn_nat_keepalive_loop,
-    spawn_session_timer_watchdog, spawn_subscription_prune_loop,
+    spawn_gateway_health_probe_loop, spawn_nat_keepalive_loop, spawn_session_timer_watchdog,
+    spawn_subscription_prune_loop,
 };
 
 use call_core::CallManager;
 use config::EdgeConfig;
 use media::MediaRelayState;
-use net::{BufferPool, PooledBuffer, Transport};
-use sip_core::{parse_message, Method, SipMessageBorrow};
+use net::{BufferPool, PooledBuffer};
 use std::{
-    net::SocketAddr,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 use tokio::net::UdpSocket;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -180,7 +169,7 @@ async fn main() -> Result<(), AnyError> {
 
     let cdr_queue_capacity = edge_config.cdr_queue_capacity;
     let cdr_persistence_enabled = edge_config.cdr_persistence_enabled;
-    let (cdr_tx, mut cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
+    let (cdr_tx, cdr_rx) = tokio::sync::mpsc::channel::<call_core::CallCdr>(cdr_queue_capacity);
     let cdr_spool = cdr::CdrSpool::open(cdr::configured_spool_dir())?;
     let cdr_pipeline_metrics = cdr_spool.metrics();
     let durable_cdr_sink = cdr::DurableCdrSink::new(cdr_tx, cdr_spool.clone());
@@ -260,47 +249,12 @@ async fn main() -> Result<(), AnyError> {
     let sip_flow_tx = sip::sip_flow::SipFlowWriter::start(Arc::clone(&edge_state), 10000);
     edge_state.sip_flow_tx.set(sip_flow_tx).ok();
 
-    let cdr_sinks_bg = Arc::clone(&cdr_sinks);
-    let cdr_spool_bg = cdr_spool.clone();
-    let (cdr_shutdown_tx, mut cdr_shutdown_rx) = tokio::sync::oneshot::channel();
-    let cdr_worker = tokio::spawn(async move {
-        let mut batch = Vec::new();
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
-        loop {
-            tokio::select! {
-                Some(cdr) = cdr_rx.recv() => {
-                    batch.push(cdr);
-                    if batch.len() >= 100 && cdr_persistence_enabled {
-                        flush_cdr_batch_with_retry_and_spool(&cdr_sinks_bg, &cdr_spool_bg, &batch).await;
-                        batch.clear();
-                    } else if batch.len() >= 100 {
-                        batch.clear();
-                    }
-                }
-                _ = interval.tick() => {
-                    if !batch.is_empty() && cdr_persistence_enabled {
-                        flush_cdr_batch_with_retry_and_spool(&cdr_sinks_bg, &cdr_spool_bg, &batch).await;
-                        batch.clear();
-                    } else if !batch.is_empty() {
-                        batch.clear();
-                    }
-                }
-                _ = &mut cdr_shutdown_rx => {
-                    while let Ok(cdr) = cdr_rx.try_recv() {
-                        batch.push(cdr);
-                    }
-                    if !batch.is_empty() && cdr_persistence_enabled {
-                        flush_cdr_batch_with_retry_and_spool(
-                            &cdr_sinks_bg,
-                            &cdr_spool_bg,
-                            &batch,
-                        ).await;
-                    }
-                    break;
-                }
-            }
-        }
-    });
+    let (cdr_shutdown_tx, cdr_worker) = runtime::spawn_cdr_worker(
+        cdr_rx,
+        Arc::clone(&cdr_sinks),
+        cdr_spool.clone(),
+        cdr_persistence_enabled,
+    );
     cdr::spawn_replay_loop(cdr_spool, Arc::clone(&cdr_sinks));
 
     let manage_addr = edge_config.manage_bind.clone();
@@ -322,94 +276,13 @@ async fn main() -> Result<(), AnyError> {
         edge_config.udp_workers.max(1)
     };
     let queue_capacity = 10000;
-    let mut worker_txs = Vec::new();
-
-    for worker_id in 0..num_workers {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<(PooledBuffer, SocketAddr)>(queue_capacity);
-        worker_txs.push(tx);
-
-        let state = Arc::clone(&edge_state);
-        let sock = Arc::clone(&socket);
-        let cfg = edge_config.clone();
-
-        tokio::spawn(async move {
-            debug!("UDP Worker {} started", worker_id);
-            while let Some((packet, peer)) = rx.recv().await {
-                let datagrams = sip::handle_datagram(&packet, peer, &state, &cfg).await;
-                if datagrams.is_empty() {
-                    debug!(%peer, "received datagram without response");
-                }
-
-                for datagram in datagrams {
-                    let transport = if let Ok(msg) = parse_message(&datagram.bytes) {
-                        if let Some(via) = msg.headers().get("via") {
-                            let via_str = via.as_str().to_uppercase();
-                            if via_str.contains("SIP/2.0/TLS") {
-                                Transport::Tls
-                            } else if via_str.contains("SIP/2.0/TCP") {
-                                Transport::Tcp
-                            } else {
-                                Transport::Udp
-                            }
-                        } else {
-                            Transport::Udp
-                        }
-                    } else {
-                        Transport::Udp
-                    };
-
-                    let client_transaction_key =
-                        if transport == Transport::Udp && datagram.is_request() {
-                            parse_message(&datagram.bytes)
-                                .ok()
-                                .and_then(|message| match message {
-                                    SipMessageBorrow::Request(request)
-                                        if !matches!(&request.method, Method::Ack) =>
-                                    {
-                                        sip::ClientTransactionKey::from_request(&request)
-                                    }
-                                    _ => None,
-                                })
-                        } else {
-                            None
-                        };
-                    let registered_transaction = client_transaction_key.clone().and_then(|key| {
-                        spawn_client_transaction_retransmission(
-                            Arc::clone(&state),
-                            Arc::clone(&sock),
-                            datagram.target.clone(),
-                            datagram.bytes.clone(),
-                            key.clone(),
-                            cfg.clone(),
-                        )
-                        .then_some(key)
-                    });
-                    if client_transaction_key.is_some() && registered_transaction.is_none() {
-                        continue;
-                    }
-
-                    if let Err(error) = state.send_sip_datagram(datagram.clone(), &sock, &cfg).await
-                    {
-                        if let Some(key) = registered_transaction.as_ref() {
-                            state.client_transactions.cancel(key);
-                        }
-                        warn!(target = %datagram.target, error = %error, "failed to send SIP message");
-                    } else if datagram.bytes.starts_with(b"INVITE ") {
-                        let msg_head = String::from_utf8_lossy(
-                            &datagram.bytes[..datagram.bytes.len().min(300)],
-                        );
-                        debug!(target = %datagram.target, head = %msg_head, "sending outbound INVITE datagram");
-                    } else {
-                        debug!(
-                            peer = %datagram.target,
-                            bytes = datagram.bytes.len(),
-                            "sent SIP datagram"
-                        );
-                    }
-                }
-            }
-        });
-    }
+    let worker_txs = runtime::spawn_udp_workers(
+        Arc::clone(&edge_state),
+        Arc::clone(&socket),
+        Arc::clone(&edge_config),
+        num_workers,
+        queue_capacity,
+    );
 
     spawn_nat_keepalive_loop(Arc::clone(&edge_state), Arc::clone(&socket));
     crate::sip::outbound_reg::spawn_outbound_registration_loop(
@@ -439,7 +312,7 @@ async fn main() -> Result<(), AnyError> {
         }
     }
 
-    let pool_capacity = (num_workers * queue_capacity).min(4096) + 256;
+    let pool_capacity = runtime::udp_buffer_pool_capacity(num_workers, queue_capacity);
     let buffer_pool = Arc::new(BufferPool::new(pool_capacity, 65535));
     let mut shutdown_check_interval = tokio::time::interval(Duration::from_millis(500));
     let mut is_draining = false;

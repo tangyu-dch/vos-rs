@@ -105,11 +105,12 @@ impl EdgeState {
                     );
                     transaction.dialogs.gateway.remote_tag = Some(to_tag);
                 } else {
-                    warn!(
+                    debug!(
                         call_id,
                         existing_tag,
                         new_tag = %to_tag,
-                        "ignoring additional dialog To tag; forked dialogs are not implemented yet"
+                        status_code = response.status_code,
+                        "ignoring non-provisional/final response with different To tag; B2BUA tracks single B-leg dialog"
                     );
                 }
             }
