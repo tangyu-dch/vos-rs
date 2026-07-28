@@ -21,6 +21,7 @@ import { ErrorState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
 import { ExtensionDetailView } from '@/pages/numbers/extension-detail';
 import { TrunkDetailView } from '@/pages/trunks/trunk-detail';
+import { CallDetailView } from '@/pages/billing/call-detail';
 import {
   callDetailText, datetimeText, entityId, valueText, moneyText, durationSecondsText,
 } from '@/pages/shared/format';
@@ -890,6 +891,8 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
             {detailModalRow && (
               spec.path === '/extensions' ? (
                 <ExtensionDetailView id={entityId(detailModalRow, spec.idKey)} />
+              ) : spec.path === '/calls' ? (
+                <CallDetailView id={entityId(detailModalRow, spec.idKey)} />
               ) : (
                 <TrunkDetailView id={entityId(detailModalRow, spec.idKey)} />
               )
