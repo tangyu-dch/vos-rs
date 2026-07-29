@@ -6814,6 +6814,34 @@ async fn test_sip_flow_packet_capture() {
     assert_eq!(record.direction, "uac_to_b2bua");
     assert_eq!(record.from_addr, peer_addr.to_string());
 
+    let SipMessage::Request(request) = parse_message(invite.as_bytes()).unwrap() else {
+        panic!("expected SIP request");
+    };
+    edge_state.remember_inbound_invite(
+        "sipflow-session-1".to_string(),
+        &request,
+        peer_addr,
+        SipUri::from_str("sip:1002@192.0.2.20:5060").unwrap(),
+        None,
+        None,
+        None,
+    );
+    edge_state.bind_gateway_dialog("sipflow-session-1", "sipflow-b-leg@example.com");
+
+    let outbound_invite = invite.replace(
+        "Call-ID: sipflow-test-1@example.com",
+        "Call-ID: sipflow-b-leg@example.com",
+    );
+    let gateway_addr = "192.0.2.20:5060".parse::<std::net::SocketAddr>().unwrap();
+    edge_state.capture_sip_packet(outbound_invite.as_bytes(), "out", gateway_addr);
+
+    let outbound_record = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+        .await
+        .expect("Timeout waiting for captured outbound SIP flow record")
+        .expect("Channel closed");
+    assert_eq!(outbound_record.call_id, "sipflow-test-1@example.com");
+    assert_eq!(outbound_record.direction, "b2bua_to_uas");
+
     // Non-whitelisted caller
     let invite_non_white = concat!(
         "INVITE sip:9999@example.com SIP/2.0\r\n",

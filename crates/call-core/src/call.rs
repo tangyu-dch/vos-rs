@@ -28,6 +28,16 @@ use crate::{
 use sip_core::{SipRequest, SipUri};
 use std::time::SystemTime;
 
+pub(crate) fn caller_number_from_request(request: &SipRequest) -> Option<String> {
+    let header = request.headers.get("from")?.as_str().trim();
+    let sip_start = header
+        .find("sip:")
+        .map(|index| index + 4)
+        .or_else(|| header.find("sips:").map(|index| index + 5))?;
+    let user = header[sip_start..].split(['@', ';', '>']).next()?.trim();
+    (!user.is_empty()).then(|| user.to_string())
+}
+
 /// SIP Call-ID：呼叫的全局唯一标识符。
 ///
 /// 用于在呼叫管理器中标识不同的呼叫。
@@ -259,10 +269,7 @@ impl Call {
 
         Ok(Self {
             id: CallId::new(call_id),
-            caller: request
-                .headers
-                .get("from")
-                .map(|value| value.as_str().to_string()),
+            caller: caller_number_from_request(request),
             inbound: CallLeg {
                 id: LegId::new("inbound"),
                 direction: LegDirection::Inbound,

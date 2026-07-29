@@ -121,7 +121,12 @@ impl EdgeState {
         let Some(call_id_val) = msg.headers().get("call-id") else {
             return;
         };
-        let call_id = call_id_val.as_str().trim().to_string();
+        let dialog_call_id = call_id_val.as_str().trim().to_string();
+        let call_id = self
+            .inbound_transactions
+            .get(&dialog_call_id)
+            .map(|transaction| transaction.dialogs.caller.call_id.clone())
+            .unwrap_or(dialog_call_id);
 
         let msg_method = match &msg {
             sip_core::SipMessageBorrow::Request(req) => req.method.as_str().to_string(),

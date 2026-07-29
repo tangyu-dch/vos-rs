@@ -1466,13 +1466,19 @@ export function ResourceWorkspace({
         size="4xl"
         scrollBehavior="inside"
       >
-        <ModalContent>
+        <ModalContent
+          style={
+            spec.path === '/calls'
+              ? { height: 'min(820px, calc(100vh - 48px))', maxHeight: 'none' }
+              : undefined
+          }
+        >
           <ModalHeader className="text-lg font-bold border-b border-divider flex items-center gap-2">
             <span>
               {spec.title}详情 · {detailModalRow ? entityId(detailModalRow, spec.idKey) : ''}
             </span>
           </ModalHeader>
-          <ModalBody className="p-6">
+          <ModalBody className="p-6 flex-1 overflow-y-auto">
             {detailModalRow &&
               (spec.path === '/extensions' ? (
                 <ExtensionDetailView id={entityId(detailModalRow, spec.idKey)} />

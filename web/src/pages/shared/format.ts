@@ -26,9 +26,9 @@ const durationSecondsText = (value: unknown) => {
   if (value === null || value === undefined || value === '') return '—';
   const milliseconds = Number(value);
   if (!Number.isFinite(milliseconds)) return String(value);
-  return (milliseconds / 1000).toLocaleString('zh-CN', {
+  return Math.ceil(milliseconds / 1000).toLocaleString('zh-CN', {
     minimumFractionDigits: 0,
-    maximumFractionDigits: 3,
+    maximumFractionDigits: 0,
   });
 };
 

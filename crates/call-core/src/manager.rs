@@ -361,9 +361,12 @@ impl CallManager {
             }
         };
 
-        let original_number = caller_number_from_request(request).ok_or_else(|| {
-            CallError::CallerIdentityUnavailable("inbound From has no caller number".to_string())
-        })?;
+        let original_number =
+            crate::call::caller_number_from_request(request).ok_or_else(|| {
+                CallError::CallerIdentityUnavailable(
+                    "inbound From has no caller number".to_string(),
+                )
+            })?;
         let source_resolution = source
             .map(|source| {
                 self.outbound_policies.load().resolve_with_alternatives(
@@ -885,11 +888,4 @@ fn parse_uri_from_contact(raw: &str) -> Option<sip_core::SipUri> {
         value.split(';').next().unwrap_or(value).trim()
     };
     std::str::FromStr::from_str(uri_raw).ok()
-}
-
-fn caller_number_from_request(request: &SipRequest) -> Option<String> {
-    let header = request.headers.get("from")?.as_str().trim();
-    let sip_start = header.find("sip:").map(|index| index + 4)?;
-    let user = header[sip_start..].split(['@', ';', '>']).next()?.trim();
-    (!user.is_empty()).then(|| user.to_string())
 }

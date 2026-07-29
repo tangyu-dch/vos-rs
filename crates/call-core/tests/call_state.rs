@@ -12,6 +12,7 @@ fn creates_call_from_inbound_invite() {
     assert_eq!(call.inbound.state, LegState::Inviting);
     assert!(call.outbound.is_none());
     assert_eq!(call.direction, "outbound");
+    assert_eq!(call.caller.as_deref(), Some("1001"));
 }
 
 #[test]

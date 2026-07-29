@@ -96,14 +96,20 @@ function parseSDP(rawMessage: string | undefined) {
 export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
   const [selectedEvent, setSelectedEvent] = useState<SipFlowEvent | null>(null);
 
-  const COL = [80, 320, 560];
+  const visibleParties = useMemo<readonly Party[]>(() => {
+    const hasEgressLeg = events.some((event) =>
+      directionToParties(event.direction).includes('UAS'),
+    );
+    return hasEgressLeg ? PARTIES : ['UAC', 'B2BUA'];
+  }, [events]);
+  const columns = visibleParties.length === 3 ? [80, 320, 560] : [160, 520];
   const ROW_H = 58;
   const HEADER_H = 60;
   const LANE_W = 24;
   const svgWidth = 680;
   const svgHeight = HEADER_H + events.length * ROW_H + 24;
 
-  const colFor = (party: Party) => COL[PARTIES.indexOf(party)];
+  const colFor = (party: Party) => columns[visibleParties.indexOf(party)];
   const parsedSDP = useMemo(() => parseSDP(selectedEvent?.raw_message), [selectedEvent]);
 
   return (
@@ -123,10 +129,10 @@ export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
           color: 'currentColor',
         }}
       >
-        {PARTIES.map((party, i) => (
+        {visibleParties.map((party, i) => (
           <g key={party}>
             <rect
-              x={COL[i] - 60}
+              x={columns[i] - 60}
               y={8}
               width={120}
               height={36}
@@ -138,7 +144,7 @@ export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
               strokeWidth={1.5}
             />
             <text
-              x={COL[i]}
+              x={columns[i]}
               y={30}
               textAnchor="middle"
               className={PARTY_COLORS[party]}
@@ -151,12 +157,12 @@ export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
           </g>
         ))}
 
-        {PARTIES.map((party, i) => (
+        {visibleParties.map((party, i) => (
           <line
             key={`line-${party}`}
-            x1={COL[i]}
+            x1={columns[i]}
             y1={HEADER_H}
-            x2={COL[i]}
+            x2={columns[i]}
             y2={svgHeight - 8}
             className={PARTY_COLORS[party]}
             stroke="currentColor"
