@@ -316,7 +316,7 @@ async fn stream_llm_response(
 
     let mut messages = vec![serde_json::json!({
         "role": "system",
-        "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）和信令数据，协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答要求：\n1. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析报告 (Analysis Report)：结合数据对当前系统状态或呼叫流程进行专业、生动的解读，避免冰冷的格式化叙述。\n   - ## 🔍 根因分析 (Root Cause)：深入剖析导致问题的底层原因（如网络延迟、信令超时、鉴权失败等），若无异常则明确告知。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引（如修改路由规则、更新分机配置、核对运营商中继配置等）。\n2. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流，不要让人觉得机械呆板。\n3. **梯形图输出**：如果上下文中包含 SIP 信令交互梯形图且用户问题与之相关，请在回答中合适的位置以 ```text 代码块原样输出该梯形图。\n4. **数据校验**：如果提供的业务数据为空，请礼貌地予以说明，并提示用户如何开启相应模块的持久化。"
+        "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于真实业务数据（JSON）和信令数据，协助用户进行高效的运维排障、性能分析或系统管理。\n\n## 工具调用策略\n- 当用户询问每日汇报、日报、今日运行情况、呼叫情况总结、问题原因分析时，**必须**优先调用 `vos_get_daily_report` 工具获取聚合数据，再基于返回数据生成结构化汇报。\n- 当用户询问系统概况、大盘监控、集群健康时，调用 `vos_get_dashboard_stats`。\n- 当用户排查具体呼叫记录或失败原因时，调用 `vos_list_cdrs`；若需要信令级排障，调用 `vos_get_sip_flows`。\n- 数据为空时礼貌说明，并提示如何开启相应模块的持久化。\n\n## 回答排版规范\n使用清晰的 Markdown 结构，语气专业、自然，像一个资深的 VoIP 架构师在与同事交流。\n\n### 通用问答场景\n必须包含以下二级标题：\n- ## 📊 分析报告：结合数据对当前系统状态或呼叫流程进行专业、生动的解读，避免冰冷的格式化叙述。\n- ## 🔍 根因分析：深入剖析导致问题的底层原因（如网络延迟、信令超时、鉴权失败等），若无异常则明确告知。\n- ## 💡 建议动作：给出具体、可执行的操作指引（如修改路由规则、更新分机配置、核对运营商中继配置等）。\n\n### 每日汇报场景（用户询问日报/今日总结时）\n必须按以下四段式结构化输出：\n- ## 📋 当日总结：总通话数、接通数、失败数、接通率、平均通话时长、计费分钟数、音质评分（MOS）、注册分机数、活跃网关数。用表格呈现关键指标。\n- ## 📈 呼叫情况：分小时通话趋势（用表格或列表呈现，标注高峰时段），接通率变化解读。\n- ## 🔍 问题原因分析：失败原因 Top N 分布（表格，含占比）、Top 失败主被叫对、对每类失败原因给出专业解读。\n- ## 💡 建议动作：针对主要失败原因给出具体、可执行的优化建议。\n\n## 其他要求\n- **梯形图输出**：如果上下文中包含 SIP 信令交互梯形图且用户问题与之相关，请在回答中合适的位置以 ```text 代码块原样输出该梯形图。\n- **数据可视化**：趋势数据优先用表格呈现，便于阅读。百分比保留 1 位小数。"
     })];
 
     // 排除最后一条（那是当前最新的消息，我们需要它带上当前最新的 telemetry payload 数据进行分析）
@@ -515,8 +515,22 @@ async fn stream_llm_response(
             let args = serde_json::from_str::<serde_json::Value>(args_str)
                 .unwrap_or(serde_json::Value::Null);
             tracing::info!(round, tool = %name, "执行 LLM 工具调用");
+            // 通知前端：工具开始执行（用于展示"正在调用 XXX"卡片）
+            let _ = send_event(
+                tx,
+                "tool_start",
+                &serde_json::json!({ "name": name, "args": args }),
+            )
+            .await;
             let result = engine.execute_tool(name, &args).await;
             let result_str = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+            // 通知前端：工具执行完成（用于展示结果摘要）
+            let _ = send_event(
+                tx,
+                "tool_result",
+                &serde_json::json!({ "name": name, "result_preview": truncate_tool_result(&result_str) }),
+            )
+            .await;
             messages.push(serde_json::json!({
                 "role": "tool",
                 "tool_call_id": id,
@@ -559,4 +573,9 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         format!("{}...", &s[..max])
     }
+}
+
+/// 将工具结果 JSON 字符串截断为前端展示用的预览（保留前 200 字符）。
+fn truncate_tool_result(s: &str) -> String {
+    truncate(s, 200)
 }

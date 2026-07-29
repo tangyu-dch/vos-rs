@@ -55,4 +55,5 @@ web/test-results/
 .mimocode/
 
 # IVR TTS/ASR 模型 (sherpa-onnx 预训练模型, 体积大, 由脚本下载)
-models/
+# 仅匹配仓库根目录的 models/，不影响 crates/*/src/models/ 等源码目录
+/models/

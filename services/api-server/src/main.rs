@@ -3,6 +3,9 @@
 //! 本服务提供 VoIP 软交换平台的 RESTful API。
 //!
 
+// Copilot 工具 schema 使用 json! 宏嵌套较深，需提升递归上限以支持 40+ 工具定义
+#![recursion_limit = "512"]
+
 // 子目录模块
 mod billing;
 mod cluster;

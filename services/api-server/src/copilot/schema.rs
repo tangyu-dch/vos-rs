@@ -17,6 +17,20 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "vos_get_daily_report",
+                "description": "生成每日汇报聚合数据，包含当日总结（总通话/接通率/平均时长/计费分钟/音质）、分小时通话趋势、失败原因 Top N 分布、Top 失败主被叫对。当用户要求生成每日汇报、日报、今日运行情况总结、呼叫情况分析、问题原因分析时调用。返回数据后请按『当日总结 / 呼叫情况 / 问题原因分析 / 建议』四段式结构化输出。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "date": { "type": "string", "description": "目标日期（Asia/Shanghai 时区，YYYY-MM-DD）；不传默认当天" },
+                        "top_n": { "type": "integer", "description": "失败原因和失败主被叫对的 Top N，默认 10", "default": 10 }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "vos_list_cdrs",
                 "description": "条件查询呼叫详单 (CDR)。支持按通话状态 (answered/failed/canceled)、主叫号码 (caller)、被叫号码 (callee) 筛选。当用户排查具体呼叫记录或失败原因时调用。",
                 "parameters": {

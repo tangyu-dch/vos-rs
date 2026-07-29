@@ -7,18 +7,20 @@
 //! 纯展示组件，不含业务状态，所有数据通过 props 传入。
 
 import {
-  AlertTriangle, Bot, Download, FileText, Lightbulb, User,
+  AlertTriangle, Bot, Check, Download, FileText, Lightbulb, Loader2, User, Wrench,
 } from 'lucide-react';
 import { Spinner } from '@heroui/react';
 import {
   DegradedBanner, LlmStateChip, MarkdownReport, StreamingIndicator,
-  parseLlmError, parseLlmState, type MessageItem,
+  parseLlmError, parseLlmState, TOOL_LABELS,
+  type MessageItem, type ToolCallTrace,
 } from './copilot-shared';
 
 // ============ 预设查询（对齐后端真实工具执行能力）============
 // 仅 WelcomePanel 使用，故放在本文件而非 shared。
 
 export const PRESETS = [
+  { title: '📋 每日汇报', desc: '帮我生成今日每日汇报，包含当日总结、呼叫情况、问题原因分析和建议' },
   { title: '🔍 诊断最近通话失败', desc: '帮我分析最新的呼叫失败记录并绘制 SIP 信令交互梯形图' },
   { title: '🪄 杂乱文本智能开户导入', desc: '帮我把这段文本整理并批量导入分机：小王分机 8001 密码 123456，小张分机 8002 密码 888888' },
   { title: '🚦 前缀路由选路配置', desc: '添加一条号段路由，将前缀 010 开头的呼叫全部路由到网关 gw_main' },
@@ -75,6 +77,34 @@ export function MessagesLoading() {
   );
 }
 
+// ============ 工具调用过程卡片 ============
+
+/** 工具调用过程可视化：展示"正在调用 XXX"和"XXX 已返回"的卡片 */
+export function ToolCallCard({ trace }: { trace: ToolCallTrace }) {
+  const label = TOOL_LABELS[trace.name] || trace.name;
+  const isPending = trace.status === 'pending';
+  return (
+    <div
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] border transition-all ${
+        isPending
+          ? 'bg-primary/5 border-primary/20 text-primary'
+          : 'bg-content2 border-default-200 text-default-600'
+      }`}
+    >
+      <Wrench className={`w-3 h-3 shrink-0 ${isPending ? 'text-primary' : 'text-default-400'}`} />
+      <span className="font-medium">{label}</span>
+      {isPending ? (
+        <Loader2 className="w-3 h-3 animate-spin text-primary/70 ml-1" />
+      ) : (
+        <Check className="w-3 h-3 text-success ml-1" />
+      )}
+      <span className="text-default-400 ml-auto font-mono text-[10px]">
+        {isPending ? '调用中' : '已完成'}
+      </span>
+    </div>
+  );
+}
+
 // ============ 单条消息气泡 ============
 
 export interface MessageBubbleProps {
@@ -85,13 +115,14 @@ export interface MessageBubbleProps {
   onCopyText: (text: string) => void;
 }
 
-/** 单条消息渲染：头像 + 气泡 + 图片/CSV附件 + 根因分析 + 建议动作 */
+/** 单条消息渲染：头像 + 气泡 + 图片/CSV附件 + 工具调用 + 根因分析 + 建议动作 */
 export function MessageBubble({
   message: m, sending, onImageClick, onFileClick, onCopyText,
 }: MessageBubbleProps) {
   const llmState = parseLlmState(m.llmStatus, m.llmEnabled);
   const llmError = llmState === 'degraded' ? parseLlmError(m.llmStatus) : '';
   const isStreaming = m.sender === 'bot' && m.text === '' && sending;
+  const hasToolCalls = m.sender === 'bot' && m.toolCalls && m.toolCalls.length > 0;
 
   return (
     <div
@@ -108,6 +139,14 @@ export function MessageBubble({
         {m.sender === 'user' ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
       </div>
       <div className={`flex flex-col gap-2.5 flex-1 min-w-0 ${m.sender === 'user' ? 'items-end' : 'items-start'}`}>
+        {/* 工具调用过程卡片（bot 消息气泡上方） */}
+        {hasToolCalls && (
+          <div className="flex flex-col gap-1.5 w-full max-w-md">
+            {m.toolCalls!.map((t, idx) => (
+              <ToolCallCard key={`${t.name}-${idx}`} trace={t} />
+            ))}
+          </div>
+        )}
         {/* 消息气泡 */}
         <div
           className={`p-4 rounded-2xl text-xs leading-relaxed shadow-sm w-fit max-w-full ${

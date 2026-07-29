@@ -317,8 +317,29 @@ export function CopilotPage() {
           onDelta: (text) => {
             setMessages((prev) => prev.map((m) => (m.id === botTempId ? { ...m, text: m.text + text } : m)));
           },
+          onToolStart: (tool) => {
+            // 新增一条 pending 状态的工具调用轨迹
+            setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
+              ...m,
+              toolCalls: [...(m.toolCalls ?? []), { name: tool.name, args: tool.args, status: 'pending' as const }],
+            } : m)));
+          },
+          onToolResult: (tool) => {
+            // 将最近一条同名 pending 轨迹更新为 done
+            setMessages((prev) => prev.map((m) => {
+              if (m.id !== botTempId || !m.toolCalls) return m;
+              const traces = [...m.toolCalls];
+              for (let i = traces.length - 1; i >= 0; i--) {
+                if (traces[i].name === tool.name && traces[i].status === 'pending') {
+                  traces[i] = { ...traces[i], status: 'done', resultPreview: (tool as { result_preview?: string }).result_preview };
+                  break;
+                }
+              }
+              return { ...m, toolCalls: traces };
+            }));
+          },
           onDone: (data) => {
-            setMessages((prev) => prev.map((m) => (m.id === botTempId ? toMessageItem(data.assistant_message) : m)));
+            setMessages((prev) => prev.map((m) => (m.id === botTempId ? { ...toMessageItem(data.assistant_message), toolCalls: m.toolCalls } : m)));
             setSessions((prev) => {
               const others = prev.filter((s) => s.id !== data.session.id);
               return [data.session, ...others];

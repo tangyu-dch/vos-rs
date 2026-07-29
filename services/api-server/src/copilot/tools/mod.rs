@@ -38,6 +38,7 @@ impl<'a> TelecomCopilotEngine<'a> {
     pub async fn execute_tool(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
         match name {
             "vos_get_dashboard_stats" => self.tool_get_dashboard_stats().await,
+            "vos_get_daily_report" => self.tool_get_daily_report(args).await,
             "vos_list_cdrs" => self.tool_list_cdrs(args).await,
             "vos_get_sip_flows" => self.tool_get_sip_flows(args).await,
             "vos_list_active_calls" => self.tool_list_active_calls().await,

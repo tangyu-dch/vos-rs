@@ -361,6 +361,186 @@ impl PostgresCdrStore {
         Ok(trends)
     }
 
+    /// 生成每日汇报聚合数据。
+    ///
+    /// 返回当日总结、分小时通话趋势、失败原因分布（Top 10）、Top 10 失败主被叫对，
+    /// 供 Copilot LLM 生成结构化的"每日汇报"风格回答。
+    ///
+    /// - `date`：目标日期（Asia/Shanghai 时区），格式 "YYYY-MM-DD"；传 None 默认当天
+    /// - `top_n`：失败原因和失败主被叫对的 Top N，默认 10
+    pub async fn get_daily_report(
+        &self,
+        date: Option<&str>,
+        top_n: Option<i32>,
+    ) -> Result<crate::DailyReport, sqlx::Error> {
+        use time::macros::offset;
+        let tz = offset!(+8);
+        let (date_str, day_start, day_end) = match date {
+            Some(d) => {
+                let day = time::Date::parse(
+                    d,
+                    &time::format_description::parse_borrowed::<2>("YYYY-MM-DD")
+                        .map_err(|e| sqlx::Error::Decode(e.into()))?,
+                )
+                .map_err(|e| sqlx::Error::Decode(e.into()))?;
+                (
+                    d.to_string(),
+                    day.with_time(time::Time::MIDNIGHT).assume_offset(tz),
+                    (day + time::Duration::days(1))
+                        .with_time(time::Time::MIDNIGHT)
+                        .assume_offset(tz),
+                )
+            }
+            None => {
+                let now = time::OffsetDateTime::now_utc().to_offset(tz);
+                let day_start = now.replace_time(time::Time::MIDNIGHT);
+                let day_end = day_start + time::Duration::days(1);
+                (
+                    day_start
+                        .format(
+                            &time::format_description::parse_borrowed::<2>("YYYY-MM-DD")
+                                .map_err(|e| sqlx::Error::Decode(e.into()))?,
+                        )
+                        .map_err(|e| sqlx::Error::Decode(e.into()))?,
+                    day_start,
+                    day_end,
+                )
+            }
+        };
+        let top_n = top_n.unwrap_or(10).clamp(1, 50) as i64;
+
+        // 并行查询：汇总指标 + 分小时趋势 + 失败原因分布 + Top 失败主被叫对 + 注册数 + 网关数
+        let (summary_res, hourly_res, reasons_res, pairs_res, reg_res, gw_res) = futures::join!(
+            sqlx::query(
+                "SELECT \
+                    COUNT(*) AS total, \
+                    COUNT(*) FILTER (WHERE status = 'answered') AS answered, \
+                    COUNT(*) FILTER (WHERE status = 'failed') AS failed, \
+                    COUNT(*) FILTER (WHERE status = 'canceled') AS canceled, \
+                    AVG(duration_ms) FILTER (WHERE status = 'answered') AS avg_duration, \
+                    SUM(billable_duration_ms) / 60000.0 AS total_minutes, \
+                    AVG(mos) AS avg_mos, \
+                    AVG(caller_rtcp_loss_rate) AS avg_loss, \
+                    AVG(caller_rtcp_jitter_ms) AS avg_jitter \
+                 FROM call_cdrs WHERE started_at >= $1 AND started_at < $2"
+            )
+            .bind(day_start)
+            .bind(day_end)
+            .fetch_one(&self.pool),
+            sqlx::query(
+                "SELECT EXTRACT(HOUR FROM started_at AT TIME ZONE 'Asia/Shanghai')::INTEGER AS hour, \
+                        COUNT(*) AS total, \
+                        COUNT(*) FILTER (WHERE status = 'answered') AS answered \
+                 FROM call_cdrs WHERE started_at >= $1 AND started_at < $2 \
+                 GROUP BY hour ORDER BY hour"
+            )
+            .bind(day_start)
+            .bind(day_end)
+            .fetch_all(&self.pool),
+            sqlx::query(
+                "SELECT COALESCE(NULLIF(BTRIM(failure_reason), ''), '未记录') AS reason, \
+                        COUNT(*) AS cnt \
+                 FROM call_cdrs \
+                 WHERE started_at >= $1 AND started_at < $2 AND status = 'failed' \
+                 GROUP BY reason ORDER BY cnt DESC LIMIT $3"
+            )
+            .bind(day_start)
+            .bind(day_end)
+            .bind(top_n)
+            .fetch_all(&self.pool),
+            sqlx::query(
+                "SELECT caller, callee, COUNT(*) AS failed_count, \
+                        (array_agg(failure_reason ORDER BY started_at DESC))[1] AS last_reason \
+                 FROM call_cdrs \
+                 WHERE started_at >= $1 AND started_at < $2 AND status = 'failed' \
+                   AND caller IS NOT NULL AND callee IS NOT NULL \
+                 GROUP BY caller, callee ORDER BY failed_count DESC LIMIT $3"
+            )
+            .bind(day_start)
+            .bind(day_end)
+            .bind(top_n)
+            .fetch_all(&self.pool),
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM sip_registrations WHERE expires_at > now()"
+            )
+            .fetch_one(&self.pool),
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sip_gateways WHERE enabled")
+                .fetch_one(&self.pool),
+        );
+
+        let row = summary_res?;
+        let total: i64 = row.get(0);
+        let answered: i64 = row.get(1);
+        let failed: i64 = row.get(2);
+        let canceled: i64 = row.get(3);
+        let avg_duration: Option<f64> = row.get(4);
+        let total_minutes: Option<f64> = row.get(5);
+        let avg_mos: Option<f64> = row.get(6);
+        let avg_loss: Option<f64> = row.get(7);
+        let avg_jitter: Option<f64> = row.get(8);
+        let answer_rate = if total > 0 {
+            answered as f64 / total as f64
+        } else {
+            0.0
+        };
+
+        let hourly_trend: Vec<crate::HourlyTrend> = hourly_res?
+            .iter()
+            .map(|r| crate::HourlyTrend {
+                hour: r.get(0),
+                total: r.get(1),
+                answered: r.get(2),
+            })
+            .collect();
+
+        let failure_reasons: Vec<crate::FailureReasonStat> = reasons_res?
+            .iter()
+            .map(|r| {
+                let count: i64 = r.get(1);
+                crate::FailureReasonStat {
+                    reason: r.get(0),
+                    count,
+                    ratio: if failed > 0 {
+                        count as f64 / failed as f64
+                    } else {
+                        0.0
+                    },
+                }
+            })
+            .collect();
+
+        let top_failed_pairs: Vec<crate::FailedPairStat> = pairs_res?
+            .iter()
+            .map(|r| crate::FailedPairStat {
+                caller: r.get(0),
+                callee: r.get(1),
+                failed_count: r.get(2),
+                last_reason: r.get(3),
+            })
+            .collect();
+
+        Ok(crate::DailyReport {
+            date: date_str,
+            summary: crate::DailyReportSummary {
+                total_calls: total,
+                answered_calls: answered,
+                failed_calls: failed,
+                canceled_calls: canceled,
+                answer_rate,
+                avg_duration_ms: avg_duration,
+                total_billable_minutes: total_minutes,
+                avg_mos: Some(avg_mos.unwrap_or(0.0)),
+                avg_loss_rate: Some(avg_loss.unwrap_or(0.0)),
+                avg_jitter_ms: Some(avg_jitter.unwrap_or(0.0)),
+                registered_users: reg_res?,
+                active_gateways: gw_res?,
+            },
+            hourly_trend,
+            failure_reasons,
+            top_failed_pairs,
+        })
+    }
+
     pub async fn get_security_and_errors_24h(
         &self,
     ) -> Result<(u64, u64, std::collections::HashMap<String, u64>), sqlx::Error> {

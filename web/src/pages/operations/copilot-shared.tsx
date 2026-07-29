@@ -30,7 +30,64 @@ export interface MessageItem {
   llmStatus?: string;
   intent?: string;
   timestamp: string;
+  /** 工具调用过程记录（流式期间通过 tool_start/tool_result 事件累积） */
+  toolCalls?: ToolCallTrace[];
 }
+
+/** 单次工具调用轨迹：开始事件 + 结果事件 */
+export interface ToolCallTrace {
+  /** 工具名（如 vos_get_daily_report） */
+  name: string;
+  /** 工具参数（tool_start 事件的 args） */
+  args?: unknown;
+  /** 结果预览（tool_result 事件的 result_preview） */
+  resultPreview?: string;
+  /** 调用状态：pending=已发起未返回，done=已返回结果 */
+  status: 'pending' | 'done';
+}
+
+/** 工具名 → 中文标签映射表（用于 ToolCallCard 展示） */
+export const TOOL_LABELS: Record<string, string> = {
+  vos_get_dashboard_stats: '平台运行概览',
+  vos_get_daily_report: '每日汇报聚合',
+  vos_list_cdrs: '呼叫详单查询',
+  vos_get_sip_flows: 'SIP 信令抓包',
+  vos_list_active_calls: '实时并发通话',
+  vos_terminate_call: '强制拆线挂断',
+  vos_list_registrations: '分机注册状态',
+  vos_list_gateways: '中继网关列表',
+  vos_preview_route: '路由试算',
+  vos_list_anti_fraud_rules: '风控规则列表',
+  vos_list_extensions: '分机账号列表',
+  vos_create_extension: '创建分机',
+  vos_delete_extension: '删除分机',
+  vos_list_ivr_menus: 'IVR 菜单列表',
+  vos_create_ivr_menu: '创建 IVR 菜单',
+  vos_add_ivr_node: '添加 IVR 节点',
+  vos_delete_ivr_menu: '删除 IVR 菜单',
+  vos_create_gateway: '创建网关',
+  vos_delete_gateway: '删除网关',
+  vos_create_route: '创建路由',
+  vos_list_routes: '路由规则列表',
+  vos_delete_route: '删除路由',
+  vos_list_billing_accounts: '计费账户列表',
+  vos_recharge_billing_account: '账户充值',
+  vos_list_rates: '费率表',
+  vos_upsert_rate: '创建/修改费率',
+  vos_delete_rate: '删除费率',
+  vos_create_anti_fraud_rule: '创建风控规则',
+  vos_delete_anti_fraud_rule: '删除风控规则',
+  vos_export_cdrs: '导出呼叫详单',
+  vos_export_extensions: '导出分机',
+  vos_export_gateways: '导出网关',
+  vos_export_routes: '导出路由',
+  vos_export_rates: '导出费率',
+  vos_export_billing_accounts: '导出计费账户',
+  vos_import_extensions: '批量导入分机',
+  vos_import_gateways: '批量导入网关',
+  vos_import_routes: '批量导入路由',
+  vos_import_rates: '批量导入费率',
+};
 
 /** Copilot 会话元数据（对齐后端 CopilotSession 结构） */
 export interface CopilotSession {
@@ -176,34 +233,46 @@ export function DegradedBanner({ error }: { error: string }) {
 /** Markdown 渲染：手写轻量 components，避免引入 @tailwindcss/typography */
 export function MarkdownReport({ content }: { content: string }) {
   return (
-    <div className="text-xs">
+    <div className="text-xs leading-relaxed">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          h1: ({ children }) => <h1 className="text-sm font-bold mt-2 mb-1.5 text-foreground">{children}</h1>,
-          h2: ({ children }) => <h2 className="text-sm font-bold mt-2 mb-1.5 text-primary">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-[13px] font-semibold mt-1.5 mb-1 text-foreground">{children}</h3>,
-          h4: ({ children }) => <h4 className="text-xs font-semibold mt-1.5 mb-0.5 text-foreground">{children}</h4>,
-          p: ({ children }) => <p className="my-1 leading-relaxed">{children}</p>,
-          ul: ({ children }) => <ul className="my-1 pl-4 space-y-0.5 list-disc marker:text-primary/50">{children}</ul>,
-          ol: ({ children }) => <ol className="my-1 pl-4 space-y-0.5 list-decimal marker:text-primary/50">{children}</ol>,
+          h1: ({ children }) => <h1 className="text-sm font-bold mt-3 mb-2 pb-1 border-b border-default-200 text-foreground">{children}</h1>,
+          h2: ({ children }) => (
+            <h2 className="text-sm font-bold mt-3 mb-2 flex items-center gap-1.5 text-primary">
+              <span className="inline-block w-1 h-3.5 rounded-full bg-primary" />
+              {children}
+            </h2>
+          ),
+          h3: ({ children }) => <h3 className="text-[13px] font-semibold mt-2 mb-1 text-foreground">{children}</h3>,
+          h4: ({ children }) => <h4 className="text-xs font-semibold mt-2 mb-0.5 text-default-700">{children}</h4>,
+          p: ({ children }) => <p className="my-1.5 leading-relaxed text-foreground">{children}</p>,
+          ul: ({ children }) => <ul className="my-1.5 pl-5 space-y-1 list-disc marker:text-primary/60">{children}</ul>,
+          ol: ({ children }) => <ol className="my-1.5 pl-5 space-y-1 list-decimal marker:text-primary/60 font-semibold">{children}</ol>,
           li: ({ children }) => <li className="leading-relaxed pl-0.5">{children}</li>,
           strong: ({ children }) => <strong className="font-bold text-primary">{children}</strong>,
           em: ({ children }) => <em className="italic text-default-600">{children}</em>,
           code: ({ className, children }) => {
             const isBlock = className?.includes('language-');
             if (isBlock) {
-              return <code className={`${className} text-[11px] font-mono text-success`}>{children}</code>;
+              return <code className={`${className} text-[11px] font-mono text-success leading-relaxed`}>{children}</code>;
             }
-            return <code className="px-1 py-0.5 rounded bg-content2 text-primary text-[11px] font-mono">{children}</code>;
+            return <code className="px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[11px] font-mono border border-primary/20">{children}</code>;
           },
-          pre: ({ children }) => <pre className="my-2 p-2.5 rounded-lg bg-content2 overflow-x-auto border border-default-200">{children}</pre>,
+          pre: ({ children }) => <pre className="my-2.5 p-3 rounded-xl bg-content2 overflow-x-auto border border-default-200 shadow-sm">{children}</pre>,
           blockquote: ({ children }) => (
-            <blockquote className="my-1.5 pl-3 border-l-2 border-primary/40 text-default-600 italic">{children}</blockquote>
+            <blockquote className="my-2 pl-3 pr-2 py-1.5 border-l-[3px] border-primary/50 bg-primary/5 rounded-r-lg text-default-700">{children}</blockquote>
           ),
-          hr: () => <hr className="my-2 border-default-200" />,
-          table: ({ children }) => <table className="my-2 w-full text-[11px] border-collapse">{children}</table>,
-          th: ({ children }) => <th className="border border-default-200 px-2 py-1 bg-content2 text-left font-semibold">{children}</th>,
+          hr: () => <hr className="my-3 border-default-200" />,
+          table: ({ children }) => (
+            <div className="my-2.5 overflow-x-auto rounded-lg border border-default-200">
+              <table className="w-full text-[11px] border-collapse">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="bg-primary/10">{children}</thead>,
+          th: ({ children }) => <th className="border-b border-default-200 px-2.5 py-1.5 text-left font-semibold text-primary">{children}</th>,
+          td: ({ children }) => <td className="border-b border-default-100 px-2.5 py-1.5 text-foreground">{children}</td>,
+          tr: ({ children }) => <tr className="even:bg-content2/50 hover:bg-primary/5 transition-colors">{children}</tr>,
           a: ({ children, href }) => {
             const isApi = href?.startsWith('/api/');
             const apiOrigin = window.location.port === '3001'

@@ -10,6 +10,21 @@ impl<'a> TelecomCopilotEngine<'a> {
         json!(stats)
     }
 
+    /// 每日汇报工具：返回当日总结、分小时通话趋势、失败原因分布、Top 失败主被叫对。
+    ///
+    /// 供 LLM 生成"每日汇报/今日运行情况/日报"风格的结构化回答，包含：
+    /// - 当日总结（总通话/接通率/平均时长/计费分钟/音质）
+    /// - 呼叫情况（分小时趋势）
+    /// - 问题原因分析（失败原因 Top N + Top 失败主被叫对）
+    pub(crate) async fn tool_get_daily_report(&self, args: &Value) -> Value {
+        let date = args.get("date").and_then(|v| v.as_str());
+        let top_n = args.get("top_n").and_then(|v| v.as_i64()).map(|n| n as i32);
+        match self.state.store.get_daily_report(date, top_n).await {
+            Ok(report) => json!(report),
+            Err(e) => json!({ "error": e.to_string() }),
+        }
+    }
+
     pub(crate) async fn tool_list_cdrs(&self, args: &Value) -> Value {
         let status = args.get("status").and_then(|v| v.as_str());
         let caller = args.get("caller").and_then(|v| v.as_str());
