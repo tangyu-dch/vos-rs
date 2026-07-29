@@ -142,18 +142,24 @@ impl PostgresCdrStore {
         Ok(out)
     }
 
-    /// 按页读取计费账户。
+    /// 按页读取计费账户，可选按关键字在 SQL 层过滤。
+    ///
+    /// - `q`：对 username 做大小写不敏感的 LIKE 匹配
     pub async fn list_accounts_page(
         &self,
         limit: i64,
         offset: i64,
+        q: Option<&str>,
     ) -> Result<Vec<BillingAccount>, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
         let rows = sqlx::query(
             "SELECT id, username, CAST(balance AS NUMERIC), CAST(credit_limit AS NUMERIC), currency, created_at FROM billing_accounts \
+             WHERE ($3::TEXT IS NULL OR LOWER(username) LIKE LOWER($3)) \
              ORDER BY username LIMIT $1 OFFSET $2",
         )
         .bind(limit)
         .bind(offset)
+        .bind(like)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -169,11 +175,16 @@ impl PostgresCdrStore {
             .collect())
     }
 
-    /// 返回计费账户总数。
-    pub async fn count_accounts(&self) -> Result<i64, sqlx::Error> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM billing_accounts")
-            .fetch_one(&self.pool)
-            .await?;
+    /// 返回与 `list_accounts_page` 相同过滤条件下的计费账户总数。
+    pub async fn count_accounts(&self, q: Option<&str>) -> Result<i64, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM billing_accounts \
+             WHERE ($1::TEXT IS NULL OR LOWER(username) LIKE LOWER($1))",
+        )
+        .bind(like)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.0)
     }
 
@@ -382,33 +393,33 @@ impl PostgresCdrStore {
         Ok(out)
     }
 
-    /// 按页读取扣费明细，支持按账户筛选。
+    /// 按页读取扣费明细，支持按账户和时间范围筛选。
+    ///
+    /// - `username`：精确匹配账户名
+    /// - `start`/`end`：按 created_at 做 >= / <= 过滤
     pub async fn list_ledger_page(
         &self,
         username: Option<&str>,
+        start: Option<time::OffsetDateTime>,
+        end: Option<time::OffsetDateTime>,
         limit: i64,
         offset: i64,
     ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
-        let rows = if let Some(username) = username {
-            sqlx::query(
-                "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
-                  FROM billing_ledger WHERE username = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
-            )
-            .bind(username)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?
-        } else {
-            sqlx::query(
-                "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
-                  FROM billing_ledger ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
-            )
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?
-        };
+        let rows = sqlx::query(
+            "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
+              FROM billing_ledger \
+              WHERE ($1::TEXT IS NULL OR username = $1) \
+                AND ($2::TIMESTAMPTZ IS NULL OR created_at >= $2) \
+                AND ($3::TIMESTAMPTZ IS NULL OR created_at <= $3) \
+              ORDER BY created_at DESC, id DESC LIMIT $4 OFFSET $5",
+        )
+        .bind(username)
+        .bind(start)
+        .bind(end)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows
             .into_iter()
             .map(|row| LedgerEntry {
@@ -426,18 +437,24 @@ impl PostgresCdrStore {
             .collect())
     }
 
-    /// 返回扣费明细总数，可按账户筛选。
-    pub async fn count_ledger(&self, username: Option<&str>) -> Result<i64, sqlx::Error> {
-        let row: (i64,) = if let Some(username) = username {
-            sqlx::query_as("SELECT COUNT(*) FROM billing_ledger WHERE username = $1")
-                .bind(username)
-                .fetch_one(&self.pool)
-                .await?
-        } else {
-            sqlx::query_as("SELECT COUNT(*) FROM billing_ledger")
-                .fetch_one(&self.pool)
-                .await?
-        };
+    /// 返回与 `list_ledger_page` 相同过滤条件下的扣费明细总数。
+    pub async fn count_ledger(
+        &self,
+        username: Option<&str>,
+        start: Option<time::OffsetDateTime>,
+        end: Option<time::OffsetDateTime>,
+    ) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM billing_ledger \
+             WHERE ($1::TEXT IS NULL OR username = $1) \
+               AND ($2::TIMESTAMPTZ IS NULL OR created_at >= $2) \
+               AND ($3::TIMESTAMPTZ IS NULL OR created_at <= $3)",
+        )
+        .bind(username)
+        .bind(start)
+        .bind(end)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.0)
     }
 

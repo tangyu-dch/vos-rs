@@ -99,30 +99,54 @@ impl PostgresCdrStore {
         Ok(rows.into_iter().map(parse_tenant_row).collect())
     }
 
-    /// 分页列出租户记录。
+    /// 分页列出租户记录，可选按关键字和启用状态在 SQL 层过滤。
+    ///
+    /// - `q`：对 name / domain 做大小写不敏感的 LIKE 匹配
+    /// - `enabled`：精确匹配 enabled 字段
+    ///
+    /// 将过滤条件下沉到 SQL，避免分页后内存过滤导致 total 不准、跨页丢数据。
     pub async fn list_tenants_page(
         &self,
         limit: i64,
         offset: i64,
+        q: Option<&str>,
+        enabled: Option<bool>,
     ) -> Result<Vec<TenantRecord>, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
         let rows = sqlx::query(
             "SELECT id, name, domain, max_concurrent_calls, max_cps, cross_tenant_policy, \
              recording_enabled, allowed_gateway_ids, billing_account_id, enabled, \
              created_at, updated_at \
-             FROM tenants ORDER BY domain ASC LIMIT $1 OFFSET $2",
+             FROM tenants \
+             WHERE ($3::TEXT IS NULL OR LOWER(name) LIKE LOWER($3) OR LOWER(domain) LIKE LOWER($3)) \
+               AND ($4::BOOL IS NULL OR enabled = $4) \
+             ORDER BY domain ASC LIMIT $1 OFFSET $2",
         )
         .bind(limit)
         .bind(offset)
+        .bind(like)
+        .bind(enabled)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(parse_tenant_row).collect())
     }
 
-    /// 返回租户总数。
-    pub async fn count_tenants(&self) -> Result<i64, sqlx::Error> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tenants")
-            .fetch_one(&self.pool)
-            .await?;
+    /// 返回与 `list_tenants_page` 相同过滤条件下的租户总数。
+    pub async fn count_tenants(
+        &self,
+        q: Option<&str>,
+        enabled: Option<bool>,
+    ) -> Result<i64, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM tenants \
+             WHERE ($1::TEXT IS NULL OR LOWER(name) LIKE LOWER($1) OR LOWER(domain) LIKE LOWER($1)) \
+               AND ($2::BOOL IS NULL OR enabled = $2)",
+        )
+        .bind(like)
+        .bind(enabled)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.0)
     }
 

@@ -44,6 +44,10 @@ pub struct LedgerQuery {
     pub page: Option<i64>,
     pub page_size: Option<i64>,
     pub export: Option<bool>,
+    /// 按发生时间起始过滤（RFC3339 或 YYYY-MM-DDTHH:mm）
+    pub start_time: Option<String>,
+    /// 按发生时间截止过滤（RFC3339 或 YYYY-MM-DDTHH:mm）
+    pub end_time: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,6 +138,15 @@ pub struct RateListQuery {
     pub page: PageQuery,
     /// 按租户 ID 过滤（不传则返回全部费率，含全局与租户专属）。
     pub tenant_id: Option<String>,
+}
+
+/// 计费账户列表查询参数：在通用分页基础上增加关键字筛选。
+#[derive(Debug, Deserialize)]
+pub struct ListAccountsQuery {
+    #[serde(flatten)]
+    pub page: PageQuery,
+    /// 按账户用户名模糊搜索
+    pub q: Option<String>,
 }
 
 pub async fn list_rates(
@@ -264,16 +277,17 @@ pub async fn delete_rate(
 
 pub async fn list_accounts(
     State(state): State<AppState>,
-    Query(query): Query<PageQuery>,
+    Query(query): Query<ListAccountsQuery>,
 ) -> Result<axum::response::Response, E> {
-    let (page, page_size, offset) = normalize_page(&query);
+    let (page, page_size, offset) = normalize_page(&query.page);
+    let q_trim = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let (items, total) = tokio::try_join!(
-        state.store.list_accounts_page(page_size, offset),
-        state.store.count_accounts(),
+        state.store.list_accounts_page(page_size, offset, q_trim),
+        state.store.count_accounts(q_trim),
     )
     .map_err(err)?;
 
-    if query.export.unwrap_or(false) {
+    if query.page.export.unwrap_or(false) {
         let headers = vec!["账户用户名", "当前余额", "信用额度", "货币单位", "创建时间"];
         let mut rows = Vec::new();
         for item in items {
@@ -424,11 +438,13 @@ pub async fn list_ledger(
         export: q.export,
     };
     let (page, page_size, offset) = normalize_page(&page_query);
+    let start = q.start_time.as_deref().and_then(parse_dt);
+    let end = q.end_time.as_deref().and_then(parse_dt);
     let (items, total) = tokio::try_join!(
         state
             .store
-            .list_ledger_page(q.username.as_deref(), page_size, offset),
-        state.store.count_ledger(q.username.as_deref()),
+            .list_ledger_page(q.username.as_deref(), start, end, page_size, offset),
+        state.store.count_ledger(q.username.as_deref(), start, end),
     )
     .map_err(err)?;
 

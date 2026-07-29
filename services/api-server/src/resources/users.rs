@@ -22,20 +22,39 @@ pub struct UpdateUserRequest {
     pub tenant_id: Option<String>,
 }
 
+/// 分机列表查询参数：在通用分页基础上增加关键字与租户筛选
+#[derive(Debug, Deserialize)]
+pub struct ListUsersQuery {
+    #[serde(flatten)]
+    pub page: PageQuery,
+    /// 按分机号模糊搜索
+    pub q: Option<String>,
+    /// 按租户 ID 精确过滤
+    pub tenant_id: Option<String>,
+}
+
 pub async fn list_users(
     State(state): State<AppState>,
-    Query(query): Query<PageQuery>,
+    Query(query): Query<ListUsersQuery>,
 ) -> Result<axum::response::Response, ApiError> {
-    let (page, page_size, offset) = normalize_page(&query);
+    let (page, page_size, offset) = normalize_page(&query.page);
+    let q_trim = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let tenant_trim = query
+        .tenant_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let (items, total) = tokio::try_join!(
-        state.store.list_users_page(page_size, offset),
-        state.store.count_users(),
+        state
+            .store
+            .list_users_page(page_size, offset, q_trim, tenant_trim),
+        state.store.count_users(q_trim, tenant_trim),
     )
     .map_err(|e| ApiError {
         error: e.to_string(),
     })?;
 
-    if query.export.unwrap_or(false) {
+    if query.page.export.unwrap_or(false) {
         let headers = vec!["SIP分机号", "租户ID", "创建时间"];
         let mut rows = Vec::new();
         for item in &items {

@@ -99,27 +99,18 @@ pub(crate) async fn list_tenants(
 ) -> Result<axum::response::Response, ApiError> {
     let (page, page_size, offset) = normalize_page(&query.page);
 
-    let mut tenants = state
+    // q 与 enabled 在 SQL 层过滤，避免分页后内存过滤导致 total 不准
+    let q_trim = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let tenants = state
         .store
-        .list_tenants_page(page_size, offset)
+        .list_tenants_page(page_size, offset, q_trim, query.enabled)
         .await
         .map_err(|e| ApiError::internal(format!("查询租户列表失败: {e}")))?;
     let total = state
         .store
-        .count_tenants()
+        .count_tenants(q_trim, query.enabled)
         .await
         .map_err(|e| ApiError::internal(format!("统计租户总数失败: {e}")))?;
-
-    // 可选过滤
-    if let Some(kw) = query.q.as_ref().filter(|s| !s.trim().is_empty()) {
-        let kw_lower = kw.to_lowercase();
-        tenants.retain(|t| {
-            t.name.to_lowercase().contains(&kw_lower) || t.domain.to_lowercase().contains(&kw_lower)
-        });
-    }
-    if let Some(enabled) = query.enabled {
-        tenants.retain(|t| t.enabled == enabled);
-    }
 
     // 导出 CSV
     if query.page.export.unwrap_or(false) {

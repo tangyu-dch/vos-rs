@@ -307,13 +307,22 @@ impl PostgresCdrStore {
     }
 
     /// 按页读取网关，并保留实时熔断状态与当前并发数。
+    ///
+    /// 过滤参数：
+    /// - `gateway_type`：精确匹配 gateway_type
+    /// - `role`：精确匹配 role（access / egress）
+    /// - `q`：对 id 和 host 做大小写不敏感的 LIKE 匹配
+    /// - `enabled`：精确匹配 enabled 状态
     pub async fn list_gateways_page(
         &self,
         limit: i64,
         offset: i64,
         gateway_type: Option<&str>,
         role: Option<&str>,
+        q: Option<&str>,
+        enabled: Option<bool>,
     ) -> Result<Vec<SipGateway>, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
         let rows = sqlx::query(
             "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.role, g.access_auth_mode, g.access_username, g.access_realm, (g.access_password_hash <> '') AS has_access_password, g.prefix_rules, \
              g.supports_registration, g.reg_auth_type, g.reg_username, g.parent_gateway_id, \
@@ -323,12 +332,16 @@ impl PostgresCdrStore {
              LEFT JOIN gateway_health_status h ON g.id = h.gateway_id \
              WHERE ($3::TEXT IS NULL OR g.gateway_type = $3) \
              AND ($4::TEXT IS NULL OR g.role = $4) \
+             AND ($5::TEXT IS NULL OR LOWER(g.id) LIKE LOWER($5) OR LOWER(g.host) LIKE LOWER($5)) \
+             AND ($6::BOOL IS NULL OR g.enabled = $6) \
              ORDER BY g.id LIMIT $1 OFFSET $2",
         )
         .bind(limit)
         .bind(offset)
         .bind(gateway_type)
         .bind(role)
+        .bind(like)
+        .bind(enabled)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -369,17 +382,26 @@ impl PostgresCdrStore {
             .collect())
     }
 
-    /// 返回网关总数。
+    /// 返回与 `list_gateways_page` 相同过滤条件下的网关总数。
     pub async fn count_gateways(
         &self,
         gateway_type: Option<&str>,
         role: Option<&str>,
+        q: Option<&str>,
+        enabled: Option<bool>,
     ) -> Result<i64, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
         let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM sip_gateways WHERE ($1::TEXT IS NULL OR gateway_type = $1) AND ($2::TEXT IS NULL OR role = $2)",
+            "SELECT COUNT(*) FROM sip_gateways \
+             WHERE ($1::TEXT IS NULL OR gateway_type = $1) \
+             AND ($2::TEXT IS NULL OR role = $2) \
+             AND ($3::TEXT IS NULL OR LOWER(id) LIKE LOWER($3) OR LOWER(host) LIKE LOWER($3)) \
+             AND ($4::BOOL IS NULL OR enabled = $4)",
         )
         .bind(gateway_type)
         .bind(role)
+        .bind(like)
+        .bind(enabled)
         .fetch_one(&self.pool)
         .await?;
         Ok(row.0)

@@ -13,7 +13,28 @@ pub(crate) fn normalize_page(query: &PageQuery) -> (i64, i64, i64) {
 }
 
 pub(crate) fn parse_dt(s: &str) -> Option<OffsetDateTime> {
-    OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
+    // 优先按 RFC3339 解析（前端 normalizeDateTimeLocal 已规范为带时区格式）
+    if let Ok(t) = OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339) {
+        return Some(t);
+    }
+    // 兼容无时区的本地时间格式："YYYY-MM-DDTHH:mm" 或 "YYYY-MM-DDTHH:mm:ss"
+    // 按服务器本地时区解释
+    let formats = [
+        "YYYY-MM-DDTHH:mm:ss",
+        "YYYY-MM-DDTHH:mm",
+        "YYYY-MM-DD HH:mm:ss",
+        "YYYY-MM-DD HH:mm",
+        "YYYY-MM-DD",
+    ];
+    for fmt in formats {
+        let Ok(items) = time::format_description::parse_borrowed::<2>(fmt) else {
+            continue;
+        };
+        if let Ok(t) = time::PrimitiveDateTime::parse(s, &items) {
+            return Some(t.assume_utc());
+        }
+    }
+    None
 }
 
 pub(crate) fn validate_runtime_secrets(

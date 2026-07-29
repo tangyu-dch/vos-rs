@@ -48,19 +48,29 @@ impl PostgresCdrStore {
         Ok(numbers)
     }
 
-    /// 按页读取号码库存。
+    /// 按页读取号码库存，可选按关键字和状态在 SQL 层过滤。
+    ///
+    /// - `q`：对 number 做大小写不敏感的 LIKE 匹配
+    /// - `status`：精确匹配 status 字段（available / assigned / disabled）
     pub async fn list_numbers_page(
         &self,
         limit: i64,
         offset: i64,
+        q: Option<&str>,
+        status: Option<&str>,
     ) -> Result<Vec<NumberInventory>, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
         let rows = sqlx::query(
             "SELECT n.number,n.username,a.source_type,a.source_id,n.gateway_id,n.owner_egress_trunk_id,n.direction,n.max_concurrent,n.current_concurrent,n.status,n.created_at,n.updated_at \
              FROM number_inventory n LEFT JOIN number_allocations a ON a.number=n.number AND a.enabled \
+             WHERE ($3::TEXT IS NULL OR LOWER(n.number) LIKE LOWER($3)) \
+               AND ($4::TEXT IS NULL OR n.status = $4) \
              ORDER BY n.number LIMIT $1 OFFSET $2",
         )
         .bind(limit)
         .bind(offset)
+        .bind(like)
+        .bind(status)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -82,11 +92,22 @@ impl PostgresCdrStore {
             .collect())
     }
 
-    /// 返回号码库存总数。
-    pub async fn count_numbers(&self) -> Result<i64, sqlx::Error> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM number_inventory")
-            .fetch_one(&self.pool)
-            .await?;
+    /// 返回与 `list_numbers_page` 相同过滤条件下的号码库存总数。
+    pub async fn count_numbers(
+        &self,
+        q: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<i64, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM number_inventory \
+             WHERE ($1::TEXT IS NULL OR LOWER(number) LIKE LOWER($1)) \
+               AND ($2::TEXT IS NULL OR status = $2)",
+        )
+        .bind(like)
+        .bind(status)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.0)
     }
 

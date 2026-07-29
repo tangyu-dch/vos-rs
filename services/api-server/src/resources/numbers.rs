@@ -28,6 +28,17 @@ pub struct UpdateNumberBody {
     pub status: Option<String>,
 }
 
+/// 号码列表查询参数：在通用分页基础上增加关键字与状态筛选
+#[derive(Debug, Deserialize)]
+pub struct ListNumbersQuery {
+    #[serde(flatten)]
+    pub page: PageQuery,
+    /// 按号码模糊搜索
+    pub q: Option<String>,
+    /// 按状态精确过滤（available / assigned / disabled）
+    pub status: Option<String>,
+}
+
 type E = (StatusCode, String);
 fn err(e: impl std::fmt::Display) -> E {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
@@ -35,16 +46,24 @@ fn err(e: impl std::fmt::Display) -> E {
 
 pub async fn list_numbers(
     State(state): State<AppState>,
-    Query(query): Query<PageQuery>,
+    Query(query): Query<ListNumbersQuery>,
 ) -> Result<axum::response::Response, E> {
-    let (page, page_size, offset) = normalize_page(&query);
+    let (page, page_size, offset) = normalize_page(&query.page);
+    let q_trim = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let status_trim = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let (items, total) = tokio::try_join!(
-        state.store.list_numbers_page(page_size, offset),
-        state.store.count_numbers(),
+        state
+            .store
+            .list_numbers_page(page_size, offset, q_trim, status_trim),
+        state.store.count_numbers(q_trim, status_trim),
     )
     .map_err(err)?;
 
-    if query.export.unwrap_or(false) {
+    if query.page.export.unwrap_or(false) {
         let headers = vec![
             "号码",
             "关联分机",

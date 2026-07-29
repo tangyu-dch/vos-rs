@@ -44,17 +44,28 @@ impl PostgresCdrStore {
         Ok(users)
     }
 
-    /// 按页读取 SIP 用户，避免管理端随数据增长一次性加载全部记录。
+    /// 按页读取 SIP 用户，可选按关键字和租户在 SQL 层过滤。
+    ///
+    /// - `q`：对 username 做大小写不敏感的 LIKE 匹配
+    /// - `tenant_id`：精确匹配 tenant_id 字段
     pub async fn list_users_page(
         &self,
         limit: i64,
         offset: i64,
+        q: Option<&str>,
+        tenant_id: Option<&str>,
     ) -> Result<Vec<SipUser>, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
         let rows = sqlx::query(
-            "SELECT username, tenant_id, created_at FROM sip_users ORDER BY username LIMIT $1 OFFSET $2",
+            "SELECT username, tenant_id, created_at FROM sip_users \
+             WHERE ($3::TEXT IS NULL OR LOWER(username) LIKE LOWER($3)) \
+               AND ($4::TEXT IS NULL OR tenant_id = $4) \
+             ORDER BY username LIMIT $1 OFFSET $2",
         )
         .bind(limit)
         .bind(offset)
+        .bind(like)
+        .bind(tenant_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -87,11 +98,22 @@ impl PostgresCdrStore {
             .collect())
     }
 
-    /// 返回 SIP 用户总数，用于构造分页响应。
-    pub async fn count_users(&self) -> Result<i64, sqlx::Error> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sip_users")
-            .fetch_one(&self.pool)
-            .await?;
+    /// 返回与 `list_users_page` 相同过滤条件下的 SIP 用户总数。
+    pub async fn count_users(
+        &self,
+        q: Option<&str>,
+        tenant_id: Option<&str>,
+    ) -> Result<i64, sqlx::Error> {
+        let like = q.map(|s| format!("%{s}%"));
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sip_users \
+             WHERE ($1::TEXT IS NULL OR LOWER(username) LIKE LOWER($1)) \
+               AND ($2::TEXT IS NULL OR tenant_id = $2)",
+        )
+        .bind(like)
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.0)
     }
 

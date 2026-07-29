@@ -1,11 +1,22 @@
 // 资源规格定义：分机/中继/号码/计费/通话等
 // 从 console.tsx 拆分
 
-import type { ResourceSpec } from '@/pages/shared/types';
+import type { ResourceSpec, ServerFilterSpec } from '@/pages/shared/types';
+
+/** 通用"启用状态"下拉选项（值传给后端 boolean 参数） */
+const ENABLED_FILTER_OPTIONS: ServerFilterSpec['options'] = [
+  { label: '全部', value: '' },
+  { label: '已启用', value: 'true' },
+  { label: '已停用', value: 'false' },
+];
 
 export const extensions: ResourceSpec = {
   title: '分机', description: '管理 SIP 账号凭据与呼叫身份。', path: '/extensions',
   idKey: 'username', detailPath: '/extensions', createLabel: '新建分机',
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索分机号...' },
+    { param: 'tenant_id', label: '所属商户', kind: 'select', optionsResource: 'tenants' },
+  ],
   fields: [
     { key: 'username', label: '分机号', required: true, placeholder: '例如 1001' },
     { key: 'tenant_id', label: '所属商户', kind: 'select', optionsResource: 'tenants', placeholder: '选择所属商户（留空为全局）' },
@@ -20,6 +31,10 @@ export const extensions: ResourceSpec = {
 export const accessTrunks: ResourceSpec = {
   title: '接入中继', description: '配置客户接入认证、安全防范与主叫匹配规则。', path: '/trunks',
   params: { role: 'access' }, idKey: 'id', detailPath: '/trunks/access', createLabel: '新建接入中继',
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索中继 ID / 主机地址...' },
+    { param: 'enabled', label: '启用状态', kind: 'status', options: ENABLED_FILTER_OPTIONS },
+  ],
   fields: [
     { key: 'id', label: '中继标识', required: true, placeholder: '例如 customer-a' },
     { key: 'access_auth_mode', label: '认证方式', kind: 'select', required: true, options: [{ label: 'IP 白名单', value: 'ip_allowlist' }, { label: '注册认证', value: 'digest_register' }, { label: 'IP 加认证', value: 'ip_and_digest' }], defaultValue: 'ip_allowlist' },
@@ -38,6 +53,10 @@ export const accessTrunks: ResourceSpec = {
 export const egressTrunks: ResourceSpec = {
   title: '落地中继', description: '管理对接上游运营商网关端点、计费账户与容量上限。', path: '/trunks',
   params: { role: 'egress' }, idKey: 'id', detailPath: '/trunks/egress', createLabel: '新建落地中继',
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索中继 ID / 主机地址...' },
+    { param: 'enabled', label: '启用状态', kind: 'status', options: ENABLED_FILTER_OPTIONS },
+  ],
   fields: [
     { key: 'id', label: '中继标识', required: true, placeholder: '例如 carrier-a' },
     { key: 'host', label: '对端主机地址', required: true, placeholder: '对端 IP 地址' },
@@ -52,6 +71,15 @@ export const egressTrunks: ResourceSpec = {
 export const numbers: ResourceSpec = {
   title: '号码库存', description: '管理真实号码的唯一落地归属、使用方向和分机授权。', path: '/numbers',
   idKey: 'number', createLabel: '录入号码',
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索号码...' },
+    { param: 'status', label: '号码状态', kind: 'status', options: [
+      { label: '全部', value: '' },
+      { label: '可用号码', value: 'available' },
+      { label: '已分配', value: 'assigned' },
+      { label: '停用号码', value: 'disabled' },
+    ] },
+  ],
   fields: [
     { key: 'number', label: '真实号码', required: true },
     { key: 'owner_egress_trunk_id', label: '落地中继', kind: 'select', optionsResource: 'egress-trunks', required: true, placeholder: '选择号码的唯一物理归属' },
@@ -67,6 +95,9 @@ export const numbers: ResourceSpec = {
 export const accounts: ResourceSpec = {
   title: '计费账户', description: '查看余额、授信额度、币种、账户可用状态及关联租户。', path: '/billing/accounts',
   idKey: 'username', readOnly: true, action: 'credit',
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索账户名...' },
+  ],
   fields: [
     { key: 'username', label: '账户' },
     { key: 'balance', label: '余额', kind: 'number' },
@@ -80,6 +111,10 @@ export const accounts: ResourceSpec = {
 export const rates: ResourceSpec = {
   title: '费率', description: '按号码前缀配置计费周期与周期价格。', path: '/billing/rates',
   idKey: 'id', createLabel: '新建费率',
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索前缀 / 说明...' },
+    { param: 'tenant_id', label: '所属商户', kind: 'select', optionsResource: 'tenants' },
+  ],
   fields: [
     { key: 'id', label: '费率 ID', required: true },
     { key: 'prefix', label: '号码前缀', placeholder: '留空表示默认费率' },
@@ -95,6 +130,11 @@ export const rates: ResourceSpec = {
 export const transactions: ResourceSpec = {
   title: '账务流水', description: '按通话追踪扣费、余额变化和处理结果。', path: '/billing/transactions',
   idKey: 'id', readOnly: true,
+  serverFilters: [
+    { param: 'username', label: '账户', kind: 'select', optionsResource: 'accounts' },
+    { param: 'call_id', label: '搜索', kind: 'keyword', placeholder: '按通话 ID 过滤...' },
+    { param: 'time', label: '发生时间', kind: 'dateRange', startParam: 'start_time', endParam: 'end_time' },
+  ],
   fields: [
     { key: 'id', label: '流水号' },
     { key: 'call_id', label: '通话 ID' },
@@ -111,6 +151,18 @@ export const transactions: ResourceSpec = {
 export const calls: ResourceSpec = {
   title: '通话记录', description: '查询呼叫结果、时长、路由和媒体质量。', path: '/calls',
   idKey: 'call_id', detailPath: '/calls', readOnly: true,
+  serverFilters: [
+    { param: 'call_id', label: '搜索', kind: 'keyword', placeholder: '搜索通话 ID / 主叫 / 被叫...' },
+    { param: 'status', label: '通话结果', kind: 'status', options: [
+      { label: '全部', value: '' },
+      { label: '已接通', value: 'answered' },
+      { label: '未接通', value: 'failed' },
+      { label: '已取消', value: 'canceled' },
+      { label: '忙线', value: 'busy' },
+      { label: '无应答', value: 'no_answer' },
+    ] },
+    { param: 'time', label: '呼叫时间', kind: 'dateRange', startParam: 'start_time', endParam: 'end_time' },
+  ],
   fields: [
     { key: 'call_id', label: '通话 ID' },
     { key: 'caller', label: '主叫' },
@@ -125,6 +177,11 @@ export const calls: ResourceSpec = {
 export const didDestinations: ResourceSpec = {
   title: '呼入目标', description: '真实 DID 通过归属落地中继校验后转入指定业务目标。', path: '/did-destinations',
   idKey: 'number', createLabel: '新建目标',
+  // 后端无分页/筛选，使用客户端筛选（数据量通常较小）
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索 DID / 目标...', mode: 'client', clientFields: ['number', 'target_id', 'tenant_id'] },
+    { param: 'enabled', label: '启用状态', kind: 'status', options: ENABLED_FILTER_OPTIONS, mode: 'client' },
+  ],
   fields: [
     { key: 'number', label: 'DID 号码', required: true },
     { key: 'tenant_id', label: '租户标识', placeholder: '可选' },
@@ -137,6 +194,11 @@ export const didDestinations: ResourceSpec = {
 export const callerPools: ResourceSpec = {
   title: '号码池组', description: '维护虚拟主叫别名、选号算法和真实号码成员。', path: '/caller-pools',
   idKey: 'id', detailPath: '/caller-pools', createLabel: '新建号码池',
+  // 后端无分页/筛选，使用客户端筛选
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索号码池 ID / 虚拟主叫...', mode: 'client', clientFields: ['id', 'virtual_alias'] },
+    { param: 'enabled', label: '启用状态', kind: 'status', options: ENABLED_FILTER_OPTIONS, mode: 'client' },
+  ],
   fields: [
     { key: 'id', label: '号码池 ID', required: true },
     { key: 'virtual_alias', label: '虚拟主叫', required: true },
@@ -151,6 +213,11 @@ export const callerPools: ResourceSpec = {
 export const egressGroups: ResourceSpec = {
   title: '落地分组', description: '定义来源允许使用的落地范围、目的地能力和故障边界。', path: '/egress-groups',
   idKey: 'id', detailPath: '/egress-groups', createLabel: '新建分组',
+  // 后端无分页/筛选，使用客户端筛选
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索分组 ID / 名称...', mode: 'client', clientFields: ['id', 'name', 'description'] },
+    { param: 'enabled', label: '启用状态', kind: 'status', options: ENABLED_FILTER_OPTIONS, mode: 'client' },
+  ],
   fields: [
     { key: 'id', label: '分组 ID', required: true },
     { key: 'name', label: '分组名称', required: true },
@@ -165,6 +232,11 @@ export const ivrMenus: ResourceSpec = {
   path: '/ivr/menus',
   idKey: 'id',
   createLabel: '定义新 IVR',
+  // 后端响应虽声明分页但实际返回全部，使用客户端筛选
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索 IVR ID / 名称 / DID...', mode: 'client', clientFields: ['id', 'name', 'did'] },
+    { param: 'enabled', label: '启用状态', kind: 'status', options: ENABLED_FILTER_OPTIONS, mode: 'client' },
+  ],
   fields: [
     { key: 'id', label: 'IVR ID', required: true, placeholder: '例如 ivr-main-sales' },
     { key: 'name', label: '流程名称', required: true, placeholder: '例如 售前客服多级导航' },
@@ -183,6 +255,10 @@ export const tenants: ResourceSpec = {
   path: '/tenants',
   idKey: 'id',
   createLabel: '新建租户',
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索租户名称 / 域...' },
+    { param: 'enabled', label: '启用状态', kind: 'status', options: ENABLED_FILTER_OPTIONS },
+  ],
   fields: [
     { key: 'name', label: '租户名称', required: true, placeholder: '例如 客户A-售前中心' },
     { key: 'domain', label: '租户域', required: true, placeholder: '例如 tenant-a.example.com' },

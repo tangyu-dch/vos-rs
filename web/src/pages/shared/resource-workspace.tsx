@@ -1,7 +1,7 @@
 // 资源工作台：通用 CRUD 列表 + 表单 + 分页 + 搜索 + 状态筛选
 // 从 console.tsx 拆分
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button, Card, CardBody, Input, Select, SelectItem, Pagination,
   Chip, Switch, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
@@ -231,11 +231,112 @@ export function FieldLabel({ label, required }: { label: string; required?: bool
   );
 }
 
+/** 关键字防抖时长（毫秒） */
+const FILTER_DEBOUNCE_MS = 300;
+
+/** 初始化筛选状态：普通筛选按 param 初始化，dateRange 按 `${param}_start`/`${param}_end` 初始化 */
+function initFilterState(spec: ResourceSpec): Record<string, string> {
+  const state: Record<string, string> = {};
+  (spec.serverFilters || []).forEach((f) => {
+    if (f.kind === 'dateRange') {
+      state[`${f.param}_start`] = '';
+      state[`${f.param}_end`] = '';
+    } else {
+      state[f.param] = '';
+    }
+  });
+  return state;
+}
+
+/** 将 server-mode 筛选值整理为后端 query 参数（仅包含非空值） */
+function buildServerQueryParams(
+  spec: ResourceSpec,
+  filters: Record<string, string>,
+): Record<string, string> {
+  const params: Record<string, string> = {};
+  (spec.serverFilters || []).forEach((f) => {
+    if (f.mode === 'client') return;
+    if (f.kind === 'dateRange') {
+      const startKey = `${f.param}_start`;
+      const endKey = `${f.param}_end`;
+      const startVal = (filters[startKey] ?? '').trim();
+      const endVal = (filters[endKey] ?? '').trim();
+      // datetime-local 值形如 "2026-07-29T15:30"，补充秒和时区后传给后端
+      if (startVal) params[f.startParam ?? startKey] = normalizeDateTimeLocal(startVal, false);
+      if (endVal) params[f.endParam ?? endKey] = normalizeDateTimeLocal(endVal, true);
+    } else {
+      const v = (filters[f.param] ?? '').trim();
+      if (v !== '') params[f.param] = v;
+    }
+  });
+  return params;
+}
+
+/**
+ * 将 `<input type="datetime-local">` 的值（"YYYY-MM-DDTHH:mm"）规范为后端可解析的 RFC3339 时间。
+ * - 补全秒（":00"）
+ * - 附加本地时区偏移（ Asia/Shanghai => +08:00）
+ * - 结束时间（isEnd=true）若未带秒，按当前秒补齐，避免漏掉结束时刻的数据
+ */
+function normalizeDateTimeLocal(value: string, isEnd: boolean): string {
+  // value: "2026-07-29T15:30" 或 "2026-07-29T15:30:45"
+  const hasSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value);
+  let normalized = hasSeconds ? value : `${value}:00`;
+  // 附加本地时区偏移：用浏览器当前时区
+  const tzOffset = new Date().getTimezoneOffset();
+  const sign = tzOffset <= 0 ? '+' : '-';
+  const absOffset = Math.abs(tzOffset);
+  const tzHours = String(Math.floor(absOffset / 60)).padStart(2, '0');
+  const tzMinutes = String(absOffset % 60).padStart(2, '0');
+  normalized = `${normalized}${sign}${tzHours}:${tzMinutes}`;
+  // 结束时间：若未带秒（用户只选到分钟），秒补为 59，包含该分钟的所有数据
+  if (isEnd && !hasSeconds) {
+    normalized = normalized.replace(/:\d{2}\+/, ':59+');
+    normalized = normalized.replace(/:\d{2}-/, ':59-');
+  }
+  return normalized;
+}
+
+/** 对已加载的行数据应用 client-mode 筛选 */
+function applyClientFilters(
+  spec: ResourceSpec,
+  rows: Entity[],
+  filters: Record<string, string>,
+): Entity[] {
+  const clientFilters = (spec.serverFilters || []).filter((f) => f.mode === 'client');
+  if (clientFilters.length === 0) return rows;
+  let result = rows;
+  for (const f of clientFilters) {
+    const raw = (filters[f.param] ?? '').trim();
+    if (raw === '') continue;
+    const lower = raw.toLowerCase();
+    if (f.kind === 'keyword') {
+      const fields = f.clientFields && f.clientFields.length > 0
+        ? f.clientFields
+        : null;
+      result = result.filter((row) => {
+        if (fields) {
+          return fields.some((k) => String(row[k] ?? '').toLowerCase().includes(lower));
+        }
+        return Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(lower));
+      });
+    } else {
+      // status / select：精确匹配字段值
+      result = result.filter((row) => {
+        const cell = row[f.param];
+        if (typeof cell === 'boolean') return String(cell) === raw;
+        return String(cell ?? '') === raw;
+      });
+    }
+  }
+  return result;
+}
+
 export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec; headerActions?: React.ReactNode }) {
   const [rows, setRows] = useState<Entity[]>([]);
   const [pagination, setPagination] = useState({ page: 1, page_size: 20, total: 0, total_pages: 0 });
-  const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
+  const [filters, setFilters] = useState<Record<string, string>>(() => initFilterState(spec));
+  const [debouncedFilters, setDebouncedFilters] = useState<Record<string, string>>(() => initFilterState(spec));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -252,14 +353,21 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
 
+  // server-mode 筛选参数（仅非空值，传给后端）
+  const serverParams = useMemo(
+    () => buildServerQueryParams(spec, debouncedFilters),
+    [spec, debouncedFilters],
+  );
+
   const load = useCallback(async (page = pagination.page) => {
     setLoading(true); setError('');
     try {
+      const baseParams = { page, page_size: pagination.page_size, ...spec.params, ...serverParams };
       if (spec.path === '/extensions') {
         const [result, regRes, sysRes] = await Promise.all([
-          listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params }),
+          listResource(spec.path, baseParams),
           api.get<{ items: Entity[] }>('/registrations').catch(() => ({ items: [] as Entity[] })),
-          api.get<{ configs?: Record<string, string> }>('/system/configs').catch(() => ({ configs: {} })),
+          api.get<{ configs?: Record<string, string> }>('/infrastructure/settings').catch(() => ({ configs: {} })),
         ]);
         const onlineAors = new Set((regRes.items || []).map((r) => String(r.aor ?? '')));
         const sysRealm = (sysRes?.configs as Record<string, string>)?.realm || 'vos-rs (默认)';
@@ -273,11 +381,12 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
             registration_status: isOnline ? 'registered' : 'unregistered',
           };
         });
-        setRows(items);
-        setPagination(result.pagination || { page, page_size: 20, total: items.length, total_pages: 1 });
+        const filtered = applyClientFilters(spec, items, debouncedFilters);
+        setRows(filtered);
+        setPagination(result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 });
       } else if (spec.path === '/tenants') {
         // 租户列表：后端返回 { tenant, billing_account }，平铺 tenant 字段为行数据
-        const result = await listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params });
+        const result = await listResource(spec.path, baseParams);
         const items = (result.items || []).map((row) => {
           const tenant = (row.tenant as Entity | undefined) ?? {};
           const billingAccount = row.billing_account as Entity | undefined;
@@ -288,11 +397,12 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
               : '—',
           };
         });
-        setRows(items);
-        setPagination(result.pagination || { page, page_size: 20, total: items.length, total_pages: 1 });
+        const filtered = applyClientFilters(spec, items, debouncedFilters);
+        setRows(filtered);
+        setPagination(result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 });
       } else if (spec.path === '/billing/accounts') {
         // 计费账户列表：后端返回 associated_tenants 数组，平铺为展示字段
-        const result = await listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params });
+        const result = await listResource(spec.path, baseParams);
         const items = (result.items || []).map((row) => {
           const tenants = Array.isArray(row.associated_tenants) ? row.associated_tenants as Entity[] : [];
           return {
@@ -302,19 +412,40 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
               : '—',
           };
         });
-        setRows(items);
-        setPagination(result.pagination || { page, page_size: 20, total: items.length, total_pages: 1 });
+        const filtered = applyClientFilters(spec, items, debouncedFilters);
+        setRows(filtered);
+        setPagination(result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 });
       } else {
-        const result = await listResource(spec.path, { page, page_size: pagination.page_size, ...spec.params });
-        setRows(result.items || []);
-        setPagination(result.pagination || { page, page_size: 20, total: result.items?.length || 0, total_pages: 1 });
+        const result = await listResource(spec.path, baseParams);
+        const items = applyClientFilters(spec, result.items || [], debouncedFilters);
+        setRows(items);
+        // 客户端筛选模式下，total 用筛选后的条数（后端通常无分页）
+        const isClientMode = (spec.serverFilters || []).some((f) => f.mode === 'client');
+        const fallbackTotal = isClientMode ? items.length : (result.items?.length || 0);
+        setPagination(result.pagination || { page, page_size: 20, total: fallbackTotal, total_pages: 1 });
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '加载失败');
     } finally {
       setLoading(false);
     }
-  }, [pagination.page, pagination.page_size, spec.path, spec.params]);
+  }, [pagination.page, pagination.page_size, spec.path, spec.params, serverParams]);
+
+  // 关键字防抖：filters 变化后延迟同步到 debouncedFilters
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedFilters(filters), FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [filters]);
+
+  // 切换资源或筛选条件变化时回到第 1 页并触发加载
+  const hasServerFilter = useMemo(
+    () => Object.values(serverParams).some((v) => v !== ''),
+    [serverParams],
+  );
+  const hasClientFilter = useMemo(() => {
+    const clientFilters = (spec.serverFilters || []).filter((f) => f.mode === 'client');
+    return clientFilters.some((f) => (filters[f.param] ?? '').trim() !== '');
+  }, [filters, spec]);
 
   const exportData = async () => {
     if (!rows.length) {
@@ -326,6 +457,7 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
       const queryParams = new URLSearchParams({
         export: 'true',
         ...spec.params,
+        ...serverParams,
       }).toString();
 
       const blob = await api.blob(`${spec.path}?${queryParams}`);
@@ -395,30 +527,54 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     }
   };
 
-  useEffect(() => { void load(1); }, [spec.path]);
+  // 切换资源时立即重置筛选状态（debouncedFilters 同步重置，跳过防抖）
+  useEffect(() => {
+    const empty = initFilterState(spec);
+    setFilters(empty);
+    setDebouncedFilters(empty);
+  }, [spec]);
+
+  // 筛选条件变化（含资源切换后的重置）时回到第 1 页并触发加载
+  useEffect(() => {
+    setPagination((prev) => ({ ...prev, page: 1 }));
+    void load(1);
+  }, [debouncedFilters, load]);
+
   useEffect(() => {
     const needsEgress = spec.fields.some((field) => field.optionsResource === 'egress-trunks');
     const needsSource = spec.fields.some((field) => field.optionsResource === 'allocation-source');
     const needsAccounts = spec.fields.some((field) => field.optionsResource === 'accounts');
     const needsTenants = spec.fields.some((field) => field.optionsResource === 'tenants');
-    if (!needsEgress && !needsSource && !needsAccounts && !needsTenants) return;
+    // 筛选器也需要加载动态选项（tenants / accounts）
+    const filterNeedsTenants = (spec.serverFilters || []).some((f) => f.optionsResource === 'tenants');
+    const filterNeedsAccounts = (spec.serverFilters || []).some((f) => f.optionsResource === 'accounts');
+    const wantEgress = needsEgress;
+    const wantSource = needsSource;
+    const wantAccounts = needsAccounts || filterNeedsAccounts;
+    const wantTenants = needsTenants || filterNeedsTenants;
+    if (!wantEgress && !wantSource && !wantAccounts && !wantTenants) return;
     void Promise.all([
-      needsEgress || needsSource ? listOptions('/trunks') : Promise.resolve([]),
-      needsSource ? listOptions('/extensions') : Promise.resolve([]),
-      needsAccounts ? listOptions('/billing/accounts') : Promise.resolve([]),
-      needsTenants ? listOptions('/tenants') : Promise.resolve([]),
+      wantEgress || wantSource ? listOptions('/trunks') : Promise.resolve([]),
+      wantSource ? listOptions('/extensions') : Promise.resolve([]),
+      wantAccounts ? listOptions('/billing/accounts') : Promise.resolve([]),
+      wantTenants ? listOptions('/tenants') : Promise.resolve([]),
     ]).then(([trunks, extensions, accounts, tenants]) => setFieldOptions({
       owner_egress_trunk_id: trunks.filter((item) => trunkRole(item) === 'egress').map((item) => ({ label: String(item.id), value: String(item.id) })),
       allocation_trunks: trunks.filter((item) => trunkRole(item) === 'access').map((item) => ({ label: String(item.id), value: String(item.id) })),
       allocation_extensions: extensions.map((item) => ({ label: String(item.display_name ?? item.username), value: String(item.username) })),
       account_id: accounts.map((acc) => ({ label: `${acc.username} (余额: ¥${acc.balance ?? 0})`, value: String(acc.username) })),
       billing_account_id: accounts.map((acc) => ({ label: `${acc.username} (余额: ¥${acc.balance ?? 0})`, value: String(acc.id) })),
+      // 筛选器用账户列表（value=username，便于按 username 精确过滤流水）
+      username: accounts.map((acc) => ({ label: `${acc.username} (余额: ¥${acc.balance ?? 0})`, value: String(acc.username) })),
       tenant_id: tenants.map((item) => {
         // 后端 /tenants 列表返回 { tenant: {...}, billing_account }，需提取嵌套租户对象
         const tenant = (item.tenant as Entity | undefined) ?? item;
         return { label: String(tenant.name ?? tenant.id ?? item.id ?? ''), value: String(tenant.id ?? item.id ?? '') };
       }),
-    })).catch(() => setFieldOptions({ owner_egress_trunk_id: [], allocation_trunks: [], allocation_extensions: [], account_id: [], billing_account_id: [], tenant_id: [] }));
+    })).catch(() => setFieldOptions({
+      owner_egress_trunk_id: [], allocation_trunks: [], allocation_extensions: [],
+      account_id: [], billing_account_id: [], username: [], tenant_id: [],
+    }));
   }, [spec.path]);
 
   const optionsForField = (field: FieldSpec) => {
@@ -525,14 +681,9 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     }
   };
 
-  const normalizedQuery = query.trim().toLowerCase();
-  let visibleRows = normalizedQuery
-    ? rows.filter((row) => Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(normalizedQuery)))
-    : rows;
-  if (statusFilter !== 'all') {
-    const target = statusFilter === 'enabled';
-    visibleRows = visibleRows.filter((row) => (row.enabled === target || (row.enabled === undefined && target)));
-  }
+  // rows 已在 load() 中完成服务端/客户端筛选，直接作为可见行
+  const visibleRows = rows;
+  const hasActiveFilter = hasServerFilter || hasClientFilter;
 
   const visibleFields = spec.fields.filter((field) => !field.showWhen || rows.some((row) => field.showWhen!(row))).slice(0, 7);
 
@@ -640,36 +791,95 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <Input
-                type="search"
-                placeholder="搜索当前列表..."
-                variant="bordered"
-                size="sm"
-                className="w-56"
-                startContent={<Search className="w-4 h-4 text-default-400" />}
-                value={query}
-                onValueChange={setQuery}
-                isClearable
-                onClear={() => setQuery('')}
-                autoComplete="none"
-                name="search_filter_query_input"
-              />
-              <Select
-                aria-label="状态筛选"
-                variant="bordered"
-                size="sm"
-                className="w-36"
-                selectedKeys={[statusFilter]}
-                onChange={(e) => setStatusFilter(e.target.value as 'all' | 'enabled' | 'disabled')}
-              >
-                <SelectItem key="all">所有状态</SelectItem>
-                <SelectItem key="enabled">已启用</SelectItem>
-                <SelectItem key="disabled">已禁用</SelectItem>
-              </Select>
+            <div className="flex flex-wrap items-center gap-3">
+              {(spec.serverFilters || []).map((f) => {
+                if (f.kind === 'keyword') {
+                  return (
+                    <Input
+                      key={f.param}
+                      type="search"
+                      placeholder={f.placeholder || `按${f.label}搜索...`}
+                      variant="bordered"
+                      size="sm"
+                      className="w-56"
+                      startContent={<Search className="w-4 h-4 text-default-400" />}
+                      value={filters[f.param] ?? ''}
+                      onValueChange={(v) => setFilters((prev) => ({ ...prev, [f.param]: v }))}
+                      isClearable
+                      onClear={() => setFilters((prev) => ({ ...prev, [f.param]: '' }))}
+                      autoComplete="none"
+                      name={`filter_${f.param}`}
+                    />
+                  );
+                }
+                if (f.kind === 'dateRange') {
+                  const startKey = `${f.param}_start`;
+                  const endKey = `${f.param}_end`;
+                  return (
+                    <div key={f.param} className="flex items-center gap-1.5">
+                      <input
+                        type="datetime-local"
+                        aria-label={`${f.label}开始`}
+                        className="h-8 w-44 rounded-lg border border-default-200 bg-content1 px-2 text-tiny text-foreground outline-none focus:border-primary"
+                        value={filters[startKey] ?? ''}
+                        onChange={(e) => setFilters((prev) => ({ ...prev, [startKey]: e.target.value }))}
+                      />
+                      <span className="text-tiny text-default-400">至</span>
+                      <input
+                        type="datetime-local"
+                        aria-label={`${f.label}结束`}
+                        className="h-8 w-44 rounded-lg border border-default-200 bg-content1 px-2 text-tiny text-foreground outline-none focus:border-primary"
+                        value={filters[endKey] ?? ''}
+                        onChange={(e) => setFilters((prev) => ({ ...prev, [endKey]: e.target.value }))}
+                      />
+                    </div>
+                  );
+                }
+                // status / select 类型：下拉选项
+                const opts = f.optionsResource === 'tenants'
+                  ? (fieldOptions.tenant_id || [])
+                  : f.optionsResource === 'accounts'
+                    ? (fieldOptions.username || [])
+                    : (f.options || []);
+                const allOpts = [{ label: '全部', value: '' }, ...opts.filter((o) => o.value !== '')];
+                const sel = filters[f.param] ?? '';
+                return (
+                  <Select
+                    key={f.param}
+                    aria-label={f.label}
+                    variant="bordered"
+                    size="sm"
+                    className="w-36"
+                    placeholder={f.label}
+                    selectedKeys={sel !== '' ? [sel] : ['']}
+                    onChange={(e) => setFilters((prev) => ({ ...prev, [f.param]: e.target.value }))}
+                  >
+                    {allOpts.map((o) => (
+                      <SelectItem key={o.value}>{o.label}</SelectItem>
+                    ))}
+                  </Select>
+                );
+              })}
+              {(spec.serverFilters || []).length === 0 && (
+                <span className="text-tiny text-default-400">该资源暂不支持筛选</span>
+              )}
               <span className="text-tiny text-default-400">
-                {normalizedQuery || statusFilter !== 'all' ? `筛选后 ${visibleRows.length} 条` : `共 ${pagination.total} 条记录`}
+                {hasActiveFilter ? `筛选后 ${visibleRows.length} 条` : `共 ${pagination.total} 条记录`}
               </span>
+              {hasActiveFilter && (
+                <Button
+                  size="sm"
+                  variant="flat"
+                  color="primary"
+                  onPress={() => {
+                    const empty = initFilterState(spec);
+                    setFilters(empty);
+                    setDebouncedFilters(empty);
+                  }}
+                >
+                  重置筛选
+                </Button>
+              )}
             </div>
           </div>
 
@@ -692,16 +902,17 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                     <Search className="w-8 h-8 text-default-400" />
                     <div className="text-center">
                       <p className="text-sm font-semibold text-foreground">没有找到匹配的数据</p>
-                      <p className="text-xs text-default-400 mt-1">请尝试调整您的搜索关键字或状态筛选条件</p>
+                      <p className="text-xs text-default-400 mt-1">请尝试调整您的筛选条件</p>
                     </div>
-                    {(normalizedQuery !== '' || statusFilter !== 'all') && (
+                    {hasActiveFilter && (
                       <Button
                         size="sm"
                         variant="flat"
                         color="primary"
                         onPress={() => {
-                          setQuery('');
-                          setStatusFilter('all');
+                          const empty = initFilterState(spec);
+                          setFilters(empty);
+                          setDebouncedFilters(empty);
                         }}
                       >
                         重置筛选条件

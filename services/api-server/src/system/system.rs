@@ -286,7 +286,7 @@ async fn validate_realm_change(
     }
     let user_count = state
         .store
-        .count_users()
+        .count_users(None, None)
         .await
         .map_err(|_| "检查 SIP 用户失败")?;
     let trunk_count: i64 = sqlx::query_scalar(

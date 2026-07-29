@@ -10,6 +10,20 @@ use crate::{normalize_page, ApiError, AppState, PageQuery, PaginatedResponse};
 mod manage;
 pub(crate) use manage::{create_gateway, update_gateway};
 
+/// 中继列表查询参数：在通用分页基础上增加关键字和启用状态筛选。
+///
+/// - `q`：对中继 ID 和 host 做大小写不敏感的模糊搜索
+/// - `enabled`：按启用状态精确过滤（true / false）
+#[derive(Debug, Deserialize)]
+pub struct ListTrunksQuery {
+    #[serde(flatten)]
+    pub page: PageQuery,
+    /// 按中继 ID / 主机地址模糊搜索
+    pub q: Option<String>,
+    /// 按启用状态精确过滤
+    pub enabled: Option<bool>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateGatewayRequest {
     pub id: String,
@@ -153,25 +167,31 @@ fn reject_unsupported_egress_secret(_role: &str, _password: Option<&str>) -> Res
 
 pub async fn list_gateways(
     State(state): State<AppState>,
-    Query(query): Query<PageQuery>,
+    Query(query): Query<ListTrunksQuery>,
 ) -> Result<axum::response::Response, ApiError> {
-    let (page, page_size, offset) = normalize_page(&query);
+    let (page, page_size, offset) = normalize_page(&query.page);
+    let q_trim = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let (items, total) = tokio::try_join!(
         state.store.list_gateways_page(
             page_size,
             offset,
-            query.gateway_type.as_deref(),
-            query.role.as_deref()
+            query.page.gateway_type.as_deref(),
+            query.page.role.as_deref(),
+            q_trim,
+            query.enabled,
         ),
-        state
-            .store
-            .count_gateways(query.gateway_type.as_deref(), query.role.as_deref()),
+        state.store.count_gateways(
+            query.page.gateway_type.as_deref(),
+            query.page.role.as_deref(),
+            q_trim,
+            query.enabled,
+        ),
     )
     .map_err(|e| ApiError {
         error: e.to_string(),
     })?;
 
-    if query.export.unwrap_or(false) {
+    if query.page.export.unwrap_or(false) {
         let headers = vec![
             "中继标识",
             "中继类型",
