@@ -284,7 +284,7 @@ RWI WebSocket 端点与普通 REST 端点共用同一套中间件链：
 | 中间件 | 职责 |
 | :--- | :--- |
 | `response_contract` | 统一响应格式包装、错误码归一化 |
-| `jwt_auth` | JWT 解码 + RBAC 权限检查（`role_allows`），WebSocket 端点额外支持 query 参数回退 |
+| `jwt_auth` | JWT 解码 + 数据库动态权限检查，WebSocket 端点额外支持 query 参数回退 |
 | `audit_log` | 请求审计记录，自动脱敏 `access_token` / `token` / `authorization` 等敏感字段 |
 
 ---

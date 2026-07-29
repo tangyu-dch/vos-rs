@@ -16,12 +16,15 @@ import { ApiError, shouldRetryRequest, unwrap } from '@/services/client';
 
 describe('v1 API client', () => {
   it('unwraps the standard success envelope', () => {
-    expect(unwrap({ code: 0, message: 'success', data: { id: 42 }, request_id: 'req-1' })).toEqual({ id: 42 });
+    expect(unwrap({ code: 0, message: 'success', data: { id: 42 }, request_id: 'req-1' })).toEqual({
+      id: 42,
+    });
   });
 
   it('keeps backend error code and request id', () => {
-    expect(() => unwrap({ code: 40001, message: '资源不存在', data: null, request_id: 'req-2' }))
-      .toThrowError(ApiError);
+    expect(() =>
+      unwrap({ code: 40001, message: '资源不存在', data: null, request_id: 'req-2' }),
+    ).toThrowError(ApiError);
     try {
       unwrap({ code: 40001, message: '资源不存在', data: null, request_id: 'req-2' });
     } catch (error) {

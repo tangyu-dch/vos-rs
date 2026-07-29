@@ -7,6 +7,8 @@
 #![recursion_limit = "512"]
 
 // 子目录模块
+mod access_control;
+mod announcements;
 mod billing;
 mod cluster;
 mod copilot;
@@ -23,6 +25,7 @@ mod helpers;
 mod import;
 mod llm_configs;
 mod middleware;
+mod notifications;
 mod recording;
 mod rwi_ws;
 mod v1;
@@ -86,9 +89,7 @@ pub(crate) struct AppState {
     pub(crate) internal_client: reqwest::Client,
     pub(crate) nats_client: Option<async_nats::Client>,
     pub(crate) jwt_secret: Vec<u8>,
-    pub(crate) admin_password: String,
-    pub(crate) operator_password: String,
-    pub(crate) financier_password: String,
+    pub(crate) access_snapshot: Arc<tokio::sync::RwLock<cdr_core::AccessSnapshot>>,
     pub(crate) internal_secret: String,
     pub(crate) redis_client: redis::aio::ConnectionManager,
     pub(crate) sip_node_key_prefix: String,
@@ -132,7 +133,6 @@ async fn main() -> anyhow::Result<()> {
     let api_section = config.api_server.unwrap_or_default();
     let api_network = api_section.network.unwrap_or_default();
     let api_security = api_section.security.unwrap_or_default();
-    let admin_credentials = api_section.admin_credentials.unwrap_or_default();
 
     let database_url = if let (Some(host), Some(port), Some(username), Some(database)) = (
         db_section.host.clone(),
@@ -288,18 +288,6 @@ async fn main() -> anyhow::Result<()> {
         .or(api_security.jwt_secret.clone())
         .unwrap_or_else(|| "vos-rs-secret-key-change-in-production".to_string());
 
-    let admin_password = env::var("VOS_RS_ADMIN_PASSWORD")
-        .ok()
-        .or(admin_credentials.admin_password)
-        .unwrap_or_else(|| "admin".to_string());
-    let operator_password = env::var("VOS_RS_OPERATOR_PASSWORD")
-        .ok()
-        .or(admin_credentials.operator_password)
-        .unwrap_or_else(|| "operator".to_string());
-    let financier_password = env::var("VOS_RS_FINANCIER_PASSWORD")
-        .ok()
-        .or(admin_credentials.financier_password)
-        .unwrap_or_else(|| "financier".to_string());
     let internal_secret = env::var("VOS_RS_INTERNAL_SECRET")
         .ok()
         .or(api_security.internal_secret)
@@ -326,14 +314,14 @@ async fn main() -> anyhow::Result<()> {
         .is_ok_and(|value| value.eq_ignore_ascii_case("production"))
         || is_public;
 
-    validate_runtime_secrets(
+    validate_runtime_secrets(production, &jwt_secret, &internal_secret)?;
+    let bootstrap_password = env::var("VOS_RS_BOOTSTRAP_ADMIN_PASSWORD").ok();
+    let access_snapshot = access_control::initialize_access_control(
+        &store,
+        bootstrap_password.as_deref(),
         production,
-        &jwt_secret,
-        &internal_secret,
-        &admin_password,
-        &operator_password,
-        &financier_password,
-    )?;
+    )
+    .await?;
 
     let state = AppState {
         store: Arc::new(store),
@@ -343,9 +331,7 @@ async fn main() -> anyhow::Result<()> {
         internal_client,
         nats_client,
         jwt_secret: jwt_secret.into_bytes(),
-        admin_password,
-        operator_password,
-        financier_password,
+        access_snapshot: Arc::new(tokio::sync::RwLock::new(access_snapshot)),
         internal_secret,
         redis_client,
         sip_node_key_prefix,
@@ -512,6 +498,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn background traffic telemetry loop to periodically report node traffic to Redis
     tokio::spawn(crate::dashboard::start_traffic_telemetry_loop(
+        state.clone(),
+    ));
+    tokio::spawn(crate::notifications::start_notification_scan_loop(
         state.clone(),
     ));
 

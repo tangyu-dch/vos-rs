@@ -100,14 +100,16 @@ pub async fn chat_in_session_stream(
     let steps = TelecomCopilotEngine::build_ladder_steps(&payload_data);
     let ascii_ladder = generate_ascii_ladder(&steps);
     let llm_enabled = active_llm.as_ref().is_some_and(|l| l.is_configured());
-    let llm_status = if llm_enabled {
-        let l = active_llm
-            .as_ref()
-            .expect("llm_enabled 为 true 时 active_llm 必存在");
-        format!("LLM 已启用 (provider={}, model={})", l.provider, l.model)
-    } else {
-        "LLM 未配置（数据库无启用配置），以下为结构化真实业务数据".to_string()
-    };
+    let llm_status = active_llm
+        .as_ref()
+        .filter(|config| config.is_configured())
+        .map(|config| {
+            format!(
+                "LLM 已启用 (provider={}, model={})",
+                config.provider, config.model
+            )
+        })
+        .unwrap_or_else(|| "LLM 未配置（数据库无启用配置），以下为结构化真实业务数据".to_string());
 
     // 4) 创建 SSE channel，spawn 任务流式推送
     let (tx, rx) = mpsc::channel::<Event>(SSE_CHANNEL_BUFFER);
@@ -120,6 +122,7 @@ pub async fn chat_in_session_stream(
     let state_clone = state.clone();
     let session_clone = session.clone();
     let claims_sub = claims.sub.clone();
+    let claims_role = claims.role.clone();
     let session_id_clone = session_id.clone();
     let query_clone = query.clone();
     let ascii_ladder_clone = ascii_ladder.clone();
@@ -131,6 +134,7 @@ pub async fn chat_in_session_stream(
             state: &state_clone,
             session_id: &session_id_clone,
             operator: &claims_sub,
+            operator_role: &claims_role,
             session: &session_clone,
             user_message,
             context,
@@ -159,6 +163,7 @@ struct StreamContext<'a> {
     state: &'a AppState,
     session_id: &'a str,
     operator: &'a str,
+    operator_role: &'a str,
     session: &'a CopilotSession,
     user_message: CopilotMessage,
     context: ContextPayload,
@@ -176,6 +181,7 @@ async fn run_stream_loop(tx: mpsc::Sender<Event>, ctx: StreamContext<'_>) -> Res
         state,
         session_id,
         operator,
+        operator_role,
         session,
         user_message,
         context,
@@ -194,16 +200,18 @@ async fn run_stream_loop(tx: mpsc::Sender<Event>, ctx: StreamContext<'_>) -> Res
 
     // 流式 LLM 调用或 fallback
     let (full_report, root_cause, suggested_action, final_llm_status) = if context.llm_enabled {
-        match stream_llm_response(
-            &tx,
+        match stream_llm_response(LlmStreamContext {
+            tx: &tx,
             state,
-            &active_llm,
+            active_llm: &active_llm,
             session_id,
+            operator,
+            operator_role,
             query,
             payload,
             ascii_ladder,
-            &images,
-        )
+            images: &images,
+        })
         .await
         {
             Ok(text) => (
@@ -279,17 +287,32 @@ async fn run_stream_loop(tx: mpsc::Sender<Event>, ctx: StreamContext<'_>) -> Res
 /// 流式调用 LLM（OpenAI 兼容协议 stream=true），逐 chunk 通过 SSE delta 推送。
 ///
 /// 返回完整文本。如果 HTTP 请求本身失败或响应解析失败，返回 Err。
-#[allow(clippy::too_many_arguments)]
-async fn stream_llm_response(
-    tx: &mpsc::Sender<Event>,
-    state: &AppState,
-    active_llm: &Option<LlmConfig>,
-    session_id: &str,
-    query: &str,
-    payload: &Payload,
-    ascii_ladder: &str,
-    images: &Option<Vec<String>>,
-) -> Result<String, String> {
+struct LlmStreamContext<'a> {
+    tx: &'a mpsc::Sender<Event>,
+    state: &'a AppState,
+    active_llm: &'a Option<LlmConfig>,
+    session_id: &'a str,
+    operator: &'a str,
+    operator_role: &'a str,
+    query: &'a str,
+    payload: &'a Payload,
+    ascii_ladder: &'a str,
+    images: &'a Option<Vec<String>>,
+}
+
+async fn stream_llm_response(ctx: LlmStreamContext<'_>) -> Result<String, String> {
+    let LlmStreamContext {
+        tx,
+        state,
+        active_llm,
+        session_id,
+        operator,
+        operator_role,
+        query,
+        payload,
+        ascii_ladder,
+        images,
+    } = ctx;
     let llm = active_llm
         .as_ref()
         .ok_or_else(|| "LLM 未配置".to_string())?;
@@ -316,7 +339,7 @@ async fn stream_llm_response(
 
     let mut messages = vec![serde_json::json!({
         "role": "system",
-        "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于真实业务数据（JSON）和信令数据，协助用户进行高效的运维排障、性能分析或系统管理。\n\n## 工具调用策略\n- 当用户询问每日汇报、日报、今日运行情况、呼叫情况总结、问题原因分析时，**必须**优先调用 `vos_get_daily_report` 工具获取聚合数据，再基于返回数据生成结构化汇报。\n- 当用户询问系统概况、大盘监控、集群健康时，调用 `vos_get_dashboard_stats`。\n- 当用户排查具体呼叫记录或失败原因时，调用 `vos_list_cdrs`；若需要信令级排障，调用 `vos_get_sip_flows`。\n- 数据为空时礼貌说明，并提示如何开启相应模块的持久化。\n\n## 回答排版规范\n使用清晰的 Markdown 结构，语气专业、自然，像一个资深的 VoIP 架构师在与同事交流。\n\n### 通用问答场景\n必须包含以下二级标题：\n- ## 📊 分析报告：结合数据对当前系统状态或呼叫流程进行专业、生动的解读，避免冰冷的格式化叙述。\n- ## 🔍 根因分析：深入剖析导致问题的底层原因（如网络延迟、信令超时、鉴权失败等），若无异常则明确告知。\n- ## 💡 建议动作：给出具体、可执行的操作指引（如修改路由规则、更新分机配置、核对运营商中继配置等）。\n\n### 每日汇报场景（用户询问日报/今日总结时）\n必须按以下四段式结构化输出：\n- ## 📋 当日总结：总通话数、接通数、失败数、接通率、平均通话时长、计费分钟数、音质评分（MOS）、注册分机数、活跃网关数。用表格呈现关键指标。\n- ## 📈 呼叫情况：分小时通话趋势（用表格或列表呈现，标注高峰时段），接通率变化解读。\n- ## 🔍 问题原因分析：失败原因 Top N 分布（表格，含占比）、Top 失败主被叫对、对每类失败原因给出专业解读。\n- ## 💡 建议动作：针对主要失败原因给出具体、可执行的优化建议。\n\n## 其他要求\n- **梯形图输出**：如果上下文中包含 SIP 信令交互梯形图且用户问题与之相关，请在回答中合适的位置以 ```text 代码块原样输出该梯形图。\n- **数据可视化**：趋势数据优先用表格呈现，便于阅读。百分比保留 1 位小数。"
+        "content": "你是 vos-rs 电信级软交换平台的智能运维专家。你的任务是基于真实业务数据和信令数据，协助用户进行高效的运维排障、性能分析或系统管理。\n\n## 工具调用策略\n- 当用户询问每日汇报、日报、今日运行情况、呼叫情况总结、问题原因分析时，**必须**优先调用 `vos_get_daily_report` 工具获取聚合数据，再基于返回数据生成结构化汇报。\n- 当用户询问系统概况、大盘监控、集群健康时，调用 `vos_get_dashboard_stats`。\n- 当用户排查具体呼叫记录或失败原因时，调用 `vos_list_cdrs`；若需要信令级排障，调用 `vos_get_sip_flows`。\n- 数据为空时礼貌说明，并提示如何开启相应模块的持久化。\n\n## 回答排版规范\n使用清晰克制的 Markdown 结构，语气专业、自然，像资深架构师在与同事交流。所有面向用户的标题、指标、状态和说明必须使用中文，不附带英文翻译，不使用装饰性表情符号。技术标识仅在无法翻译的配置值或代码中保留。\n\n### 通用问答场景\n必须包含以下二级标题：\n- ## 分析报告：结合数据对当前系统状态或呼叫流程进行专业解读，避免冰冷的格式化叙述。\n- ## 根因分析：深入剖析导致问题的底层原因，若无异常则明确告知。\n- ## 建议动作：给出具体、可执行的操作指引。\n\n### 每日汇报场景（用户询问日报或今日总结时）\n必须按以下四段式结构化输出：\n- ## 当日总结：总通话数、接通数、失败数、接通率、平均通话时长、计费分钟数、音质评分、注册分机数、活跃网关数。用表格呈现关键指标。\n- ## 呼叫情况：分小时通话趋势，标注高峰时段并解读接通率变化。\n- ## 问题原因分析：失败原因分布及占比、主要失败主被叫对，并给出专业解读。\n- ## 建议动作：针对主要失败原因给出具体、可执行的优化建议。\n\n## 其他要求\n- **梯形图输出**：如果上下文中包含信令交互梯形图且用户问题与之相关，请在回答中合适的位置以 ```text 代码块原样输出该梯形图。\n- **数据可视化**：趋势数据优先用表格呈现，便于阅读。百分比保留 1 位小数。"
     })];
 
     // 排除最后一条（那是当前最新的消息，我们需要它带上当前最新的 telemetry payload 数据进行分析）
@@ -362,6 +385,7 @@ async fn stream_llm_response(
     const MAX_TOOL_ROUNDS: usize = 3;
     let engine = TelecomCopilotEngine::new(state, active_llm.clone());
     let mut full_text = String::new();
+    let mut proposed_actions = std::collections::HashMap::new();
 
     for round in 0..MAX_TOOL_ROUNDS {
         let body = serde_json::json!({
@@ -514,7 +538,7 @@ async fn stream_llm_response(
         for (id, name, args_str) in &pending_tool_calls {
             let args = serde_json::from_str::<serde_json::Value>(args_str)
                 .unwrap_or(serde_json::Value::Null);
-            tracing::info!(round, tool = %name, "执行 LLM 工具调用");
+            tracing::info!(round, tool = %name, "处理 LLM 工具调用");
             // 通知前端：工具开始执行（用于展示"正在调用 XXX"卡片）
             let _ = send_event(
                 tx,
@@ -522,7 +546,69 @@ async fn stream_llm_response(
                 &serde_json::json!({ "name": name, "args": args }),
             )
             .await;
-            let result = engine.execute_tool(name, &args).await;
+            let result = match crate::copilot::safety::tool_policy(name) {
+                Some(policy) if policy.risk == crate::copilot::safety::ToolRisk::ReadOnly => {
+                    let auth_version = state
+                        .access_snapshot
+                        .read()
+                        .await
+                        .users
+                        .get(operator)
+                        .map(|identity| identity.auth_version)
+                        .unwrap_or_default();
+                    let claims = Claims {
+                        sub: operator.to_string(),
+                        role: operator_role.to_string(),
+                        auth_version,
+                        exp: 0,
+                    };
+                    if crate::copilot::safety::tool_allowed(state, &claims, policy).await {
+                        engine.execute_tool(name, &args).await
+                    } else {
+                        serde_json::json!({
+                            "error": format!("当前角色无权调用工具 {name}"),
+                            "executed": false
+                        })
+                    }
+                }
+                Some(policy) => {
+                    let proposal_key = format!("{name}:{args}");
+                    if let Some(action) = proposed_actions.get(&proposal_key) {
+                        crate::copilot::safety::approval_tool_result(action)
+                    } else {
+                        let claims = Claims {
+                            sub: operator.to_string(),
+                            role: operator_role.to_string(),
+                            auth_version: state
+                                .access_snapshot
+                                .read()
+                                .await
+                                .users
+                                .get(operator)
+                                .map(|identity| identity.auth_version)
+                                .unwrap_or_default(),
+                            exp: 0,
+                        };
+                        match crate::copilot::safety::propose_action(
+                            state, session_id, &claims, name, &args, policy,
+                        )
+                        .await
+                        {
+                            Ok(action) => {
+                                let _ = send_event(tx, "approval_required", &action).await;
+                                let result = crate::copilot::safety::approval_tool_result(&action);
+                                proposed_actions.insert(proposal_key, action);
+                                result
+                            }
+                            Err(error) => serde_json::json!({ "error": error, "executed": false }),
+                        }
+                    }
+                }
+                None => serde_json::json!({
+                    "error": format!("未知或未分级工具: {name}"),
+                    "executed": false
+                }),
+            };
             let result_str = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
             // 通知前端：工具执行完成（用于展示结果摘要）
             let _ = send_event(

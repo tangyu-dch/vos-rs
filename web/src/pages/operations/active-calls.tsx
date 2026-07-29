@@ -3,20 +3,27 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Button, Card, CardBody, Chip, Table, TableHeader, TableColumn, TableBody, TableRow, TableCell,
+  Button,
+  Card,
+  CardBody,
+  Chip,
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
+  TableCell,
 } from '@heroui/react';
 import { RefreshCw, Eye, PhoneOff, Activity, Download, PhoneCall } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/client';
 import { useAuth } from '@/auth/AuthContext';
-import { canWriteDomain } from '@/services/auth';
+import { hasPermission } from '@/services/auth';
 import type { Entity } from '@/services/resources';
-import { ErrorState } from '@/components/detail-shell';
+import { EmptyState, ErrorState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
 import { SipTraceModal } from '@/components/SipTraceModal';
-import {
-  ConfirmDialog, usePageVisibility,
-} from '@/pages/shared/resource-workspace';
+import { ConfirmDialog, usePageVisibility } from '@/pages/shared/resource-workspace';
 import { callDetailText, entityId, valueText } from '@/pages/shared/format';
 
 export function ActiveCallsPage() {
@@ -29,6 +36,8 @@ export function ActiveCallsPage() {
   const [saving, setSaving] = useState(false);
   const navigate = useNavigate();
   const { session } = useAuth();
+  const canExport = Boolean(session && hasPermission(session, 'calls.export'));
+  const canTerminate = Boolean(session && hasPermission(session, 'calls.terminate'));
   const isVisible = usePageVisibility();
 
   const load = useCallback(async (silent = false) => {
@@ -76,12 +85,12 @@ export function ActiveCallsPage() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.setAttribute('href', url);
-      link.setAttribute('download', `Active_Calls_List_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.setAttribute('download', `活跃通话列表_${new Date().toISOString().slice(0, 10)}.csv`);
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      message.success('已从后端成功生成并下载活跃通话列表 (CSV 格式)');
+      message.success('活跃通话列表已导出');
     } catch (err) {
       message.error(err instanceof Error ? err.message : '从后端导出活跃通话数据失败');
     } finally {
@@ -90,23 +99,40 @@ export function ActiveCallsPage() {
   };
 
   return (
-    <Card shadow="sm" className="p-2">
+    <Card shadow="none" className="overview-card p-2">
       <CardBody className="p-4 flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-divider">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <h2 className="text-base font-bold text-foreground">活跃通话监控</h2>
-              <Chip color="success" size="sm" variant="flat">10s 实时刷新</Chip>
+              <h2 className="text-base font-semibold text-foreground">活跃通话</h2>
+              <Chip color="success" size="sm" variant="flat">
+                每十秒刷新
+              </Chip>
             </div>
-            <p className="text-tiny text-default-500">实时查看正在建立与通话中的会话，支持强拆挂断与 SIP 事务分析</p>
+            <p className="text-tiny text-default-500">
+              实时查看正在建立与通话中的会话，支持强拆挂断与信令事务分析
+            </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="flat" size="sm" isLoading={loading} onPress={() => void load()} startContent={<RefreshCw className="w-4 h-4" />}>
+            <Button
+              variant="flat"
+              size="sm"
+              isLoading={loading}
+              onPress={() => void load()}
+              startContent={<RefreshCw className="w-4 h-4" />}
+            >
               刷新
             </Button>
-            <Button variant="flat" size="sm" onPress={handleExport} startContent={<Download className="w-4 h-4" />}>
-              导出
-            </Button>
+            {canExport && (
+              <Button
+                variant="flat"
+                size="sm"
+                onPress={handleExport}
+                startContent={<Download className="w-4 h-4" />}
+              >
+                导出
+              </Button>
+            )}
           </div>
         </div>
 
@@ -121,32 +147,42 @@ export function ActiveCallsPage() {
               <TableColumn key="state">状态</TableColumn>
               <TableColumn key="started_at_ms">开始时间</TableColumn>
               <TableColumn key="gateway">中继网关</TableColumn>
-              <TableColumn key="actions" align="end">操作</TableColumn>
+              <TableColumn key="actions" align="end">
+                操作
+              </TableColumn>
             </TableHeader>
             <TableBody
               items={rows}
-              className={isRefreshing ? 'opacity-50 transition-opacity duration-300' : 'transition-opacity duration-300'}
+              className={
+                isRefreshing
+                  ? 'opacity-50 transition-opacity duration-300'
+                  : 'transition-opacity duration-300'
+              }
               emptyContent={
-                <div className="flex flex-col items-center justify-center p-8 gap-4">
-                  <PhoneCall className="w-8 h-8 text-default-400" />
-                  <div className="text-center">
-                    <p className="text-sm font-semibold text-foreground">当前无活跃通话</p>
-                    <p className="text-xs text-default-400 mt-1">系统处于空闲/待机状态，建立通话后将在此实时展示信令流</p>
-                  </div>
-                </div>
+                <EmptyState
+                  icon={PhoneCall}
+                  title="当前没有活跃通话"
+                  description="建立通话后将在此实时展示"
+                />
               }
             >
               {(row) => (
                 <TableRow key={entityId(row, 'call_id')}>
                   <TableCell>
-                    <span className="font-mono text-foreground font-bold">{entityId(row, 'call_id')}</span>
+                    <span className="font-mono text-foreground font-bold">
+                      {entityId(row, 'call_id')}
+                    </span>
                   </TableCell>
                   <TableCell>{valueText(row.caller)}</TableCell>
                   <TableCell>{valueText(row.callee)}</TableCell>
                   <TableCell>
                     <Chip
                       size="sm"
-                      color={['active', 'answered', 'in_call'].includes(String(row.state).toLowerCase()) ? 'success' : 'warning'}
+                      color={
+                        ['active', 'answered', 'in_call'].includes(String(row.state).toLowerCase())
+                          ? 'success'
+                          : 'warning'
+                      }
                       variant="flat"
                     >
                       {valueText(row.state)}
@@ -163,12 +199,17 @@ export function ActiveCallsPage() {
                         startContent={<Activity className="w-3.5 h-3.5" />}
                         onPress={() => setTraceCallId(String(entityId(row, 'call_id')))}
                       >
-                        SIP 轨迹
+                        信令轨迹
                       </Button>
-                      <Button isIconOnly size="sm" variant="light" onPress={() => navigate(`/calls/${entityId(row, 'call_id')}`)}>
+                      <Button
+                        isIconOnly
+                        size="sm"
+                        variant="light"
+                        onPress={() => navigate(`/calls/${entityId(row, 'call_id')}`)}
+                      >
                         <Eye className="w-4 h-4 text-default-500" />
                       </Button>
-                      {session && canWriteDomain(session.role, 'operations') && (
+                      {canTerminate && (
                         <Button
                           size="sm"
                           color="danger"

@@ -28,11 +28,7 @@ interface NodeFormProps {
 }
 
 // 设置单个字段
-function setField<T extends Record<string, unknown>>(
-  config: T,
-  key: string,
-  value: unknown
-): T {
+function setField<T extends Record<string, unknown>>(config: T, key: string, value: unknown): T {
   return { ...config, [key]: value };
 }
 
@@ -217,7 +213,10 @@ export function NodeConfigForm({ type, config, onChange }: NodeFormProps) {
                   type="button"
                   className="text-xs text-primary font-semibold"
                   onClick={() => {
-                    const next = [...options, { key: String(options.length + 1), label: `选项 ${options.length + 1}` }];
+                    const next = [
+                      ...options,
+                      { key: String(options.length + 1), label: `选项 ${options.length + 1}` },
+                    ];
                     update('options', next);
                   }}
                 >

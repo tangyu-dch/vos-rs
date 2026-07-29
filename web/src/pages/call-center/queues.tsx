@@ -1,13 +1,31 @@
 import { useEffect, useState } from 'react';
 import {
-  Card, CardBody, Button, Chip, Input, Modal, ModalBody, ModalHeader, ModalContent, ModalFooter,
-  Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Select, SelectItem,
+  Card,
+  CardBody,
+  Button,
+  Chip,
+  Input,
+  Modal,
+  ModalBody,
+  ModalHeader,
+  ModalContent,
+  ModalFooter,
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
+  TableCell,
+  Select,
+  SelectItem,
   useDisclosure,
 } from '@heroui/react';
 import { Plus, RefreshCw, Search, Pencil, Trash2, Music, Download, Users } from 'lucide-react';
 import { api } from '@/services/client';
 import { ErrorState, LoadingState, PageHeader, EmptyState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
+import { useAuth } from '@/auth/AuthContext';
+import { hasPermission } from '@/services/auth';
 
 interface QueueForm {
   id: string;
@@ -35,6 +53,11 @@ const strategyOptions = [
 ];
 
 export default function QueuesPage() {
+  const { session } = useAuth();
+  const canCreate = Boolean(session && hasPermission(session, 'queues.create'));
+  const canUpdate = Boolean(session && hasPermission(session, 'queues.update'));
+  const canDelete = Boolean(session && hasPermission(session, 'queues.delete'));
+  const canExport = Boolean(session && hasPermission(session, 'queues.export'));
   const [data, setData] = useState<any[]>([]);
   const [agentsList, setAgentsList] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -135,7 +158,7 @@ export default function QueuesPage() {
   const filteredData = data.filter(
     (q) =>
       (q.name || '').toLowerCase().includes(searchKey.toLowerCase()) ||
-      (q.id || '').toLowerCase().includes(searchKey.toLowerCase())
+      (q.id || '').toLowerCase().includes(searchKey.toLowerCase()),
   );
 
   const handleExport = async () => {
@@ -154,7 +177,7 @@ export default function QueuesPage() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      message.success('已从后端成功生成并下载呼叫队列列表 (CSV 格式)');
+      message.success('呼叫队列列表已导出');
     } catch (err) {
       message.error(err instanceof Error ? err.message : '从后端导出队列数据失败');
     } finally {
@@ -165,20 +188,40 @@ export default function QueuesPage() {
   const getStrategyChip = (strategy: string) => {
     switch (strategy) {
       case 'round_robin':
-        return <Chip color="primary" variant="flat" size="sm">轮询分发 (Round Robin)</Chip>;
+        return (
+          <Chip color="primary" variant="flat" size="sm">
+            轮询分发 (Round Robin)
+          </Chip>
+        );
       case 'ring_all':
-        return <Chip color="primary" variant="flat" size="sm">群响 (Ring All)</Chip>;
+        return (
+          <Chip color="primary" variant="flat" size="sm">
+            群响 (Ring All)
+          </Chip>
+        );
       case 'random':
-        return <Chip color="warning" variant="flat" size="sm">随机 (Random)</Chip>;
+        return (
+          <Chip color="warning" variant="flat" size="sm">
+            随机 (Random)
+          </Chip>
+        );
       case 'longest_idle':
       default:
-        return <Chip color="success" variant="flat" size="sm">最长空闲优先 (Longest Idle)</Chip>;
+        return (
+          <Chip color="success" variant="flat" size="sm">
+            最长空闲优先 (Longest Idle)
+          </Chip>
+        );
     }
   };
 
   const kpis: Array<{ label: string; value: number | string; className: string }> = [
     { label: '呼叫队列总数', value: data.length, className: 'text-primary' },
-    { label: '在线绑定座席人次', value: data.reduce((acc, q) => acc + (Array.isArray(q.agents) ? q.agents.length : 0), 0), className: 'text-success' },
+    {
+      label: '在线绑定座席人次',
+      value: data.reduce((acc, q) => acc + (Array.isArray(q.agents) ? q.agents.length : 0), 0),
+      className: 'text-success',
+    },
     { label: '可用分发算法', value: '4 种策略', className: 'text-primary' },
   ];
 
@@ -195,7 +238,7 @@ export default function QueuesPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <Card shadow="sm" className="p-2">
+      <Card shadow="none" className="overview-card p-2">
         <CardBody className="p-4">
           <PageHeader
             icon={Users}
@@ -208,16 +251,16 @@ export default function QueuesPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {kpis.map((kpi) => (
-          <Card key={kpi.label} shadow="sm">
+          <Card key={kpi.label} shadow="none" className="overview-card">
             <CardBody className="p-4">
               <div className="text-tiny font-medium text-default-500 mb-1">{kpi.label}</div>
-              <div className={`text-3xl font-bold ${kpi.className}`}>{kpi.value}</div>
+              <div className="text-2xl font-semibold text-foreground tnum">{kpi.value}</div>
             </CardBody>
           </Card>
         ))}
       </div>
 
-      <Card shadow="sm">
+      <Card shadow="none" className="overview-card">
         <CardBody className="p-4">
           <h3 className="text-small font-semibold text-foreground mb-3">队列负载概览</h3>
           {queueLoad.length === 0 || queueLoadMax === 0 ? (
@@ -228,14 +271,21 @@ export default function QueuesPage() {
                 const pct = queueLoadMax > 0 ? (q.count / queueLoadMax) * 100 : 0;
                 return (
                   <div key={q.id} className="flex items-center gap-3">
-                    <span className="text-tiny text-default-600 truncate w-28 flex-shrink-0" title={q.name}>{q.name}</span>
+                    <span
+                      className="text-tiny text-default-600 truncate w-28 flex-shrink-0"
+                      title={q.name}
+                    >
+                      {q.name}
+                    </span>
                     <div className="flex-1 h-5 bg-default-200 rounded overflow-hidden">
                       <div
                         className="h-full bg-primary transition-all"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="text-tiny font-bold text-primary font-mono w-8 text-right flex-shrink-0">{q.count}</span>
+                    <span className="text-tiny font-semibold text-foreground tnum w-8 text-right flex-shrink-0">
+                      {q.count}
+                    </span>
                   </div>
                 );
               })}
@@ -249,100 +299,124 @@ export default function QueuesPage() {
       ) : loading && data.length === 0 ? (
         <LoadingState />
       ) : (
-      <Card>
-        <CardBody className="gap-4 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-default-200">
-            <Input
-              placeholder="搜索队列 ID / 名称"
-              className="w-64"
-              size="sm"
-              variant="bordered"
-              startContent={<Search className="w-4 h-4 text-default-400" />}
-              value={searchKey}
-              onValueChange={setSearchKey}
-              isClearable
-            />
-            <div className="flex items-center gap-2">
-              <Button
-                variant="flat"
+        <Card>
+          <CardBody className="gap-4 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-default-200">
+              <Input
+                placeholder="搜索队列 ID / 名称"
+                className="w-64"
                 size="sm"
-                isLoading={loading}
-                onPress={loadData}
-                startContent={<RefreshCw className="w-4 h-4" />}
-              >
-                刷新
-              </Button>
-              <Button
-                variant="flat"
-                size="sm"
-                onPress={handleExport}
-                startContent={<Download className="w-4 h-4" />}
-              >
-                导出
-              </Button>
-              <Button
-                color="primary"
-                size="sm"
-                onPress={openCreate}
-                startContent={<Plus className="w-4 h-4" />}
-              >
-                新建队列
-              </Button>
+                variant="bordered"
+                startContent={<Search className="w-4 h-4 text-default-400" />}
+                value={searchKey}
+                onValueChange={setSearchKey}
+                isClearable
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="flat"
+                  size="sm"
+                  isLoading={loading}
+                  onPress={loadData}
+                  startContent={<RefreshCw className="w-4 h-4" />}
+                >
+                  刷新
+                </Button>
+                {canExport && (
+                  <Button
+                    variant="flat"
+                    size="sm"
+                    onPress={handleExport}
+                    startContent={<Download className="w-4 h-4" />}
+                  >
+                    导出
+                  </Button>
+                )}
+                {canCreate && (
+                  <Button
+                    color="primary"
+                    size="sm"
+                    onPress={openCreate}
+                    startContent={<Plus className="w-4 h-4" />}
+                  >
+                    新建队列
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
 
-          <Table aria-label="呼叫队列列表">
-            <TableHeader>
-              <TableColumn key="id">队列 ID</TableColumn>
-              <TableColumn key="name">队列名称</TableColumn>
-              <TableColumn key="strategy">分配策略</TableColumn>
-              <TableColumn key="moh_file">MOH 音乐文件</TableColumn>
-              <TableColumn key="max_wait_secs">最大等待 (秒)</TableColumn>
-              <TableColumn key="agents">绑定座席数</TableColumn>
-              <TableColumn key="actions" align="end">操作</TableColumn>
-            </TableHeader>
-            <TableBody items={filteredData} emptyContent={<EmptyState icon={Users} title="暂无呼叫队列数据" description="点击「新建队列」添加第一个呼叫队列" />}>
-              {(item) => (
-                <TableRow key={item.id}>
-                  <TableCell key="id">
-                    <span className="font-mono font-semibold text-foreground">{item.id}</span>
-                  </TableCell>
-                  <TableCell key="name">{item.name}</TableCell>
-                  <TableCell key="strategy">{getStrategyChip(item.strategy)}</TableCell>
-                  <TableCell key="moh_file">
-                    <div className="flex items-center gap-1.5 text-default-600 font-mono">
-                      <Music className="w-4 h-4 text-default-400" />
-                      <span>{item.moh_file || 'moh.wav'}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell key="max_wait_secs">{item.max_wait_secs || 300}s</TableCell>
-                  <TableCell key="agents">
-                    <Chip size="sm" variant="bordered">
-                      {Array.isArray(item.agents) ? `${item.agents.length} 个座席` : '0 个座席'}
-                    </Chip>
-                  </TableCell>
-                  <TableCell key="actions">
-                    <div className="flex items-center justify-end gap-1">
-                      <Button isIconOnly size="sm" variant="light" onPress={() => openEdit(item)}>
-                        <Pencil className="w-4 h-4 text-default-500" />
-                      </Button>
-                      <Button
-                        isIconOnly
-                        size="sm"
-                        color="danger"
-                        variant="light"
-                        onPress={() => handleDelete(item.id)}
-                      >
-                        <Trash2 className="w-4 h-4 text-danger" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardBody>
-      </Card>
+            <Table aria-label="呼叫队列列表">
+              <TableHeader>
+                <TableColumn key="id">队列 ID</TableColumn>
+                <TableColumn key="name">队列名称</TableColumn>
+                <TableColumn key="strategy">分配策略</TableColumn>
+                <TableColumn key="moh_file">MOH 音乐文件</TableColumn>
+                <TableColumn key="max_wait_secs">最大等待 (秒)</TableColumn>
+                <TableColumn key="agents">绑定座席数</TableColumn>
+                <TableColumn key="actions" align="end">
+                  操作
+                </TableColumn>
+              </TableHeader>
+              <TableBody
+                items={filteredData}
+                emptyContent={
+                  <EmptyState
+                    icon={Users}
+                    title="暂无呼叫队列数据"
+                    description="点击「新建队列」添加第一个呼叫队列"
+                  />
+                }
+              >
+                {(item) => (
+                  <TableRow key={item.id}>
+                    <TableCell key="id">
+                      <span className="font-mono font-semibold text-foreground">{item.id}</span>
+                    </TableCell>
+                    <TableCell key="name">{item.name}</TableCell>
+                    <TableCell key="strategy">{getStrategyChip(item.strategy)}</TableCell>
+                    <TableCell key="moh_file">
+                      <div className="flex items-center gap-1.5 text-default-600 font-mono">
+                        <Music className="w-4 h-4 text-default-400" />
+                        <span>{item.moh_file || 'moh.wav'}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell key="max_wait_secs">{item.max_wait_secs || 300}s</TableCell>
+                    <TableCell key="agents">
+                      <Chip size="sm" variant="bordered">
+                        {Array.isArray(item.agents) ? `${item.agents.length} 个座席` : '0 个座席'}
+                      </Chip>
+                    </TableCell>
+                    <TableCell key="actions">
+                      <div className="flex items-center justify-end gap-1">
+                        {canUpdate && (
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            variant="light"
+                            onPress={() => openEdit(item)}
+                          >
+                            <Pencil className="w-4 h-4 text-default-500" />
+                          </Button>
+                        )}
+                        {canDelete && (
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            color="danger"
+                            variant="light"
+                            onPress={() => handleDelete(item.id)}
+                          >
+                            <Trash2 className="w-4 h-4 text-danger" />
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardBody>
+        </Card>
       )}
 
       <Modal isOpen={isOpen} onClose={onClose} size="lg">
@@ -418,8 +492,12 @@ export default function QueuesPage() {
                 </Select>
               </ModalBody>
               <ModalFooter>
-                <Button variant="flat" onPress={onModalClose}>取消</Button>
-                <Button color="primary" onPress={handleSave}>保存</Button>
+                <Button variant="flat" onPress={onModalClose}>
+                  取消
+                </Button>
+                <Button color="primary" onPress={handleSave}>
+                  保存
+                </Button>
               </ModalFooter>
             </>
           )}

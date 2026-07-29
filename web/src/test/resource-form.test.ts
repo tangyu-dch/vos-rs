@@ -28,21 +28,36 @@ describe('resource form values', () => {
     const trunkSpec = {
       ...routeSpec,
       idKey: 'id',
-      fields: [...routeSpec.fields, { key: 'reg_password', label: '注册密码', kind: 'secret' as const, preserveEmptyOnEdit: true }],
+      fields: [
+        ...routeSpec.fields,
+        {
+          key: 'reg_password',
+          label: '注册密码',
+          kind: 'secret' as const,
+          preserveEmptyOnEdit: true,
+        },
+      ],
     };
-    expect(resourceSaveValues(trunkSpec, { id: 'carrier', host: '127.0.0.1', reg_password: '' }, true))
-      .toEqual({ id: 'carrier', host: '127.0.0.1' });
-    expect(resourceSaveValues(trunkSpec, { id: 'carrier', reg_password: 'new-secret' }, true))
-      .toEqual({ id: 'carrier', reg_password: 'new-secret' });
+    expect(
+      resourceSaveValues(trunkSpec, { id: 'carrier', host: '127.0.0.1', reg_password: '' }, true),
+    ).toEqual({ id: 'carrier', host: '127.0.0.1' });
+    expect(
+      resourceSaveValues(trunkSpec, { id: 'carrier', reg_password: 'new-secret' }, true),
+    ).toEqual({ id: 'carrier', reg_password: 'new-secret' });
   });
 
   it('keeps required secrets that the update endpoint cannot preserve', () => {
     const extensionSpec = {
       ...routeSpec,
       idKey: 'username',
-      fields: [{ key: 'username', label: '分机号' }, { key: 'password', label: 'SIP 密码', kind: 'secret' as const, required: true }],
+      fields: [
+        { key: 'username', label: '分机号' },
+        { key: 'password', label: 'SIP 密码', kind: 'secret' as const, required: true },
+      ],
     };
-    expect(resourceSaveValues(extensionSpec, { username: '1001', password: '' }, true))
-      .toEqual({ username: '1001', password: '' });
+    expect(resourceSaveValues(extensionSpec, { username: '1001', password: '' }, true)).toEqual({
+      username: '1001',
+      password: '',
+    });
   });
 });

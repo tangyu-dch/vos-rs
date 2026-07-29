@@ -1,18 +1,48 @@
 import { useRef, useState, useCallback, type MouseEvent, type WheelEvent } from 'react';
 import { Button, Chip, Tooltip } from '@heroui/react';
 import {
-  PhoneCall, Hash, Clock, Shield, Route, PhoneForwarded, GitFork, Users,
-  Split, Ban, Plus, Trash2, Sparkles, ZoomIn, ZoomOut, Maximize2, LayoutGrid,
+  PhoneCall,
+  Hash,
+  Clock,
+  Shield,
+  Route,
+  PhoneForwarded,
+  GitFork,
+  Users,
+  Split,
+  Ban,
+  Plus,
+  Trash2,
+  Sparkles,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  LayoutGrid,
 } from 'lucide-react';
 import {
-  ROUTE_NODE_CATALOG, ROUTE_NODE_CATALOG_MAP, genRouteEdgeId, genRouteNodeId,
-  type RouteEdge, type RouteNode, type RouteTopology, type RouteNodeCatalogEntry,
+  ROUTE_NODE_CATALOG,
+  ROUTE_NODE_CATALOG_MAP,
+  genRouteEdgeId,
+  genRouteNodeId,
+  type RouteEdge,
+  type RouteNode,
+  type RouteTopology,
+  type RouteNodeCatalogEntry,
 } from './route-types';
 import { autoLayoutNodes } from './ivr-canvas';
 export { autoLayoutNodes };
 
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
-  PhoneCall, Hash, Clock, Shield, Route, PhoneForwarded, GitFork, Users, Split, Ban,
+  PhoneCall,
+  Hash,
+  Clock,
+  Shield,
+  Route,
+  PhoneForwarded,
+  GitFork,
+  Users,
+  Split,
+  Ban,
 };
 
 const NODE_W = 220;
@@ -21,18 +51,43 @@ const PORT_R = 6;
 /** 根据 catalog 颜色决定节点的边框与顶栏半透明渲染色 */
 function getNodeTheme(colorClass: string) {
   if (colorClass.includes('text-success') || colorClass.includes('border-success')) {
-    return { stroke: 'stroke-success/70', strokeSelected: 'stroke-success', fillHeader: 'fill-success/15', ring: 'ring-success/30' };
+    return {
+      stroke: 'stroke-success/70',
+      strokeSelected: 'stroke-success',
+      fillHeader: 'fill-success/15',
+      ring: 'ring-success/30',
+    };
   }
   if (colorClass.includes('text-warning') || colorClass.includes('border-warning')) {
-    return { stroke: 'stroke-warning/70', strokeSelected: 'stroke-warning', fillHeader: 'fill-warning/15', ring: 'ring-warning/30' };
+    return {
+      stroke: 'stroke-warning/70',
+      strokeSelected: 'stroke-warning',
+      fillHeader: 'fill-warning/15',
+      ring: 'ring-warning/30',
+    };
   }
   if (colorClass.includes('text-danger') || colorClass.includes('border-danger')) {
-    return { stroke: 'stroke-danger/70', strokeSelected: 'stroke-danger', fillHeader: 'fill-danger/15', ring: 'ring-danger/30' };
+    return {
+      stroke: 'stroke-danger/70',
+      strokeSelected: 'stroke-danger',
+      fillHeader: 'fill-danger/15',
+      ring: 'ring-danger/30',
+    };
   }
   if (colorClass.includes('text-secondary') || colorClass.includes('border-secondary')) {
-    return { stroke: 'stroke-secondary/70', strokeSelected: 'stroke-secondary', fillHeader: 'fill-secondary/15', ring: 'ring-secondary/30' };
+    return {
+      stroke: 'stroke-secondary/70',
+      strokeSelected: 'stroke-secondary',
+      fillHeader: 'fill-secondary/15',
+      ring: 'ring-secondary/30',
+    };
   }
-  return { stroke: 'stroke-primary/70', strokeSelected: 'stroke-primary', fillHeader: 'fill-primary/15', ring: 'ring-primary/30' };
+  return {
+    stroke: 'stroke-primary/70',
+    strokeSelected: 'stroke-primary',
+    fillHeader: 'fill-primary/15',
+    ring: 'ring-primary/30',
+  };
 }
 
 export function getRouteNodePorts(node: RouteNode): {
@@ -40,7 +95,11 @@ export function getRouteNodePorts(node: RouteNode): {
   outPorts: Array<{ id: string; label: string; type: 'in' | 'out' }>;
 } {
   const cat = ROUTE_NODE_CATALOG_MAP[node.type];
-  if (!cat) return { inPorts: [{ id: 'in', label: '呼入', type: 'in' }], outPorts: [{ id: 'out', label: '出口', type: 'out' }] };
+  if (!cat)
+    return {
+      inPorts: [{ id: 'in', label: '呼入', type: 'in' }],
+      outPorts: [{ id: 'out', label: '出口', type: 'out' }],
+    };
 
   let inPorts = cat.defaultPorts.filter((p) => p.type === 'in');
   if (inPorts.length === 0) inPorts = [{ id: 'in', label: '呼入', type: 'in' }];
@@ -117,7 +176,12 @@ interface DragState {
   cursor: { x: number; y: number };
 }
 
-export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelectNode }: RouteCanvasProps) {
+export function RouteCanvas({
+  topology,
+  onChange,
+  selectedNodeId = null,
+  onSelectNode,
+}: RouteCanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [localSelected, setLocalSelected] = useState<string | null>(null);
@@ -127,10 +191,13 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
   const [zoom, setZoom] = useState(1.0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
 
-  const fireSelect = useCallback((id: string | null) => {
-    setLocalSelected(id);
-    onSelectNode?.(id);
-  }, [onSelectNode]);
+  const fireSelect = useCallback(
+    (id: string | null) => {
+      setLocalSelected(id);
+      onSelectNode?.(id);
+    },
+    [onSelectNode],
+  );
 
   const toCanvas = useCallback(
     (cx: number, cy: number) => {
@@ -144,7 +211,7 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
         y: (rawY - pan.y) / zoom,
       };
     },
-    [pan.x, pan.y, zoom]
+    [pan.x, pan.y, zoom],
   );
 
   const handleWheel = (e: WheelEvent) => {
@@ -185,7 +252,13 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
     const node = topology.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const cursor = toCanvas(e.clientX, e.clientY);
-    setDrag({ type: 'node', nodeId, offsetX: cursor.x - node.position.x, offsetY: cursor.y - node.position.y, cursor });
+    setDrag({
+      type: 'node',
+      nodeId,
+      offsetX: cursor.x - node.position.x,
+      offsetY: cursor.y - node.position.y,
+      cursor,
+    });
     fireSelect(nodeId);
   };
 
@@ -208,7 +281,12 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
       onChange({
         ...topology,
         nodes: topology.nodes.map((n) =>
-          n.id === drag.nodeId ? { ...n, position: { x: cursor.x - (drag.offsetX ?? 0), y: cursor.y - (drag.offsetY ?? 0) } } : n,
+          n.id === drag.nodeId
+            ? {
+                ...n,
+                position: { x: cursor.x - (drag.offsetX ?? 0), y: cursor.y - (drag.offsetY ?? 0) },
+              }
+            : n,
         ),
       });
     } else if (drag.type === 'edge') {
@@ -225,8 +303,19 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
         const { outPorts } = getRouteNodePorts(srcNode);
         const portObj = outPorts.find((p) => p.id === drag.fromPort!.portId);
         const portLabel = portObj?.label ?? '连线';
-        const newEdge: RouteEdge = { id: genRouteEdgeId(), source: drag.fromPort.nodeId, target: targetId, sourcePort: drag.fromPort.portId, label: portLabel };
-        const exists = topology.edges.some((ed) => ed.source === newEdge.source && ed.target === newEdge.target && ed.sourcePort === newEdge.sourcePort);
+        const newEdge: RouteEdge = {
+          id: genRouteEdgeId(),
+          source: drag.fromPort.nodeId,
+          target: targetId,
+          sourcePort: drag.fromPort.portId,
+          label: portLabel,
+        };
+        const exists = topology.edges.some(
+          (ed) =>
+            ed.source === newEdge.source &&
+            ed.target === newEdge.target &&
+            ed.sourcePort === newEdge.sourcePort,
+        );
         if (!exists) onChange({ ...topology, edges: [...topology.edges, newEdge] });
       }
     }
@@ -270,14 +359,26 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
         transform={`translate(${node.position.x}, ${node.position.y})`}
         className="topo-node cursor-move select-none"
         onMouseDown={(e) => startNodeDrag(e, node.id)}
-        onClick={(e) => { e.stopPropagation(); fireSelect(node.id); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          fireSelect(node.id);
+        }}
       >
         {/* 阴影底板 */}
-        <rect width={NODE_W} height={NODE_H} y={4} rx={14} className="fill-black/30 blur-sm" opacity={0.5} />
+        <rect
+          width={NODE_W}
+          height={NODE_H}
+          y={4}
+          rx={14}
+          className="fill-black/30 blur-sm"
+          opacity={0.5}
+        />
 
         {/* 节点主体背景卡片（边框颜色与工具箱一致） */}
         <rect
-          width={NODE_W} height={NODE_H} rx={14}
+          width={NODE_W}
+          height={NODE_H}
+          rx={14}
           className={`fill-content1 ${selected ? `${theme.strokeSelected} ring-2 ${theme.ring} shadow-2xl` : `${theme.stroke} hover:stroke-foreground/60`}`}
           strokeWidth={selected ? 2 : 1.5}
         />
@@ -286,7 +387,14 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
         {outPorts.length > 1 ? (
           <>
             <rect width={NODE_W} height={42} rx={14} className={theme.fillHeader} />
-            <line x1={0} y1={42} x2={NODE_W} y2={42} className="stroke-default-200/30" strokeWidth={1} />
+            <line
+              x1={0}
+              y1={42}
+              x2={NODE_W}
+              y2={42}
+              className="stroke-default-200/30"
+              strokeWidth={1}
+            />
           </>
         ) : (
           <rect width={NODE_W} height={NODE_H} rx={14} className={theme.fillHeader} />
@@ -302,15 +410,21 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
           return (
             <>
               <foreignObject x={10} y={yIcon} width={28} height={28}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${cat.color} shadow-xs`}>
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center ${cat.color} shadow-xs`}
+                >
                   <Icon className="w-4 h-4" />
                 </div>
               </foreignObject>
 
               <foreignObject x={44} y={yText} width={NODE_W - 76} height={36}>
                 <div className="flex flex-col justify-center h-full min-w-0">
-                  <span className="text-xs font-bold text-foreground truncate leading-tight">{node.title}</span>
-                  <span className="text-[9px] text-default-400 truncate leading-tight mt-0.5">{node.description || node.type}</span>
+                  <span className="text-xs font-bold text-foreground truncate leading-tight">
+                    {node.title}
+                  </span>
+                  <span className="text-[9px] text-default-400 truncate leading-tight mt-0.5">
+                    {node.description || node.type}
+                  </span>
                 </div>
               </foreignObject>
 
@@ -336,13 +450,22 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
               return (
                 <g key={`row-${port.id}`} transform={`translate(0, ${rowY})`}>
                   {/* 选项背景条 */}
-                  <rect x={6} y={2} width={NODE_W - 12} height={24} rx={6} className="fill-default-50/50 hover:fill-default-100/60 transition-colors" />
+                  <rect
+                    x={6}
+                    y={2}
+                    width={NODE_W - 12}
+                    height={24}
+                    rx={6}
+                    className="fill-default-50/50 hover:fill-default-100/60 transition-colors"
+                  />
 
                   {/* 选项名称 Badge */}
                   <foreignObject x={12} y={5} width={NODE_W - 40} height={18}>
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="w-1.5 h-1.5 rounded-full bg-primary/70 shrink-0" />
-                      <span className="text-[10px] font-medium text-foreground truncate">{port.label}</span>
+                      <span className="text-[10px] font-medium text-foreground truncate">
+                        {port.label}
+                      </span>
                     </div>
                   </foreignObject>
                 </g>
@@ -356,7 +479,13 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
           const { x, y } = portOffset(node, port.id, 'in');
           return (
             <g key={`in-${port.id}`} transform={`translate(${x}, ${y})`}>
-              <circle cx={0} cy={0} r={PORT_R + 2} className="fill-content1 stroke-default-300" strokeWidth={1.5} />
+              <circle
+                cx={0}
+                cy={0}
+                r={PORT_R + 2}
+                className="fill-content1 stroke-default-300"
+                strokeWidth={1.5}
+              />
               <circle cx={0} cy={0} r={PORT_R - 2} className="fill-default-400" />
             </g>
           );
@@ -393,29 +522,66 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
     const src = topology.nodes.find((n) => n.id === edge.source);
     const dst = topology.nodes.find((n) => n.id === edge.target);
     if (!src || !dst) return null;
-    const srcPort = edge.sourcePort ?? ROUTE_NODE_CATALOG_MAP[src.type].defaultPorts.find((p) => p.type === 'out')?.id ?? 'out';
-    const srcPos = { x: src.position.x + portOffset(src, srcPort, 'out').x, y: src.position.y + portOffset(src, srcPort, 'out').y };
-    const dstPos = { x: dst.position.x + portOffset(dst, 'in', 'in').x, y: dst.position.y + portOffset(dst, 'in', 'in').y };
+    const srcPort =
+      edge.sourcePort ??
+      ROUTE_NODE_CATALOG_MAP[src.type].defaultPorts.find((p) => p.type === 'out')?.id ??
+      'out';
+    const srcPos = {
+      x: src.position.x + portOffset(src, srcPort, 'out').x,
+      y: src.position.y + portOffset(src, srcPort, 'out').y,
+    };
+    const dstPos = {
+      x: dst.position.x + portOffset(dst, 'in', 'in').x,
+      y: dst.position.y + portOffset(dst, 'in', 'in').y,
+    };
     const midX = (srcPos.x + dstPos.x) / 2;
     const midY = (srcPos.y + dstPos.y) / 2;
     return (
       <g key={edge.id} className="group">
         {/* 底层粗线（hover 高亮） */}
-        <path d={bezier(srcPos, dstPos)} fill="none" className="stroke-primary/0 group-hover:stroke-primary/20" strokeWidth={8} />
+        <path
+          d={bezier(srcPos, dstPos)}
+          fill="none"
+          className="stroke-primary/0 group-hover:stroke-primary/20"
+          strokeWidth={8}
+        />
         {/* 主线 */}
-        <path d={bezier(srcPos, dstPos)} fill="none" className="stroke-primary/60 group-hover:stroke-primary" strokeWidth={2.5} markerEnd="url(#arrow-route)" />
+        <path
+          d={bezier(srcPos, dstPos)}
+          fill="none"
+          className="stroke-primary/60 group-hover:stroke-primary"
+          strokeWidth={2.5}
+          markerEnd="url(#arrow-route)"
+        />
         {/* 流动动画线 */}
-        <path d={bezier(srcPos, dstPos)} fill="none" className="stroke-primary edge-flow" strokeWidth={1.5} opacity={0.5} />
+        <path
+          d={bezier(srcPos, dstPos)}
+          fill="none"
+          className="stroke-primary edge-flow"
+          strokeWidth={1.5}
+          opacity={0.5}
+        />
         {/* 边标签 */}
         {edge.label && (
           <foreignObject x={midX - 24} y={midY - 9} width={48} height={18}>
             <div className="flex justify-center">
-              <Chip size="sm" variant="flat" color="primary" className="text-[9px] h-4 min-w-0 px-1">{edge.label}</Chip>
+              <Chip
+                size="sm"
+                variant="flat"
+                color="primary"
+                className="text-[9px] h-4 min-w-0 px-1"
+              >
+                {edge.label}
+              </Chip>
             </div>
           </foreignObject>
         )}
         {/* 删除按钮（hover 显示） */}
-        <g transform={`translate(${midX - 9}, ${midY - 9})`} className="opacity-0 group-hover:opacity-100 cursor-pointer" onClick={() => deleteEdge(edge.id)}>
+        <g
+          transform={`translate(${midX - 9}, ${midY - 9})`}
+          className="opacity-0 group-hover:opacity-100 cursor-pointer"
+          onClick={() => deleteEdge(edge.id)}
+        >
           <circle cx={9} cy={9} r={8} className="fill-danger" />
           <foreignObject x={3} y={3} width={12} height={12}>
             <Trash2 className="w-3 h-3 text-white" />
@@ -429,8 +595,19 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
     if (drag?.type !== 'edge' || !drag.fromPort) return null;
     const src = topology.nodes.find((n) => n.id === drag.fromPort!.nodeId);
     if (!src) return null;
-    const srcPos = { x: src.position.x + portOffset(src, drag.fromPort.portId, 'out').x, y: src.position.y + portOffset(src, drag.fromPort.portId, 'out').y };
-    return <path d={bezier(srcPos, drag.cursor)} fill="none" className="stroke-primary/60" strokeWidth={2.5} strokeDasharray="5 3" />;
+    const srcPos = {
+      x: src.position.x + portOffset(src, drag.fromPort.portId, 'out').x,
+      y: src.position.y + portOffset(src, drag.fromPort.portId, 'out').y,
+    };
+    return (
+      <path
+        d={bezier(srcPos, drag.cursor)}
+        fill="none"
+        className="stroke-primary/60"
+        strokeWidth={2.5}
+        strokeDasharray="5 3"
+      />
+    );
   };
 
   return (
@@ -450,7 +627,15 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
         onClick={() => fireSelect(null)}
       >
         <defs>
-          <marker id="arrow-route" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+          <marker
+            id="arrow-route"
+            markerWidth="10"
+            markerHeight="10"
+            refX="8"
+            refY="3"
+            orient="auto"
+            markerUnits="strokeWidth"
+          >
             <path d="M0,0 L0,6 L8,3 z" className="fill-primary" />
           </marker>
           {/* 点阵网格 */}
@@ -519,7 +704,10 @@ export function RouteCanvas({ topology, onChange, selectedNodeId = null, onSelec
             size="sm"
             variant="light"
             className="w-7 h-7 min-w-0"
-            onPress={() => { setPan({ x: 0, y: 0 }); setZoom(1.0); }}
+            onPress={() => {
+              setPan({ x: 0, y: 0 });
+              setZoom(1.0);
+            }}
           >
             <Maximize2 className="w-3.5 h-3.5" />
           </Button>
@@ -563,14 +751,19 @@ export function RouteNodePalette() {
           if (items.length === 0) return null;
           return (
             <div key={cat.key} className="flex flex-col gap-1.5">
-              <span className="text-[10px] font-bold text-default-500 uppercase tracking-wider px-1">{cat.label}</span>
+              <span className="text-[10px] font-bold text-default-500 uppercase tracking-wider px-1">
+                {cat.label}
+              </span>
               {items.map((entry) => {
                 const Icon = ICON_MAP[entry.icon] ?? Plus;
                 return (
                   <div
                     key={entry.type}
                     draggable
-                    onDragStart={(e) => { e.dataTransfer.setData('application/route-node', JSON.stringify(entry)); e.dataTransfer.effectAllowed = 'copy'; }}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('application/route-node', JSON.stringify(entry));
+                      e.dataTransfer.effectAllowed = 'copy';
+                    }}
                     className={`p-2.5 rounded-lg border ${entry.color} cursor-grab active:cursor-grabbing hover:shadow-sm hover:scale-[1.02] transition-all flex items-center gap-2.5 bg-content1`}
                   >
                     <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-content2 shrink-0">
@@ -578,7 +771,9 @@ export function RouteNodePalette() {
                     </div>
                     <div className="flex flex-col min-w-0">
                       <span className="text-[11px] font-bold truncate">{entry.title}</span>
-                      <span className="text-[9px] text-default-400 truncate">{entry.description}</span>
+                      <span className="text-[9px] text-default-400 truncate">
+                        {entry.description}
+                      </span>
                     </div>
                   </div>
                 );
@@ -678,7 +873,12 @@ export function createDefaultTopology(): RouteTopology {
         title: '时间路由',
         description: '工作时间 vs 非工作时间',
         position: { x: 380, y: 280 },
-        config: { time_start: '09:00', time_end: '18:00', weekdays: [1, 2, 3, 4, 5], timezone: 'Asia/Shanghai' },
+        config: {
+          time_start: '09:00',
+          time_end: '18:00',
+          weekdays: [1, 2, 3, 4, 5],
+          timezone: 'Asia/Shanghai',
+        },
       },
       {
         id: queueId,
@@ -698,9 +898,27 @@ export function createDefaultTopology(): RouteTopology {
       },
     ],
     edges: [
-      { id: genRouteEdgeId(), source: inboundId, target: timeFilterId, sourcePort: 'out', label: '进入' },
-      { id: genRouteEdgeId(), source: timeFilterId, target: queueId, sourcePort: 'in_window', label: '时段内' },
-      { id: genRouteEdgeId(), source: timeFilterId, target: ivrId, sourcePort: 'out_window', label: '时段外' },
+      {
+        id: genRouteEdgeId(),
+        source: inboundId,
+        target: timeFilterId,
+        sourcePort: 'out',
+        label: '进入',
+      },
+      {
+        id: genRouteEdgeId(),
+        source: timeFilterId,
+        target: queueId,
+        sourcePort: 'in_window',
+        label: '时段内',
+      },
+      {
+        id: genRouteEdgeId(),
+        source: timeFilterId,
+        target: ivrId,
+        sourcePort: 'out_window',
+        label: '时段外',
+      },
     ],
   };
 }

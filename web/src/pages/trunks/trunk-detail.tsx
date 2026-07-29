@@ -1,22 +1,60 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Button, Card, CardBody, Chip, Input, Select, SelectItem, Switch,
-  Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Tabs, Tab,
+  Button,
+  Card,
+  CardBody,
+  Chip,
+  Input,
+  Select,
+  SelectItem,
+  Switch,
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
+  TableCell,
+  Tabs,
+  Tab,
 } from '@heroui/react';
 import { Plus, Trash2, RefreshCw, Server } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import type { Entity } from '@/services/resources';
 import {
-  getOutboundPolicy, getTrunkIpRules, getTrunkWorkspace, listOptions, saveOutboundPolicy,
-  policyValidationError, saveTrunkIpRules, trunkRole, trunkValidationError, updateTrunk, type OutboundPolicy, type TrunkIpRule,
-  type TrunkWorkspaceData, getTrunkEgressEndpoints, saveTrunkEgressEndpoints, type EgressEndpoint,
+  getOutboundPolicy,
+  getTrunkIpRules,
+  getTrunkWorkspace,
+  listOptions,
+  saveOutboundPolicy,
+  policyValidationError,
+  saveTrunkIpRules,
+  trunkRole,
+  trunkValidationError,
+  updateTrunk,
+  type OutboundPolicy,
+  type TrunkIpRule,
+  type TrunkWorkspaceData,
+  getTrunkEgressEndpoints,
+  saveTrunkEgressEndpoints,
+  type EgressEndpoint,
 } from '@/services/trunks';
-import { DetailErrorState, DetailHeader, DetailLoading, FormGrid, SectionBlock } from '@/components/detail-shell';
+import {
+  DetailErrorState,
+  DetailHeader,
+  DetailLoading,
+  EmptyState,
+  FormGrid,
+  SectionBlock,
+} from '@/components/detail-shell';
 import { message } from '@/utils/toast';
+import { useAuth } from '@/auth/AuthContext';
+import { hasPermission } from '@/services/auth';
 
 export const emptyPolicy: OutboundPolicy = {
-  caller_mode: 'strict_passthrough', fallback_mode: 'reject',
-  egress_mode: 'direct', enabled: true,
+  caller_mode: 'strict_passthrough',
+  fallback_mode: 'reject',
+  egress_mode: 'direct',
+  enabled: true,
 };
 
 const roleOptions = [
@@ -42,7 +80,8 @@ const connectionTypeOptions = [
   { label: '主动注册', value: 'client_register' },
 ];
 
-const genId = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2));
+const genId = () =>
+  crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
 
 interface FieldProps {
   label: string;
@@ -52,7 +91,12 @@ interface FieldProps {
 }
 
 /** 表单字段容器：标签 + 控件，配合 grid 父容器使用 */
-export function WorkspaceField({ label, children, fullWidth = false, required = false }: FieldProps) {
+export function WorkspaceField({
+  label,
+  children,
+  fullWidth = false,
+  required = false,
+}: FieldProps) {
   return (
     <div className={fullWidth ? 'md:col-span-2 col-span-1' : 'col-span-1'}>
       <label className="block text-tiny font-medium text-foreground mb-1.5">
@@ -83,7 +127,11 @@ function BasicTab({ draft, set }: { draft: Entity; set: (key: string, value: unk
         <Input
           type="number"
           variant="bordered"
-          value={draft.account_id !== undefined && draft.account_id !== null ? String(draft.account_id) : ''}
+          value={
+            draft.account_id !== undefined && draft.account_id !== null
+              ? String(draft.account_id)
+              : ''
+          }
           onValueChange={(v) => set('account_id', v === '' ? null : Number(v))}
           placeholder="可选"
         />
@@ -91,9 +139,13 @@ function BasicTab({ draft, set }: { draft: Entity; set: (key: string, value: unk
       {role === 'egress' && (
         <>
           <Field label="主机地址" required>
-            <Input variant="bordered" value={String(draft.host ?? '')} onValueChange={(v) => set('host', v)} />
+            <Input
+              variant="bordered"
+              value={String(draft.host ?? '')}
+              onValueChange={(v) => set('host', v)}
+            />
           </Field>
-          <Field label="SIP 端口" required>
+          <Field label="信令端口" required>
             <Input
               type="number"
               variant="bordered"
@@ -124,7 +176,15 @@ function BasicTab({ draft, set }: { draft: Entity; set: (key: string, value: unk
   );
 }
 
-function IpRulesEditor({ rules, onChange }: { rules: TrunkIpRule[]; onChange: (rules: TrunkIpRule[]) => void }) {
+function IpRulesEditor({
+  rules,
+  onChange,
+  canManage,
+}: {
+  rules: TrunkIpRule[];
+  onChange: (rules: TrunkIpRule[]) => void;
+  canManage: boolean;
+}) {
   const patch = (index: number, values: Partial<TrunkIpRule>) =>
     onChange(rules.map((rule, itemIndex) => (itemIndex === index ? { ...rule, ...values } : rule)));
 
@@ -133,14 +193,28 @@ function IpRulesEditor({ rules, onChange }: { rules: TrunkIpRule[]; onChange: (r
       title="来源地址"
       description="支持 IPv4、IPv6 和 CIDR；端口留空表示任意来源端口。"
       actions={
-        <Button
-          size="sm"
-          variant="flat"
-          onPress={() => onChange([...rules, { _key: genId(), cidr: '', source_port: null, transport: 'udp', description: '', enabled: true }])}
-          startContent={<Plus className="w-4 h-4" />}
-        >
-          添加地址
-        </Button>
+        canManage && (
+          <Button
+            size="sm"
+            variant="flat"
+            onPress={() =>
+              onChange([
+                ...rules,
+                {
+                  _key: genId(),
+                  cidr: '',
+                  source_port: null,
+                  transport: 'udp',
+                  description: '',
+                  enabled: true,
+                },
+              ])
+            }
+            startContent={<Plus className="w-4 h-4" />}
+          >
+            添加地址
+          </Button>
+        )
       }
     >
       <Table aria-label="IP 白名单规则" isStriped>
@@ -150,11 +224,24 @@ function IpRulesEditor({ rules, onChange }: { rules: TrunkIpRule[]; onChange: (r
           <TableColumn key="transport">传输协议</TableColumn>
           <TableColumn key="description">备注说明</TableColumn>
           <TableColumn key="enabled">启用</TableColumn>
-          <TableColumn key="actions" align="end">操作</TableColumn>
+          <TableColumn key="actions" align="end">
+            操作
+          </TableColumn>
         </TableHeader>
-        <TableBody items={rules} emptyContent="尚未配置 IP 白名单">
+        <TableBody
+          items={rules}
+          emptyContent={
+            <EmptyState
+              icon={Server}
+              title="暂无地址白名单"
+              description="添加允许访问的网络地址后将在此展示"
+            />
+          }
+        >
           {(row) => {
-            const idx = rules.findIndex((r) => (r._key || r.id || r.cidr) === (row._key || row.id || row.cidr));
+            const idx = rules.findIndex(
+              (r) => (r._key || r.id || r.cidr) === (row._key || row.id || row.cidr),
+            );
             const rowKey = row._key || row.id || row.cidr || idx;
             return (
               <TableRow key={rowKey}>
@@ -170,8 +257,14 @@ function IpRulesEditor({ rules, onChange }: { rules: TrunkIpRule[]; onChange: (r
                   <Input
                     variant="underlined"
                     type="number"
-                    value={row.source_port !== null && row.source_port !== undefined ? String(row.source_port) : ''}
-                    onValueChange={(v) => patch(idx, { source_port: v === '' ? null : Number(v) || null })}
+                    value={
+                      row.source_port !== null && row.source_port !== undefined
+                        ? String(row.source_port)
+                        : ''
+                    }
+                    onValueChange={(v) =>
+                      patch(idx, { source_port: v === '' ? null : Number(v) || null })
+                    }
                     placeholder="任意"
                     min={1}
                     max={65535}
@@ -197,15 +290,17 @@ function IpRulesEditor({ rules, onChange }: { rules: TrunkIpRule[]; onChange: (r
                   />
                 </TableCell>
                 <TableCell>
-                  <Button
-                    isIconOnly
-                    size="sm"
-                    color="danger"
-                    variant="light"
-                    onPress={() => onChange(rules.filter((_, itemIndex) => itemIndex !== idx))}
-                  >
-                    <Trash2 className="w-4 h-4 text-danger" />
-                  </Button>
+                  {canManage && (
+                    <Button
+                      isIconOnly
+                      size="sm"
+                      color="danger"
+                      variant="light"
+                      onPress={() => onChange(rules.filter((_, itemIndex) => itemIndex !== idx))}
+                    >
+                      <Trash2 className="w-4 h-4 text-danger" />
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             );
@@ -216,7 +311,15 @@ function IpRulesEditor({ rules, onChange }: { rules: TrunkIpRule[]; onChange: (r
   );
 }
 
-function EgressEndpointsEditor({ endpoints, onChange }: { endpoints: EgressEndpoint[]; onChange: (endpoints: EgressEndpoint[]) => void }) {
+function EgressEndpointsEditor({
+  endpoints,
+  onChange,
+  canManage,
+}: {
+  endpoints: EgressEndpoint[];
+  onChange: (endpoints: EgressEndpoint[]) => void;
+  canManage: boolean;
+}) {
   const patch = (index: number, values: Partial<EgressEndpoint>) =>
     onChange(endpoints.map((ep, itemIndex) => (itemIndex === index ? { ...ep, ...values } : ep)));
 
@@ -225,28 +328,51 @@ function EgressEndpointsEditor({ endpoints, onChange }: { endpoints: EgressEndpo
       title="落地端点 (Egress Endpoints)"
       description="静态直连中继可以配置多个落地服务器端点，支持优先级故障切换。"
       actions={
-        <Button
-          size="sm"
-          variant="flat"
-          onPress={() => onChange([...endpoints, { _key: genId(), host: '', port: 5060, transport: 'udp', priority: 100, enabled: true }])}
-          startContent={<Plus className="w-4 h-4" />}
-        >
-          添加端点
-        </Button>
+        canManage && (
+          <Button
+            size="sm"
+            variant="flat"
+            onPress={() =>
+              onChange([
+                ...endpoints,
+                {
+                  _key: genId(),
+                  host: '',
+                  port: 5060,
+                  transport: 'udp',
+                  priority: 100,
+                  enabled: true,
+                },
+              ])
+            }
+            startContent={<Plus className="w-4 h-4" />}
+          >
+            添加端点
+          </Button>
+        )
       }
     >
       <Table aria-label="落地端点列表" isStriped>
         <TableHeader>
           <TableColumn key="host">落地主机/IP</TableColumn>
-          <TableColumn key="port">SIP 端口</TableColumn>
+          <TableColumn key="port">信令端口</TableColumn>
           <TableColumn key="transport">传输协议</TableColumn>
           <TableColumn key="priority">优先级</TableColumn>
           <TableColumn key="enabled">启用</TableColumn>
-          <TableColumn key="actions" align="end">操作</TableColumn>
+          <TableColumn key="actions" align="end">
+            操作
+          </TableColumn>
         </TableHeader>
-        <TableBody items={endpoints} emptyContent="尚未配置落地端点">
+        <TableBody
+          items={endpoints}
+          emptyContent={
+            <EmptyState icon={Server} title="暂无落地端点" description="添加端点后将在此展示" />
+          }
+        >
           {(row) => {
-            const idx = endpoints.findIndex((e) => (e._key || e.id || e.host) === (row._key || row.id || row.host));
+            const idx = endpoints.findIndex(
+              (e) => (e._key || e.id || e.host) === (row._key || row.id || row.host),
+            );
             const rowKey = row._key || row.id || row.host || idx;
             return (
               <TableRow key={rowKey}>
@@ -292,15 +418,19 @@ function EgressEndpointsEditor({ endpoints, onChange }: { endpoints: EgressEndpo
                   />
                 </TableCell>
                 <TableCell>
-                  <Button
-                    isIconOnly
-                    size="sm"
-                    color="danger"
-                    variant="light"
-                    onPress={() => onChange(endpoints.filter((_, itemIndex) => itemIndex !== idx))}
-                  >
-                    <Trash2 className="w-4 h-4 text-danger" />
-                  </Button>
+                  {canManage && (
+                    <Button
+                      isIconOnly
+                      size="sm"
+                      color="danger"
+                      variant="light"
+                      onPress={() =>
+                        onChange(endpoints.filter((_, itemIndex) => itemIndex !== idx))
+                      }
+                    >
+                      <Trash2 className="w-4 h-4 text-danger" />
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             );
@@ -311,7 +441,19 @@ function EgressEndpointsEditor({ endpoints, onChange }: { endpoints: EgressEndpo
   );
 }
 
-function AccessAuthTab({ draft, set, rules, setRules }: { draft: Entity; set: (key: string, value: unknown) => void; rules: TrunkIpRule[]; setRules: (rules: TrunkIpRule[]) => void }) {
+function AccessAuthTab({
+  draft,
+  set,
+  rules,
+  setRules,
+  canManage,
+}: {
+  draft: Entity;
+  set: (key: string, value: unknown) => void;
+  rules: TrunkIpRule[];
+  setRules: (rules: TrunkIpRule[]) => void;
+  canManage: boolean;
+}) {
   const mode = String(draft.access_auth_mode ?? 'ip_allowlist');
   const showIp = mode === 'ip_allowlist' || mode === 'ip_and_digest';
   const showDigest = mode === 'digest_register' || mode === 'ip_and_digest';
@@ -347,21 +489,28 @@ function AccessAuthTab({ draft, set, rules, setRules }: { draft: Entity; set: (k
                 variant="bordered"
                 value={String(draft.access_password ?? '')}
                 onValueChange={(v) => set('access_password', v)}
-                placeholder={draft.has_access_password ? '用户名不变时留空表示不修改' : '请输入注册认证密码'}
+                placeholder={
+                  draft.has_access_password ? '用户名不变时留空表示不修改' : '请输入注册认证密码'
+                }
               />
             </Field>
           </>
         )}
       </FormGrid>
-      {showIp && (
-        <IpRulesEditor rules={rules} onChange={setRules} />
-      )}
+      {showIp && <IpRulesEditor rules={rules} onChange={setRules} canManage={canManage} />}
     </div>
   );
 }
 
 function RegistrationTab({
-  draft, set, registrations, endpoints, setEndpoints, onRefresh, refreshing,
+  draft,
+  set,
+  registrations,
+  endpoints,
+  setEndpoints,
+  onRefresh,
+  refreshing,
+  canManage,
 }: {
   draft: Entity;
   set: (key: string, value: unknown) => void;
@@ -370,6 +519,7 @@ function RegistrationTab({
   setEndpoints: (endpoints: EgressEndpoint[]) => void;
   onRefresh?: () => void;
   refreshing?: boolean;
+  canManage: boolean;
 }) {
   const mode = String(draft.egress_connection_type ?? 'static_peer');
   const hasReg = registrations.length > 0;
@@ -430,7 +580,13 @@ function RegistrationTab({
           </>
         )}
       </FormGrid>
-      {mode === 'static_peer' && <EgressEndpointsEditor endpoints={endpoints} onChange={setEndpoints} />}
+      {mode === 'static_peer' && (
+        <EgressEndpointsEditor
+          endpoints={endpoints}
+          onChange={setEndpoints}
+          canManage={canManage}
+        />
+      )}
       <SectionBlock
         title="注册状态"
         actions={
@@ -439,7 +595,11 @@ function RegistrationTab({
               size="sm"
               variant="flat"
               color={hasReg ? 'success' : 'default'}
-              startContent={<span className={`w-2 h-2 rounded-full ${hasReg ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}
+              startContent={
+                <span
+                  className={`w-2 h-2 rounded-full ${hasReg ? 'bg-success animate-pulse' : 'bg-default-400'}`}
+                />
+              }
             >
               {hasReg ? '已有注册 (正常)' : '暂无注册'}
             </Chip>
@@ -467,11 +627,17 @@ function RegistrationTab({
             </TableHeader>
             <TableBody items={registrations}>
               {(row) => (
-                <TableRow key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}>
-                  <TableCell className="font-mono text-tiny">{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
+                <TableRow
+                  key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}
+                >
+                  <TableCell className="font-mono text-tiny">
+                    {String(row.contact_uri ?? row.contact ?? '')}
+                  </TableCell>
                   <TableCell>{String(row.received_from ?? row.node ?? '')}</TableCell>
                   <TableCell>
-                    <Chip size="sm" variant="dot" color="success">在线</Chip>
+                    <Chip size="sm" variant="dot" color="success">
+                      在线
+                    </Chip>
                   </TableCell>
                   <TableCell>{String(row.expires_at ?? '')}</TableCell>
                 </TableRow>
@@ -506,7 +672,11 @@ function AccessRegistrationStatus({
             size="sm"
             variant="flat"
             color={hasReg ? 'success' : 'default'}
-            startContent={<span className={`w-2 h-2 rounded-full ${hasReg ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}
+            startContent={
+              <span
+                className={`w-2 h-2 rounded-full ${hasReg ? 'bg-success animate-pulse' : 'bg-default-400'}`}
+              />
+            }
           >
             {hasReg ? `${registrations.length} 个在线注册` : '暂无注册'}
           </Chip>
@@ -534,11 +704,17 @@ function AccessRegistrationStatus({
           </TableHeader>
           <TableBody items={registrations}>
             {(row) => (
-              <TableRow key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}>
-                <TableCell className="font-mono text-tiny">{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
+              <TableRow
+                key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}
+              >
+                <TableCell className="font-mono text-tiny">
+                  {String(row.contact_uri ?? row.contact ?? '')}
+                </TableCell>
                 <TableCell>{String(row.received_from ?? row.node ?? '')}</TableCell>
                 <TableCell>
-                  <Chip size="sm" variant="dot" color="success">在线</Chip>
+                  <Chip size="sm" variant="dot" color="success">
+                    在线
+                  </Chip>
                 </TableCell>
                 <TableCell>{String(row.expires_at ?? '')}</TableCell>
               </TableRow>
@@ -552,9 +728,25 @@ function AccessRegistrationStatus({
   );
 }
 
-export function CallerPolicyForm({ policy, set, pools, numbers }: { policy: OutboundPolicy; set: (key: keyof OutboundPolicy, value: unknown) => void; pools: Entity[]; numbers: Entity[] }) {
-  const numberOptions = numbers.map((item) => ({ label: String(item.number), value: String(item.number) }));
-  const poolOptions = pools.map((item) => ({ label: String(item.virtual_alias || item.id), value: String(item.id) }));
+export function CallerPolicyForm({
+  policy,
+  set,
+  pools,
+  numbers,
+}: {
+  policy: OutboundPolicy;
+  set: (key: keyof OutboundPolicy, value: unknown) => void;
+  pools: Entity[];
+  numbers: Entity[];
+}) {
+  const numberOptions = numbers.map((item) => ({
+    label: String(item.number),
+    value: String(item.number),
+  }));
+  const poolOptions = pools.map((item) => ({
+    label: String(item.virtual_alias || item.id),
+    value: String(item.id),
+  }));
   return (
     <FormGrid>
       <Field label="主叫策略" required>
@@ -610,8 +802,19 @@ export function CallerPolicyForm({ policy, set, pools, numbers }: { policy: Outb
   );
 }
 
-export function EgressBindingForm({ policy, set, groups, trunks }: { policy: OutboundPolicy; set: (key: keyof OutboundPolicy, value: unknown) => void; groups: Entity[]; trunks: Entity[] }) {
-  const options = (items: Entity[]) => items.map((item) => ({ label: String(item.name ?? item.id), value: String(item.id) }));
+export function EgressBindingForm({
+  policy,
+  set,
+  groups,
+  trunks,
+}: {
+  policy: OutboundPolicy;
+  set: (key: keyof OutboundPolicy, value: unknown) => void;
+  groups: Entity[];
+  trunks: Entity[];
+}) {
+  const options = (items: Entity[]) =>
+    items.map((item) => ({ label: String(item.name ?? item.id), value: String(item.id) }));
   const egressTrunkOptions = options(trunks.filter((item) => trunkRole(item) === 'egress'));
   const groupOptions = options(groups);
   return (
@@ -631,7 +834,9 @@ export function EgressBindingForm({ policy, set, groups, trunks }: { policy: Out
         <Field label="落地中继" required>
           <Select
             variant="bordered"
-            selectedKeys={policy.direct_egress_trunk_id ? [String(policy.direct_egress_trunk_id)] : []}
+            selectedKeys={
+              policy.direct_egress_trunk_id ? [String(policy.direct_egress_trunk_id)] : []
+            }
             onChange={(e) => set('direct_egress_trunk_id', e.target.value)}
             placeholder="选择唯一号码归属中继"
           >
@@ -666,6 +871,12 @@ interface TabDef {
 }
 
 export function TrunkDetailView({ id: propId }: { id?: string }) {
+  const { session } = useAuth();
+  const canManage = Boolean(
+    session &&
+    hasPermission(session, 'trunks.update') &&
+    hasPermission(session, 'termination.manage'),
+  );
   const params = useParams();
   const id = propId || params.id || '';
   const [data, setData] = useState<TrunkWorkspaceData | null>(null);
@@ -691,7 +902,9 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
       setDraft({
         ...workspace.trunk,
         role: workspaceRole,
-        egress_connection_type: workspace.trunk.supports_registration ? 'client_register' : 'static_peer',
+        egress_connection_type: workspace.trunk.supports_registration
+          ? 'client_register'
+          : 'static_peer',
         register_server: workspace.trunk.host,
         register_username: workspace.trunk.reg_username,
       });
@@ -705,9 +918,10 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
         const loadedRules = await getTrunkIpRules(id);
         setRules(loadedRules.map((rule) => ({ ...rule, _key: rule.id || genId() })));
         try {
-          setPolicy({ ...emptyPolicy, ...await getOutboundPolicy(id) });
+          setPolicy({ ...emptyPolicy, ...(await getOutboundPolicy(id)) });
         } catch (reason) {
-          if (!(reason instanceof Error && 'status' in reason && reason.status === 404)) throw reason;
+          if (!(reason instanceof Error && 'status' in reason && reason.status === 404))
+            throw reason;
         }
       } else {
         const loadedEndpoints = await getTrunkEgressEndpoints(id);
@@ -720,7 +934,12 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
       ]);
       if (optional[0].status === 'fulfilled') setGroups(optional[0].value);
       if (optional[1].status === 'fulfilled') setTrunks(optional[1].value);
-      if (optional[2].status === 'fulfilled') setPools(optional[2].value.filter((pool) => pool.owner_source_type === 'trunk' && pool.owner_source_id === id));
+      if (optional[2].status === 'fulfilled')
+        setPools(
+          optional[2].value.filter(
+            (pool) => pool.owner_source_type === 'trunk' && pool.owner_source_id === id,
+          ),
+        );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '中继加载失败');
     } finally {
@@ -728,21 +947,33 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
     }
   }, [id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const set = (key: string, value: unknown) => setDraft((current) => ({ ...current, [key]: value }));
-  const setPolicyField = (key: keyof OutboundPolicy, value: unknown) => setPolicy((current) => ({ ...current, [key]: value }));
+  const set = (key: string, value: unknown) =>
+    setDraft((current) => ({ ...current, [key]: value }));
+  const setPolicyField = (key: keyof OutboundPolicy, value: unknown) =>
+    setPolicy((current) => ({ ...current, [key]: value }));
 
   const save = async () => {
     const trunkError = trunkValidationError(draft, data?.trunk || {}, rules, endpoints);
-    if (trunkError) { message.error(trunkError); return; }
+    if (trunkError) {
+      message.error(trunkError);
+      return;
+    }
     const policyError = role === 'access' ? policyValidationError(policy) : null;
-    if (policyError) { message.error(policyError); return; }
+    if (policyError) {
+      message.error(policyError);
+      return;
+    }
     try {
       setSaving(true);
       const body: Entity = { ...draft };
       if (role === 'access') {
-        body.supports_registration = ['digest_register', 'ip_and_digest'].includes(String(draft.access_auth_mode));
+        body.supports_registration = ['digest_register', 'ip_and_digest'].includes(
+          String(draft.access_auth_mode),
+        );
         body.reg_auth_type = String(draft.access_auth_mode).includes('digest') ? 'digest' : 'ip';
       } else if (role === 'egress') {
         const connectionType = draft.egress_connection_type ?? 'static_peer';
@@ -762,7 +993,9 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
       }
       if (role === 'access') {
         const needsIp = ['ip_allowlist', 'ip_and_digest'].includes(String(draft.access_auth_mode));
-        const currentlyNeedsIp = ['ip_allowlist', 'ip_and_digest'].includes(String(data?.trunk.access_auth_mode));
+        const currentlyNeedsIp = ['ip_allowlist', 'ip_and_digest'].includes(
+          String(data?.trunk.access_auth_mode),
+        );
         // Entering IP authentication stores rules first. Leaving IP-only
         // authentication changes the mode first so the API can safely remove
         // the final allowlist rule without creating an invalid intermediate state.
@@ -793,35 +1026,73 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
       {
         key: 'auth',
         title: '接入认证',
-        content: <AccessAuthTab draft={draft} set={set} rules={rules} setRules={setRules} />,
+        content: (
+          <AccessAuthTab
+            draft={draft}
+            set={set}
+            rules={rules}
+            setRules={setRules}
+            canManage={canManage}
+          />
+        ),
         hide: role !== 'access',
       },
       {
         key: 'registration',
         title: '注册状态',
-        content: role === 'egress'
-          ? <RegistrationTab draft={draft} set={set} registrations={data?.registrations || []} endpoints={endpoints} setEndpoints={setEndpoints} onRefresh={load} refreshing={loading} />
-          : <AccessRegistrationStatus registrations={data?.registrations || []} onRefresh={load} refreshing={loading} />,
+        content:
+          role === 'egress' ? (
+            <RegistrationTab
+              draft={draft}
+              set={set}
+              registrations={data?.registrations || []}
+              endpoints={endpoints}
+              setEndpoints={setEndpoints}
+              onRefresh={load}
+              refreshing={loading}
+              canManage={canManage}
+            />
+          ) : (
+            <AccessRegistrationStatus
+              registrations={data?.registrations || []}
+              onRefresh={load}
+              refreshing={loading}
+            />
+          ),
       },
       {
         key: 'caller',
         title: '主叫策略',
-        content: <CallerPolicyForm policy={policy} set={setPolicyField} pools={pools} numbers={data?.numbers || []} />,
+        content: (
+          <CallerPolicyForm
+            policy={policy}
+            set={setPolicyField}
+            pools={pools}
+            numbers={data?.numbers || []}
+          />
+        ),
         hide: role !== 'access',
       },
       {
         key: 'pool',
         title: role === 'access' ? '号码池组' : '归属号码',
-        content: role === 'access'
-          ? (
+        content:
+          role === 'access' ? (
             <SectionBlock
               title="号码池组"
-              actions={<Chip size="sm" variant="flat">{policy.caller_mode === 'virtual_pool' ? (policy.caller_pool_id || '尚未绑定') : '当前策略不使用号码池'}</Chip>}
+              actions={
+                <Chip size="sm" variant="flat">
+                  {policy.caller_mode === 'virtual_pool'
+                    ? policy.caller_pool_id || '尚未绑定'
+                    : '当前策略不使用号码池'}
+                </Chip>
+              }
             >
-              <p className="text-tiny text-default-400">号码池成员是唯一归属于落地中继的真实号码。请在"号码池组"页面维护成员和选号算法。</p>
+              <p className="text-tiny text-default-400">
+                号码池成员是唯一归属于落地中继的真实号码。请在"号码池组"页面维护成员和选号算法。
+              </p>
             </SectionBlock>
-          )
-          : (
+          ) : (
             <SectionBlock title="归属号码">
               {data?.numbers?.length ? (
                 <Table aria-label="归属号码列表">
@@ -832,7 +1103,9 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
                   </TableHeader>
                   <TableBody items={data.numbers}>
                     {(row) => (
-                      <TableRow key={String(row.number ?? row.id ?? row.owner_egress_trunk_id ?? '')}>
+                      <TableRow
+                        key={String(row.number ?? row.id ?? row.owner_egress_trunk_id ?? '')}
+                      >
                         <TableCell>{String(row.number ?? '')}</TableCell>
                         <TableCell>{row.can_present ? '是' : '否'}</TableCell>
                         <TableCell>{row.can_receive ? '是' : '否'}</TableCell>
@@ -849,17 +1122,38 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
       {
         key: 'binding',
         title: '落地绑定',
-        content: <EgressBindingForm policy={policy} set={setPolicyField} groups={groups} trunks={trunks} />,
+        content: (
+          <EgressBindingForm policy={policy} set={setPolicyField} groups={groups} trunks={trunks} />
+        ),
         hide: role !== 'access',
       },
     ];
     return list.filter((tab) => !tab.hide);
-  }, [data, draft, groups, policy, pools, role, rules, trunks, endpoints, load, loading]);
+  }, [
+    canManage,
+    data,
+    draft,
+    groups,
+    policy,
+    pools,
+    role,
+    rules,
+    trunks,
+    endpoints,
+    load,
+    loading,
+  ]);
 
   if (loading) {
     return (
       <section>
-        <DetailHeader loading={true} saving={saving} onRefresh={load} onSave={save} />
+        <DetailHeader
+          loading={true}
+          saving={saving}
+          onRefresh={load}
+          onSave={save}
+          canSave={canManage}
+        />
         <DetailLoading />
       </section>
     );
@@ -890,16 +1184,28 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
                 size="sm"
                 variant="flat"
                 color={isOnline ? 'success' : 'default'}
-                startContent={<span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}
+                startContent={
+                  <span
+                    className={`w-2 h-2 rounded-full ${isOnline ? 'bg-success animate-pulse' : 'bg-default-400'}`}
+                  />
+                }
               >
                 {isOnline ? `在线 (${regCount} 个注册)` : '未注册/离线'}
               </Chip>
             </div>
-            <p className="text-tiny text-default-400 mt-0.5">SIP 中继对接、IP/Digest 鉴权与网关链路属性配置</p>
+            <p className="text-tiny text-default-400 mt-0.5">
+              中继对接、地址与注册鉴权、网关链路属性配置
+            </p>
           </div>
         </div>
 
-        <DetailHeader loading={loading} saving={saving} onRefresh={load} onSave={save} />
+        <DetailHeader
+          loading={loading}
+          saving={saving}
+          onRefresh={load}
+          onSave={save}
+          canSave={canManage}
+        />
       </div>
 
       {error ? (

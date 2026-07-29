@@ -23,7 +23,9 @@ export function AudioWaveform({ active, level = 50, color = 'primary' }: AudioWa
     <div className="flex items-center justify-center gap-1 h-8 px-2 py-1 bg-content2 rounded-lg border border-default-100/20 backdrop-blur-sm">
       {Array.from({ length: barCount }).map((_, i) => {
         const factor = Math.sin((i + 1) * 0.7) * 0.5 + 0.5;
-        const barHeightPercent = active ? Math.min(100, Math.max(15, (level * factor) + (i % 3) * 15)) : 10;
+        const barHeightPercent = active
+          ? Math.min(100, Math.max(15, level * factor + (i % 3) * 15))
+          : 10;
 
         return (
           <div

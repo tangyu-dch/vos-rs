@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { canAccessPage, clearSession, getSession, saveSession } from '@/services/auth';
+import {
+  canAccessPage,
+  clearSession,
+  firstMenuPath,
+  getSession,
+  hasPermission,
+  saveSession,
+  type AuthSession,
+} from '@/services/auth';
 import { api } from '@/services/client';
 import { login } from '@/services/resources';
 
@@ -8,24 +16,64 @@ describe('frontend RBAC', () => {
     clearSession();
   });
 
-  it('limits pages by role', () => {
-    expect(canAccessPage('admin', '/extensions')).toBe(true);
-    expect(canAccessPage('operator', '/extensions')).toBe(false);
-    expect(canAccessPage('operator', '/routing')).toBe(true);
-    expect(canAccessPage('operator', '/billing/accounts')).toBe(false);
-    expect(canAccessPage('financier', '/billing/accounts')).toBe(true);
-    expect(canAccessPage('financier', '/trunks')).toBe(false);
-    expect(canAccessPage('operator', '/infrastructure')).toBe(false);
-    expect(canAccessPage('financier', '/calls/example')).toBe(true);
-    expect(canAccessPage('operator', '/settings')).toBe(false);
-    expect(canAccessPage('financier', '/settings')).toBe(false);
+  const session: AuthSession = {
+    token: 'token',
+    username: 'alice',
+    display_name: 'Alice',
+    role: 'custom',
+    role_name: '自定义角色',
+    permissions: ['calls.view'],
+    menus: [
+      {
+        group_key: 'analytics',
+        label: '通话分析',
+        icon_key: 'phone',
+        sort_order: 1,
+        enabled: true,
+        items: [
+          {
+            item_key: 'calls',
+            label: '通话记录',
+            path: '/calls',
+            icon_key: 'phone',
+            permission_key: 'calls.view',
+            sort_order: 1,
+            enabled: true,
+          },
+        ],
+      },
+    ],
+  };
+
+  it('uses database menus to limit pages', () => {
+    expect(canAccessPage(session, '/calls')).toBe(true);
+    expect(canAccessPage(session, '/calls/example')).toBe(false);
+    expect(canAccessPage(session, '/billing/accounts')).toBe(false);
+  });
+
+  it('uses the first enabled database menu as the home page', () => {
+    expect(firstMenuPath(session)).toBe('/calls');
+  });
+
+  it('does not treat a sibling button permission as authorization', () => {
+    const operator = { ...session, permissions: ['calls.monitor'] };
+    expect(hasPermission(operator, 'calls.monitor')).toBe(true);
+    expect(hasPermission(operator, 'calls.terminate')).toBe(false);
+    expect(hasPermission(operator, 'calls.play')).toBe(false);
+  });
+
+  it('wildcard permission authorizes every button action', () => {
+    expect(hasPermission({ ...session, permissions: ['*'] }, 'infrastructure.manage')).toBe(true);
   });
 
   it('persists and validates the login session', () => {
-    saveSession({ token: 'token', username: 'alice', role: 'operator' });
-    expect(getSession()).toEqual({ token: 'token', username: 'alice', role: 'operator' });
+    saveSession(session);
+    expect(getSession()).toEqual(session);
 
-    localStorage.setItem('vos-auth-session', JSON.stringify({ token: '', username: 'alice', role: 'operator' }));
+    localStorage.setItem(
+      'vos-auth-session',
+      JSON.stringify({ token: '', username: 'alice', role: 'operator' }),
+    );
     expect(getSession()).toBeNull();
   });
 

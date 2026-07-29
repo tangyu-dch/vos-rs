@@ -6,7 +6,13 @@ import { CallControlPanel } from './ai-agent-panel';
 
 interface CallDetailPanelProps {
   currentCall: LiveCallItem;
-  isOperatorOrAdmin: boolean;
+  permissions: {
+    canBarge: boolean;
+    canPlay: boolean;
+    canMonitor: boolean;
+    canTransfer: boolean;
+    canTerminate: boolean;
+  };
   transcriptScrollRef: React.RefObject<HTMLDivElement>;
   renderStateChip: (state: CallState) => React.ReactNode;
   onBargeIn: () => void;
@@ -18,7 +24,7 @@ interface CallDetailPanelProps {
 
 export function CallDetailPanel({
   currentCall,
-  isOperatorOrAdmin,
+  permissions,
   transcriptScrollRef,
   renderStateChip,
   onBargeIn,
@@ -37,7 +43,7 @@ export function CallDetailPanel({
   const audioOut = currentCall.media.audioLevelOut ?? 0;
 
   return (
-    <Card shadow="sm" className="bg-content1/80 border border-default-200/60 backdrop-blur-md flex-1 flex flex-col min-h-0 overflow-hidden">
+    <Card shadow="none" className="overview-card flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* 通话信息头部 */}
       <div className="p-4 bg-content2/80 border-b border-default-200/60 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -46,7 +52,9 @@ export function CallDetailPanel({
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold text-foreground font-mono">{currentCall.callId}</h2>
+              <h2 className="text-base font-bold text-foreground font-mono">
+                {currentCall.callId}
+              </h2>
               {renderStateChip(currentCall.state)}
               {currentCall.listening && (
                 <Chip size="sm" color="success" variant="flat" className="animate-pulse">
@@ -55,13 +63,26 @@ export function CallDetailPanel({
               )}
             </div>
             <div className="text-xs text-default-500 mt-0.5 flex items-center gap-3 flex-wrap">
-              <span>主叫: <strong className="text-foreground font-mono">{currentCall.caller || '-'}</strong></span>
-              <span>{"->"}</span>
-              <span>被叫: <strong className="text-foreground font-mono">{currentCall.callee || '-'}</strong></span>
+              <span>
+                主叫:{' '}
+                <strong className="text-foreground font-mono">{currentCall.caller || '-'}</strong>
+              </span>
+              <span>{'->'}</span>
+              <span>
+                被叫:{' '}
+                <strong className="text-foreground font-mono">{currentCall.callee || '-'}</strong>
+              </span>
               <span>•</span>
-              <span>方向: <span className="font-mono">{currentCall.direction === 'inbound' ? '入呼' : '外呼'}</span></span>
+              <span>
+                方向:{' '}
+                <span className="font-mono">
+                  {currentCall.direction === 'inbound' ? '入呼' : '外呼'}
+                </span>
+              </span>
               <span>•</span>
-              <span>网关: <span className="font-mono">{currentCall.gateway || '-'}</span></span>
+              <span>
+                网关: <span className="font-mono">{currentCall.gateway || '-'}</span>
+              </span>
             </div>
           </div>
         </div>
@@ -71,7 +92,7 @@ export function CallDetailPanel({
         {/* 通话操作面板 */}
         <CallControlPanel
           currentCall={currentCall}
-          isOperatorOrAdmin={isOperatorOrAdmin}
+          permissions={permissions}
           onBargeIn={onBargeIn}
           onSpeak={onSpeak}
           onToggleListen={onToggleListen}
@@ -86,20 +107,20 @@ export function CallDetailPanel({
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
                 <User className="w-3.5 h-3.5 text-primary" />
-                主叫上行 RTP 媒体流 (Inbound)
+                主叫上行媒体流
               </span>
               <span className="font-mono text-tiny text-primary">{codec}</span>
             </div>
 
             <div className="flex items-center justify-between gap-3">
-              <AudioWaveform
-                active={audioIn > 5}
-                level={audioIn}
-                color="primary"
-              />
+              <AudioWaveform active={audioIn > 5} level={audioIn} color="primary" />
               <div className="text-right font-mono text-tiny text-default-400 space-y-0.5">
-                <div>Bitrate: <span className="text-foreground">{bitrateKbps} kbps</span></div>
-                <div>Loss: <span className="text-success">{packetLossPercent}%</span></div>
+                <div>
+                  Bitrate: <span className="text-foreground">{bitrateKbps} kbps</span>
+                </div>
+                <div>
+                  Loss: <span className="text-success">{packetLossPercent}%</span>
+                </div>
               </div>
             </div>
           </div>
@@ -115,14 +136,14 @@ export function CallDetailPanel({
             </div>
 
             <div className="flex items-center justify-between gap-3">
-              <AudioWaveform
-                active={audioOut > 5}
-                level={audioOut}
-                color="primary"
-              />
+              <AudioWaveform active={audioOut > 5} level={audioOut} color="primary" />
               <div className="text-right font-mono text-tiny text-default-400 space-y-0.5">
-                <div>Jitter: <span className="text-foreground">{jitterMs} ms</span></div>
-                <div>RTT: <span className="text-primary">{rttMs} ms</span></div>
+                <div>
+                  Jitter: <span className="text-foreground">{jitterMs} ms</span>
+                </div>
+                <div>
+                  RTT: <span className="text-primary">{rttMs} ms</span>
+                </div>
               </div>
             </div>
           </div>
@@ -152,11 +173,13 @@ export function CallDetailPanel({
                 if (t.speaker === 'system') {
                   return (
                     <div key={t.id} className="flex justify-center my-2">
-                      <span className={`text-[11px] font-mono px-3 py-1 rounded-full border ${
-                        t.interrupted
-                          ? 'bg-danger/20 text-danger border-danger/30'
-                          : 'bg-primary/20 text-primary border-primary/30'
-                      }`}>
+                      <span
+                        className={`text-[11px] font-mono px-3 py-1 rounded-full border ${
+                          t.interrupted
+                            ? 'bg-danger/20 text-danger border-danger/30'
+                            : 'bg-primary/20 text-primary border-primary/30'
+                        }`}
+                      >
                         {t.text} ({t.timestamp})
                       </span>
                     </div>

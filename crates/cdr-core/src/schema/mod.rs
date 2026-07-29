@@ -1,11 +1,19 @@
 //! # 数据库表结构定义
 
+pub mod access_control_tables;
+pub mod announcement_tables;
 pub mod billing_tables;
 pub mod cdr_tables;
+pub mod copilot_tables;
+pub mod notification_tables;
 pub mod sip_tables;
 
+pub(crate) use access_control_tables::*;
+pub(crate) use announcement_tables::*;
 pub(crate) use billing_tables::*;
 pub(crate) use cdr_tables::*;
+pub(crate) use copilot_tables::*;
+pub(crate) use notification_tables::*;
 pub(crate) use sip_tables::*;
 
 #[cfg(test)]

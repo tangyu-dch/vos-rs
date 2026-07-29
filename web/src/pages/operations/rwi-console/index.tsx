@@ -11,12 +11,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { useAuth } from '@/auth/AuthContext';
-import { canWriteDomain } from '@/services/auth';
-import {
-  useRwiWebSocket,
-  type CallState,
-  type WsConnectionState,
-} from './use-rwi-websocket';
+import { hasPermission } from '@/services/auth';
+import { useRwiWebSocket, type CallState, type WsConnectionState } from './use-rwi-websocket';
 import { CallListPanel } from './call-list-panel';
 import { CallDetailPanel } from './call-detail-panel';
 import { TransferModal } from './transfer-modal';
@@ -25,7 +21,13 @@ import { SpeakModal } from './speak-modal';
 
 export function RwiConsolePage() {
   const { session } = useAuth();
-  const isOperatorOrAdmin = session ? canWriteDomain(session.role, 'operations') : true;
+  const permissions = {
+    canBarge: Boolean(session && hasPermission(session, 'calls.barge')),
+    canPlay: Boolean(session && hasPermission(session, 'calls.play')),
+    canMonitor: Boolean(session && hasPermission(session, 'calls.monitor')),
+    canTransfer: Boolean(session && hasPermission(session, 'calls.transfer')),
+    canTerminate: Boolean(session && hasPermission(session, 'calls.terminate')),
+  };
 
   const {
     calls,
@@ -146,7 +148,8 @@ export function RwiConsolePage() {
   // WebSocket 连接状态信号图标
   const renderSignalIcon = (state: WsConnectionState) => {
     if (state === 'connected') return <SignalHigh className="w-4 h-4 text-success" />;
-    if (state === 'connecting') return <SignalMedium className="w-4 h-4 text-warning animate-pulse" />;
+    if (state === 'connecting')
+      return <SignalMedium className="w-4 h-4 text-warning animate-pulse" />;
     return <SignalLow className="w-4 h-4 text-danger" />;
   };
 
@@ -192,27 +195,25 @@ export function RwiConsolePage() {
   ];
 
   return (
-    <div className="flex flex-col gap-5 w-full h-full min-h-[calc(100vh-100px)]">
+    <div className="flex flex-col gap-4 w-full h-full min-h-[calc(100vh-96px)]">
       {/* 顶部状态栏 */}
-      <div className="relative overflow-hidden rounded-2xl bg-content1 border border-primary/30 p-5 shadow-2xl backdrop-blur-xl">
+      <div className="overview-card overflow-hidden p-4">
         <div className="relative flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/30 text-foreground">
-              <Radio className="w-6 h-6 animate-pulse" />
+            <div className="w-9 h-9 rounded-lg bg-default-100 flex items-center justify-center text-primary">
+              <Radio className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-black tracking-tight text-foreground">
-                  实时控制台
-                </h1>
-                <Chip size="sm" variant="flat" className="bg-primary/20 text-primary border border-primary/30 font-mono text-xs">
+                <h1 className="text-lg font-semibold tracking-tight text-foreground">实时控制</h1>
+                <Chip size="sm" variant="flat" color="success">
                   实时
                 </Chip>
               </div>
-              <p className="text-xs text-foreground mt-1 flex items-center gap-2">
+              <p className="text-xs text-default-500 mt-1 flex items-center gap-2">
                 <span>基于实时双工通道的呼叫事件订阅与媒体指令下发</span>
                 <span className="text-default-400">•</span>
-                <span className="text-primary font-mono">强插 / 播报 / 监听 / 转接 / 挂断</span>
+                <span className="text-default-600">强插 / 播报 / 监听 / 转接 / 挂断</span>
               </p>
             </div>
           </div>
@@ -222,7 +223,7 @@ export function RwiConsolePage() {
             <button
               type="button"
               onClick={reconnect}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-content2 border border-default-200 text-xs font-mono text-foreground hover:bg-default-100 transition-colors cursor-pointer"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-default-50 border border-default-200 text-xs text-foreground hover:bg-default-100 transition-colors cursor-pointer"
               aria-label="重连实时通道"
             >
               {renderSignalIcon(wsState)}
@@ -236,7 +237,7 @@ export function RwiConsolePage() {
             <button
               type="button"
               onClick={reconnect}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-default-100/10 hover:bg-default-100/20 text-foreground border border-default-200 text-xs"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-default-50 hover:bg-default-100 text-foreground border border-default-200 text-xs"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span>重连</span>
@@ -247,15 +248,20 @@ export function RwiConsolePage() {
         {/* KPI 统计 */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5 pt-4 border-t border-default-200">
           {kpiStats.map(({ Icon, ...kpi }) => (
-            <div key={kpi.label} className="flex items-center gap-3 p-3 rounded-xl bg-default-100/10 border border-default-100/10">
+            <div
+              key={kpi.label}
+              className="flex items-center gap-3 p-3 rounded-lg bg-default-50 border border-default-100"
+            >
               <div className={`p-2 rounded-lg ${kpi.iconCls}`}>
                 <Icon className="w-5 h-5" />
               </div>
               <div>
                 <div className="text-xs text-default-500 font-medium">{kpi.label}</div>
-                <div className={`text-lg font-bold font-mono ${kpi.valCls}`}>
+                <div className="text-lg font-semibold text-foreground tnum">
                   {kpi.value}
-                  {kpi.suffix && <span className="text-xs text-default-500 font-normal"> {kpi.suffix}</span>}
+                  {kpi.suffix && (
+                    <span className="text-xs text-default-500 font-normal"> {kpi.suffix}</span>
+                  )}
                 </div>
               </div>
             </div>
@@ -281,7 +287,7 @@ export function RwiConsolePage() {
           {currentCall ? (
             <CallDetailPanel
               currentCall={currentCall}
-              isOperatorOrAdmin={isOperatorOrAdmin}
+              permissions={permissions}
               transcriptScrollRef={transcriptScrollRef}
               renderStateChip={renderStateChip}
               onBargeIn={() => setBargeInConfirmOpen(true)}
@@ -291,7 +297,10 @@ export function RwiConsolePage() {
               onHangup={() => handleHangup(currentCall.callId)}
             />
           ) : (
-            <Card shadow="sm" className="h-full flex items-center justify-center p-12 text-center text-default-400">
+            <Card
+              shadow="none"
+              className="overview-card h-full flex items-center justify-center p-12 text-center text-default-400"
+            >
               <PhoneCall className="w-12 h-12 mb-3 opacity-30" />
               <p className="text-sm font-semibold">请在左侧选择需要调控的实时通话</p>
               <p className="text-xs mt-1 text-default-400">建立通话后将自动出现在列表中</p>

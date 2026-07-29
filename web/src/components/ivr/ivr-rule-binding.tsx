@@ -8,14 +8,26 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Chip, Input } from '@heroui/react';
-import { Save, Play, GitFork, AlertCircle, AlertTriangle, CheckCircle2, ShieldAlert } from 'lucide-react';
+import {
+  Save,
+  Play,
+  GitFork,
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  ShieldAlert,
+} from 'lucide-react';
 import { api } from '@/services/client';
 import { ErrorState, LoadingState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
 import { autoLayoutNodes, IvrCanvas, NodeInspector, NodePalette } from './ivr-canvas';
 import {
-  NODE_CATALOG_MAP, genEdgeId, genNodeId,
-  type IvrEdge, type IvrFlow, type IvrNode,
+  NODE_CATALOG_MAP,
+  genEdgeId,
+  genNodeId,
+  type IvrEdge,
+  type IvrFlow,
+  type IvrNode,
 } from './types';
 
 // 表格行字段 (从 IVR 列表项提取, 不含 nodes/edges)
@@ -166,7 +178,9 @@ export function validateIvrFlow(flow: IvrFlow): IvrValidationResult {
 
     const cycleNames = cycle.map((id) => nodes.find((n) => n.id === id)?.title || id).join(' -> ');
     if (!hasLoopNode) {
-      errors.push(`检测到死循环/非法环路: 【${cycleNames} -> ${nodes.find((n) => n.id === cycle[0])?.title}】，缺少显式【循环跳转】节点或退出条件`);
+      errors.push(
+        `检测到死循环/非法环路: 【${cycleNames} -> ${nodes.find((n) => n.id === cycle[0])?.title}】，缺少显式【循环跳转】节点或退出条件`,
+      );
     } else {
       warnings.push(`流程包含受控循环: ${cycleNames}`);
     }
@@ -251,8 +265,20 @@ export function flowFromFields(fields: IvrFlowFields): IvrFlow {
     enabled: fields.enabled ?? true,
     nodes: [startNode, menuNode, hangupNode],
     edges: [
-      { id: genEdgeId(), source: startNode.id, target: menuNode.id, sourcePort: 'out', label: '进入' },
-      { id: genEdgeId(), source: menuNode.id, target: hangupNode.id, sourcePort: 'key-0', label: '按 0' },
+      {
+        id: genEdgeId(),
+        source: startNode.id,
+        target: menuNode.id,
+        sourcePort: 'out',
+        label: '进入',
+      },
+      {
+        id: genEdgeId(),
+        source: menuNode.id,
+        target: hangupNode.id,
+        sourcePort: 'key-0',
+        label: '按 0',
+      },
     ],
   };
 }
@@ -278,15 +304,13 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
     try {
       const res: Record<string, unknown> = await api.get(`/ivr/menus/${flow.id}`);
       const menu = (res.data ?? res) as Record<string, unknown>;
-      const menuNodeDtos = Array.isArray(menu.nodes) ? menu.nodes as IvrNodeDto[] : [];
-      const menuEdgeDtos = Array.isArray(menu.edges) ? menu.edges as IvrEdgeDto[] : [];
+      const menuNodeDtos = Array.isArray(menu.nodes) ? (menu.nodes as IvrNodeDto[]) : [];
+      const menuEdgeDtos = Array.isArray(menu.edges) ? (menu.edges as IvrEdgeDto[]) : [];
 
-      const nodes: IvrNode[] = menuNodeDtos.length > 0
-        ? menuNodeDtos.map(nodeFromDto)
-        : flowFromFields(flow).nodes;
-      const edges: IvrEdge[] = menuNodeDtos.length > 0
-        ? menuEdgeDtos.map(edgeFromDto)
-        : flowFromFields(flow).edges;
+      const nodes: IvrNode[] =
+        menuNodeDtos.length > 0 ? menuNodeDtos.map(nodeFromDto) : flowFromFields(flow).nodes;
+      const edges: IvrEdge[] =
+        menuNodeDtos.length > 0 ? menuEdgeDtos.map(edgeFromDto) : flowFromFields(flow).edges;
 
       const layoutedNodes = autoLayoutNodes(nodes, edges);
 
@@ -309,7 +333,9 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
     }
   }, [flow.id, flow.name]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   // 实时节点树图验证
   const validation = useMemo(() => (topology ? validateIvrFlow(topology) : null), [topology]);
@@ -397,14 +423,24 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
           <Chip size="sm" variant="flat" color="primary">
             {topology.nodes.length} 节点 · {topology.edges.length} 连线
           </Chip>
-          {topology.did && <Chip size="sm" variant="flat" color="primary">DID {topology.did}</Chip>}
+          {topology.did && (
+            <Chip size="sm" variant="flat" color="primary">
+              DID {topology.did}
+            </Chip>
+          )}
 
           {/* 节点树防呆校验状态 Chip */}
           {validation && (
             <Chip
               size="sm"
               variant="flat"
-              color={validation.errors.length > 0 ? 'danger' : validation.warnings.length > 0 ? 'warning' : 'success'}
+              color={
+                validation.errors.length > 0
+                  ? 'danger'
+                  : validation.warnings.length > 0
+                    ? 'warning'
+                    : 'success'
+              }
               startContent={
                 validation.errors.length > 0 ? (
                   <AlertCircle className="w-3.5 h-3.5 text-danger" />
@@ -418,8 +454,8 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
               {validation.errors.length > 0
                 ? `${validation.errors.length} 项流程错误`
                 : validation.warnings.length > 0
-                ? `${validation.warnings.length} 项流程警告`
-                : '流程节点树验证通过'}
+                  ? `${validation.warnings.length} 项流程警告`
+                  : '流程节点树验证通过'}
             </Chip>
           )}
         </div>
@@ -479,4 +515,3 @@ export function IvrTopologyEditor({ flow, onSaved }: IvrTopologyEditorProps) {
     </div>
   );
 }
-

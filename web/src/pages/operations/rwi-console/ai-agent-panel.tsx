@@ -1,17 +1,16 @@
 import { Button, Tooltip } from '@heroui/react';
-import {
-  Mic,
-  PhoneForwarded,
-  PhoneOff,
-  Volume2,
-  VolumeX,
-  Zap,
-} from 'lucide-react';
+import { Mic, PhoneForwarded, PhoneOff, Volume2, VolumeX, Zap } from 'lucide-react';
 import type { LiveCallItem } from './use-rwi-websocket';
 
 interface CallControlPanelProps {
   currentCall: LiveCallItem;
-  isOperatorOrAdmin: boolean;
+  permissions: {
+    canBarge: boolean;
+    canPlay: boolean;
+    canMonitor: boolean;
+    canTransfer: boolean;
+    canTerminate: boolean;
+  };
   onBargeIn: () => void;
   onSpeak: () => void;
   onToggleListen: () => void;
@@ -25,7 +24,7 @@ interface CallControlPanelProps {
  */
 export function CallControlPanel({
   currentCall,
-  isOperatorOrAdmin,
+  permissions,
   onBargeIn,
   onSpeak,
   onToggleListen,
@@ -35,13 +34,13 @@ export function CallControlPanel({
   const callEnded = currentCall.state === 'ended';
 
   return (
-    <div className="p-4 rounded-xl bg-content1 border border-primary/30 shadow-xl">
-      <div className="text-xs font-semibold text-primary uppercase tracking-wider mb-3 flex items-center justify-between">
+    <div className="overview-card p-4">
+      <div className="text-xs font-semibold text-foreground mb-3 flex items-center justify-between">
         <span className="flex items-center gap-1.5">
           <Zap className="w-4 h-4 text-warning" />
           通话操作面板
         </span>
-        <span className="text-[10px] text-primary font-normal">RTP 双向注入</span>
+        <span className="text-[10px] text-default-400 font-normal">媒体双向注入</span>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
@@ -49,11 +48,10 @@ export function CallControlPanel({
         <Tooltip content="立即打断当前媒体流并接管双向通道" placement="top">
           <Button
             color="danger"
-            variant="shadow"
+            variant="flat"
             isIconOnly
-            disabled={!isOperatorOrAdmin || callEnded}
+            isDisabled={!permissions.canBarge || callEnded}
             onPress={onBargeIn}
-            className="font-bold bg-danger text-foreground shadow-danger/30"
             aria-label="强插"
           >
             <Zap className="w-5 h-5" />
@@ -66,9 +64,8 @@ export function CallControlPanel({
             color="primary"
             variant="flat"
             isIconOnly
-            disabled={!isOperatorOrAdmin || callEnded}
+            isDisabled={!permissions.canPlay || callEnded}
             onPress={onSpeak}
-            className="font-bold bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30"
             aria-label="文本播报"
           >
             <Mic className="w-5 h-5" />
@@ -81,24 +78,26 @@ export function CallControlPanel({
             color={currentCall.listening ? 'warning' : 'primary'}
             variant={currentCall.listening ? 'solid' : 'flat'}
             isIconOnly
-            disabled={callEnded}
+            isDisabled={!permissions.canMonitor || callEnded}
             onPress={onToggleListen}
-            className="font-bold"
             aria-label="监听"
           >
-            {currentCall.listening ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+            {currentCall.listening ? (
+              <VolumeX className="w-5 h-5" />
+            ) : (
+              <Volume2 className="w-5 h-5" />
+            )}
           </Button>
         </Tooltip>
 
         {/* 4. 转接 Transfer */}
-        <Tooltip content="发送 SIP REFER 盲转到指定座席分机或外部号码" placement="top">
+        <Tooltip content="盲转到指定座席分机或外部号码" placement="top">
           <Button
             color="success"
             variant="flat"
             isIconOnly
-            disabled={!isOperatorOrAdmin || callEnded}
+            isDisabled={!permissions.canTransfer || callEnded}
             onPress={onTransfer}
-            className="font-bold bg-success/10 text-success border border-success/30 hover:bg-success/20"
             aria-label="转接"
           >
             <PhoneForwarded className="w-5 h-5" />
@@ -106,14 +105,13 @@ export function CallControlPanel({
         </Tooltip>
 
         {/* 5. 挂断 Hangup */}
-        <Tooltip content="立即强拆并挂断当前 SIP 会话" placement="top">
+        <Tooltip content="立即强拆并挂断当前会话" placement="top">
           <Button
             color="danger"
             variant="flat"
             isIconOnly
-            disabled={!isOperatorOrAdmin || callEnded}
+            isDisabled={!permissions.canTerminate || callEnded}
             onPress={onHangup}
-            className="font-bold bg-danger/20 text-danger border border-danger/30 hover:bg-danger/40"
             aria-label="挂断"
           >
             <PhoneOff className="w-5 h-5" />

@@ -4,6 +4,7 @@ pub mod audit;
 pub mod auth;
 pub mod hot_cache;
 pub mod metrics;
+pub mod permissions;
 #[allow(clippy::module_inception)]
 pub mod system;
 pub mod utils;

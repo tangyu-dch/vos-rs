@@ -13,27 +13,94 @@ import { Button, Card, CardBody, ScrollShadow } from '@heroui/react';
 import { Bot, Download, PanelLeft, Square, SquarePen, Trash2 } from 'lucide-react';
 import { api } from '@/services/client';
 import { PageHeader } from '@/components/detail-shell';
-import { getAccessToken } from '@/services/auth';
+import { getAccessToken, hasPermission } from '@/services/auth';
+import { useAuth } from '@/auth/AuthContext';
 import { message } from '@/utils/toast';
 import { SessionSidebar } from './copilot-sidebar';
 import {
-  CopilotMessageDTO, CopilotSession, ActiveModelBadge,
-  MessageItem, buildExportMarkdown, streamChat, toMessageItem,
+  CopilotAction,
+  CopilotMessageDTO,
+  CopilotSession,
+  ActiveModelBadge,
+  MessageItem,
+  buildExportMarkdown,
+  streamChat,
+  toMessageItem,
 } from './copilot-shared';
-import {
-  WelcomePanel, MessagesLoading, MessageBubble,
-} from './copilot-message';
-import {
-  AttachedFile, AttachmentChips, ComposerBar,
-} from './copilot-input';
-import {
-  ImageLightbox, CsvPreviewModal,
-} from './copilot-preview';
+import { WelcomePanel, MessagesLoading, MessageBubble } from './copilot-message';
+import { AttachedFile, AttachmentChips, ComposerBar } from './copilot-input';
+import { ImageLightbox, CsvPreviewModal } from './copilot-preview';
 
-interface SessionListResponse { sessions: CopilotSession[]; }
-interface SessionDetailResponse { session: CopilotSession; messages: CopilotMessageDTO[]; }
+interface SessionListResponse {
+  sessions: CopilotSession[];
+}
+interface SessionDetailResponse {
+  session: CopilotSession;
+  messages: CopilotMessageDTO[];
+}
+interface ActionListResponse {
+  actions: CopilotAction[];
+}
+
+function actionTraceStatus(
+  action: CopilotAction,
+): 'approval_required' | 'approved' | 'rejected' | 'failed' | 'approving' {
+  if (action.status === 'approved') return 'approved';
+  if (action.status === 'rejected') return 'rejected';
+  if (action.status === 'failed') return 'failed';
+  if (action.status === 'executing') return 'approving';
+  return 'approval_required';
+}
+
+/** 将持久化审批动作恢复到最后一条助手消息，刷新页面后仍可继续处理。 */
+function attachActionsToMessages(items: MessageItem[], actions: CopilotAction[]): MessageItem[] {
+  if (actions.length === 0) return items;
+  const actionTraces = actions.map((action) => ({
+    name: action.tool_name,
+    args: action.tool_arguments,
+    resultPreview:
+      action.result === undefined || action.result === null
+        ? undefined
+        : JSON.stringify(action.result),
+    status: actionTraceStatus(action),
+    action,
+  }));
+  let lastBotIndex = -1;
+  for (let index = items.length - 1; index >= 0; index--) {
+    if (items[index].sender === 'bot') {
+      lastBotIndex = index;
+      break;
+    }
+  }
+  if (lastBotIndex < 0) {
+    return [
+      ...items,
+      {
+        id: `actions-${actions[0].session_id}`,
+        sender: 'bot',
+        text: '以下系统操作需要您的确认。',
+        timestamp: new Date(actions[0].created_at).toLocaleTimeString('zh-CN', { hour12: false }),
+        toolCalls: actionTraces,
+      },
+    ];
+  }
+  return items.map((item, index) =>
+    index === lastBotIndex
+      ? {
+          ...item,
+          toolCalls: [...(item.toolCalls?.filter((trace) => !trace.action) ?? []), ...actionTraces],
+        }
+      : item,
+  );
+}
 
 export function CopilotPage() {
+  const { session: authSession } = useAuth();
+  const canExecute = Boolean(authSession && hasPermission(authSession, 'copilot.execute'));
+  const canManageModel = Boolean(
+    authSession &&
+    (hasPermission(authSession, 'llm.activate') || hasPermission(authSession, 'llm.manage')),
+  );
   // ============ 核心状态 ============
   const [sessions, setSessions] = useState<CopilotSession[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -46,7 +113,12 @@ export function CopilotPage() {
   const [sending, setSending] = useState(false);
   const [inputQuery, setInputQuery] = useState('');
   const abortRef = useRef<AbortController | null>(null);
-  const [activeModel, setActiveModel] = useState<{ id: number; provider: string; model: string } | null>(null);
+  const [activeModel, setActiveModel] = useState<{
+    id: number;
+    provider: string;
+    model: string;
+  } | null>(null);
+  const [updatingActionIds, setUpdatingActionIds] = useState<Set<string>>(() => new Set());
 
   // ============ 图片与 CSV 附件预览 Modal 状态 ============
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -59,9 +131,10 @@ export function CopilotPage() {
   const processFiles = useCallback((files: FileList | File[]) => {
     Array.from(files).forEach((file) => {
       const isImage = file.type.startsWith('image/');
-      const sizeStr = file.size < 1024 * 1024
-        ? `${(file.size / 1024).toFixed(1)} KB`
-        : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+      const sizeStr =
+        file.size < 1024 * 1024
+          ? `${(file.size / 1024).toFixed(1)} KB`
+          : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
       const id = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       const reader = new FileReader();
 
@@ -70,7 +143,15 @@ export function CopilotPage() {
           const base64 = e.target?.result as string;
           setAttachedFiles((prev) => [
             ...prev,
-            { id, file, name: file.name, sizeStr, isImage: true, previewUrl: base64, base64Data: base64 },
+            {
+              id,
+              file,
+              name: file.name,
+              sizeStr,
+              isImage: true,
+              previewUrl: base64,
+              base64Data: base64,
+            },
           ]);
         };
         reader.readAsDataURL(file);
@@ -87,13 +168,16 @@ export function CopilotPage() {
     });
   }, []);
 
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    if (e.clipboardData.files && e.clipboardData.files.length > 0) {
-      e.preventDefault();
-      processFiles(e.clipboardData.files);
-      message.success('已自动捕获剪贴板图片/文件附件');
-    }
-  }, [processFiles]);
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+        e.preventDefault();
+        processFiles(e.clipboardData.files);
+        message.success('已自动捕获剪贴板图片/文件附件');
+      }
+    },
+    [processFiles],
+  );
 
   // ============ 自动滚动到底部（流式输出 + 新消息）============
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -119,19 +203,21 @@ export function CopilotPage() {
     if (el) el.scrollTo({ top: el.scrollHeight });
   }, [currentId]);
 
-
-
   // ============ 获取当前启用的模型 ============
   const fetchActiveModel = useCallback(async () => {
     try {
-      const rec = await api.get<{ id: number; provider: string; model: string } | null>('/llm-configs/active');
+      const rec = await api.get<{ id: number; provider: string; model: string } | null>(
+        '/llm-configs/active',
+      );
       setActiveModel(rec);
     } catch {
       setActiveModel(null);
     }
   }, []);
 
-  useEffect(() => { fetchActiveModel(); }, [fetchActiveModel]);
+  useEffect(() => {
+    fetchActiveModel();
+  }, [fetchActiveModel]);
 
   // ============ 中断当前流 ============
   const abortStream = useCallback(() => {
@@ -152,23 +238,32 @@ export function CopilotPage() {
     }
   }, []);
 
-  useEffect(() => { refreshSessions(); }, [refreshSessions]);
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
 
   // ============ 选中会话 → 中断流 + 加载消息 ============
-  const loadSession = useCallback(async (id: string) => {
-    abortStream();
-    setLoadingMessages(true);
-    setCurrentId(id);
-    try {
-      const res = await api.get<SessionDetailResponse>(`/copilot/sessions/${id}`);
-      setMessages(res.messages.map(toMessageItem));
-    } catch {
-      message.error('加载会话消息失败');
-      setMessages([]);
-    } finally {
-      setLoadingMessages(false);
-    }
-  }, [abortStream]);
+  const loadSession = useCallback(
+    async (id: string) => {
+      abortStream();
+      setLoadingMessages(true);
+      setCurrentId(id);
+      try {
+        const res = await api.get<SessionDetailResponse>(`/copilot/sessions/${id}`);
+        const actionPayload = await api
+          .get<CopilotAction[] | ActionListResponse>(`/copilot/sessions/${id}/actions`)
+          .catch(() => []);
+        const actions = Array.isArray(actionPayload) ? actionPayload : actionPayload.actions;
+        setMessages(attachActionsToMessages(res.messages.map(toMessageItem), actions));
+      } catch {
+        message.error('加载会话消息失败');
+        setMessages([]);
+      } finally {
+        setLoadingMessages(false);
+      }
+    },
+    [abortStream],
+  );
 
   // ============ 新建会话（复用空会话，避免重复创建）============
   const handleCreate = useCallback(async () => {
@@ -192,20 +287,23 @@ export function CopilotPage() {
   }, [abortStream, sessions]);
 
   // ============ 删除会话 ============
-  const handleDelete = useCallback(async (id: string) => {
-    if (!window.confirm('确认删除该会话？所有消息将一并删除。')) return;
-    try {
-      await api.delete(`/copilot/sessions/${id}`);
-      setSessions((prev) => prev.filter((s) => s.id !== id));
-      if (currentId === id) {
-        setCurrentId(null);
-        setMessages([]);
+  const handleDelete = useCallback(
+    async (id: string) => {
+      if (!window.confirm('确认删除该会话？所有消息将一并删除。')) return;
+      try {
+        await api.delete(`/copilot/sessions/${id}`);
+        setSessions((prev) => prev.filter((s) => s.id !== id));
+        if (currentId === id) {
+          setCurrentId(null);
+          setMessages([]);
+        }
+        message.success('会话已删除');
+      } catch {
+        message.error('删除会话失败');
       }
-      message.success('会话已删除');
-    } catch {
-      message.error('删除会话失败');
-    }
-  }, [currentId]);
+    },
+    [currentId],
+  );
 
   // ============ 置顶/取消置顶 ============
   const handleTogglePin = useCallback(async (id: string, pinned: boolean) => {
@@ -223,152 +321,307 @@ export function CopilotPage() {
     message.success('已复制分析报告至剪贴板');
   }, []);
 
+  const handleActionDecision = useCallback(
+    async (actionId: string, decision: 'approve' | 'reject') => {
+      if (!currentId || updatingActionIds.has(actionId)) return;
+      setUpdatingActionIds((current) => new Set(current).add(actionId));
+      setMessages((current) =>
+        current.map((item) => ({
+          ...item,
+          toolCalls: item.toolCalls?.map((trace) =>
+            trace.action?.id === actionId ? { ...trace, status: 'approving' } : trace,
+          ),
+        })),
+      );
+      try {
+        const action = await api.post<CopilotAction>(
+          `/copilot/sessions/${currentId}/actions/${encodeURIComponent(actionId)}/${decision}`,
+          decision === 'reject' ? {} : undefined,
+        );
+        setMessages((current) =>
+          current.map((item) => ({
+            ...item,
+            toolCalls: item.toolCalls?.map((trace) =>
+              trace.action?.id === actionId
+                ? {
+                    ...trace,
+                    action,
+                    status: actionTraceStatus(action),
+                    resultPreview:
+                      action.result === undefined || action.result === null
+                        ? undefined
+                        : JSON.stringify(action.result),
+                  }
+                : trace,
+            ),
+          })),
+        );
+        if (action.status === 'failed') message.error('操作执行失败，请查看执行结果');
+        else if (decision === 'approve') message.success('操作已批准并执行');
+        else message.info('操作已拒绝，未执行任何变更');
+      } catch (error) {
+        setMessages((current) =>
+          current.map((item) => ({
+            ...item,
+            toolCalls: item.toolCalls?.map((trace) =>
+              trace.action?.id === actionId ? { ...trace, status: 'approval_required' } : trace,
+            ),
+          })),
+        );
+        message.error(error instanceof Error ? error.message : '审批操作失败，请重试');
+      } finally {
+        setUpdatingActionIds((current) => {
+          const next = new Set(current);
+          next.delete(actionId);
+          return next;
+        });
+      }
+    },
+    [currentId, updatingActionIds],
+  );
+
   // ============ 发送消息（SSE 流式 + 打字机渲染）============
-  const handleSend = useCallback(async (queryText?: string) => {
-    const query = (queryText || inputQuery).trim();
-    if ((!query && attachedFiles.length === 0) || sending) return;
+  const handleSend = useCallback(
+    async (queryText?: string) => {
+      const query = (queryText || inputQuery).trim();
+      if ((!query && attachedFiles.length === 0) || sending) return;
 
-    // 整合附件信息
-    const images = attachedFiles.filter((f) => f.isImage && f.base64Data).map((f) => f.base64Data as string);
-    const attachedTextFiles = attachedFiles
-      .filter((f) => !f.isImage && f.textContent)
-      .map((f) => ({ name: f.name, sizeStr: f.sizeStr, content: f.textContent }));
-    const textAppend = attachedFiles
-      .filter((f) => !f.isImage && f.textContent)
-      .map((f) => `\n\n[📁 附加文件/数据: ${f.name}]\n\`\`\`\n${f.textContent}\n\`\`\``)
-      .join('');
-    const fullQuery = query + textAppend;
-    const displayQuery = query || (attachedFiles.length > 0 ? `[发送了 ${attachedFiles.length} 个附件进行分析]` : '');
+      // 整合附件信息
+      const images = attachedFiles
+        .filter((f) => f.isImage && f.base64Data)
+        .map((f) => f.base64Data as string);
+      const attachedTextFiles = attachedFiles
+        .filter((f) => !f.isImage && f.textContent)
+        .map((f) => ({ name: f.name, sizeStr: f.sizeStr, content: f.textContent }));
+      const textAppend = attachedFiles
+        .filter((f) => !f.isImage && f.textContent)
+        .map((f) => `\n\n[📁 附加文件/数据: ${f.name}]\n\`\`\`\n${f.textContent}\n\`\`\``)
+        .join('');
+      const fullQuery = query + textAppend;
+      const displayQuery =
+        query ||
+        (attachedFiles.length > 0 ? `[发送了 ${attachedFiles.length} 个附件进行分析]` : '');
 
-    setAttachedFiles([]);
-    if (!queryText) setInputQuery('');
+      setAttachedFiles([]);
+      if (!queryText) setInputQuery('');
 
-    abortStream();
-    const controller = new AbortController();
-    abortRef.current = controller;
+      abortStream();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-    // 若无当前会话，先复用空会话或创建
-    let sessionId = currentId;
-    if (!sessionId) {
-      const emptySession = sessions.find((s) => s.message_count === 0);
-      if (emptySession) {
-        sessionId = emptySession.id;
-        setCurrentId(emptySession.id);
-      } else {
-        try {
-          const session = await api.post<CopilotSession>('/copilot/sessions', {});
-          sessionId = session.id;
-          setSessions((prev) => [session, ...prev]);
-          setCurrentId(session.id);
-        } catch {
-          message.error('创建会话失败');
-          return;
+      // 若无当前会话，先复用空会话或创建
+      let sessionId = currentId;
+      if (!sessionId) {
+        const emptySession = sessions.find((s) => s.message_count === 0);
+        if (emptySession) {
+          sessionId = emptySession.id;
+          setCurrentId(emptySession.id);
+        } else {
+          try {
+            const session = await api.post<CopilotSession>('/copilot/sessions', {});
+            sessionId = session.id;
+            setSessions((prev) => [session, ...prev]);
+            setCurrentId(session.id);
+          } catch {
+            message.error('创建会话失败');
+            return;
+          }
         }
       }
-    }
 
-    // 乐观追加用户消息 + 空 bot 消息占位
-    const userTempId = `tmp-user-${Date.now()}`;
-    const botTempId = `tmp-bot-${Date.now()}`;
-    const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    const userMsg: MessageItem = {
-      id: userTempId, sender: 'user', text: displayQuery,
-      images: images.length > 0 ? images : undefined,
-      files: attachedTextFiles.length > 0 ? attachedTextFiles : undefined,
-      timestamp: ts,
-    };
-    const botMsg: MessageItem = { id: botTempId, sender: 'bot', text: '', timestamp: ts };
-    setMessages((prev) => [...prev, userMsg, botMsg]);
-    setSending(true);
+      // 乐观追加用户消息 + 空 bot 消息占位
+      const userTempId = `tmp-user-${Date.now()}`;
+      const botTempId = `tmp-bot-${Date.now()}`;
+      const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      const userMsg: MessageItem = {
+        id: userTempId,
+        sender: 'user',
+        text: displayQuery,
+        images: images.length > 0 ? images : undefined,
+        files: attachedTextFiles.length > 0 ? attachedTextFiles : undefined,
+        timestamp: ts,
+      };
+      const botMsg: MessageItem = { id: botTempId, sender: 'bot', text: '', timestamp: ts };
+      setMessages((prev) => [...prev, userMsg, botMsg]);
+      setSending(true);
 
-    const token = getAccessToken();
-    if (!token) {
-      message.error('登录已失效，请重新登录');
-      setSending(false);
-      return;
-    }
-
-    // 发送时获取最新激活的模型配置
-    let currentModelId = activeModel?.id;
-    try {
-      const rec = await api.get<{ id: number; provider: string; model: string } | null>('/llm-configs/active');
-      if (rec) {
-        setActiveModel(rec);
-        currentModelId = rec.id;
+      const token = getAccessToken();
+      if (!token) {
+        message.error('登录已失效，请重新登录');
+        setSending(false);
+        return;
       }
-    } catch {
-      // 活跃模型加载失败时使用默认模型，忽略错误
-    }
 
-    const url = `/api/v1/copilot/sessions/${sessionId}/chat/stream`;
-
-    try {
-      await streamChat(
-        url, token, fullQuery,
-        {
-          onUserMessage: (msg) => {
-            setMessages((prev) => prev.map((m) => (m.id === userTempId ? { ...toMessageItem(msg), images: m.images, files: m.files } : m)));
-          },
-          onContext: (ctx) => {
-            setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
-              ...m, llmEnabled: ctx.llm_enabled, llmStatus: ctx.llm_status, intent: ctx.intent,
-            } : m)));
-          },
-          onDelta: (text) => {
-            setMessages((prev) => prev.map((m) => (m.id === botTempId ? { ...m, text: m.text + text } : m)));
-          },
-          onToolStart: (tool) => {
-            // 新增一条 pending 状态的工具调用轨迹
-            setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
-              ...m,
-              toolCalls: [...(m.toolCalls ?? []), { name: tool.name, args: tool.args, status: 'pending' as const }],
-            } : m)));
-          },
-          onToolResult: (tool) => {
-            // 将最近一条同名 pending 轨迹更新为 done
-            setMessages((prev) => prev.map((m) => {
-              if (m.id !== botTempId || !m.toolCalls) return m;
-              const traces = [...m.toolCalls];
-              for (let i = traces.length - 1; i >= 0; i--) {
-                if (traces[i].name === tool.name && traces[i].status === 'pending') {
-                  traces[i] = { ...traces[i], status: 'done', resultPreview: (tool as { result_preview?: string }).result_preview };
-                  break;
-                }
-              }
-              return { ...m, toolCalls: traces };
-            }));
-          },
-          onDone: (data) => {
-            setMessages((prev) => prev.map((m) => (m.id === botTempId ? { ...toMessageItem(data.assistant_message), toolCalls: m.toolCalls } : m)));
-            setSessions((prev) => {
-              const others = prev.filter((s) => s.id !== data.session.id);
-              return [data.session, ...others];
-            });
-          },
-          onError: (error) => {
-            setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
-              ...m, text: m.text || `诊断失败：${error}`,
-              llmEnabled: false, llmStatus: m.llmStatus || '调用失败',
-            } : m)));
-          },
-        },
-        currentModelId ?? undefined,
-        controller.signal,
-        images.length > 0 ? images : undefined,
-      );
-    } catch (err) {
-      if (!controller.signal.aborted) {
-        const errorText = err instanceof Error ? err.message : String(err);
-        setMessages((prev) => prev.map((m) => (m.id === botTempId ? {
-          ...m, text: m.text || `诊断失败：${errorText}`,
-          llmEnabled: false, llmStatus: '调用失败',
-        } : m)));
+      // 发送时获取最新激活的模型配置
+      let currentModelId = activeModel?.id;
+      try {
+        const rec = await api.get<{ id: number; provider: string; model: string } | null>(
+          '/llm-configs/active',
+        );
+        if (rec) {
+          setActiveModel(rec);
+          currentModelId = rec.id;
+        }
+      } catch {
+        // 活跃模型加载失败时使用默认模型，忽略错误
       }
-    } finally {
-      setSending(false);
-      if (abortRef.current === controller) abortRef.current = null;
-    }
-  }, [abortStream, currentId, inputQuery, sending, sessions, attachedFiles, activeModel]);
+
+      const url = `/api/v1/copilot/sessions/${sessionId}/chat/stream`;
+
+      try {
+        await streamChat(
+          url,
+          token,
+          fullQuery,
+          {
+            onUserMessage: (msg) => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === userTempId
+                    ? { ...toMessageItem(msg), images: m.images, files: m.files }
+                    : m,
+                ),
+              );
+            },
+            onContext: (ctx) => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === botTempId
+                    ? {
+                        ...m,
+                        llmEnabled: ctx.llm_enabled,
+                        llmStatus: ctx.llm_status,
+                        intent: ctx.intent,
+                      }
+                    : m,
+                ),
+              );
+            },
+            onDelta: (text) => {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === botTempId ? { ...m, text: m.text + text } : m)),
+              );
+            },
+            onToolStart: (tool) => {
+              // 新增一条 pending 状态的工具调用轨迹
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === botTempId
+                    ? {
+                        ...m,
+                        toolCalls: [
+                          ...(m.toolCalls ?? []),
+                          { name: tool.name, args: tool.args, status: 'pending' as const },
+                        ],
+                      }
+                    : m,
+                ),
+              );
+            },
+            onToolResult: (tool) => {
+              // 将最近一条同名 pending 轨迹更新为 done
+              setMessages((prev) =>
+                prev.map((m) => {
+                  if (m.id !== botTempId || !m.toolCalls) return m;
+                  const traces = [...m.toolCalls];
+                  for (let i = traces.length - 1; i >= 0; i--) {
+                    if (traces[i].name === tool.name && traces[i].status === 'pending') {
+                      traces[i] = {
+                        ...traces[i],
+                        status: 'done',
+                        resultPreview: (tool as { result_preview?: string }).result_preview,
+                      };
+                      break;
+                    }
+                  }
+                  return { ...m, toolCalls: traces };
+                }),
+              );
+            },
+            onApprovalRequired: (action) => {
+              setMessages((prev) =>
+                prev.map((m) => {
+                  if (m.id !== botTempId) return m;
+                  const traces = [...(m.toolCalls ?? [])];
+                  let matched = false;
+                  for (let i = traces.length - 1; i >= 0; i--) {
+                    if (traces[i].name === action.tool_name && traces[i].status === 'pending') {
+                      traces[i] = {
+                        ...traces[i],
+                        args: action.tool_arguments,
+                        action,
+                        status: 'approval_required',
+                      };
+                      matched = true;
+                      break;
+                    }
+                  }
+                  if (!matched)
+                    traces.push({
+                      name: action.tool_name,
+                      args: action.tool_arguments,
+                      action,
+                      status: 'approval_required',
+                    });
+                  return { ...m, toolCalls: traces };
+                }),
+              );
+            },
+            onDone: (data) => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === botTempId
+                    ? { ...toMessageItem(data.assistant_message), toolCalls: m.toolCalls }
+                    : m,
+                ),
+              );
+              setSessions((prev) => {
+                const others = prev.filter((s) => s.id !== data.session.id);
+                return [data.session, ...others];
+              });
+            },
+            onError: (error) => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === botTempId
+                    ? {
+                        ...m,
+                        text: m.text || `诊断失败：${error}`,
+                        llmEnabled: false,
+                        llmStatus: m.llmStatus || '调用失败',
+                      }
+                    : m,
+                ),
+              );
+            },
+          },
+          currentModelId ?? undefined,
+          controller.signal,
+          images.length > 0 ? images : undefined,
+        );
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          const errorText = err instanceof Error ? err.message : String(err);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === botTempId
+                ? {
+                    ...m,
+                    text: m.text || `诊断失败：${errorText}`,
+                    llmEnabled: false,
+                    llmStatus: '调用失败',
+                  }
+                : m,
+            ),
+          );
+        }
+      } finally {
+        setSending(false);
+        if (abortRef.current === controller) abortRef.current = null;
+      }
+    },
+    [abortStream, currentId, inputQuery, sending, sessions, attachedFiles, activeModel],
+  );
 
   // ============ 导出报告 ============
   const handleExport = useCallback(() => {
@@ -381,12 +634,12 @@ export function CopilotPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `Copilot_Diagnosis_Report_${new Date().toISOString().slice(0, 10)}.md`);
+    link.setAttribute('download', `智能诊断报告_${new Date().toISOString().slice(0, 10)}.md`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    message.success('已导出 Copilot 诊断分析报告 (Markdown)');
+    message.success('诊断分析报告已导出');
   }, [messages]);
 
   // ============ 渲染 ============
@@ -394,7 +647,7 @@ export function CopilotPage() {
   const showWelcome = !hasMessages && !loadingMessages && !sending;
 
   return (
-    <div className="h-[calc(100vh-100px)] flex flex-row relative">
+    <div className="h-full min-h-[calc(100vh-96px)] flex flex-row relative overflow-hidden overview-card">
       {/* 小屏侧边栏浮层展开时的遮罩，点击关闭 */}
       {mobileSidebarOpen && (
         <div
@@ -427,12 +680,12 @@ export function CopilotPage() {
       {/* 右侧：主聊天区 */}
       <div className="flex-1 flex flex-col min-w-0 bg-content1">
         {/* 顶部固定标题与操作栏 */}
-        <Card shadow="sm" className="p-2 shrink-0 rounded-none">
-          <CardBody className="p-4">
+        <Card shadow="none" className="shrink-0 rounded-none border-b border-default-200">
+          <CardBody className="px-5 py-4">
             <PageHeader
               icon={Bot}
-              title="Copilot 智能运维助手"
-              subtitle="自然语言抓包排障 · SIP 梯形图自动合成"
+              title="智能助手"
+              subtitle="自然语言排障 · 信令流程自动生成"
               actions={
                 <>
                   {/* 小屏：展开会话历史浮层 */}
@@ -446,21 +699,40 @@ export function CopilotPage() {
                   >
                     <PanelLeft className="w-4 h-4" />
                   </Button>
-                  <ActiveModelBadge activeModel={activeModel} onModelChange={fetchActiveModel} />
+                  <ActiveModelBadge
+                    activeModel={activeModel}
+                    onModelChange={fetchActiveModel}
+                    canManage={canManageModel}
+                  />
                   {(hasMessages || sending) && (
                     <>
                       {sending && (
-                        <Button size="sm" color="danger" variant="flat" onPress={abortStream}
-                          startContent={<Square className="w-4 h-4" />}>
+                        <Button
+                          size="sm"
+                          color="danger"
+                          variant="flat"
+                          onPress={abortStream}
+                          startContent={<Square className="w-4 h-4" />}
+                        >
                           停止生成
                         </Button>
                       )}
-                      <Button size="sm" variant="flat" onPress={handleExport} isDisabled={sending}
-                        startContent={<Download className="w-4 h-4" />}>
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        onPress={handleExport}
+                        isDisabled={sending}
+                        startContent={<Download className="w-4 h-4" />}
+                      >
                         导出报告
                       </Button>
-                      <Button size="sm" variant="flat" color="primary" onPress={handleCreate}
-                        startContent={<SquarePen className="w-4 h-4" />}>
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onPress={handleCreate}
+                        startContent={<SquarePen className="w-4 h-4" />}
+                      >
                         新对话
                       </Button>
                     </>
@@ -472,21 +744,31 @@ export function CopilotPage() {
         </Card>
 
         {/* 主沉浸聊天区 */}
-        <div className="flex-1 flex flex-col min-h-0 justify-between items-center w-full border border-default-200/50 rounded-2xl overflow-hidden bg-content1">
-          <ScrollShadow ref={scrollRef} onScroll={handleScroll} className="w-full flex-1 px-4 py-6 space-y-6 overflow-y-auto min-h-0">
-            <div className="max-w-[94%] mx-auto w-full space-y-6">
+        <div className="flex-1 flex flex-col min-h-0 justify-between items-center w-full overflow-hidden bg-content1">
+          <ScrollShadow
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="w-full flex-1 px-5 py-6 overflow-y-auto min-h-0"
+          >
+            <div className="max-w-6xl mx-auto w-full space-y-5">
               {showWelcome && <WelcomePanel onPresetClick={(desc) => handleSend(desc)} />}
               {loadingMessages && <MessagesLoading />}
-              {!loadingMessages && hasMessages && messages.map((m) => (
-                <MessageBubble
-                  key={m.id}
-                  message={m}
-                  sending={sending}
-                  onImageClick={setPreviewImage}
-                  onFileClick={setPreviewFile}
-                  onCopyText={handleCopyText}
-                />
-              ))}
+              {!loadingMessages &&
+                hasMessages &&
+                messages.map((m) => (
+                  <MessageBubble
+                    key={m.id}
+                    message={m}
+                    sending={sending}
+                    onImageClick={setPreviewImage}
+                    onFileClick={setPreviewFile}
+                    onCopyText={handleCopyText}
+                    onApproveAction={(actionId) => void handleActionDecision(actionId, 'approve')}
+                    onRejectAction={(actionId) => void handleActionDecision(actionId, 'reject')}
+                    isActionUpdating={(actionId) => updatingActionIds.has(actionId)}
+                    canExecute={canExecute}
+                  />
+                ))}
             </div>
           </ScrollShadow>
 

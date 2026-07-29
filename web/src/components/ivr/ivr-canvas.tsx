@@ -1,20 +1,62 @@
 import { useRef, useState, useCallback, type MouseEvent, type WheelEvent } from 'react';
 import { Button, Chip, Tooltip } from '@heroui/react';
 import {
-  Play, Volume2, MessageSquare, Hash, GitBranch, GitFork, Route, Users,
-  PhoneCall, PhoneForwarded, Voicemail, Mic, Webhook, Variable,
-  AudioLines, Sparkles, Repeat, PhoneOff, Plus, Trash2, ZoomIn, ZoomOut,
-  Maximize2, LayoutGrid,
+  Play,
+  Volume2,
+  MessageSquare,
+  Hash,
+  GitBranch,
+  GitFork,
+  Route,
+  Users,
+  PhoneCall,
+  PhoneForwarded,
+  Voicemail,
+  Mic,
+  Webhook,
+  Variable,
+  AudioLines,
+  Sparkles,
+  Repeat,
+  PhoneOff,
+  Plus,
+  Trash2,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  LayoutGrid,
 } from 'lucide-react';
 import {
-  NODE_CATALOG, NODE_CATALOG_MAP, genEdgeId, genNodeId,
-  type IvrEdge, type IvrFlow, type IvrNode, type IvrNodeType, type NodeCatalogEntry,
+  NODE_CATALOG,
+  NODE_CATALOG_MAP,
+  genEdgeId,
+  genNodeId,
+  type IvrEdge,
+  type IvrFlow,
+  type IvrNode,
+  type IvrNodeType,
+  type NodeCatalogEntry,
 } from './types';
 
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
-  Play, Volume2, MessageSquare, Hash, GitBranch, GitFork, Route, Users,
-  PhoneCall, PhoneForwarded, Voicemail, Mic, Webhook, Variable,
-  AudioLines, Sparkles, Repeat, PhoneOff,
+  Play,
+  Volume2,
+  MessageSquare,
+  Hash,
+  GitBranch,
+  GitFork,
+  Route,
+  Users,
+  PhoneCall,
+  PhoneForwarded,
+  Voicemail,
+  Mic,
+  Webhook,
+  Variable,
+  AudioLines,
+  Sparkles,
+  Repeat,
+  PhoneOff,
 };
 
 const NODE_W = 220;
@@ -23,22 +65,47 @@ const PORT_R = 6;
 /** 根据 catalog 颜色决定节点的边框与顶栏半透明渲染色 */
 function getNodeTheme(colorClass: string) {
   if (colorClass.includes('text-success') || colorClass.includes('border-success')) {
-    return { stroke: 'stroke-success/70', strokeSelected: 'stroke-success', fillHeader: 'fill-success/15', ring: 'ring-success/30' };
+    return {
+      stroke: 'stroke-success/70',
+      strokeSelected: 'stroke-success',
+      fillHeader: 'fill-success/15',
+      ring: 'ring-success/30',
+    };
   }
   if (colorClass.includes('text-warning') || colorClass.includes('border-warning')) {
-    return { stroke: 'stroke-warning/70', strokeSelected: 'stroke-warning', fillHeader: 'fill-warning/15', ring: 'ring-warning/30' };
+    return {
+      stroke: 'stroke-warning/70',
+      strokeSelected: 'stroke-warning',
+      fillHeader: 'fill-warning/15',
+      ring: 'ring-warning/30',
+    };
   }
   if (colorClass.includes('text-danger') || colorClass.includes('border-danger')) {
-    return { stroke: 'stroke-danger/70', strokeSelected: 'stroke-danger', fillHeader: 'fill-danger/15', ring: 'ring-danger/30' };
+    return {
+      stroke: 'stroke-danger/70',
+      strokeSelected: 'stroke-danger',
+      fillHeader: 'fill-danger/15',
+      ring: 'ring-danger/30',
+    };
   }
   if (colorClass.includes('text-secondary') || colorClass.includes('border-secondary')) {
-    return { stroke: 'stroke-secondary/70', strokeSelected: 'stroke-secondary', fillHeader: 'fill-secondary/15', ring: 'ring-secondary/30' };
+    return {
+      stroke: 'stroke-secondary/70',
+      strokeSelected: 'stroke-secondary',
+      fillHeader: 'fill-secondary/15',
+      ring: 'ring-secondary/30',
+    };
   }
-  return { stroke: 'stroke-primary/70', strokeSelected: 'stroke-primary', fillHeader: 'fill-primary/15', ring: 'ring-primary/30' };
+  return {
+    stroke: 'stroke-primary/70',
+    strokeSelected: 'stroke-primary',
+    fillHeader: 'fill-primary/15',
+    ring: 'ring-primary/30',
+  };
 }
 export function autoLayoutNodes<T extends { id: string; position: { x: number; y: number } }>(
   nodes: T[],
-  edges: Array<{ source: string; target: string; sourcePort?: string }>
+  edges: Array<{ source: string; target: string; sourcePort?: string }>,
 ): T[] {
   if (nodes.length === 0) return nodes;
 
@@ -93,7 +160,9 @@ export function autoLayoutNodes<T extends { id: string; position: { x: number; y
     nodesByLayer[l].push(n);
   });
 
-  const layerKeys = Object.keys(nodesByLayer).map(Number).sort((a, b) => a - b);
+  const layerKeys = Object.keys(nodesByLayer)
+    .map(Number)
+    .sort((a, b) => a - b);
   const updatedNodes = [...nodes];
   const startX = 60;
   const colSpacing = 360;
@@ -108,7 +177,9 @@ export function autoLayoutNodes<T extends { id: string; position: { x: number; y
       let currY = 160;
       layerNodes.forEach((node) => {
         layerPositions[node.id] = { x: targetX, y: currY };
-        const h = (node as unknown as IvrNode).type ? getNodeDimensions(node as unknown as IvrNode).height : 58;
+        const h = (node as unknown as IvrNode).type
+          ? getNodeDimensions(node as unknown as IvrNode).height
+          : 58;
         currY += h + 30;
       });
     } else {
@@ -117,7 +188,9 @@ export function autoLayoutNodes<T extends { id: string; position: { x: number; y
         const parentEdge = edges.find((e) => e.target === node.id);
         const parentNode = parentEdge ? nodes.find((n) => n.id === parentEdge.source) : null;
         const parentPos = parentNode ? layerPositions[parentNode.id] : null;
-        const nodeH = (node as unknown as IvrNode).type ? getNodeDimensions(node as unknown as IvrNode).height : 58;
+        const nodeH = (node as unknown as IvrNode).type
+          ? getNodeDimensions(node as unknown as IvrNode).height
+          : 58;
 
         let idealY = lastY;
         if (parentNode && parentPos) {
@@ -152,7 +225,11 @@ export function getNodePorts(node: IvrNode): {
   outPorts: Array<{ id: string; label: string; type: 'in' | 'out' }>;
 } {
   const cat = NODE_CATALOG_MAP[node.type];
-  if (!cat) return { inPorts: [{ id: 'in', label: '呼入', type: 'in' }], outPorts: [{ id: 'out', label: '出口', type: 'out' }] };
+  if (!cat)
+    return {
+      inPorts: [{ id: 'in', label: '呼入', type: 'in' }],
+      outPorts: [{ id: 'out', label: '出口', type: 'out' }],
+    };
 
   let inPorts = cat.defaultPorts.filter((p) => p.type === 'in');
   if (inPorts.length === 0) inPorts = [{ id: 'in', label: '呼入', type: 'in' }];
@@ -248,7 +325,7 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
         y: (rawY - pan.y) / zoom,
       };
     },
-    [pan.x, pan.y, zoom]
+    [pan.x, pan.y, zoom],
   );
 
   const handleWheel = (e: WheelEvent) => {
@@ -289,7 +366,13 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
     const node = flow.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const cursor = toCanvas(e.clientX, e.clientY);
-    setDrag({ type: 'node', nodeId, offsetX: cursor.x - node.position.x, offsetY: cursor.y - node.position.y, cursor });
+    setDrag({
+      type: 'node',
+      nodeId,
+      offsetX: cursor.x - node.position.x,
+      offsetY: cursor.y - node.position.y,
+      cursor,
+    });
     onSelectNode(nodeId);
   };
 
@@ -312,7 +395,12 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
       onChange({
         ...flow,
         nodes: flow.nodes.map((n) =>
-          n.id === drag.nodeId ? { ...n, position: { x: cursor.x - (drag.offsetX ?? 0), y: cursor.y - (drag.offsetY ?? 0) } } : n,
+          n.id === drag.nodeId
+            ? {
+                ...n,
+                position: { x: cursor.x - (drag.offsetX ?? 0), y: cursor.y - (drag.offsetY ?? 0) },
+              }
+            : n,
         ),
       });
     } else if (drag.type === 'edge') {
@@ -336,7 +424,12 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
           sourcePort: drag.fromPort.portId,
           label: portLabel,
         };
-        const exists = flow.edges.some((ed) => ed.source === newEdge.source && ed.target === newEdge.target && ed.sourcePort === newEdge.sourcePort);
+        const exists = flow.edges.some(
+          (ed) =>
+            ed.source === newEdge.source &&
+            ed.target === newEdge.target &&
+            ed.sourcePort === newEdge.sourcePort,
+        );
         if (!exists) onChange({ ...flow, edges: [...flow.edges, newEdge] });
       }
     }
@@ -380,14 +473,26 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
         transform={`translate(${node.position.x}, ${node.position.y})`}
         className="topo-node cursor-move select-none"
         onMouseDown={(e) => startNodeDrag(e, node.id)}
-        onClick={(e) => { e.stopPropagation(); onSelectNode(node.id); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelectNode(node.id);
+        }}
       >
         {/* 阴影底板 */}
-        <rect width={NODE_W} height={NODE_H} y={4} rx={14} className="fill-black/30 blur-sm" opacity={0.5} />
+        <rect
+          width={NODE_W}
+          height={NODE_H}
+          y={4}
+          rx={14}
+          className="fill-black/30 blur-sm"
+          opacity={0.5}
+        />
 
         {/* 节点主体背景卡片（边框颜色与工具箱一致） */}
         <rect
-          width={NODE_W} height={NODE_H} rx={14}
+          width={NODE_W}
+          height={NODE_H}
+          rx={14}
           className={`fill-content1 ${selected ? `${theme.strokeSelected} ring-2 ${theme.ring} shadow-2xl` : `${theme.stroke} hover:stroke-foreground/60`}`}
           strokeWidth={selected ? 2 : 1.5}
         />
@@ -396,7 +501,14 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
         {outPorts.length > 1 ? (
           <>
             <rect width={NODE_W} height={42} rx={14} className={theme.fillHeader} />
-            <line x1={0} y1={42} x2={NODE_W} y2={42} className="stroke-default-200/30" strokeWidth={1} />
+            <line
+              x1={0}
+              y1={42}
+              x2={NODE_W}
+              y2={42}
+              className="stroke-default-200/30"
+              strokeWidth={1}
+            />
           </>
         ) : (
           <rect width={NODE_W} height={NODE_H} rx={14} className={theme.fillHeader} />
@@ -412,15 +524,21 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
           return (
             <>
               <foreignObject x={10} y={yIcon} width={28} height={28}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${cat.color} shadow-xs`}>
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center ${cat.color} shadow-xs`}
+                >
                   <Icon className="w-4 h-4" />
                 </div>
               </foreignObject>
 
               <foreignObject x={44} y={yText} width={NODE_W - 76} height={36}>
                 <div className="flex flex-col justify-center h-full min-w-0">
-                  <span className="text-xs font-bold text-foreground truncate leading-tight">{node.title}</span>
-                  <span className="text-[9px] text-default-400 truncate leading-tight mt-0.5">{node.description || node.type}</span>
+                  <span className="text-xs font-bold text-foreground truncate leading-tight">
+                    {node.title}
+                  </span>
+                  <span className="text-[9px] text-default-400 truncate leading-tight mt-0.5">
+                    {node.description || node.type}
+                  </span>
                 </div>
               </foreignObject>
 
@@ -446,13 +564,22 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
               return (
                 <g key={`row-${port.id}`} transform={`translate(0, ${rowY})`}>
                   {/* 选项背景条 */}
-                  <rect x={6} y={2} width={NODE_W - 12} height={24} rx={6} className="fill-default-50/50 hover:fill-default-100/60 transition-colors" />
+                  <rect
+                    x={6}
+                    y={2}
+                    width={NODE_W - 12}
+                    height={24}
+                    rx={6}
+                    className="fill-default-50/50 hover:fill-default-100/60 transition-colors"
+                  />
 
                   {/* 选项名称 Badge */}
                   <foreignObject x={12} y={5} width={NODE_W - 40} height={18}>
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="w-1.5 h-1.5 rounded-full bg-primary/70 shrink-0" />
-                      <span className="text-[10px] font-medium text-foreground truncate">{port.label}</span>
+                      <span className="text-[10px] font-medium text-foreground truncate">
+                        {port.label}
+                      </span>
                     </div>
                   </foreignObject>
                 </g>
@@ -466,7 +593,13 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
           const { x, y } = portOffset(node, port.id, 'in');
           return (
             <g key={`in-${port.id}`} transform={`translate(${x}, ${y})`}>
-              <circle cx={0} cy={0} r={PORT_R + 2} className="fill-content1 stroke-default-300" strokeWidth={1.5} />
+              <circle
+                cx={0}
+                cy={0}
+                r={PORT_R + 2}
+                className="fill-content1 stroke-default-300"
+                strokeWidth={1.5}
+              />
               <circle cx={0} cy={0} r={PORT_R - 2} className="fill-default-400" />
             </g>
           );
@@ -503,29 +636,66 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
     const src = flow.nodes.find((n) => n.id === edge.source);
     const dst = flow.nodes.find((n) => n.id === edge.target);
     if (!src || !dst) return null;
-    const srcPort = edge.sourcePort ?? NODE_CATALOG_MAP[src.type].defaultPorts.find((p) => p.type === 'out')?.id ?? 'out';
-    const srcPos = { x: src.position.x + portOffset(src, srcPort, 'out').x, y: src.position.y + portOffset(src, srcPort, 'out').y };
-    const dstPos = { x: dst.position.x + portOffset(dst, 'in', 'in').x, y: dst.position.y + portOffset(dst, 'in', 'in').y };
+    const srcPort =
+      edge.sourcePort ??
+      NODE_CATALOG_MAP[src.type].defaultPorts.find((p) => p.type === 'out')?.id ??
+      'out';
+    const srcPos = {
+      x: src.position.x + portOffset(src, srcPort, 'out').x,
+      y: src.position.y + portOffset(src, srcPort, 'out').y,
+    };
+    const dstPos = {
+      x: dst.position.x + portOffset(dst, 'in', 'in').x,
+      y: dst.position.y + portOffset(dst, 'in', 'in').y,
+    };
     const midX = (srcPos.x + dstPos.x) / 2;
     const midY = (srcPos.y + dstPos.y) / 2;
     return (
       <g key={edge.id} className="group">
         {/* 底层粗线（hover 高亮） */}
-        <path d={bezier(srcPos, dstPos)} fill="none" className="stroke-primary/0 group-hover:stroke-primary/20" strokeWidth={8} />
+        <path
+          d={bezier(srcPos, dstPos)}
+          fill="none"
+          className="stroke-primary/0 group-hover:stroke-primary/20"
+          strokeWidth={8}
+        />
         {/* 主线 */}
-        <path d={bezier(srcPos, dstPos)} fill="none" className="stroke-primary/60 group-hover:stroke-primary" strokeWidth={2.5} markerEnd="url(#arrow-ivr)" />
+        <path
+          d={bezier(srcPos, dstPos)}
+          fill="none"
+          className="stroke-primary/60 group-hover:stroke-primary"
+          strokeWidth={2.5}
+          markerEnd="url(#arrow-ivr)"
+        />
         {/* 流动动画线 */}
-        <path d={bezier(srcPos, dstPos)} fill="none" className="stroke-primary edge-flow" strokeWidth={1.5} opacity={0.5} />
+        <path
+          d={bezier(srcPos, dstPos)}
+          fill="none"
+          className="stroke-primary edge-flow"
+          strokeWidth={1.5}
+          opacity={0.5}
+        />
         {/* 边标签 */}
         {edge.label && (
           <foreignObject x={midX - 24} y={midY - 9} width={48} height={18}>
             <div className="flex justify-center">
-              <Chip size="sm" variant="flat" color="primary" className="text-[9px] h-4 min-w-0 px-1">{edge.label}</Chip>
+              <Chip
+                size="sm"
+                variant="flat"
+                color="primary"
+                className="text-[9px] h-4 min-w-0 px-1"
+              >
+                {edge.label}
+              </Chip>
             </div>
           </foreignObject>
         )}
         {/* 删除按钮（hover 显示） */}
-        <g transform={`translate(${midX - 9}, ${midY - 9})`} className="opacity-0 group-hover:opacity-100 cursor-pointer" onClick={() => deleteEdge(edge.id)}>
+        <g
+          transform={`translate(${midX - 9}, ${midY - 9})`}
+          className="opacity-0 group-hover:opacity-100 cursor-pointer"
+          onClick={() => deleteEdge(edge.id)}
+        >
           <circle cx={9} cy={9} r={8} className="fill-danger" />
           <foreignObject x={3} y={3} width={12} height={12}>
             <Trash2 className="w-3 h-3 text-white" />
@@ -539,8 +709,19 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
     if (drag?.type !== 'edge' || !drag.fromPort) return null;
     const src = flow.nodes.find((n) => n.id === drag.fromPort!.nodeId);
     if (!src) return null;
-    const srcPos = { x: src.position.x + portOffset(src, drag.fromPort.portId, 'out').x, y: src.position.y + portOffset(src, drag.fromPort.portId, 'out').y };
-    return <path d={bezier(srcPos, drag.cursor)} fill="none" className="stroke-primary/60" strokeWidth={2.5} strokeDasharray="5 3" />;
+    const srcPos = {
+      x: src.position.x + portOffset(src, drag.fromPort.portId, 'out').x,
+      y: src.position.y + portOffset(src, drag.fromPort.portId, 'out').y,
+    };
+    return (
+      <path
+        d={bezier(srcPos, drag.cursor)}
+        fill="none"
+        className="stroke-primary/60"
+        strokeWidth={2.5}
+        strokeDasharray="5 3"
+      />
+    );
   };
 
   return (
@@ -560,7 +741,15 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
         onClick={() => onSelectNode(null)}
       >
         <defs>
-          <marker id="arrow-ivr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+          <marker
+            id="arrow-ivr"
+            markerWidth="10"
+            markerHeight="10"
+            refX="8"
+            refY="3"
+            orient="auto"
+            markerUnits="strokeWidth"
+          >
             <path d="M0,0 L0,6 L8,3 z" className="fill-primary" />
           </marker>
           {/* 点阵网格 */}
@@ -629,7 +818,10 @@ export function IvrCanvas({ flow, onChange, selectedNodeId, onSelectNode }: Canv
             size="sm"
             variant="light"
             className="w-7 h-7 min-w-0"
-            onPress={() => { setPan({ x: 0, y: 0 }); setZoom(1.0); }}
+            onPress={() => {
+              setPan({ x: 0, y: 0 });
+              setZoom(1.0);
+            }}
           >
             <Maximize2 className="w-3.5 h-3.5" />
           </Button>
@@ -675,14 +867,19 @@ export function NodePalette() {
           if (items.length === 0) return null;
           return (
             <div key={cat.key} className="flex flex-col gap-1.5">
-              <span className="text-[10px] font-bold text-default-500 uppercase tracking-wider px-1">{cat.label}</span>
+              <span className="text-[10px] font-bold text-default-500 uppercase tracking-wider px-1">
+                {cat.label}
+              </span>
               {items.map((entry) => {
                 const Icon = ICON_MAP[entry.icon] ?? Plus;
                 return (
                   <div
                     key={entry.type}
                     draggable
-                    onDragStart={(e) => { e.dataTransfer.setData('application/ivr-node', JSON.stringify(entry)); e.dataTransfer.effectAllowed = 'copy'; }}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('application/ivr-node', JSON.stringify(entry));
+                      e.dataTransfer.effectAllowed = 'copy';
+                    }}
                     className={`p-2.5 rounded-lg border ${entry.color} cursor-grab active:cursor-grabbing hover:shadow-sm hover:scale-[1.02] transition-all flex items-center gap-2.5 bg-content1`}
                   >
                     <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-content2 shrink-0">
@@ -690,7 +887,9 @@ export function NodePalette() {
                     </div>
                     <div className="flex flex-col min-w-0">
                       <span className="text-[11px] font-bold truncate">{entry.title}</span>
-                      <span className="text-[9px] text-default-400 truncate">{entry.description}</span>
+                      <span className="text-[9px] text-default-400 truncate">
+                        {entry.description}
+                      </span>
                     </div>
                   </div>
                 );
@@ -764,8 +963,20 @@ export function NodeInspector({ node, onChange }: InspectorProps) {
 }
 
 import { NodeConfigForm } from './ivr-node-forms';
-function NodeConfigFormWrapper({ node, onChange }: { node: IvrNode; onChange: (n: IvrNode) => void }) {
-  return <NodeConfigForm type={node.type} config={node.config} onChange={(config) => onChange({ ...node, config })} />;
+function NodeConfigFormWrapper({
+  node,
+  onChange,
+}: {
+  node: IvrNode;
+  onChange: (n: IvrNode) => void;
+}) {
+  return (
+    <NodeConfigForm
+      type={node.type}
+      config={node.config}
+      onChange={(config) => onChange({ ...node, config })}
+    />
+  );
 }
 
 export type { IvrFlow, IvrNode, IvrEdge, IvrNodeType };

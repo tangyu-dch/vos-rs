@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, Chip, Progress, Tooltip } from '@heroui/react';
 import { Upload, Play, Pause, Trash2, FileAudio, CheckCircle2, X } from 'lucide-react';
 import { api } from '@/services/client';
+import { useAuth } from '@/auth/AuthContext';
+import { hasPermission } from '@/services/auth';
 
 interface PromptFile {
   filename: string;
@@ -38,6 +40,8 @@ export function AudioFileUpload({
   hint,
   allowClear = true,
 }: AudioFileUploadProps) {
+  const { session } = useAuth();
+  const canUpload = Boolean(session && hasPermission(session, 'ivr.prompts'));
   const inputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -108,9 +112,7 @@ export function AudioFileUpload({
 
   return (
     <div className="flex flex-col gap-1.5">
-      {label && (
-        <label className="text-xs font-semibold text-foreground">{label}</label>
-      )}
+      {label && <label className="text-xs font-semibold text-foreground">{label}</label>}
 
       <input
         ref={inputRef}
@@ -120,7 +122,7 @@ export function AudioFileUpload({
         onChange={handleFileSelect}
       />
 
-      {!displayName && !uploading && (
+      {!displayName && !uploading && canUpload && (
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
@@ -128,7 +130,9 @@ export function AudioFileUpload({
         >
           <Upload className="w-4 h-4" />
           <span className="text-xs">点击上传音频文件</span>
-          <span className="text-[10px] text-default-400">支持 WAV / MP3 / GSM / OGG, 最大 50MB</span>
+          <span className="text-[10px] text-default-400">
+            支持 WAV / MP3 / GSM / OGG, 最大 50MB
+          </span>
         </button>
       )}
 
@@ -173,17 +177,19 @@ export function AudioFileUpload({
             </Tooltip>
           )}
 
-          <Tooltip content="重新上传" placement="top" delay={200}>
-            <Button
-              isIconOnly
-              size="sm"
-              variant="flat"
-              onPress={() => inputRef.current?.click()}
-              aria-label="重新上传"
-            >
-              <Upload className="w-3.5 h-3.5" />
-            </Button>
-          </Tooltip>
+          {canUpload && (
+            <Tooltip content="重新上传" placement="top" delay={200}>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="flat"
+                onPress={() => inputRef.current?.click()}
+                aria-label="重新上传"
+              >
+                <Upload className="w-3.5 h-3.5" />
+              </Button>
+            </Tooltip>
+          )}
 
           {allowClear && (
             <Tooltip content="清空" placement="top" delay={200}>

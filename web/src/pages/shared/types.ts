@@ -3,7 +3,8 @@
 
 import type { Entity } from '@/services/resources';
 
-export type FieldKind = 'text' | 'textarea' | 'number' | 'duration' | 'switch' | 'select' | 'secret' | 'datetime';
+export type FieldKind =
+  'text' | 'textarea' | 'number' | 'duration' | 'switch' | 'select' | 'secret' | 'datetime';
 
 export interface SelectOptionSpec {
   label: string;

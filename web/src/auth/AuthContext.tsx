@@ -1,10 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { login as createSession } from '@/services/resources';
-import { clearSession, getSession, type AuthSession } from '@/services/auth';
+import { clearSession, getSession, saveSession, type AuthSession } from '@/services/auth';
+import { api } from '@/services/client';
 
 interface AuthContextValue {
   session: AuthSession | null;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<AuthSession>;
   logout: () => void;
 }
 
@@ -24,12 +25,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('storage', syncSession);
   }, []);
 
+  useEffect(() => {
+    if (!session) return;
+    const refreshProfile = async () => {
+      try {
+        const profile = await api.get<Omit<AuthSession, 'token'>>('/auth/me');
+        const next = { ...profile, token: session.token };
+        saveSession(next);
+        setSession(next);
+      } catch {
+        // 请求客户端会统一处理失效令牌；临时网络异常时保留当前页面状态。
+      }
+    };
+    void refreshProfile();
+    const timer = window.setInterval(() => void refreshProfile(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [session?.token]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       session,
       async login(username, password) {
         const next = await createSession(username, password);
         setSession(next);
+        return next;
       },
       logout() {
         clearSession();

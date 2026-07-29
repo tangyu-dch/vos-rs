@@ -24,20 +24,43 @@ export interface EgressGroupMember extends Entity {
 const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DESTINATION_PREFIX = /^\+?\d*$/;
 
-export function egressGroupValidationError(group: EgressGroup, members: EgressGroupMember[]): string | null {
+export function egressGroupValidationError(
+  group: EgressGroup,
+  members: EgressGroupMember[],
+): string | null {
   if (!group.name?.trim()) return '分组名称不能为空';
   const seen = new Set<string>();
   for (const member of members) {
     if (!member.egress_trunk_id) return '落地中继不能为空';
     const prefix = member.destination_prefix?.trim() ?? '';
-    if (!DESTINATION_PREFIX.test(prefix)) return `落地中继 ${member.egress_trunk_id} 的被叫前缀只能包含数字和开头的 +`;
-    if (!Number.isInteger(member.priority) || Number(member.priority) < 0 || Number(member.priority) > 65535) return `落地中继 ${member.egress_trunk_id} 的优先级必须是 0 到 65535 的整数`;
-    if (!Number.isInteger(member.weight) || Number(member.weight) < 1 || Number(member.weight) > 10000) return `落地中继 ${member.egress_trunk_id} 的权重必须是 1 到 10000 的整数`;
+    if (!DESTINATION_PREFIX.test(prefix))
+      return `落地中继 ${member.egress_trunk_id} 的被叫前缀只能包含数字和开头的 +`;
+    if (
+      !Number.isInteger(member.priority) ||
+      Number(member.priority) < 0 ||
+      Number(member.priority) > 65535
+    )
+      return `落地中继 ${member.egress_trunk_id} 的优先级必须是 0 到 65535 的整数`;
+    if (
+      !Number.isInteger(member.weight) ||
+      Number(member.weight) < 1 ||
+      Number(member.weight) > 10000
+    )
+      return `落地中继 ${member.egress_trunk_id} 的权重必须是 1 到 10000 的整数`;
     const hasStart = Boolean(member.time_start);
     const hasEnd = Boolean(member.time_end);
     if (hasStart !== hasEnd) return '时间窗口必须成对出现';
-    if ((member.time_start && !HH_MM.test(member.time_start)) || (member.time_end && !HH_MM.test(member.time_end))) return '时间窗口必须使用 24 小时制 HH:MM';
-    const identity = [member.egress_trunk_id, prefix, member.time_start ?? '', member.time_end ?? ''].join('|');
+    if (
+      (member.time_start && !HH_MM.test(member.time_start)) ||
+      (member.time_end && !HH_MM.test(member.time_end))
+    )
+      return '时间窗口必须使用 24 小时制 HH:MM';
+    const identity = [
+      member.egress_trunk_id,
+      prefix,
+      member.time_start ?? '',
+      member.time_end ?? '',
+    ].join('|');
     if (seen.has(identity)) return `落地中继 ${member.egress_trunk_id} 存在重复的匹配规则`;
     seen.add(identity);
   }
@@ -70,7 +93,10 @@ export async function getEgressGroupMembers(id: string): Promise<EgressGroupMemb
   return api.get<EgressGroupMember[]>(`/egress-groups/${encodeURIComponent(id)}/members`);
 }
 
-export async function saveEgressGroupMembers(id: string, members: EgressGroupMember[]): Promise<void> {
+export async function saveEgressGroupMembers(
+  id: string,
+  members: EgressGroupMember[],
+): Promise<void> {
   const items = members.map((m) => {
     const item = { ...m };
     delete item._key;

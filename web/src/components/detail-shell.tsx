@@ -3,7 +3,19 @@ import { Button, Card, CardBody, Chip, Spinner } from '@heroui/react';
 import { Plus, RefreshCw, Save, type LucideIcon } from 'lucide-react';
 
 /** 详情页顶部操作栏：刷新 + 保存 */
-export function DetailHeader({ loading, saving, onRefresh, onSave }: { loading: boolean; saving: boolean; onRefresh: () => void; onSave: () => void }) {
+export function DetailHeader({
+  loading,
+  saving,
+  onRefresh,
+  onSave,
+  canSave = true,
+}: {
+  loading: boolean;
+  saving: boolean;
+  onRefresh: () => void;
+  onSave: () => void;
+  canSave?: boolean;
+}) {
   return (
     <div className="flex items-center justify-end gap-2 mb-4">
       <Button
@@ -19,6 +31,7 @@ export function DetailHeader({ loading, saving, onRefresh, onSave }: { loading: 
         color="primary"
         size="sm"
         isLoading={saving}
+        isDisabled={!canSave}
         onPress={onSave}
         startContent={<Save className="w-4 h-4" />}
       >
@@ -34,7 +47,17 @@ export function FormGrid({ children }: { children: ReactNode }) {
 }
 
 /** 详情页内分区：标题 + 描述 + 操作 + 主体内容 */
-export function SectionBlock({ title, description, actions, children }: { title: string; description?: string; actions?: ReactNode; children?: ReactNode }) {
+export function SectionBlock({
+  title,
+  description,
+  actions,
+  children,
+}: {
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+  children?: ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
@@ -79,14 +102,22 @@ export function ErrorState({ error, retry }: { error: string; retry: () => void 
           <p className="text-small font-semibold text-danger">数据加载失败</p>
           <p className="text-tiny text-danger mt-1 opacity-80 truncate">{error}</p>
         </div>
-        <Button size="sm" color="danger" variant="flat" onPress={retry}>重试</Button>
+        <Button size="sm" color="danger" variant="flat" onPress={retry}>
+          重试
+        </Button>
       </CardBody>
     </Card>
   );
 }
 
 /** 通用加载中占位 */
-export function LoadingState({ label = '加载中...', minHeight = 200 }: { label?: string; minHeight?: number }) {
+export function LoadingState({
+  label = '加载中...',
+  minHeight = 200,
+}: {
+  label?: string;
+  minHeight?: number;
+}) {
   return (
     <div className="flex items-center justify-center" style={{ minHeight }}>
       <Spinner color="primary" label={label} />
@@ -120,7 +151,11 @@ export function PageHeader({
   title: string;
   subtitle?: ReactNode;
   icon?: LucideIcon;
-  statusChip?: { label: string; color?: 'success' | 'warning' | 'danger' | 'primary' | 'default'; pulse?: boolean };
+  statusChip?: {
+    label: string;
+    color?: 'success' | 'warning' | 'danger' | 'primary' | 'default';
+    pulse?: boolean;
+  };
   actions?: ReactNode;
 }) {
   return (
@@ -128,13 +163,17 @@ export function PageHeader({
       <div className="min-w-0">
         <div className="flex items-center gap-2 mb-1">
           {Icon && <Icon className="w-4 h-4 text-primary shrink-0" />}
-          <h2 className="text-base font-bold text-foreground truncate">{title}</h2>
+          <h2 className="text-base font-semibold text-foreground truncate">{title}</h2>
           {statusChip && (
             <Chip
               color={statusChip.color ?? 'default'}
               size="sm"
               variant="flat"
-              startContent={statusChip.pulse ? <span className="w-2 h-2 rounded-full bg-current animate-pulse" /> : undefined}
+              startContent={
+                statusChip.pulse ? (
+                  <span className="w-2 h-2 rounded-full bg-current animate-pulse" />
+                ) : undefined
+              }
             >
               {statusChip.label}
             </Chip>
@@ -148,18 +187,46 @@ export function PageHeader({
 }
 
 /** 统一刷新按钮：variant=flat, size=sm, RefreshCw w-4 h-4，文案默认"刷新" */
-export function RefreshButton({ isLoading, onPress, label = '刷新' }: { isLoading?: boolean; onPress: () => void; label?: string }) {
+export function RefreshButton({
+  isLoading,
+  onPress,
+  label = '刷新',
+}: {
+  isLoading?: boolean;
+  onPress: () => void;
+  label?: string;
+}) {
   return (
-    <Button variant="flat" size="sm" isLoading={isLoading} onPress={onPress} startContent={<RefreshCw className="w-4 h-4" />}>
+    <Button
+      variant="flat"
+      size="sm"
+      isLoading={isLoading}
+      onPress={onPress}
+      startContent={<RefreshCw className="w-4 h-4" />}
+    >
       {label}
     </Button>
   );
 }
 
 /** 统一新建按钮：color=primary, size=sm, Plus w-4 h-4 */
-export function CreateButton({ onPress, label = '新建', isLoading }: { onPress: () => void; label?: string; isLoading?: boolean }) {
+export function CreateButton({
+  onPress,
+  label = '新建',
+  isLoading,
+}: {
+  onPress: () => void;
+  label?: string;
+  isLoading?: boolean;
+}) {
   return (
-    <Button color="primary" size="sm" isLoading={isLoading} onPress={onPress} startContent={<Plus className="w-4 h-4" />}>
+    <Button
+      color="primary"
+      size="sm"
+      isLoading={isLoading}
+      onPress={onPress}
+      startContent={<Plus className="w-4 h-4" />}
+    >
       {label}
     </Button>
   );
@@ -171,18 +238,23 @@ export function EmptyState({
   icon: Icon,
   title,
   description,
+  action,
 }: {
   icon: LucideIcon;
   title: string;
   description?: string;
+  action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center p-8 gap-3">
-      <Icon className="w-8 h-8 text-default-400" aria-hidden />
+    <div className="flex flex-col items-center justify-center px-4 py-10 gap-2.5">
+      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-default-100 text-default-400">
+        <Icon className="w-4.5 h-4.5" aria-hidden />
+      </span>
       <div className="text-center">
-        <p className="text-sm font-semibold text-foreground">{title}</p>
-        {description && <p className="text-xs text-default-400 mt-1 max-w-sm">{description}</p>}
+        <p className="text-small font-medium text-default-600">{title}</p>
+        {description && <p className="text-tiny text-default-400 mt-0.5 max-w-sm">{description}</p>}
       </div>
+      {action && <div className="mt-1">{action}</div>}
     </div>
   );
 }

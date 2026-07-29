@@ -30,11 +30,7 @@ interface RouteNodeFormProps {
   onChange: (config: Record<string, unknown>) => void;
 }
 
-function setField<T extends Record<string, unknown>>(
-  config: T,
-  key: string,
-  value: unknown,
-): T {
+function setField<T extends Record<string, unknown>>(config: T, key: string, value: unknown): T {
   return { ...config, [key]: value };
 }
 
@@ -58,7 +54,10 @@ export function RouteNodeConfigForm({ type, config, onChange }: RouteNodeFormPro
             </Select>
           </Field>
           {config.source_type !== 'any' && (
-            <Field label={config.source_type === 'did' ? 'DID 号码' : '中继 ID'} hint="留空表示匹配全部">
+            <Field
+              label={config.source_type === 'did' ? 'DID 号码' : '中继 ID'}
+              hint="留空表示匹配全部"
+            >
               <Input
                 variant="bordered"
                 size="sm"
@@ -108,7 +107,12 @@ export function RouteNodeConfigForm({ type, config, onChange }: RouteNodeFormPro
                   <button
                     type="button"
                     className="shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-danger hover:bg-danger/10"
-                    onClick={() => update('prefixes', prefixes.filter((_, i) => i !== idx))}
+                    onClick={() =>
+                      update(
+                        'prefixes',
+                        prefixes.filter((_, i) => i !== idx),
+                      )
+                    }
                     aria-label="删除前缀"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -118,7 +122,12 @@ export function RouteNodeConfigForm({ type, config, onChange }: RouteNodeFormPro
               <button
                 type="button"
                 className="flex items-center gap-1.5 text-xs text-primary font-semibold self-start"
-                onClick={() => update('prefixes', [...prefixes, { prefix: '', label: `前缀 ${prefixes.length + 1}` }])}
+                onClick={() =>
+                  update('prefixes', [
+                    ...prefixes,
+                    { prefix: '', label: `前缀 ${prefixes.length + 1}` },
+                  ])
+                }
               >
                 <Plus className="w-3.5 h-3.5" />
                 添加前缀
@@ -155,7 +164,9 @@ export function RouteNodeConfigForm({ type, config, onChange }: RouteNodeFormPro
           <Field label="生效星期" hint="1=周一, 7=周日">
             <div className="flex flex-wrap gap-1.5">
               {[1, 2, 3, 4, 5, 6, 7].map((day) => {
-                const weekdays = Array.isArray(config.weekdays) ? (config.weekdays as number[]) : [];
+                const weekdays = Array.isArray(config.weekdays)
+                  ? (config.weekdays as number[])
+                  : [];
                 const isSelected = weekdays.includes(day);
                 const dayLabel = ['一', '二', '三', '四', '五', '六', '日'][day - 1];
                 return (
@@ -215,7 +226,12 @@ export function RouteNodeConfigForm({ type, config, onChange }: RouteNodeFormPro
               minRows={4}
               placeholder={'13800138000\n139*\n400*'}
               value={Array.isArray(config.patterns) ? (config.patterns as string[]).join('\n') : ''}
-              onValueChange={(v) => update('patterns', v.split('\n').filter((s) => s.trim()))}
+              onValueChange={(v) =>
+                update(
+                  'patterns',
+                  v.split('\n').filter((s) => s.trim()),
+                )
+              }
             />
           </Field>
         </div>

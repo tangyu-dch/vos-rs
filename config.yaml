@@ -202,11 +202,6 @@ api_server:
     # api-server 用此生成 X-VOS-Token，sip-edge manage API 用此验证。
     # 当前 sip-edge 运行在 Docker（config.compose.yaml），其值为 compose-internal-secret。
     internal_secret: "compose-internal-secret"
-  admin_credentials:
-    admin_password: "admin"
-    operator_password: "operator"
-    financier_password: "financier"
-
 # ==========================================
 # 4. cdr-worker 话单入库消费者服务配置
 # ==========================================
@@ -224,4 +219,3 @@ cdr_worker:
 
 # 注：LLM 配置已迁移至数据库 llm_configs 表，通过 Web 界面「系统与安全 → LLM 配置」管理，
 # 支持多厂商（智谱/通义/文心/DeepSeek/Kimi/OpenAI/自定义）动态切换，无需重启服务。
-

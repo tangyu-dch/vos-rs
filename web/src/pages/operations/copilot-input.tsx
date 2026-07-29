@@ -9,9 +9,7 @@
 
 import { RefObject } from 'react';
 import { Button, Input } from '@heroui/react';
-import {
-  Image as ImageIcon, Paperclip, Send, X, FileText,
-} from 'lucide-react';
+import { Image as ImageIcon, Paperclip, Send, X, FileText } from 'lucide-react';
 
 // ============ 附件类型定义 ============
 
@@ -87,7 +85,13 @@ export interface ComposerBarProps {
 
 /** 底部浮动输入框：隐藏 FileInput + 上传按钮 + 文本输入 + 发送按钮 */
 export function ComposerBar({
-  inputQuery, setInputQuery, sending, onSend, onPaste, fileInputRef, onFileSelect,
+  inputQuery,
+  setInputQuery,
+  sending,
+  onSend,
+  onPaste,
+  fileInputRef,
+  onFileSelect,
 }: ComposerBarProps) {
   return (
     <div className="w-full px-4 py-4 shrink-0 bg-transparent flex flex-col gap-2">
@@ -106,14 +110,15 @@ export function ComposerBar({
         }}
       />
 
-      <div className="w-full max-w-full lg:max-w-[94%] mx-auto rounded-3xl border-2 border-default-200 hover:border-primary/40 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 bg-content1 shadow-lg p-2 flex items-center gap-2 transition-all duration-200">
+      <div className="w-full max-w-6xl mx-auto rounded-xl border border-default-200 hover:border-primary/40 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/10 bg-content1 shadow-sm p-2 flex items-center gap-2 transition-colors">
         <Input
           variant="flat"
           classNames={{
-            inputWrapper: 'bg-transparent shadow-none hover:bg-transparent focus-within:bg-transparent',
+            inputWrapper:
+              '!bg-transparent shadow-none data-[hover=true]:!bg-transparent group-data-[focus=true]:!bg-transparent group-data-[focus-visible=true]:ring-0 group-data-[focus-visible=true]:ring-offset-0',
             input: 'text-sm',
           }}
-          placeholder="询问问题、粘贴图片/日志、或上传 CSV 进行导入排查... (可直接 Ctrl+V / Cmd+V 粘贴截图)"
+          placeholder="输入问题，或粘贴图片和日志进行排查"
           value={inputQuery}
           onValueChange={setInputQuery}
           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), onSend())}
@@ -123,7 +128,7 @@ export function ComposerBar({
             <div className="flex items-center gap-1.5 text-default-400 mr-1">
               <button
                 type="button"
-                title="上传数据/日志文件 (.csv, .json, .txt, .log)"
+                title="上传数据或日志文件"
                 onClick={() => fileInputRef.current?.click()}
                 className="p-1 hover:text-primary hover:bg-default-100 rounded-lg transition-colors"
               >
@@ -131,7 +136,7 @@ export function ComposerBar({
               </button>
               <button
                 type="button"
-                title="截图/图片识别异常"
+                title="上传截图或图片"
                 onClick={() => fileInputRef.current?.click()}
                 className="p-1 hover:text-primary hover:bg-default-100 rounded-lg transition-colors"
               >
@@ -143,7 +148,7 @@ export function ComposerBar({
             <Button
               size="sm"
               color="primary"
-              className="rounded-2xl px-4 text-primary-foreground font-bold"
+              className="rounded-lg px-4 text-primary-foreground font-medium"
               isLoading={sending}
               onPress={onSend}
               startContent={!sending && <Send className="w-3.5 h-3.5" />}

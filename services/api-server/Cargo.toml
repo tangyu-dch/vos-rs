@@ -35,9 +35,9 @@ uuid = { version = "1", features = ["v4"] }
 redis = { version = "0.26.0", features = ["tokio-comp", "connection-manager"] }
 serde_yaml = "0.9"
 percent-encoding = "2"
+argon2 = "0.5"
 
 [features]
 default = ["enterprise"]
 enterprise = ["enterprise-copilot"]
 enterprise-copilot = []
-

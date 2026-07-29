@@ -4,11 +4,13 @@ use axum::{
 };
 
 use crate::{
+    access_control, announcements,
     billing::{anti_fraud, billing, cdr, report},
     cluster::{calls, media_cluster, sip_cluster},
     copilot::history as copilot_history,
+    copilot::safety as copilot_safety,
     copilot::stream as copilot_stream,
-    dashboard, details, llm_configs, recording,
+    dashboard, details, llm_configs, notifications, recording,
     resources::{
         call_center, gateways, ivr_menus, numbers, prompts, registrations, routes, tenants, users,
     },
@@ -17,6 +19,98 @@ use crate::{
 };
 
 use super::handle_copilot_chat;
+
+pub(super) fn access_control_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/v1/access-control", get(access_control::overview))
+        .route(
+            "/api/v1/access-control/accounts",
+            get(access_control::overview),
+        )
+        .route(
+            "/api/v1/access-control/role-permissions",
+            get(access_control::overview),
+        )
+        .route(
+            "/api/v1/access-control/users",
+            post(access_control::create_user),
+        )
+        .route(
+            "/api/v1/access-control/users/:username",
+            put(access_control::update_user).delete(access_control::delete_user),
+        )
+        .route(
+            "/api/v1/access-control/roles",
+            post(access_control::create_role),
+        )
+        .route(
+            "/api/v1/access-control/roles/:role_key",
+            put(access_control::update_role).delete(access_control::delete_role),
+        )
+        .route(
+            "/api/v1/access-control/roles/user-assignments",
+            put(access_control::assign_user_roles),
+        )
+        .route(
+            "/api/v1/access-control/roles/:role_key/permissions",
+            put(access_control::replace_permissions),
+        )
+        .route(
+            "/api/v1/access-control/menus/:item_key",
+            put(access_control::update_menu),
+        )
+}
+
+pub(super) fn notification_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/v1/notifications",
+            get(notifications::list_notifications),
+        )
+        .route(
+            "/api/v1/notifications/unread-count",
+            get(notifications::unread_count),
+        )
+        .route(
+            "/api/v1/notifications/read-all",
+            post(notifications::mark_all_read),
+        )
+        .route("/api/v1/notifications/scan", post(notifications::scan_now))
+        .route(
+            "/api/v1/notifications/:id/read",
+            post(notifications::mark_read),
+        )
+}
+
+pub(super) fn announcement_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/v1/announcements",
+            get(announcements::list_announcements).post(announcements::create_announcement),
+        )
+        .route(
+            "/api/v1/announcements/:id/publish",
+            post(announcements::publish_announcement),
+        )
+        .route(
+            "/api/v1/announcements/:id",
+            get(announcements::get_announcement)
+                .put(announcements::update_announcement)
+                .delete(announcements::delete_announcement),
+        )
+        .route(
+            "/api/v1/my-announcements",
+            get(announcements::list_my_announcements),
+        )
+        .route(
+            "/api/v1/my-announcements/:id/read",
+            post(announcements::mark_my_announcement_read),
+        )
+        .route(
+            "/api/v1/my-announcements/:id",
+            get(announcements::get_my_announcement),
+        )
+}
 
 pub(super) fn overview_routes() -> Router<AppState> {
     Router::new()
@@ -293,6 +387,18 @@ pub(super) fn security_routes() -> Router<AppState> {
         .route(
             "/api/v1/copilot/sessions/:id/chat/stream",
             post(copilot_stream::chat_in_session_stream),
+        )
+        .route(
+            "/api/v1/copilot/sessions/:id/actions",
+            get(copilot_safety::list_actions),
+        )
+        .route(
+            "/api/v1/copilot/sessions/:id/actions/:action_id/approve",
+            post(copilot_safety::approve_action),
+        )
+        .route(
+            "/api/v1/copilot/sessions/:id/actions/:action_id/reject",
+            post(copilot_safety::reject_action),
         )
         // LLM 配置管理：多厂商配置 CRUD + 启用切换，Copilot 运行时动态读取
         .route(

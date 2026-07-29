@@ -6,9 +6,7 @@
 //!
 //! 纯展示组件，open 状态和内容由主页面控制。
 
-import {
-  Modal, ModalBody, ModalContent, ModalHeader,
-} from '@heroui/react';
+import { Modal, ModalBody, ModalContent, ModalHeader } from '@heroui/react';
 import { FileText } from 'lucide-react';
 
 // ============ 图片大图预览 ============
@@ -78,15 +76,14 @@ export function CsvPreviewModal({ file, onClose }: CsvPreviewModalProps) {
           </div>
         </ModalHeader>
         <ModalBody className="p-4 overflow-x-auto">
-          {file && (
-            isCsv ? (
+          {file &&
+            (isCsv ? (
               <CsvTable content={file.content} />
             ) : (
               <pre className="p-4 rounded-xl bg-default-100 text-xs font-mono whitespace-pre-wrap overflow-x-auto text-foreground border border-default-200">
                 {file.content}
               </pre>
-            )
-          )}
+            ))}
         </ModalBody>
       </ModalContent>
     </Modal>
@@ -105,7 +102,10 @@ function CsvTable({ content }: { content: string }) {
         <thead>
           <tr className="bg-default-100 border-b border-default-200 text-foreground font-semibold">
             {header.map((h, i) => (
-              <th key={i} className="px-3 py-2 border-r border-default-200 last:border-r-0 whitespace-nowrap">
+              <th
+                key={i}
+                className="px-3 py-2 border-r border-default-200 last:border-r-0 whitespace-nowrap"
+              >
                 {h}
               </th>
             ))}
@@ -115,7 +115,10 @@ function CsvTable({ content }: { content: string }) {
           {bodyRows.map((row, rIdx) => (
             <tr key={rIdx} className="border-b border-default-100 hover:bg-default-50/50">
               {row.split(',').map((cell, cIdx) => (
-                <td key={cIdx} className="px-3 py-1.5 border-r border-default-100 last:border-r-0 whitespace-nowrap text-default-600">
+                <td
+                  key={cIdx}
+                  className="px-3 py-1.5 border-r border-default-100 last:border-r-0 whitespace-nowrap text-default-600"
+                >
                   {cell.trim().replace(/^"|"$/g, '')}
                 </td>
               ))}

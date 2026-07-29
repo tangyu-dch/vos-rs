@@ -23,13 +23,14 @@
 
 ---
 
-## 1. 唯一环境变量
+## 1. 引导环境变量
 
 在启动系统时，仅保留以下环境变量作为配置文件引导入口：
 
 | 环境变量名称 | 强制性 | 默认值 | 作用描述 |
 | :--- | :--- | :--- | :--- |
 | `VOS_RS_CONFIG_FILE` | *可选* | `config.yaml` | 指定系统统一的主配置文件路径 |
+| `VOS_RS_BOOTSTRAP_ADMIN_PASSWORD` | *首次生产部署必填* | 无 | 仅在 `console_users` 为空时创建首个 `admin`，创建后即不再读取 |
 
 ---
 
@@ -97,10 +98,8 @@ api_server:
   security:
     jwt_secret: "secret"
     internal_secret: "internal-dev-secret"
-  admin_credentials:
-    admin_password: "admin"
-    operator_password: "operator"
-    financier_password: "financier"
+  # 控制台用户、角色、按钮权限和菜单均存储于 PostgreSQL，不再写入配置文件。
+  # 数据库为空时可临时设置 VOS_RS_BOOTSTRAP_ADMIN_PASSWORD 创建首个管理员。
 
 # ==========================================
 # 4. 多租户（商户）配置

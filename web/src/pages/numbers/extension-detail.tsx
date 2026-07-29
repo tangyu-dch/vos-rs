@@ -1,15 +1,45 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Button, Card, CardBody, Chip, Input,
-  Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Tabs, Tab,
+  Button,
+  Card,
+  CardBody,
+  Chip,
+  Input,
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
+  TableCell,
+  Tabs,
+  Tab,
 } from '@heroui/react';
 import { RefreshCw, Phone, ShieldCheck } from 'lucide-react';
 import { useParams } from 'react-router-dom';
+import { useAuth } from '@/auth/AuthContext';
+import { hasPermission } from '@/services/auth';
 import type { Entity } from '@/services/resources';
-import { getExtensionOutboundPolicy, getExtensionWorkspace, saveExtensionOutboundPolicy, updateExtensionPassword, type ExtensionWorkspaceData } from '@/services/extensions';
+import {
+  getExtensionOutboundPolicy,
+  getExtensionWorkspace,
+  saveExtensionOutboundPolicy,
+  updateExtensionPassword,
+  type ExtensionWorkspaceData,
+} from '@/services/extensions';
 import { listOptions, policyValidationError, type OutboundPolicy } from '@/services/trunks';
-import { CallerPolicyForm, EgressBindingForm, WorkspaceField, emptyPolicy } from '@/pages/trunks/trunk-detail';
-import { DetailErrorState, DetailHeader, DetailLoading, FormGrid, SectionBlock } from '@/components/detail-shell';
+import {
+  CallerPolicyForm,
+  EgressBindingForm,
+  WorkspaceField,
+  emptyPolicy,
+} from '@/pages/trunks/trunk-detail';
+import {
+  DetailErrorState,
+  DetailHeader,
+  DetailLoading,
+  FormGrid,
+  SectionBlock,
+} from '@/components/detail-shell';
 import { message } from '@/utils/toast';
 
 function RegistrationStatus({
@@ -33,7 +63,9 @@ function RegistrationStatus({
             variant="flat"
             color={isOnline ? 'success' : 'default'}
             startContent={
-              <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-success animate-pulse' : 'bg-default-400'}`} />
+              <span
+                className={`w-2 h-2 rounded-full ${isOnline ? 'bg-success animate-pulse' : 'bg-default-400'}`}
+              />
             }
           >
             {isOnline ? `${registrations.length} 个在线终端` : '当前离线'}
@@ -62,11 +94,19 @@ function RegistrationStatus({
           </TableHeader>
           <TableBody items={registrations}>
             {(row) => (
-              <TableRow key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}>
-                <TableCell className="font-mono text-tiny">{String(row.contact_uri ?? row.contact ?? '')}</TableCell>
-                <TableCell>{String(row.received_from ?? row.user_agent ?? row.node ?? '')}</TableCell>
+              <TableRow
+                key={String(row.contact_uri ?? row.contact ?? row.id ?? row.user_agent ?? '')}
+              >
+                <TableCell className="font-mono text-tiny">
+                  {String(row.contact_uri ?? row.contact ?? '')}
+                </TableCell>
                 <TableCell>
-                  <Chip size="sm" variant="dot" color="success">在线</Chip>
+                  {String(row.received_from ?? row.user_agent ?? row.node ?? '')}
+                </TableCell>
+                <TableCell>
+                  <Chip size="sm" variant="dot" color="success">
+                    在线
+                  </Chip>
                 </TableCell>
                 <TableCell>{String(row.expires_at ?? '')}</TableCell>
               </TableRow>
@@ -85,7 +125,11 @@ function NumberOwnership({ numbers }: { numbers: Entity[] }) {
     <SectionBlock
       title="号码归属"
       description="分机使用授权与号码物理落地归属相互独立。"
-      actions={<Chip size="sm" variant="flat">{numbers.length} 个号码</Chip>}
+      actions={
+        <Chip size="sm" variant="flat">
+          {numbers.length} 个号码
+        </Chip>
+      }
     >
       {numbers.length ? (
         <Table aria-label="号码归属列表">
@@ -97,8 +141,12 @@ function NumberOwnership({ numbers }: { numbers: Entity[] }) {
           </TableHeader>
           <TableBody items={numbers}>
             {(row) => {
-              const canReceive = row.can_receive ?? ['inbound', 'both', 'bidirectional'].includes(String(row.direction));
-              const canPresent = row.can_present ?? ['outbound', 'both', 'bidirectional'].includes(String(row.direction));
+              const canReceive =
+                row.can_receive ??
+                ['inbound', 'both', 'bidirectional'].includes(String(row.direction));
+              const canPresent =
+                row.can_present ??
+                ['outbound', 'both', 'bidirectional'].includes(String(row.direction));
               return (
                 <TableRow key={String(row.number ?? row.id ?? row.owner_egress_trunk_id ?? '')}>
                   <TableCell>{String(row.number ?? '')}</TableCell>
@@ -124,6 +172,7 @@ interface TabDef {
 }
 
 export function ExtensionDetailView({ id: propId }: { id?: string }) {
+  const { session } = useAuth();
   const params = useParams();
   const username = propId || params.id || '';
   const [data, setData] = useState<ExtensionWorkspaceData | null>(null);
@@ -136,6 +185,11 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const canSave = Boolean(
+    session &&
+    hasPermission(session, 'extensions.update') &&
+    hasPermission(session, 'termination.manage'),
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -152,7 +206,12 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
       if (optional[0].status === 'fulfilled') setPolicy({ ...emptyPolicy, ...optional[0].value });
       if (optional[1].status === 'fulfilled') setGroups(optional[1].value);
       if (optional[2].status === 'fulfilled') setTrunks(optional[2].value);
-      if (optional[3].status === 'fulfilled') setPools(optional[3].value.filter((pool) => pool.owner_source_type === 'extension' && pool.owner_source_id === username));
+      if (optional[3].status === 'fulfilled')
+        setPools(
+          optional[3].value.filter(
+            (pool) => pool.owner_source_type === 'extension' && pool.owner_source_id === username,
+          ),
+        );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '分机加载失败');
     } finally {
@@ -160,14 +219,23 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
     }
   }, [username]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const setPolicyField = (key: keyof OutboundPolicy, value: unknown) => setPolicy((current) => ({ ...current, [key]: value }));
+  const setPolicyField = (key: keyof OutboundPolicy, value: unknown) =>
+    setPolicy((current) => ({ ...current, [key]: value }));
 
   const save = async () => {
     const policyError = policyValidationError(policy);
-    if (policyError) { message.error(policyError); return; }
-    if (password !== confirmPassword) { message.error('两次输入的新密码不一致'); return; }
+    if (policyError) {
+      message.error(policyError);
+      return;
+    }
+    if (password !== confirmPassword) {
+      message.error('两次输入的新密码不一致');
+      return;
+    }
     try {
       setSaving(true);
       if (password) await updateExtensionPassword(username, password);
@@ -199,7 +267,7 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
             <WorkspaceField label="分机号码 (User)" required>
               <Input variant="bordered" value={username} isDisabled />
             </WorkspaceField>
-            <WorkspaceField label="注册服务器 (SIP Domain / Server)">
+            <WorkspaceField label="注册服务器">
               <Input variant="bordered" value={sipDomain} isDisabled />
             </WorkspaceField>
             <WorkspaceField label="鉴权域 (Realm)">
@@ -209,29 +277,35 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
               <Input
                 variant="bordered"
                 isDisabled
-                value={data?.tenant?.name
-                  ? `${String(data.tenant.name)}${data.tenant.enabled === false ? '（已停用）' : ''}`
-                  : '全局（未关联商户）'}
+                value={
+                  data?.tenant?.name
+                    ? `${String(data.tenant.name)}${data.tenant.enabled === false ? '（已停用）' : ''}`
+                    : '全局（未关联商户）'
+                }
               />
             </WorkspaceField>
             <WorkspaceField label="凭据鉴权状态">
               <Input
                 variant="bordered"
                 isDisabled
-                value={data?.credential?.configured ? '已配置 MD5 Digest 凭据 (不可逆哈希)' : '尚未配置凭据'}
+                value={
+                  data?.credential?.configured
+                    ? '已配置 MD5 Digest 凭据 (不可逆哈希)'
+                    : '尚未配置凭据'
+                }
               />
             </WorkspaceField>
-            <WorkspaceField label="重置/设定 SIP 密码">
+            <WorkspaceField label="重置注册密码">
               <Input
                 type="password"
                 variant="bordered"
                 value={password}
                 onValueChange={setPassword}
-                placeholder="输入新 SIP 密码 (如 123456)"
+                placeholder="输入新的注册密码"
                 autoComplete="new-password"
               />
             </WorkspaceField>
-            <WorkspaceField label="确认 SIP 密码">
+            <WorkspaceField label="确认注册密码">
               <Input
                 type="password"
                 variant="bordered"
@@ -242,23 +316,66 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
               />
             </WorkspaceField>
             <div className="md:col-span-2 col-span-1 p-4 bg-primary/5 rounded-xl border border-primary/20 text-tiny text-default-600 flex flex-col gap-1.5">
-              <span className="font-bold text-primary flex items-center gap-1.5">
-                💡 SIP 软电话 / 话机注册配置指引
+              <span className="font-semibold text-foreground flex items-center gap-1.5">
+                话机注册指引
               </span>
               <ul className="list-disc list-inside space-y-1 text-default-500">
-                <li><strong>SIP 账号 (Username / Auth ID)：</strong> <code className="text-foreground bg-content2 px-1 rounded">{username}</code></li>
-                <li><strong>SIP 域名 / 代理服务器 (Domain / Registrar)：</strong> <code className="text-foreground bg-content2 px-1 rounded">{sipDomain}</code></li>
-                <li><strong>鉴权域 (Realm / Domain)：</strong> <code className="text-foreground bg-content2 px-1 rounded">{realm}</code> (软电话若要求填 Realm 请填此值)</li>
-                <li><strong>认证密码说明：</strong> 电信级 VoIP 为安全起见在服务端以不可逆 Digest 哈希存储凭据。如忘记注册密码，请直接在上方填写新密码并点击右上方<strong>保存配置</strong>进行快速重置。</li>
+                <li>
+                  <strong>注册账号：</strong>{' '}
+                  <code className="text-foreground bg-content2 px-1 rounded">{username}</code>
+                </li>
+                <li>
+                  <strong>代理服务器：</strong>{' '}
+                  <code className="text-foreground bg-content2 px-1 rounded">{sipDomain}</code>
+                </li>
+                <li>
+                  <strong>鉴权域：</strong>{' '}
+                  <code className="text-foreground bg-content2 px-1 rounded">{realm}</code>
+                </li>
+                <li>
+                  <strong>认证密码：</strong>
+                  服务端仅保存不可逆摘要；忘记密码时请在上方设置新密码并保存。
+                </li>
               </ul>
             </div>
           </FormGrid>
         ),
       },
-      { key: 'registration', title: '注册状态', content: <RegistrationStatus registrations={data?.registrations || []} onRefresh={load} refreshing={loading} /> },
-      { key: 'caller', title: '主叫策略', content: <CallerPolicyForm policy={policy} set={setPolicyField} pools={pools} numbers={data?.numbers || []} /> },
-      { key: 'binding', title: '落地绑定', content: <EgressBindingForm policy={policy} set={setPolicyField} groups={groups} trunks={trunks} /> },
-      { key: 'numbers', title: '号码归属', content: <NumberOwnership numbers={data?.numbers || []} /> },
+      {
+        key: 'registration',
+        title: '注册状态',
+        content: (
+          <RegistrationStatus
+            registrations={data?.registrations || []}
+            onRefresh={load}
+            refreshing={loading}
+          />
+        ),
+      },
+      {
+        key: 'caller',
+        title: '主叫策略',
+        content: (
+          <CallerPolicyForm
+            policy={policy}
+            set={setPolicyField}
+            pools={pools}
+            numbers={data?.numbers || []}
+          />
+        ),
+      },
+      {
+        key: 'binding',
+        title: '落地绑定',
+        content: (
+          <EgressBindingForm policy={policy} set={setPolicyField} groups={groups} trunks={trunks} />
+        ),
+      },
+      {
+        key: 'numbers',
+        title: '号码归属',
+        content: <NumberOwnership numbers={data?.numbers || []} />,
+      },
     ];
   }, [confirmPassword, data, groups, loading, load, password, policy, pools, trunks, username]);
 
@@ -286,21 +403,38 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
                 size="sm"
                 variant="flat"
                 color={isOnline ? 'success' : 'default'}
-                startContent={<span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}
+                startContent={
+                  <span
+                    className={`w-2 h-2 rounded-full ${isOnline ? 'bg-success animate-pulse' : 'bg-default-400'}`}
+                  />
+                }
               >
                 {isOnline ? `在线 (${regCount} 个终端)` : '未注册/离线'}
               </Chip>
               {Boolean(data?.credential?.configured) && (
-                <Chip size="sm" variant="dot" color="primary" startContent={<ShieldCheck className="w-3 h-3" />}>
+                <Chip
+                  size="sm"
+                  variant="dot"
+                  color="primary"
+                  startContent={<ShieldCheck className="w-3 h-3" />}
+                >
                   Digest 凭据就绪
                 </Chip>
               )}
             </div>
-            <p className="text-tiny text-default-400 mt-0.5">SIP 账号管理、注册终端追踪与出站路由策略配置</p>
+            <p className="text-tiny text-default-400 mt-0.5">
+              分机账号管理、注册终端追踪与出站路由策略配置
+            </p>
           </div>
         </div>
 
-        <DetailHeader loading={loading} saving={saving} onRefresh={load} onSave={save} />
+        <DetailHeader
+          loading={loading}
+          saving={saving}
+          onRefresh={load}
+          onSave={save}
+          canSave={canSave}
+        />
       </div>
 
       {error ? (

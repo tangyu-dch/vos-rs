@@ -1,13 +1,40 @@
 import { useEffect, useState } from 'react';
 import {
-  Card, CardBody, Button, ButtonGroup, Chip, Avatar, Input, Modal, ModalBody, ModalHeader, ModalContent, ModalFooter,
-  Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Select, SelectItem,
+  Card,
+  CardBody,
+  Button,
+  ButtonGroup,
+  Chip,
+  Avatar,
+  Input,
+  Modal,
+  ModalBody,
+  ModalHeader,
+  ModalContent,
+  ModalFooter,
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
+  TableCell,
+  Select,
+  SelectItem,
   useDisclosure,
 } from '@heroui/react';
 import { Headset, Search, Pencil, Trash2, LayoutGrid, List, Download } from 'lucide-react';
 import { api } from '@/services/client';
-import { ErrorState, LoadingState, PageHeader, RefreshButton, CreateButton, EmptyState } from '@/components/detail-shell';
+import {
+  ErrorState,
+  LoadingState,
+  PageHeader,
+  RefreshButton,
+  CreateButton,
+  EmptyState,
+} from '@/components/detail-shell';
 import { message } from '@/utils/toast';
+import { useAuth } from '@/auth/AuthContext';
+import { hasPermission } from '@/services/auth';
 
 interface AgentForm {
   agent_id: string;
@@ -19,6 +46,11 @@ interface AgentForm {
 const emptyForm: AgentForm = { agent_id: '', name: '', extension: '', status: 'idle' };
 
 export default function AgentsPage() {
+  const { session } = useAuth();
+  const canCreate = Boolean(session && hasPermission(session, 'agents.create'));
+  const canUpdate = Boolean(session && hasPermission(session, 'agents.update'));
+  const canDelete = Boolean(session && hasPermission(session, 'agents.delete'));
+  const canExport = Boolean(session && hasPermission(session, 'agents.export'));
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -50,7 +82,7 @@ export default function AgentsPage() {
     const next: Record<string, string> = {};
     if (!form.agent_id) next.agent_id = '请填写座席工号';
     if (!form.name) next.name = '请填写座席姓名';
-    if (!form.extension) next.extension = '请填写 SIP 分机号';
+    if (!form.extension) next.extension = '请填写关联分机号';
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -114,7 +146,7 @@ export default function AgentsPage() {
     (a) =>
       (a.name || '').toLowerCase().includes(searchKey.toLowerCase()) ||
       (a.agent_id || '').toLowerCase().includes(searchKey.toLowerCase()) ||
-      (a.extension || '').includes(searchKey)
+      (a.extension || '').includes(searchKey),
   );
 
   const handleExport = async () => {
@@ -133,7 +165,7 @@ export default function AgentsPage() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      message.success('已从后端成功生成并下载座席列表 (CSV 格式)');
+      message.success('座席列表已导出');
     } catch (err) {
       message.error(err instanceof Error ? err.message : '从后端导出座席数据失败');
     } finally {
@@ -144,14 +176,30 @@ export default function AgentsPage() {
   const getStatusChip = (status: string) => {
     switch (status) {
       case 'idle':
-        return <Chip color="success" variant="flat" size="sm">空闲 (Ready)</Chip>;
+        return (
+          <Chip color="success" variant="flat" size="sm">
+            空闲 (Ready)
+          </Chip>
+        );
       case 'in_call':
-        return <Chip color="primary" variant="flat" size="sm">通话中 (In Call)</Chip>;
+        return (
+          <Chip color="primary" variant="flat" size="sm">
+            通话中 (In Call)
+          </Chip>
+        );
       case 'busy':
-        return <Chip color="warning" variant="flat" size="sm">示忙 (Busy)</Chip>;
+        return (
+          <Chip color="warning" variant="flat" size="sm">
+            示忙 (Busy)
+          </Chip>
+        );
       case 'offline':
       default:
-        return <Chip color="default" variant="flat" size="sm">离线 (Offline)</Chip>;
+        return (
+          <Chip color="default" variant="flat" size="sm">
+            离线 (Offline)
+          </Chip>
+        );
     }
   };
 
@@ -181,7 +229,7 @@ export default function AgentsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <Card shadow="sm" className="p-2">
+      <Card shadow="none" className="overview-card p-2">
         <CardBody className="p-4">
           <PageHeader
             icon={Headset}
@@ -191,7 +239,7 @@ export default function AgentsPage() {
             actions={
               <>
                 <RefreshButton isLoading={loading} onPress={loadData} />
-                <CreateButton onPress={openCreate} label="新增座席" />
+                {canCreate && <CreateButton onPress={openCreate} label="新增座席" />}
               </>
             }
           />
@@ -201,15 +249,15 @@ export default function AgentsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-4">
           {kpis.map((kpi) => (
-            <Card key={kpi.label} shadow="sm">
+            <Card key={kpi.label} shadow="none" className="overview-card">
               <CardBody className="p-4">
                 <div className="text-tiny font-medium text-default-500 mb-1">{kpi.label}</div>
-                <div className={`text-3xl font-bold ${kpi.className}`}>{kpi.value}</div>
+                <div className="text-2xl font-semibold text-foreground tnum">{kpi.value}</div>
               </CardBody>
             </Card>
           ))}
         </div>
-        <Card shadow="sm">
+        <Card shadow="none" className="overview-card">
           <CardBody className="p-4">
             <h3 className="text-small font-semibold text-foreground mb-3">座席状态分布</h3>
             <div className="flex items-center gap-4">
@@ -219,38 +267,80 @@ export default function AgentsPage() {
                 role="img"
                 aria-label="座席状态分布环形图"
               >
-                <circle cx="60" cy="60" r={DONUT_R} fill="none" stroke="currentColor" strokeWidth="14" className="text-default-200" />
-                {totalAgents > 0 && donutSegments.map((seg) => (
-                  <circle
-                    key={seg.key}
-                    cx="60"
-                    cy="60"
-                    r={DONUT_R}
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="14"
-                    className={seg.colorClass}
-                    strokeDasharray={`${seg.length} ${DONUT_C - seg.length}`}
-                    strokeDashoffset={seg.offset}
-                    transform="rotate(-90 60 60)"
-                  />
-                ))}
+                <circle
+                  cx="60"
+                  cy="60"
+                  r={DONUT_R}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="14"
+                  className="text-default-200"
+                />
+                {totalAgents > 0 &&
+                  donutSegments.map((seg) => (
+                    <circle
+                      key={seg.key}
+                      cx="60"
+                      cy="60"
+                      r={DONUT_R}
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="14"
+                      className={seg.colorClass}
+                      strokeDasharray={`${seg.length} ${DONUT_C - seg.length}`}
+                      strokeDashoffset={seg.offset}
+                      transform="rotate(-90 60 60)"
+                    />
+                  ))}
                 {totalAgents === 0 ? (
-                  <text x="60" y="64" textAnchor="middle" fill="currentColor" className="text-default-400" style={{ fontSize: '11px' }}>暂无数据</text>
+                  <text
+                    x="60"
+                    y="64"
+                    textAnchor="middle"
+                    fill="currentColor"
+                    className="text-default-400"
+                    style={{ fontSize: '11px' }}
+                  >
+                    暂无数据
+                  </text>
                 ) : (
                   <>
-                    <text x="60" y="56" textAnchor="middle" fill="currentColor" className="text-default-500" style={{ fontSize: '10px' }}>总座席</text>
-                    <text x="60" y="72" textAnchor="middle" fill="currentColor" className="text-foreground" style={{ fontSize: '20px', fontWeight: 700 }}>{totalAgents}</text>
+                    <text
+                      x="60"
+                      y="56"
+                      textAnchor="middle"
+                      fill="currentColor"
+                      className="text-default-500"
+                      style={{ fontSize: '10px' }}
+                    >
+                      总座席
+                    </text>
+                    <text
+                      x="60"
+                      y="72"
+                      textAnchor="middle"
+                      fill="currentColor"
+                      className="text-foreground"
+                      style={{ fontSize: '20px', fontWeight: 700 }}
+                    >
+                      {totalAgents}
+                    </text>
                   </>
                 )}
               </svg>
               <div className="flex flex-col gap-1.5 flex-1 min-w-0">
                 {statusSegments.map((seg) => {
-                  const pct = totalAgents > 0 ? ((seg.value / totalAgents) * 100).toFixed(1) : '0.0';
+                  const pct =
+                    totalAgents > 0 ? ((seg.value / totalAgents) * 100).toFixed(1) : '0.0';
                   return (
-                    <div key={seg.key} className="flex items-center justify-between gap-2 text-tiny">
+                    <div
+                      key={seg.key}
+                      className="flex items-center justify-between gap-2 text-tiny"
+                    >
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <span className={`inline-block w-2.5 h-2.5 rounded-sm ${seg.colorClass} bg-current flex-shrink-0`} />
+                        <span
+                          className={`inline-block w-2.5 h-2.5 rounded-sm ${seg.colorClass} bg-current flex-shrink-0`}
+                        />
                         <span className="text-default-600 truncate">{seg.label}</span>
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -271,164 +361,203 @@ export default function AgentsPage() {
       ) : loading && data.length === 0 ? (
         <LoadingState />
       ) : (
-      <Card>
-        <CardBody className="gap-4 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-default-200">
-            <Input
-              placeholder="搜索工号 / 姓名 / 分机"
-              className="w-64"
-              size="sm"
-              variant="bordered"
-              startContent={<Search className="w-4 h-4 text-default-400" />}
-              value={searchKey}
-              onValueChange={setSearchKey}
-              isClearable
-            />
-            <div className="flex items-center gap-2">
-              <ButtonGroup>
-                <Button
-                  size="sm"
-                  variant={viewMode === 'grid' ? 'solid' : 'light'}
-                  color={viewMode === 'grid' ? 'primary' : 'default'}
-                  onPress={() => setViewMode('grid')}
-                  startContent={<LayoutGrid className="w-4 h-4" />}
-                >
-                  卡片
-                </Button>
-                <Button
-                  size="sm"
-                  variant={viewMode === 'table' ? 'solid' : 'light'}
-                  color={viewMode === 'table' ? 'primary' : 'default'}
-                  onPress={() => setViewMode('table')}
-                  startContent={<List className="w-4 h-4" />}
-                >
-                  列表
-                </Button>
-              </ButtonGroup>
-
-              <Button
-                variant="flat"
+        <Card>
+          <CardBody className="gap-4 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-default-200">
+              <Input
+                placeholder="搜索工号 / 姓名 / 分机"
+                className="w-64"
                 size="sm"
-                onPress={handleExport}
-                startContent={<Download className="w-4 h-4" />}
-              >
-                导出
-              </Button>
-            </div>
-          </div>
+                variant="bordered"
+                startContent={<Search className="w-4 h-4 text-default-400" />}
+                value={searchKey}
+                onValueChange={setSearchKey}
+                isClearable
+              />
+              <div className="flex items-center gap-2">
+                <ButtonGroup>
+                  <Button
+                    size="sm"
+                    variant={viewMode === 'grid' ? 'solid' : 'light'}
+                    color={viewMode === 'grid' ? 'primary' : 'default'}
+                    onPress={() => setViewMode('grid')}
+                    startContent={<LayoutGrid className="w-4 h-4" />}
+                  >
+                    卡片
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={viewMode === 'table' ? 'solid' : 'light'}
+                    color={viewMode === 'table' ? 'primary' : 'default'}
+                    onPress={() => setViewMode('table')}
+                    startContent={<List className="w-4 h-4" />}
+                  >
+                    列表
+                  </Button>
+                </ButtonGroup>
 
-          {viewMode === 'table' ? (
-            <Table aria-label="座席列表">
-              <TableHeader>
-                <TableColumn key="name">座席人员</TableColumn>
-                <TableColumn key="extension">关联 SIP 分机</TableColumn>
-                <TableColumn key="status">工作状态</TableColumn>
-                <TableColumn key="current_call">当前通话</TableColumn>
-                <TableColumn key="actions" align="end">操作</TableColumn>
-              </TableHeader>
-              <TableBody items={filteredData} emptyContent={<EmptyState icon={Headset} title="暂无座席数据" description="点击「新增座席」添加第一个座席" />}>
-                {(record) => (
-                  <TableRow key={record.agent_id}>
-                    <TableCell key="name">
-                      <div className="flex items-center gap-3">
-                        <Avatar name={record.name ? record.name[0] : 'U'} size="sm" />
-                        <div>
-                          <div className="font-semibold text-foreground">{record.name}</div>
-                          <div className="text-tiny text-default-400 font-mono">ID: {record.agent_id}</div>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell key="extension">
-                      <Chip size="sm" variant="bordered" className="font-mono">sip:{record.extension}</Chip>
-                    </TableCell>
-                    <TableCell key="status">
-                      {getStatusChip(record.status || 'idle')}
-                    </TableCell>
-                    <TableCell key="current_call">
-                      <span className={record.current_call ? 'font-mono font-semibold text-primary' : 'text-default-400'}>
-                        {record.current_call || '-'}
-                      </span>
-                    </TableCell>
-                    <TableCell key="actions">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          isIconOnly
-                          size="sm"
-                          variant="light"
-                          onPress={() => openEdit(record)}
-                        >
-                          <Pencil className="w-4 h-4 text-default-500" />
-                        </Button>
-                        <Button
-                          isIconOnly
-                          size="sm"
-                          color="danger"
-                          variant="light"
-                          onPress={() => handleDelete(record.agent_id)}
-                        >
-                          <Trash2 className="w-4 h-4 text-danger" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
+                {canExport && (
+                  <Button
+                    variant="flat"
+                    size="sm"
+                    onPress={handleExport}
+                    startContent={<Download className="w-4 h-4" />}
+                  >
+                    导出
+                  </Button>
                 )}
-              </TableBody>
-            </Table>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {filteredData.map((agent) => (
-                <Card key={agent.agent_id} isHoverable>
-                  <CardBody className="p-4 gap-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <Avatar name={agent.name ? agent.name[0] : 'U'} />
-                        <div>
-                          <div className="font-semibold text-foreground text-small">{agent.name}</div>
-                          <div className="text-tiny text-default-400 font-mono">工号: {agent.agent_id}</div>
+              </div>
+            </div>
+
+            {viewMode === 'table' ? (
+              <Table aria-label="座席列表">
+                <TableHeader>
+                  <TableColumn key="name">座席人员</TableColumn>
+                  <TableColumn key="extension">关联分机</TableColumn>
+                  <TableColumn key="status">工作状态</TableColumn>
+                  <TableColumn key="current_call">当前通话</TableColumn>
+                  <TableColumn key="actions" align="end">
+                    操作
+                  </TableColumn>
+                </TableHeader>
+                <TableBody
+                  items={filteredData}
+                  emptyContent={
+                    <EmptyState
+                      icon={Headset}
+                      title="暂无座席数据"
+                      description="点击「新增座席」添加第一个座席"
+                    />
+                  }
+                >
+                  {(record) => (
+                    <TableRow key={record.agent_id}>
+                      <TableCell key="name">
+                        <div className="flex items-center gap-3">
+                          <Avatar name={record.name ? record.name[0] : 'U'} size="sm" />
+                          <div>
+                            <div className="font-semibold text-foreground">{record.name}</div>
+                            <div className="text-tiny text-default-400 font-mono">
+                              ID: {record.agent_id}
+                            </div>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell key="extension">
+                        <Chip size="sm" variant="bordered" className="font-mono">
+                          sip:{record.extension}
+                        </Chip>
+                      </TableCell>
+                      <TableCell key="status">{getStatusChip(record.status || 'idle')}</TableCell>
+                      <TableCell key="current_call">
+                        <span
+                          className={
+                            record.current_call
+                              ? 'font-mono font-semibold text-primary'
+                              : 'text-default-400'
+                          }
+                        >
+                          {record.current_call || '-'}
+                        </span>
+                      </TableCell>
+                      <TableCell key="actions">
+                        <div className="flex items-center justify-end gap-1">
+                          {canUpdate && (
+                            <Button
+                              isIconOnly
+                              size="sm"
+                              variant="light"
+                              onPress={() => openEdit(record)}
+                            >
+                              <Pencil className="w-4 h-4 text-default-500" />
+                            </Button>
+                          )}
+                          {canDelete && (
+                            <Button
+                              isIconOnly
+                              size="sm"
+                              color="danger"
+                              variant="light"
+                              onPress={() => handleDelete(record.agent_id)}
+                            >
+                              <Trash2 className="w-4 h-4 text-danger" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {filteredData.map((agent) => (
+                  <Card key={agent.agent_id} isHoverable>
+                    <CardBody className="p-4 gap-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Avatar name={agent.name ? agent.name[0] : 'U'} />
+                          <div>
+                            <div className="font-semibold text-foreground text-small">
+                              {agent.name}
+                            </div>
+                            <div className="text-tiny text-default-400 font-mono">
+                              工号: {agent.agent_id}
+                            </div>
+                          </div>
+                        </div>
+                        {getStatusChip(agent.status || 'idle')}
+                      </div>
+
+                      <div className="flex flex-col gap-1.5 text-tiny">
+                        <div className="flex justify-between">
+                          <span className="text-default-400">绑定分机:</span>
+                          <span className="font-medium text-foreground font-mono">
+                            sip:{agent.extension}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-default-400">当前通话:</span>
+                          <span
+                            className={
+                              agent.current_call ? 'font-semibold text-primary' : 'text-default-400'
+                            }
+                          >
+                            {agent.current_call || '无通话'}
+                          </span>
                         </div>
                       </div>
-                      {getStatusChip(agent.status || 'idle')}
-                    </div>
 
-                    <div className="flex flex-col gap-1.5 text-tiny">
-                      <div className="flex justify-between">
-                        <span className="text-default-400">绑定分机:</span>
-                        <span className="font-medium text-foreground font-mono">sip:{agent.extension}</span>
+                      <div className="flex justify-end gap-1">
+                        {canUpdate && (
+                          <Button
+                            size="sm"
+                            variant="flat"
+                            onPress={() => openEdit(agent)}
+                            startContent={<Pencil className="w-4 h-4" />}
+                          >
+                            编辑
+                          </Button>
+                        )}
+                        {canDelete && (
+                          <Button
+                            size="sm"
+                            color="danger"
+                            variant="light"
+                            startContent={<Trash2 className="w-4 h-4" />}
+                            onPress={() => handleDelete(agent.agent_id)}
+                          >
+                            删除
+                          </Button>
+                        )}
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-default-400">当前通话:</span>
-                        <span className={agent.current_call ? 'font-semibold text-primary' : 'text-default-400'}>
-                          {agent.current_call || '无通话'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="flat"
-                        onPress={() => openEdit(agent)}
-                        startContent={<Pencil className="w-4 h-4" />}
-                      >
-                        编辑
-                      </Button>
-                      <Button
-                        size="sm"
-                        color="danger"
-                        variant="light"
-                        startContent={<Trash2 className="w-4 h-4" />}
-                        onPress={() => handleDelete(agent.agent_id)}
-                      >
-                        删除
-                      </Button>
-                    </div>
-                  </CardBody>
-                </Card>
-              ))}
-            </div>
-          )}
-        </CardBody>
-      </Card>
+                    </CardBody>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </CardBody>
+        </Card>
       )}
 
       <Modal isOpen={isOpen} onClose={onClose} size="lg">
@@ -459,7 +588,7 @@ export default function AgentsPage() {
                   errorMessage={errors.name}
                 />
                 <Input
-                  label="关联 SIP 分机号"
+                  label="关联分机号"
                   variant="bordered"
                   placeholder="例如 8001"
                   value={form.extension}
@@ -481,8 +610,12 @@ export default function AgentsPage() {
                 </Select>
               </ModalBody>
               <ModalFooter>
-                <Button variant="flat" onPress={onModalClose}>取消</Button>
-                <Button color="primary" onPress={handleSave}>保存</Button>
+                <Button variant="flat" onPress={onModalClose}>
+                  取消
+                </Button>
+                <Button color="primary" onPress={handleSave}>
+                  保存
+                </Button>
               </ModalFooter>
             </>
           )}

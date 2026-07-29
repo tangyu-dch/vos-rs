@@ -17,8 +17,15 @@ mod utils;
 pub use batch::{CdrBatchChannel, CdrBatchConfig};
 pub use call_core::CdrAuditSnapshot;
 pub use models::*;
+pub use store::access_control::*;
+pub use store::announcement::{Announcement, AnnouncementSummary, UpsertAnnouncementInput};
 pub use store::copilot::{AppendCopilotMessageInput, CopilotMessage, CopilotSession};
+pub use store::copilot_action::CopilotAction;
 pub use store::llm_config::{LlmConfigRecord, UpsertLlmConfigInput};
+pub use store::notification::{
+    CreateNotificationInput, Notification, NotificationCategory, NotificationSeverity,
+    NotificationSummary,
+};
 pub use store::tenant::{TenantRecord, UpsertTenantInput};
 pub use termination_models::*;
 pub use utils::current_hhmm;

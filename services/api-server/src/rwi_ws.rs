@@ -9,23 +9,25 @@ use axum::{
         State,
     },
     response::IntoResponse,
+    Extension,
 };
 use call_core::rwi::{RwiCommand, RwiEvent, RwiMessage, RwiPayload};
 use futures::{SinkExt, StreamExt};
 use uuid::Uuid;
 
-use crate::AppState;
+use crate::{system::auth::Claims, AppState};
 
 /// Handler for `/rwi/v1/ws` WebSocket upgrade.
 pub async fn rwi_ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_rwi_socket(socket, state))
+    ws.on_upgrade(move |socket| handle_rwi_socket(socket, state, claims))
 }
 
 /// Handles upgraded WebSocket connection.
-async fn handle_rwi_socket(socket: WebSocket, state: AppState) {
+async fn handle_rwi_socket(socket: WebSocket, state: AppState, claims: Claims) {
     let (mut sender, mut receiver) = socket.split();
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(64);
 
@@ -50,7 +52,7 @@ async fn handle_rwi_socket(socket: WebSocket, state: AppState) {
             Ok(m) => m,
             Err(_) => break,
         };
-        if let Err(e) = process_ws_message(&state, msg, &tx).await {
+        if let Err(e) = process_ws_message(&state, &claims, msg, &tx).await {
             tracing::warn!(error = %e, "Error processing RWI WS message");
         }
     }
@@ -184,6 +186,7 @@ fn parse_rwi_event_from_value(val: &serde_json::Value) -> Result<RwiEvent, serde
 /// Processes an incoming WebSocket message frame (Text or Binary).
 async fn process_ws_message(
     state: &AppState,
+    claims: &Claims,
     msg: Message,
     tx: &tokio::sync::mpsc::Sender<Message>,
 ) -> Result<(), String> {
@@ -204,6 +207,7 @@ async fn process_ws_message(
     };
 
     if let RwiPayload::Command(cmd) = rwi_msg.payload {
+        authorize_rwi_command(state, claims, &cmd).await?;
         execute_rwi_command(state, &cmd).await?;
         let ack = RwiMessage {
             id: rwi_msg.id,
@@ -220,6 +224,39 @@ async fn process_ws_message(
         let _ = tx.send(response_msg).await;
     }
     Ok(())
+}
+
+/// 对升级后的每一条实时控制命令重新检查数据库权限快照。
+///
+/// 这同时保证角色权限或用户权限版本在连接存续期间发生变化后，旧连接不能继续操作。
+async fn authorize_rwi_command(
+    state: &AppState,
+    claims: &Claims,
+    command: &RwiCommand,
+) -> Result<(), String> {
+    let permission = rwi_command_permission(command);
+    let allowed = state.access_snapshot.read().await.allows(
+        &claims.sub,
+        &claims.role,
+        claims.auth_version,
+        permission,
+    );
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!("越权访问：缺少权限 {permission}"))
+    }
+}
+
+/// 返回实时控制命令对应的最小按钮级权限点。
+fn rwi_command_permission(command: &RwiCommand) -> &'static str {
+    match command {
+        RwiCommand::BargeIn { .. } => "calls.barge",
+        RwiCommand::Speak { .. } => "calls.play",
+        RwiCommand::Listen { .. } => "calls.monitor",
+        RwiCommand::Transfer { .. } => "calls.transfer",
+        RwiCommand::Hangup { .. } => "calls.terminate",
+    }
 }
 
 /// Executes control command (`BargeIn`, `Speak`, `Listen`, `Transfer`, `Hangup`).
@@ -337,5 +374,55 @@ mod tests {
             return Err("Unexpected event variant".into());
         }
         Ok(())
+    }
+
+    #[test]
+    fn rwi_commands_have_independent_permissions() {
+        let commands = [
+            (
+                RwiCommand::BargeIn {
+                    call_id: "call-1".to_string(),
+                    mode: "listen".to_string(),
+                    target_leg: None,
+                },
+                "calls.barge",
+            ),
+            (
+                RwiCommand::Speak {
+                    call_id: "call-1".to_string(),
+                    text: "测试".to_string(),
+                    voice: None,
+                    speed: None,
+                },
+                "calls.play",
+            ),
+            (
+                RwiCommand::Listen {
+                    call_id: "call-1".to_string(),
+                    stream_url: "wss://example.invalid/audio".to_string(),
+                    format: None,
+                },
+                "calls.monitor",
+            ),
+            (
+                RwiCommand::Transfer {
+                    call_id: "call-1".to_string(),
+                    target: "1002".to_string(),
+                    transfer_type: None,
+                },
+                "calls.transfer",
+            ),
+            (
+                RwiCommand::Hangup {
+                    call_id: "call-1".to_string(),
+                    reason_code: None,
+                },
+                "calls.terminate",
+            ),
+        ];
+
+        for (command, permission) in commands {
+            assert_eq!(rwi_command_permission(&command), permission);
+        }
     }
 }

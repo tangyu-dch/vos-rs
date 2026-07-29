@@ -35,7 +35,11 @@ impl<'a> TelecomCopilotEngine<'a> {
     /// 在流式 LLM 对话中，当模型返回 `tool_calls` 时，由 `stream.rs` 的
     /// tool-call 处理循环调用此方法执行工具，再将结果以 `tool` 角色消息
     /// 回填到 LLM 上下文，让模型生成最终自然语言回答。
-    pub async fn execute_tool(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
+    pub(super) async fn execute_tool(
+        &self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> serde_json::Value {
         match name {
             "vos_get_dashboard_stats" => self.tool_get_dashboard_stats().await,
             "vos_get_daily_report" => self.tool_get_daily_report(args).await,
@@ -120,7 +124,7 @@ impl<'a> TelecomCopilotEngine<'a> {
                 "🔴 异常"
             };
             report.push_str(&format!(
-                "| **呼叫接通率 (ASR)** | {:.2}% | {} | 平台整体接通比例 |\n",
+                "| **呼叫接通率** | {:.2}% | {} | 平台整体接通比例 |\n",
                 stats.answer_rate * 100.0,
                 asr_status
             ));
@@ -139,7 +143,7 @@ impl<'a> TelecomCopilotEngine<'a> {
                 "🔴 差"
             };
             report.push_str(&format!(
-                "| **平均通话质量 (MOS)** | {:.2} / 5 | {} | RTP 语音传输主观质量评分 |\n",
+                "| **平均通话质量** | {:.2} / 5 | {} | 媒体传输主观质量评分 |\n",
                 mos_val, mos_status
             ));
 
@@ -290,7 +294,7 @@ impl<'a> TelecomCopilotEngine<'a> {
             _ => ("已在上方生成该场景的结构化真实业务数据。".to_string(), "请根据上述数据和呼叫情况，结合具体业务逻辑和运营商中继链路进行判断。".to_string()),
         };
 
-        report.push_str("## 🔍 根因分析 (Root Cause)\n");
+        report.push_str("## 根因分析\n");
         report.push_str(&format!("{}\n\n", root_cause));
         report.push_str("## 💡 建议动作 (Suggested Action)\n");
         report.push_str(&format!("{}\n\n", suggested_action));

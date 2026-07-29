@@ -1,17 +1,48 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Button, Card, CardBody, Input, Select, SelectItem, Switch,
-  Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Tabs, Tab,
+  Button,
+  Card,
+  CardBody,
+  Input,
+  Select,
+  SelectItem,
+  Switch,
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
+  TableCell,
+  Tabs,
+  Tab,
 } from '@heroui/react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Users } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import type { Entity } from '@/services/resources';
 import { listOptions } from '@/services/trunks';
-import { callerPoolValidationError, getCallerPool, getCallerPoolMembers, numberCanJoinCallerPool, saveCallerPoolMembers, updateCallerPool, type CallerPool, type CallerPoolMember } from '@/services/caller-pools';
+import {
+  callerPoolValidationError,
+  getCallerPool,
+  getCallerPoolMembers,
+  numberCanJoinCallerPool,
+  saveCallerPoolMembers,
+  updateCallerPool,
+  type CallerPool,
+  type CallerPoolMember,
+} from '@/services/caller-pools';
 import { trunkRole } from '@/services/trunks';
 import { WorkspaceField } from '@/pages/trunks/trunk-detail';
-import { DetailErrorState, DetailHeader, DetailLoading, FormGrid, SectionBlock } from '@/components/detail-shell';
+import {
+  DetailErrorState,
+  DetailHeader,
+  DetailLoading,
+  EmptyState,
+  FormGrid,
+  SectionBlock,
+} from '@/components/detail-shell';
 import { message } from '@/utils/toast';
+import { useAuth } from '@/auth/AuthContext';
+import { hasPermission } from '@/services/auth';
 
 const strategyOptions = [
   { label: '均匀随机', value: 'random' },
@@ -25,7 +56,8 @@ const sourceTypeOptions = [
   { label: '分机号码', value: 'extension' },
 ];
 
-const genId = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2));
+const genId = () =>
+  crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
 
 interface TabDef {
   key: string;
@@ -34,6 +66,8 @@ interface TabDef {
 }
 
 export default function CallerPoolDetailPage() {
+  const { session } = useAuth();
+  const canManage = Boolean(session && hasPermission(session, 'termination.manage'));
   const { id = '' } = useParams();
   const [pool, setPool] = useState<CallerPool | null>(null);
   const [members, setMembers] = useState<CallerPoolMember[]>([]);
@@ -67,18 +101,20 @@ export default function CallerPoolDetailPage() {
     }
   }, [id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const save = async () => {
     if (!pool) return;
     const validationError = callerPoolValidationError(pool, members);
-    if (validationError) { message.error(validationError); return; }
+    if (validationError) {
+      message.error(validationError);
+      return;
+    }
     try {
       setSaving(true);
-      await Promise.all([
-        updateCallerPool(id, pool),
-        saveCallerPoolMembers(id, members),
-      ]);
+      await Promise.all([updateCallerPool(id, pool), saveCallerPoolMembers(id, members)]);
       message.success('号码池配置已保存');
       await load();
     } catch (reason) {
@@ -90,7 +126,7 @@ export default function CallerPoolDetailPage() {
 
   const patchMember = (index: number, values: Partial<CallerPoolMember>) => {
     setMembers((current) =>
-      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...values } : item))
+      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...values } : item)),
     );
   };
 
@@ -98,14 +134,24 @@ export default function CallerPoolDetailPage() {
     if (!pool) return [];
     const selected = new Set(members.map((member) => member.number));
     return numbers
-      .filter((number) => numberCanJoinCallerPool(number, pool) || selected.has(String(number.number)))
+      .filter(
+        (number) => numberCanJoinCallerPool(number, pool) || selected.has(String(number.number)),
+      )
       .map((number) => ({ label: String(number.number), value: String(number.number) }));
   }, [members, numbers, pool]);
 
   const sourceOptions = useMemo(() => {
     if (!pool) return [];
-    if (pool.owner_source_type === 'trunk') return accessTrunks.map((trunk) => ({ label: String(trunk.name ?? trunk.id), value: String(trunk.id) }));
-    if (pool.owner_source_type === 'extension') return extensions.map((extension) => ({ label: String(extension.display_name ?? extension.username), value: String(extension.username) }));
+    if (pool.owner_source_type === 'trunk')
+      return accessTrunks.map((trunk) => ({
+        label: String(trunk.name ?? trunk.id),
+        value: String(trunk.id),
+      }));
+    if (pool.owner_source_type === 'extension')
+      return extensions.map((extension) => ({
+        label: String(extension.display_name ?? extension.username),
+        value: String(extension.username),
+      }));
     return [];
   }, [accessTrunks, extensions, pool]);
 
@@ -124,14 +170,26 @@ export default function CallerPoolDetailPage() {
               <Input
                 variant="bordered"
                 value={pool.virtual_alias}
-                onValueChange={(v) => setPool((curr) => curr ? { ...curr, virtual_alias: v } : null)}
+                onValueChange={(v) =>
+                  setPool((curr) => (curr ? { ...curr, virtual_alias: v } : null))
+                }
               />
             </WorkspaceField>
             <WorkspaceField label="来源类型" required>
               <Select
                 variant="bordered"
                 selectedKeys={[pool.owner_source_type]}
-                onChange={(e) => setPool((curr) => curr ? { ...curr, owner_source_type: e.target.value as CallerPool['owner_source_type'], owner_source_id: '' } : null)}
+                onChange={(e) =>
+                  setPool((curr) =>
+                    curr
+                      ? {
+                          ...curr,
+                          owner_source_type: e.target.value as CallerPool['owner_source_type'],
+                          owner_source_id: '',
+                        }
+                      : null,
+                  )
+                }
               >
                 {sourceTypeOptions.map((opt) => (
                   <SelectItem key={opt.value}>{opt.label}</SelectItem>
@@ -142,7 +200,9 @@ export default function CallerPoolDetailPage() {
               <Select
                 variant="bordered"
                 selectedKeys={pool.owner_source_id ? [String(pool.owner_source_id)] : []}
-                onChange={(e) => setPool((curr) => curr ? { ...curr, owner_source_id: e.target.value } : null)}
+                onChange={(e) =>
+                  setPool((curr) => (curr ? { ...curr, owner_source_id: e.target.value } : null))
+                }
                 placeholder="请选择已存在的来源"
               >
                 {sourceOptions.map((opt) => (
@@ -154,7 +214,11 @@ export default function CallerPoolDetailPage() {
               <Select
                 variant="bordered"
                 selectedKeys={[pool.strategy]}
-                onChange={(e) => setPool((curr) => curr ? { ...curr, strategy: e.target.value as CallerPool['strategy'] } : null)}
+                onChange={(e) =>
+                  setPool((curr) =>
+                    curr ? { ...curr, strategy: e.target.value as CallerPool['strategy'] } : null,
+                  )
+                }
               >
                 {strategyOptions.map((opt) => (
                   <SelectItem key={opt.value}>{opt.label}</SelectItem>
@@ -169,7 +233,9 @@ export default function CallerPoolDetailPage() {
             <WorkspaceField label="启用状态">
               <Switch
                 isSelected={pool.enabled !== false}
-                onChange={(e) => setPool((curr) => curr ? { ...curr, enabled: e.target.checked } : null)}
+                onChange={(e) =>
+                  setPool((curr) => (curr ? { ...curr, enabled: e.target.checked } : null))
+                }
               />
             </WorkspaceField>
           </FormGrid>
@@ -183,27 +249,29 @@ export default function CallerPoolDetailPage() {
             title="真实号码成员"
             description="仅展示已授权给当前来源且允许显号的真实号码；历史成员仍会保留回显以便修正。"
             actions={
-              <Button
-                size="sm"
-                variant="flat"
-                onPress={() =>
-                  setMembers((current) => [
-                    ...current,
-                    {
-                      _key: genId(),
-                      pool_id: id,
-                      number: '',
-                      priority: 100,
-                      weight: 100,
-                      max_concurrent: 0,
-                      enabled: true,
-                    },
-                  ])
-                }
-                startContent={<Plus className="w-4 h-4" />}
-              >
-                添加号码
-              </Button>
+              canManage && (
+                <Button
+                  size="sm"
+                  variant="flat"
+                  onPress={() =>
+                    setMembers((current) => [
+                      ...current,
+                      {
+                        _key: genId(),
+                        pool_id: id,
+                        number: '',
+                        priority: 100,
+                        weight: 100,
+                        max_concurrent: 0,
+                        enabled: true,
+                      },
+                    ])
+                  }
+                  startContent={<Plus className="w-4 h-4" />}
+                >
+                  添加号码
+                </Button>
+              )
             }
           >
             <Table aria-label="号码池成员列表" isStriped>
@@ -213,9 +281,20 @@ export default function CallerPoolDetailPage() {
                 <TableColumn key="weight">权重</TableColumn>
                 <TableColumn key="max_concurrent">最大并发</TableColumn>
                 <TableColumn key="enabled">启用</TableColumn>
-                <TableColumn key="actions" align="end">操作</TableColumn>
+                <TableColumn key="actions" align="end">
+                  操作
+                </TableColumn>
               </TableHeader>
-              <TableBody items={members} emptyContent="尚未配置号码池成员">
+              <TableBody
+                items={members}
+                emptyContent={
+                  <EmptyState
+                    icon={Users}
+                    title="暂无号码池成员"
+                    description="添加号码后将在此展示"
+                  />
+                }
+              >
                 {(row) => {
                   const idx = members.findIndex((m) => (m._key || m.id) === (row._key || row.id));
                   const rowKey = row._key || row.id || idx;
@@ -258,7 +337,9 @@ export default function CallerPoolDetailPage() {
                           variant="underlined"
                           type="number"
                           value={String(row.max_concurrent ?? 0)}
-                          onValueChange={(v) => patchMember(idx, { max_concurrent: Number(v) || 0 })}
+                          onValueChange={(v) =>
+                            patchMember(idx, { max_concurrent: Number(v) || 0 })
+                          }
                           placeholder="0 表示不限制"
                           min={0}
                         />
@@ -271,15 +352,21 @@ export default function CallerPoolDetailPage() {
                         />
                       </TableCell>
                       <TableCell>
-                        <Button
-                          isIconOnly
-                          size="sm"
-                          color="danger"
-                          variant="light"
-                          onPress={() => setMembers((current) => current.filter((_, itemIndex) => itemIndex !== idx))}
-                        >
-                          <Trash2 className="w-4 h-4 text-danger" />
-                        </Button>
+                        {canManage && (
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            color="danger"
+                            variant="light"
+                            onPress={() =>
+                              setMembers((current) =>
+                                current.filter((_, itemIndex) => itemIndex !== idx),
+                              )
+                            }
+                          >
+                            <Trash2 className="w-4 h-4 text-danger" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   );
@@ -290,12 +377,18 @@ export default function CallerPoolDetailPage() {
         ),
       },
     ];
-  }, [members, numberOptions, pool, sourceOptions, id]);
+  }, [canManage, members, numberOptions, pool, sourceOptions, id]);
 
   if (loading) {
     return (
       <section>
-        <DetailHeader loading={true} saving={saving} onRefresh={load} onSave={save} />
+        <DetailHeader
+          loading={true}
+          saving={saving}
+          onRefresh={load}
+          onSave={save}
+          canSave={canManage}
+        />
         <DetailLoading />
       </section>
     );
@@ -303,7 +396,13 @@ export default function CallerPoolDetailPage() {
 
   return (
     <section>
-      <DetailHeader loading={loading} saving={saving} onRefresh={load} onSave={save} />
+      <DetailHeader
+        loading={loading}
+        saving={saving}
+        onRefresh={load}
+        onSave={save}
+        canSave={canManage}
+      />
       {error ? (
         <DetailErrorState error={error} />
       ) : pool ? (

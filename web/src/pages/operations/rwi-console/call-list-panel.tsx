@@ -29,14 +29,14 @@ export function CallListPanel({
 }: CallListPanelProps) {
   return (
     <div className="lg:col-span-4 flex flex-col gap-3 min-h-0">
-      <Card shadow="sm" className="bg-content1/80 border border-default-200/60 backdrop-blur-md flex-1 flex flex-col min-h-0">
+      <Card shadow="none" className="overview-card flex-1 flex flex-col min-h-0">
         <CardBody className="p-4 flex flex-col gap-3 min-h-0">
           {/* 搜索与状态筛选 */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Radio className="w-4 h-4 text-primary" />
-                <h3 className="text-sm font-bold text-foreground">实时会话列表</h3>
+                <h3 className="text-sm font-semibold text-foreground">实时会话</h3>
               </div>
               <Chip size="sm" variant="flat" color="primary">
                 {filteredCalls.length} 个通话
@@ -46,7 +46,7 @@ export function CallListPanel({
             <div className="flex gap-2">
               <Input
                 size="sm"
-                placeholder="搜索 CallID / 主叫 / 被叫..."
+                placeholder="搜索通话标识、主叫或被叫"
                 value={searchQuery}
                 onValueChange={onSearchChange}
                 startContent={<Search className="w-3.5 h-3.5 text-default-400" />}
@@ -88,7 +88,7 @@ export function CallListPanel({
                     onClick={() => onSelectCall(c.callId)}
                     className={`cursor-pointer p-3.5 rounded-xl border transition-all duration-200 relative overflow-hidden ${
                       isSelected
-                        ? 'bg-primary/10 border-primary shadow-lg shadow-primary/10'
+                        ? 'bg-default-100 border-primary'
                         : 'bg-content2/60 border-default-200/60 hover:border-default-300'
                     }`}
                   >
@@ -97,27 +97,31 @@ export function CallListPanel({
                     )}
 
                     <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="font-mono text-xs font-bold text-foreground truncate">{c.callId}</span>
+                      <span className="font-mono text-xs font-bold text-foreground truncate">
+                        {c.callId}
+                      </span>
                       {renderStateChip(c.state)}
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-xs mb-2">
                       <div>
                         <span className="text-default-400">主叫: </span>
-                        <span className="font-mono font-medium text-foreground">{c.caller || '-'}</span>
+                        <span className="font-mono font-medium text-foreground">
+                          {c.caller || '-'}
+                        </span>
                       </div>
                       <div>
                         <span className="text-default-400">被叫: </span>
-                        <span className="font-mono font-medium text-foreground">{c.callee || '-'}</span>
+                        <span className="font-mono font-medium text-foreground">
+                          {c.callee || '-'}
+                        </span>
                       </div>
                     </div>
 
                     {/* 网关与时长行 */}
                     <div className="flex items-center justify-between pt-2 border-t border-default-200/40 text-tiny text-default-500">
                       <div className="flex items-center gap-1 truncate max-w-[170px]">
-                        <span className="truncate">
-                          网关: {c.gateway || '-'}
-                        </span>
+                        <span className="truncate">网关: {c.gateway || '-'}</span>
                       </div>
 
                       <div className="flex items-center gap-1 font-mono text-default-400">

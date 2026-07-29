@@ -17,6 +17,7 @@ use crate::AppState;
 
 pub(crate) mod history;
 mod ladder;
+pub(crate) mod safety;
 mod schema;
 pub(crate) mod stream;
 mod tools;

@@ -1,10 +1,14 @@
+pub mod access_control;
+pub mod announcement;
 pub mod anti_fraud;
 pub mod audit;
 pub mod billing;
 pub mod cdr;
 pub mod copilot;
+pub mod copilot_action;
 pub mod gateway;
 pub mod llm_config;
+pub mod notification;
 pub mod number;
 pub mod registration;
 pub mod route;

@@ -156,11 +156,6 @@ api_server:
   security:
     jwt_secret: "compose-jwt-secret-change-me"
     internal_secret: "compose-internal-secret"
-  admin_credentials:
-    admin_password: "admin-change-me"
-    operator_password: "operator-change-me"
-    financier_password: "financier-change-me"
-
 cdr_worker:
   queue:
     nats_cdr_consumer: "vos_rs_cdr_worker"

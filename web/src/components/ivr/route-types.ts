@@ -1,16 +1,16 @@
 // 路由策略可视化拓扑编排 - 节点类型与画布配置
 
 export type RouteNodeType =
-  | 'inbound'         // 呼入源
-  | 'prefix_match'    // 前缀匹配
-  | 'time_filter'     // 时间段过滤 (时间路由)
-  | 'caller_filter'   // 主叫过滤
-  | 'lcr'             // 最低成本路由
-  | 'gateway_trunk'   // 落地网关
-  | 'ivr_branch'      // IVR 分支
-  | 'queue_branch'    // 坐席队列分支
-  | 'fork'            // 并行分支
-  | 'reject';         // 拒绝
+  | 'inbound' // 呼入源
+  | 'prefix_match' // 前缀匹配
+  | 'time_filter' // 时间段过滤 (时间路由)
+  | 'caller_filter' // 主叫过滤
+  | 'lcr' // 最低成本路由
+  | 'gateway_trunk' // 落地网关
+  | 'ivr_branch' // IVR 分支
+  | 'queue_branch' // 坐席队列分支
+  | 'fork' // 并行分支
+  | 'reject'; // 拒绝
 
 export interface RouteNode {
   id: string;
@@ -90,7 +90,7 @@ export const ROUTE_NODE_CATALOG: RouteNodeCatalogEntry[] = [
     defaultConfig: {
       time_start: '09:00',
       time_end: '18:00',
-      weekdays: [1, 2, 3, 4, 5],  // 周一到周五
+      weekdays: [1, 2, 3, 4, 5], // 周一到周五
       timezone: 'Asia/Shanghai',
     },
     defaultPorts: [
@@ -193,10 +193,13 @@ export const ROUTE_NODE_CATALOG: RouteNodeCatalogEntry[] = [
 ];
 
 export const ROUTE_NODE_CATALOG_MAP: Record<RouteNodeType, RouteNodeCatalogEntry> =
-  ROUTE_NODE_CATALOG.reduce((acc, entry) => {
-    acc[entry.type] = entry;
-    return acc;
-  }, {} as Record<RouteNodeType, RouteNodeCatalogEntry>);
+  ROUTE_NODE_CATALOG.reduce(
+    (acc, entry) => {
+      acc[entry.type] = entry;
+      return acc;
+    },
+    {} as Record<RouteNodeType, RouteNodeCatalogEntry>,
+  );
 
 export const genRouteNodeId = (type: RouteNodeType): string =>
   `${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;

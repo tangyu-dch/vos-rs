@@ -8,9 +8,7 @@
 //! - 折叠/展开侧栏
 
 import { Button, Chip, ScrollShadow, Spinner } from '@heroui/react';
-import {
-  Bot, MessageSquare, PanelLeftClose, PanelLeftOpen, Pin, Plus, Trash2,
-} from 'lucide-react';
+import { Bot, MessageSquare, PanelLeftClose, PanelLeftOpen, Pin, Plus, Trash2 } from 'lucide-react';
 import { CopilotSession, timeAgo } from './copilot-shared';
 
 export interface SessionSidebarProps {
@@ -28,8 +26,16 @@ export interface SessionSidebarProps {
 }
 
 export function SessionSidebar({
-  sessions, currentId, loading, collapsed, mobileOpen,
-  onSelect, onCreate, onDelete, onTogglePin, onToggleCollapse,
+  sessions,
+  currentId,
+  loading,
+  collapsed,
+  mobileOpen,
+  onSelect,
+  onCreate,
+  onDelete,
+  onTogglePin,
+  onToggleCollapse,
 }: SessionSidebarProps) {
   // 小屏默认隐藏（hidden lg:flex）；mobileOpen 时以 absolute 浮层形式覆盖主区域，lg+ 回到 static。
   const responsiveVisibility = mobileOpen
@@ -38,7 +44,9 @@ export function SessionSidebar({
 
   if (collapsed) {
     return (
-      <aside className={`w-12 shrink-0 border-r border-default-200 bg-content1 ${responsiveVisibility} flex-col items-center py-3 gap-3`}>
+      <aside
+        className={`w-12 shrink-0 border-r border-default-200 bg-content1 ${responsiveVisibility} flex-col items-center py-3 gap-3`}
+      >
         <Button
           isIconOnly
           size="sm"
@@ -63,7 +71,9 @@ export function SessionSidebar({
   }
 
   return (
-    <aside className={`w-64 shrink-0 border-r border-default-200 bg-content1 ${responsiveVisibility} flex-col`}>
+    <aside
+      className={`w-64 shrink-0 border-r border-default-200 bg-content1 ${responsiveVisibility} flex-col`}
+    >
       {/* 顶部：标题 + 折叠按钮 */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-default-200">
         <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -107,87 +117,88 @@ export function SessionSidebar({
             暂无历史会话，点击"新建对话"开始
           </div>
         )}
-        {!loading && sessions.map((s) => {
-          const active = s.id === currentId;
-          return (
-            <div
-              key={s.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(s.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onSelect(s.id);
-                }
-              }}
-              className={`group relative px-2.5 py-2 mb-1 rounded-lg cursor-pointer transition-colors ${
-                active
-                  ? 'bg-primary/15 border-l-2 border-primary pl-2 shadow-sm'
-                  : 'hover:bg-default-100 border-l-2 border-transparent'
-              }`}
-            >
-              {/* 标题行 */}
-              <div className="flex items-start justify-between gap-1.5">
-                <div className="flex-1 min-w-0">
-                  <div className={`text-xs truncate font-medium ${active ? 'text-primary' : 'text-foreground'}`}>
-                    {s.title || '新对话'}
+        {!loading &&
+          sessions.map((s) => {
+            const active = s.id === currentId;
+            return (
+              <div
+                key={s.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelect(s.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelect(s.id);
+                  }
+                }}
+                className={`group relative px-2.5 py-2 mb-1 rounded-lg cursor-pointer transition-colors ${
+                  active
+                    ? 'bg-default-100 border-l-2 border-primary pl-2'
+                    : 'hover:bg-default-100 border-l-2 border-transparent'
+                }`}
+              >
+                {/* 标题行 */}
+                <div className="flex items-start justify-between gap-1.5">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs truncate font-medium text-foreground">
+                      {s.title || '新对话'}
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-1 text-[10px] text-default-400">
+                      <MessageSquare className="w-2.5 h-2.5" />
+                      <span>{s.message_count} 条</span>
+                      {s.last_message_at && (
+                        <>
+                          <span>·</span>
+                          <span>{timeAgo(s.last_message_at)}</span>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5 mt-1 text-[10px] text-default-400">
-                    <MessageSquare className="w-2.5 h-2.5" />
-                    <span>{s.message_count} 条</span>
-                    {s.last_message_at && (
-                      <>
-                        <span>·</span>
-                        <span>{timeAgo(s.last_message_at)}</span>
-                      </>
+                  {/* 置顶 + 删除按钮（hover 显示） */}
+                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTogglePin(s.id, !s.pinned);
+                      }}
+                      className={`p-1 rounded hover:bg-default-200 transition-colors ${
+                        s.pinned ? 'text-primary' : 'text-default-400'
+                      }`}
+                      aria-label={s.pinned ? '取消置顶' : '置顶'}
+                    >
+                      <Pin className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(s.id);
+                      }}
+                      className="p-1 rounded hover:bg-danger/10 text-default-400 hover:text-danger transition-colors"
+                      aria-label="删除会话"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+                {/* 置顶/归档标记 */}
+                {(s.pinned || s.archived) && (
+                  <div className="flex items-center gap-1 mt-1">
+                    {s.pinned && (
+                      <Chip size="sm" color="primary" variant="flat" className="text-[9px] h-4">
+                        置顶
+                      </Chip>
+                    )}
+                    {s.archived && (
+                      <Chip size="sm" variant="flat" className="text-[9px] h-4 text-default-400">
+                        归档
+                      </Chip>
                     )}
                   </div>
-                </div>
-                {/* 置顶 + 删除按钮（hover 显示） */}
-                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTogglePin(s.id, !s.pinned);
-                    }}
-                    className={`p-1 rounded hover:bg-default-200 transition-colors ${
-                      s.pinned ? 'text-primary' : 'text-default-400'
-                    }`}
-                    aria-label={s.pinned ? '取消置顶' : '置顶'}
-                  >
-                    <Pin className="w-3 h-3" />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDelete(s.id);
-                    }}
-                    className="p-1 rounded hover:bg-danger/10 text-default-400 hover:text-danger transition-colors"
-                    aria-label="删除会话"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
+                )}
               </div>
-              {/* 置顶/归档标记 */}
-              {(s.pinned || s.archived) && (
-                <div className="flex items-center gap-1 mt-1">
-                  {s.pinned && (
-                    <Chip size="sm" color="primary" variant="flat" className="text-[9px] h-4">
-                      置顶
-                    </Chip>
-                  )}
-                  {s.archived && (
-                    <Chip size="sm" variant="flat" className="text-[9px] h-4 text-default-400">
-                      归档
-                    </Chip>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
       </ScrollShadow>
     </aside>
   );

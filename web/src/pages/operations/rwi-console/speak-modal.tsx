@@ -1,4 +1,13 @@
-import { Button, Chip, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader } from '@heroui/react';
+import {
+  Button,
+  Chip,
+  Input,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+} from '@heroui/react';
 import { Mic, Send } from 'lucide-react';
 
 interface SpeakModalProps {
@@ -15,7 +24,13 @@ const QUICK_REPLIES = [
   '十分抱歉给您带来不便，我们将优先处理。',
 ];
 
-export function SpeakModal({ isOpen, onClose, speakText, onTextChange, onSubmit }: SpeakModalProps) {
+export function SpeakModal({
+  isOpen,
+  onClose,
+  speakText,
+  onTextChange,
+  onSubmit,
+}: SpeakModalProps) {
   return (
     <Modal isOpen={isOpen} onClose={onClose}>
       <ModalContent>

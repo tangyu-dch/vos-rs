@@ -1,5 +1,6 @@
 use crate::error::ApiError;
-use crate::system::auth::{role_allows, Claims};
+use crate::system::auth::Claims;
+use crate::system::permissions::{required_permission, AUTHENTICATED_ONLY_PERMISSION};
 use crate::AppState;
 use axum::{extract::State, http::HeaderValue};
 use jsonwebtoken::{decode, DecodingKey, Validation};
@@ -24,13 +25,42 @@ pub(crate) async fn jwt_auth(
         &validation,
     ) {
         Ok(token_data) => {
+            let snapshot = state.access_snapshot.read().await;
+            if !snapshot.is_current_identity(
+                &token_data.claims.sub,
+                &token_data.claims.role,
+                token_data.claims.auth_version,
+            ) {
+                return Err(ApiError::unauthorized(
+                    "当前会话权限已变更，请重新登录".to_string(),
+                ));
+            }
+
             let path = req.uri().path();
-            let role = &token_data.claims.role;
-            if !role_allows(role, req.method().as_str(), path) {
+            let permission_target = if req
+                .uri()
+                .query()
+                .is_some_and(|query| query.split('&').any(|item| item == "export=true"))
+            {
+                format!("{path}?export=true")
+            } else {
+                path.to_string()
+            };
+            let permission = required_permission(req.method().as_str(), &permission_target)
+                .ok_or_else(|| ApiError::forbidden(format!("接口尚未配置权限: {path}")))?;
+            let allowed = permission == AUTHENTICATED_ONLY_PERMISSION
+                || snapshot.allows(
+                    &token_data.claims.sub,
+                    &token_data.claims.role,
+                    token_data.claims.auth_version,
+                    permission,
+                );
+            if !allowed {
                 return Err(ApiError::forbidden(format!(
-                    "越权访问：角色 {role} 无权访问 {path}"
+                    "越权访问：缺少权限 {permission}"
                 )));
             }
+            drop(snapshot);
 
             req.extensions_mut().insert(token_data.claims);
             Ok(next.run(req).await)

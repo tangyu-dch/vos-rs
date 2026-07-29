@@ -289,6 +289,12 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(CREATE_COPILOT_MESSAGES_SESSION_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
+    sqlx::query(CREATE_COPILOT_ACTIONS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_COPILOT_ACTIONS_SESSION_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(MIGRATE_COPILOT_MESSAGES_IMAGES_SQL)
         .execute(&mut *tx)
         .await?;
@@ -301,6 +307,72 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(SEED_DEFAULT_LLM_CONFIG_SQL)
         .execute(&mut *tx)
         .await?;
+    sqlx::query(CREATE_NOTIFICATIONS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_NOTIFICATIONS_ACTIVE_DEDUP_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_NOTIFICATIONS_CREATED_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_NOTIFICATION_READS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_NOTIFICATION_READS_OPERATOR_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_ANNOUNCEMENTS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_ANNOUNCEMENTS_STATUS_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_ANNOUNCEMENTS_CATEGORY_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_ANNOUNCEMENT_READS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_ANNOUNCEMENT_READS_OPERATOR_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_ACCESS_ROLES_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_ACCESS_PERMISSIONS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_ACCESS_ROLE_PERMISSIONS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_CONSOLE_USERS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_CONSOLE_USERS_ROLE_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_MENU_GROUPS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_MENU_ITEMS_TABLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(SEED_ACCESS_ROLES_SQL).execute(&mut *tx).await?;
+    sqlx::query(NORMALIZE_SYSTEM_ROLE_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(SEED_ACCESS_PERMISSIONS_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(SEED_ACCESS_ROLE_PERMISSIONS_SQL)
+        .execute(&mut *tx)
+        .await?;
+    for migration_sql in MIGRATE_LEGACY_ACCESS_ROLE_PERMISSIONS_SQL {
+        sqlx::query(migration_sql).execute(&mut *tx).await?;
+    }
+    sqlx::query(SEED_MENU_GROUPS_SQL).execute(&mut *tx).await?;
+    sqlx::query(SEED_MENU_ITEMS_SQL).execute(&mut *tx).await?;
 
     for migration_sql in termination_schema::MIGRATE_TERMINATION_DOMAIN_SQL {
         sqlx::query(migration_sql).execute(&mut *tx).await?;

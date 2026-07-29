@@ -3,38 +3,125 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Card, CardBody, Input, Select, SelectItem, Pagination,
-  Chip, Switch, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
-  Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Textarea,
+  Button,
+  Card,
+  CardBody,
+  Input,
+  Select,
+  SelectItem,
+  Pagination,
+  Chip,
+  Switch,
+  Modal,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
+  TableCell,
+  Textarea,
   Tooltip,
 } from '@heroui/react';
 import {
-  Plus, RefreshCw, Search, Eye, EyeOff, Pencil, Trash2, Download, Upload, FileText,
-  CheckCircle2, Network, GitBranch, Wallet, PhoneCall, Settings, Cog,
+  Plus,
+  RefreshCw,
+  Search,
+  Eye,
+  EyeOff,
+  Pencil,
+  Trash2,
+  Download,
+  Upload,
+  FileText,
+  CheckCircle2,
+  Network,
+  GitBranch,
+  Wallet,
+  PhoneCall,
+  Settings,
+  Cog,
 } from 'lucide-react';
 import { api } from '@/services/client';
 import {
-  createResource, deleteResource, listResource, updateResource, type Entity,
+  createResource,
+  deleteResource,
+  listResource,
+  updateResource,
+  type Entity,
 } from '@/services/resources';
 import { listOptions, trunkRole } from '@/services/trunks';
-import { ErrorState } from '@/components/detail-shell';
+import { EmptyState, ErrorState } from '@/components/detail-shell';
 import { message } from '@/utils/toast';
 import { ExtensionDetailView } from '@/pages/numbers/extension-detail';
 import { TrunkDetailView } from '@/pages/trunks/trunk-detail';
 import { CallDetailView } from '@/pages/billing/call-detail';
 import {
-  callDetailText, datetimeText, entityId, valueText, moneyText, durationSecondsText,
+  callDetailText,
+  datetimeText,
+  entityId,
+  valueText,
+  moneyText,
+  durationSecondsText,
 } from '@/pages/shared/format';
 import type { FieldSpec, ResourceSpec, SelectOptionSpec } from '@/pages/shared/types';
+import { useAuth } from '@/auth/AuthContext';
+import { hasPermission } from '@/services/auth';
 
 // customRowAction.icon 字符串 → Lucide 图标组件映射
 const ROW_ACTION_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  Network, GitBranch, Wallet, PhoneCall, Settings, Cog,
+  Network,
+  GitBranch,
+  Wallet,
+  PhoneCall,
+  Settings,
+  Cog,
 };
 
 const moneyFields = new Set([
-  'balance', 'credit_limit', 'price_per_interval', 'amount', 'balance_after', 'cost',
+  'balance',
+  'credit_limit',
+  'price_per_interval',
+  'amount',
+  'balance_after',
+  'cost',
 ]);
+
+function resourcePermission(spec: ResourceSpec, action: string): string {
+  if (spec.path === '/billing/accounts') {
+    if (action === 'credit') return 'billing.accounts.credit';
+    return action === 'export' ? 'billing.accounts.export' : 'billing.accounts.view';
+  }
+  if (spec.path === '/billing/transactions')
+    return action === 'export' ? 'billing.ledger.export' : 'billing.ledger.view';
+  if (spec.path === '/billing/rates') return `billing.rates.${action}`;
+  if (spec.path.startsWith('/routing')) return `routing.${action}`;
+  if (spec.path === '/extensions') return `extensions.${action}`;
+  if (spec.path === '/numbers') return `numbers.${action}`;
+  if (spec.path === '/trunks') return `trunks.${action}`;
+  if (spec.path.startsWith('/ivr')) return action === 'view' ? 'ivr.view' : `ivr.${action}`;
+  if (spec.path === '/tenants') return `tenants.${action}`;
+  if (
+    spec.path.includes('caller-pools') ||
+    spec.path.includes('egress-groups') ||
+    spec.path.includes('did-destinations')
+  ) {
+    if (action === 'view') return 'termination.view';
+    return ['create', 'update', 'delete'].includes(action)
+      ? 'termination.manage'
+      : `termination.${action}`;
+  }
+  if (spec.path.startsWith('/security')) {
+    if (action === 'view') return 'security.view';
+    return ['create', 'update', 'delete'].includes(action)
+      ? 'security.manage'
+      : `security.${action}`;
+  }
+  return `${spec.path.replace(/^\//, '').replaceAll('/', '.')}.${action}`;
+}
 
 export function usePageVisibility() {
   const [isVisible, setIsVisible] = useState(!document.hidden);
@@ -47,7 +134,12 @@ export function usePageVisibility() {
 }
 
 export function ConfirmDialog({
-  open, title, message, loading, onConfirm, onClose,
+  open,
+  title,
+  message,
+  loading,
+  onConfirm,
+  onClose,
 }: {
   open: boolean;
   title: string;
@@ -64,8 +156,12 @@ export function ConfirmDialog({
           <p className="text-small text-default-500">{message}</p>
         </ModalBody>
         <ModalFooter>
-          <Button variant="flat" onPress={onClose}>取消</Button>
-          <Button color="danger" isLoading={loading} onPress={onConfirm}>确认</Button>
+          <Button variant="flat" onPress={onClose}>
+            取消
+          </Button>
+          <Button color="danger" isLoading={loading} onPress={onConfirm}>
+            确认
+          </Button>
         </ModalFooter>
       </ModalContent>
     </Modal>
@@ -73,7 +169,10 @@ export function ConfirmDialog({
 }
 
 export function FormControl({
-  field, disabled = false, value, onChange,
+  field,
+  disabled = false,
+  value,
+  onChange,
 }: {
   field: FieldSpec;
   disabled?: boolean;
@@ -95,11 +194,17 @@ export function FormControl({
   }
   if (field.kind === 'switch') {
     return (
-      <Switch isDisabled={disabled} isSelected={Boolean(value)} onValueChange={(v) => onChange(v)} />
+      <Switch
+        isDisabled={disabled}
+        isSelected={Boolean(value)}
+        onValueChange={(v) => onChange(v)}
+      />
     );
   }
   if (field.kind === 'select') {
-    const options = (field.options || []).map((option) => typeof option === 'string' ? { label: option, value: option } : option);
+    const options = (field.options || []).map((option) =>
+      typeof option === 'string' ? { label: option, value: option } : option,
+    );
     const selected = value !== undefined && value !== null ? [String(value)] : [];
     return (
       <Select
@@ -179,7 +284,12 @@ export function resourceFormValues(spec: ResourceSpec, row: Entity | null): Enti
   return spec.fields.reduce<Entity>((defaults, field) => {
     if (field.defaultValue !== undefined) defaults[field.key] = field.defaultValue;
     else if (field.kind === 'switch') defaults[field.key] = false;
-    if (defaults[field.key] === undefined && field.required && field.kind === 'select' && field.options?.[0]) {
+    if (
+      defaults[field.key] === undefined &&
+      field.required &&
+      field.kind === 'select' &&
+      field.options?.[0]
+    ) {
       const option = field.options[0];
       defaults[field.key] = typeof option === 'string' ? option : option.value;
     }
@@ -190,7 +300,13 @@ export function resourceFormValues(spec: ResourceSpec, row: Entity | null): Enti
 export function resourceSaveValues(spec: ResourceSpec, values: Entity, editing: boolean): Entity {
   const result = { ...values };
   if (spec.path === '/numbers') {
-    result.direction = result.can_receive ? (result.can_present ? 'both' : 'inbound') : (result.can_present ? 'outbound' : 'disabled');
+    result.direction = result.can_receive
+      ? result.can_present
+        ? 'both'
+        : 'inbound'
+      : result.can_present
+        ? 'outbound'
+        : 'disabled';
   }
   if ('account_id' in result) {
     if (result.account_id === '' || result.account_id === undefined || result.account_id === null) {
@@ -200,9 +316,16 @@ export function resourceSaveValues(spec: ResourceSpec, values: Entity, editing: 
     }
   }
   if ('billing_account_id' in result) {
-    if (result.billing_account_id === '' || result.billing_account_id === undefined || result.billing_account_id === null) {
+    if (
+      result.billing_account_id === '' ||
+      result.billing_account_id === undefined ||
+      result.billing_account_id === null
+    ) {
       delete result.billing_account_id;
-    } else if (typeof result.billing_account_id === 'string' && !isNaN(Number(result.billing_account_id))) {
+    } else if (
+      typeof result.billing_account_id === 'string' &&
+      !isNaN(Number(result.billing_account_id))
+    ) {
       result.billing_account_id = Number(result.billing_account_id);
     }
   }
@@ -216,9 +339,11 @@ export function resourceSaveValues(spec: ResourceSpec, values: Entity, editing: 
   delete result.billing_account_summary;
   delete result.associated_tenants_summary;
   if (!editing) return result;
-  spec.fields.filter((field) => field.kind === 'secret' && field.preserveEmptyOnEdit).forEach((field) => {
-    if (result[field.key] === '' || result[field.key] === undefined) delete result[field.key];
-  });
+  spec.fields
+    .filter((field) => field.kind === 'secret' && field.preserveEmptyOnEdit)
+    .forEach((field) => {
+      if (result[field.key] === '' || result[field.key] === undefined) delete result[field.key];
+    });
   return result;
 }
 
@@ -311,14 +436,20 @@ function applyClientFilters(
     if (raw === '') continue;
     const lower = raw.toLowerCase();
     if (f.kind === 'keyword') {
-      const fields = f.clientFields && f.clientFields.length > 0
-        ? f.clientFields
-        : null;
+      const fields = f.clientFields && f.clientFields.length > 0 ? f.clientFields : null;
       result = result.filter((row) => {
         if (fields) {
-          return fields.some((k) => String(row[k] ?? '').toLowerCase().includes(lower));
+          return fields.some((k) =>
+            String(row[k] ?? '')
+              .toLowerCase()
+              .includes(lower),
+          );
         }
-        return Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(lower));
+        return Object.values(row).some((v) =>
+          String(v ?? '')
+            .toLowerCase()
+            .includes(lower),
+        );
       });
     } else {
       // status / select：精确匹配字段值
@@ -332,11 +463,29 @@ function applyClientFilters(
   return result;
 }
 
-export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec; headerActions?: React.ReactNode }) {
+export function ResourceWorkspace({
+  spec,
+  headerActions,
+  headerActionsPermission,
+}: {
+  spec: ResourceSpec;
+  headerActions?: React.ReactNode;
+  headerActionsPermission?: string;
+}) {
+  const { session } = useAuth();
+  const may = (action: string) =>
+    Boolean(session && hasPermission(session, resourcePermission(spec, action)));
   const [rows, setRows] = useState<Entity[]>([]);
-  const [pagination, setPagination] = useState({ page: 1, page_size: 20, total: 0, total_pages: 0 });
+  const [pagination, setPagination] = useState({
+    page: 1,
+    page_size: 20,
+    total: 0,
+    total_pages: 0,
+  });
   const [filters, setFilters] = useState<Record<string, string>>(() => initFilterState(spec));
-  const [debouncedFilters, setDebouncedFilters] = useState<Record<string, string>>(() => initFilterState(spec));
+  const [debouncedFilters, setDebouncedFilters] = useState<Record<string, string>>(() =>
+    initFilterState(spec),
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -359,77 +508,103 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     [spec, debouncedFilters],
   );
 
-  const load = useCallback(async (page = pagination.page) => {
-    setLoading(true); setError('');
-    try {
-      const baseParams = { page, page_size: pagination.page_size, ...spec.params, ...serverParams };
-      if (spec.path === '/extensions') {
-        const [result, regRes, sysRes] = await Promise.all([
-          listResource(spec.path, baseParams),
-          api.get<{ items: Entity[] }>('/registrations').catch(() => ({ items: [] as Entity[] })),
-          api.get<{ configs?: Record<string, string> }>('/infrastructure/settings').catch(() => ({ configs: {} })),
-        ]);
-        const onlineAors = new Set((regRes.items || []).map((r) => String(r.aor ?? '')));
-        const sysRealm = (sysRes?.configs as Record<string, string>)?.realm || 'vos-rs (默认)';
-        const items = (result.items || []).map((user) => {
-          const u = String(user.username ?? '');
-          const isOnline = onlineAors.has(u) || Array.from(onlineAors).some((aor) => aor.includes(`:${u}@`) || aor.includes(`:${u};`) || aor.endsWith(`:${u}`));
-          return {
-            ...user,
-            sip_domain: user.sip_domain || '127.0.0.1:5060',
-            realm: user.realm ? String(user.realm) : `${sysRealm} (继承系统)`,
-            registration_status: isOnline ? 'registered' : 'unregistered',
-          };
-        });
-        const filtered = applyClientFilters(spec, items, debouncedFilters);
-        setRows(filtered);
-        setPagination(result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 });
-      } else if (spec.path === '/tenants') {
-        // 租户列表：后端返回 { tenant, billing_account }，平铺 tenant 字段为行数据
-        const result = await listResource(spec.path, baseParams);
-        const items = (result.items || []).map((row) => {
-          const tenant = (row.tenant as Entity | undefined) ?? {};
-          const billingAccount = row.billing_account as Entity | undefined;
-          return {
-            ...tenant,
-            billing_account_summary: billingAccount
-              ? `${billingAccount.username} (余额: ¥${billingAccount.balance ?? 0})`
-              : '—',
-          };
-        });
-        const filtered = applyClientFilters(spec, items, debouncedFilters);
-        setRows(filtered);
-        setPagination(result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 });
-      } else if (spec.path === '/billing/accounts') {
-        // 计费账户列表：后端返回 associated_tenants 数组，平铺为展示字段
-        const result = await listResource(spec.path, baseParams);
-        const items = (result.items || []).map((row) => {
-          const tenants = Array.isArray(row.associated_tenants) ? row.associated_tenants as Entity[] : [];
-          return {
-            ...row,
-            associated_tenants_summary: tenants.length > 0
-              ? tenants.map((t) => String(t.name ?? t.id ?? '')).join('、')
-              : '—',
-          };
-        });
-        const filtered = applyClientFilters(spec, items, debouncedFilters);
-        setRows(filtered);
-        setPagination(result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 });
-      } else {
-        const result = await listResource(spec.path, baseParams);
-        const items = applyClientFilters(spec, result.items || [], debouncedFilters);
-        setRows(items);
-        // 客户端筛选模式下，total 用筛选后的条数（后端通常无分页）
-        const isClientMode = (spec.serverFilters || []).some((f) => f.mode === 'client');
-        const fallbackTotal = isClientMode ? items.length : (result.items?.length || 0);
-        setPagination(result.pagination || { page, page_size: 20, total: fallbackTotal, total_pages: 1 });
+  const load = useCallback(
+    async (page = pagination.page) => {
+      setLoading(true);
+      setError('');
+      try {
+        const baseParams = {
+          page,
+          page_size: pagination.page_size,
+          ...spec.params,
+          ...serverParams,
+        };
+        if (spec.path === '/extensions') {
+          const [result, regRes, sysRes] = await Promise.all([
+            listResource(spec.path, baseParams),
+            api.get<{ items: Entity[] }>('/registrations').catch(() => ({ items: [] as Entity[] })),
+            api
+              .get<{ configs?: Record<string, string> }>('/infrastructure/settings')
+              .catch(() => ({ configs: {} })),
+          ]);
+          const onlineAors = new Set((regRes.items || []).map((r) => String(r.aor ?? '')));
+          const sysRealm = (sysRes?.configs as Record<string, string>)?.realm || 'vos-rs (默认)';
+          const items = (result.items || []).map((user) => {
+            const u = String(user.username ?? '');
+            const isOnline =
+              onlineAors.has(u) ||
+              Array.from(onlineAors).some(
+                (aor) => aor.includes(`:${u}@`) || aor.includes(`:${u};`) || aor.endsWith(`:${u}`),
+              );
+            return {
+              ...user,
+              sip_domain: user.sip_domain || '127.0.0.1:5060',
+              realm: user.realm ? String(user.realm) : `${sysRealm} (继承系统)`,
+              registration_status: isOnline ? 'registered' : 'unregistered',
+            };
+          });
+          const filtered = applyClientFilters(spec, items, debouncedFilters);
+          setRows(filtered);
+          setPagination(
+            result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 },
+          );
+        } else if (spec.path === '/tenants') {
+          // 租户列表：后端返回 { tenant, billing_account }，平铺 tenant 字段为行数据
+          const result = await listResource(spec.path, baseParams);
+          const items = (result.items || []).map((row) => {
+            const tenant = (row.tenant as Entity | undefined) ?? {};
+            const billingAccount = row.billing_account as Entity | undefined;
+            return {
+              ...tenant,
+              billing_account_summary: billingAccount
+                ? `${billingAccount.username} (余额: ¥${billingAccount.balance ?? 0})`
+                : '—',
+            };
+          });
+          const filtered = applyClientFilters(spec, items, debouncedFilters);
+          setRows(filtered);
+          setPagination(
+            result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 },
+          );
+        } else if (spec.path === '/billing/accounts') {
+          // 计费账户列表：后端返回 associated_tenants 数组，平铺为展示字段
+          const result = await listResource(spec.path, baseParams);
+          const items = (result.items || []).map((row) => {
+            const tenants = Array.isArray(row.associated_tenants)
+              ? (row.associated_tenants as Entity[])
+              : [];
+            return {
+              ...row,
+              associated_tenants_summary:
+                tenants.length > 0
+                  ? tenants.map((t) => String(t.name ?? t.id ?? '')).join('、')
+                  : '—',
+            };
+          });
+          const filtered = applyClientFilters(spec, items, debouncedFilters);
+          setRows(filtered);
+          setPagination(
+            result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 },
+          );
+        } else {
+          const result = await listResource(spec.path, baseParams);
+          const items = applyClientFilters(spec, result.items || [], debouncedFilters);
+          setRows(items);
+          // 客户端筛选模式下，total 用筛选后的条数（后端通常无分页）
+          const isClientMode = (spec.serverFilters || []).some((f) => f.mode === 'client');
+          const fallbackTotal = isClientMode ? items.length : result.items?.length || 0;
+          setPagination(
+            result.pagination || { page, page_size: 20, total: fallbackTotal, total_pages: 1 },
+          );
+        }
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : '加载失败');
+      } finally {
+        setLoading(false);
       }
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '加载失败');
-    } finally {
-      setLoading(false);
-    }
-  }, [pagination.page, pagination.page_size, spec.path, spec.params, serverParams]);
+    },
+    [pagination.page, pagination.page_size, spec.path, spec.params, serverParams],
+  );
 
   // 关键字防抖：filters 变化后延迟同步到 debouncedFilters
   useEffect(() => {
@@ -546,8 +721,12 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     const needsAccounts = spec.fields.some((field) => field.optionsResource === 'accounts');
     const needsTenants = spec.fields.some((field) => field.optionsResource === 'tenants');
     // 筛选器也需要加载动态选项（tenants / accounts）
-    const filterNeedsTenants = (spec.serverFilters || []).some((f) => f.optionsResource === 'tenants');
-    const filterNeedsAccounts = (spec.serverFilters || []).some((f) => f.optionsResource === 'accounts');
+    const filterNeedsTenants = (spec.serverFilters || []).some(
+      (f) => f.optionsResource === 'tenants',
+    );
+    const filterNeedsAccounts = (spec.serverFilters || []).some(
+      (f) => f.optionsResource === 'accounts',
+    );
     const wantEgress = needsEgress;
     const wantSource = needsSource;
     const wantAccounts = needsAccounts || filterNeedsAccounts;
@@ -558,29 +737,62 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
       wantSource ? listOptions('/extensions') : Promise.resolve([]),
       wantAccounts ? listOptions('/billing/accounts') : Promise.resolve([]),
       wantTenants ? listOptions('/tenants') : Promise.resolve([]),
-    ]).then(([trunks, extensions, accounts, tenants]) => setFieldOptions({
-      owner_egress_trunk_id: trunks.filter((item) => trunkRole(item) === 'egress').map((item) => ({ label: String(item.id), value: String(item.id) })),
-      allocation_trunks: trunks.filter((item) => trunkRole(item) === 'access').map((item) => ({ label: String(item.id), value: String(item.id) })),
-      allocation_extensions: extensions.map((item) => ({ label: String(item.display_name ?? item.username), value: String(item.username) })),
-      account_id: accounts.map((acc) => ({ label: `${acc.username} (余额: ¥${acc.balance ?? 0})`, value: String(acc.username) })),
-      billing_account_id: accounts.map((acc) => ({ label: `${acc.username} (余额: ¥${acc.balance ?? 0})`, value: String(acc.id) })),
-      // 筛选器用账户列表（value=username，便于按 username 精确过滤流水）
-      username: accounts.map((acc) => ({ label: `${acc.username} (余额: ¥${acc.balance ?? 0})`, value: String(acc.username) })),
-      tenant_id: tenants.map((item) => {
-        // 后端 /tenants 列表返回 { tenant: {...}, billing_account }，需提取嵌套租户对象
-        const tenant = (item.tenant as Entity | undefined) ?? item;
-        return { label: String(tenant.name ?? tenant.id ?? item.id ?? ''), value: String(tenant.id ?? item.id ?? '') };
-      }),
-    })).catch(() => setFieldOptions({
-      owner_egress_trunk_id: [], allocation_trunks: [], allocation_extensions: [],
-      account_id: [], billing_account_id: [], username: [], tenant_id: [],
-    }));
+    ])
+      .then(([trunks, extensions, accounts, tenants]) =>
+        setFieldOptions({
+          owner_egress_trunk_id: trunks
+            .filter((item) => trunkRole(item) === 'egress')
+            .map((item) => ({ label: String(item.id), value: String(item.id) })),
+          allocation_trunks: trunks
+            .filter((item) => trunkRole(item) === 'access')
+            .map((item) => ({ label: String(item.id), value: String(item.id) })),
+          allocation_extensions: extensions.map((item) => ({
+            label: String(item.display_name ?? item.username),
+            value: String(item.username),
+          })),
+          account_id: accounts.map((acc) => ({
+            label: `${acc.username} (余额: ¥${acc.balance ?? 0})`,
+            value: String(acc.username),
+          })),
+          billing_account_id: accounts.map((acc) => ({
+            label: `${acc.username} (余额: ¥${acc.balance ?? 0})`,
+            value: String(acc.id),
+          })),
+          // 筛选器用账户列表（value=username，便于按 username 精确过滤流水）
+          username: accounts.map((acc) => ({
+            label: `${acc.username} (余额: ¥${acc.balance ?? 0})`,
+            value: String(acc.username),
+          })),
+          tenant_id: tenants.map((item) => {
+            // 后端 /tenants 列表返回 { tenant: {...}, billing_account }，需提取嵌套租户对象
+            const tenant = (item.tenant as Entity | undefined) ?? item;
+            return {
+              label: String(tenant.name ?? tenant.id ?? item.id ?? ''),
+              value: String(tenant.id ?? item.id ?? ''),
+            };
+          }),
+        }),
+      )
+      .catch(() =>
+        setFieldOptions({
+          owner_egress_trunk_id: [],
+          allocation_trunks: [],
+          allocation_extensions: [],
+          account_id: [],
+          billing_account_id: [],
+          username: [],
+          tenant_id: [],
+        }),
+      );
   }, [spec.path]);
 
   const optionsForField = (field: FieldSpec) => {
     if (field.optionsResource === 'allocation-source') {
-      const sourceType = field.key === 'owner_source_id' ? draft.owner_source_type : draft.allocation_source_type;
-      return sourceType === 'trunk' ? fieldOptions.allocation_trunks || [] : fieldOptions.allocation_extensions || [];
+      const sourceType =
+        field.key === 'owner_source_id' ? draft.owner_source_type : draft.allocation_source_type;
+      return sourceType === 'trunk'
+        ? fieldOptions.allocation_trunks || []
+        : fieldOptions.allocation_extensions || [];
     }
     return field.optionsResource ? fieldOptions[field.key] || [] : field.options;
   };
@@ -590,9 +802,16 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     let values = resourceFormValues(spec, row);
     if (row && spec.path === '/numbers') {
       try {
-        const allocations = await api.get<Entity[]>(`/numbers/${encodeURIComponent(entityId(row, spec.idKey))}/allocations`);
+        const allocations = await api.get<Entity[]>(
+          `/numbers/${encodeURIComponent(entityId(row, spec.idKey))}/allocations`,
+        );
         const active = allocations.find((allocation) => allocation.enabled !== false);
-        if (active) values = { ...values, allocation_source_type: active.source_type, allocation_source_id: active.source_id };
+        if (active)
+          values = {
+            ...values,
+            allocation_source_type: active.source_type,
+            allocation_source_id: active.source_id,
+          };
       } catch (reason) {
         message.warning(reason instanceof Error ? reason.message : '号码授权加载失败');
       }
@@ -623,25 +842,36 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
         const value = draft[field.key];
         const isEmpty = value === undefined || value === null || value === '';
         if (field.required && isEmpty) result[field.key] = `请填写${field.label}`;
-        else if (!isEmpty && field.pattern && !field.pattern.test(String(value))) result[field.key] = field.patternMessage || `${field.label}格式不正确`;
-        else if (!isEmpty && field.min !== undefined && Number(value) < field.min) result[field.key] = `${field.label}不能小于 ${field.min}`;
+        else if (!isEmpty && field.pattern && !field.pattern.test(String(value)))
+          result[field.key] = field.patternMessage || `${field.label}格式不正确`;
+        else if (!isEmpty && field.min !== undefined && Number(value) < field.min)
+          result[field.key] = `${field.label}不能小于 ${field.min}`;
         return result;
       }, {});
-      if (Object.keys(errors).length) { setValidationErrors(errors); return; }
+      if (Object.keys(errors).length) {
+        setValidationErrors(errors);
+        return;
+      }
       const values = { ...resourceSaveValues(spec, draft, isEditing), ...spec.params };
-      const allocation = spec.path === '/numbers' ? {
-        source_type: String(values.allocation_source_type ?? ''),
-        source_id: String(values.allocation_source_id ?? ''),
-        enabled: true,
-      } : null;
+      const allocation =
+        spec.path === '/numbers'
+          ? {
+              source_type: String(values.allocation_source_type ?? ''),
+              source_id: String(values.allocation_source_id ?? ''),
+              enabled: true,
+            }
+          : null;
       delete values.allocation_source_type;
       delete values.allocation_source_id;
       setSaving(true);
-      if (isEditing) await updateResource(spec.path, entityId(editing as Entity, spec.idKey), values);
+      if (isEditing)
+        await updateResource(spec.path, entityId(editing as Entity, spec.idKey), values);
       else await createResource(spec.path, values);
       if (allocation) {
         const number = isEditing ? entityId(editing as Entity, spec.idKey) : String(values.number);
-        await api.put(`/numbers/${encodeURIComponent(number)}/allocations`, { items: [allocation] });
+        await api.put(`/numbers/${encodeURIComponent(number)}/allocations`, {
+          items: [allocation],
+        });
       }
       message.success(isEditing ? '已保存更改' : '已创建');
       setEditing(undefined);
@@ -685,7 +915,9 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
   const visibleRows = rows;
   const hasActiveFilter = hasServerFilter || hasClientFilter;
 
-  const visibleFields = spec.fields.filter((field) => !field.showWhen || rows.some((row) => field.showWhen!(row))).slice(0, 7);
+  const visibleFields = spec.fields
+    .filter((field) => !field.showWhen || rows.some((row) => field.showWhen!(row)))
+    .slice(0, 7);
 
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
   const toggleSecretVisibility = (rowKey: string, fieldKey: string) => {
@@ -698,7 +930,16 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     if (field.key === 'registration_status') {
       const registered = value === 'registered';
       return (
-        <Chip size="sm" color={registered ? 'success' : 'default'} variant="flat" startContent={<span className={`w-1.5 h-1.5 rounded-full ${registered ? 'bg-success animate-pulse' : 'bg-default-400'}`} />}>
+        <Chip
+          size="sm"
+          color={registered ? 'success' : 'default'}
+          variant="flat"
+          startContent={
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${registered ? 'bg-success animate-pulse' : 'bg-default-400'}`}
+            />
+          }
+        >
           {registered ? '已注册/在线' : '未注册/离线'}
         </Chip>
       );
@@ -709,7 +950,11 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     if (field.key === 'tenant_id') {
       // 所属商户：空值显示"全局费率"（费率）或"全局"（分机），有值显示商户名称
       if (value === undefined || value === null || value === '') {
-        return <span className="text-default-400">{spec.path === '/billing/rates' ? '全局费率' : '全局'}</span>;
+        return (
+          <span className="text-default-400">
+            {spec.path === '/billing/rates' ? '全局费率' : '全局'}
+          </span>
+        );
       }
       const tenantOptions = fieldOptions.tenant_id || [];
       const matched = tenantOptions.find((option) => option.value === String(value));
@@ -717,7 +962,16 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     }
     const callText = spec.path === '/calls' ? callDetailText(value, field.key) : undefined;
     if (['status', 'state', 'enabled', 'health'].includes(field.key)) {
-      const positive = ['active', 'online', 'registered', 'healthy', 'answered', 'enabled', 'closed', true].includes(value as never);
+      const positive = [
+        'active',
+        'online',
+        'registered',
+        'healthy',
+        'answered',
+        'enabled',
+        'closed',
+        true,
+      ].includes(value as never);
       return (
         <Chip size="sm" color={positive ? 'success' : 'danger'} variant="flat">
           {callText ?? (typeof value === 'boolean' ? (value ? '启用' : '停用') : valueText(value))}
@@ -731,7 +985,7 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
       const rawText = String(value ?? '');
       return (
         <div className="flex items-center gap-1.5 font-mono text-tiny">
-          <span>{isVisible ? (rawText || '—') : '••••••••'}</span>
+          <span>{isVisible ? rawText || '—' : '••••••••'}</span>
           {rawText && (
             <Button
               isIconOnly
@@ -753,37 +1007,88 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
     else if (field.kind === 'datetime') text = datetimeText(value);
     else if (moneyFields.has(field.key)) text = moneyText(value);
     else if (field.kind === 'select') {
-      const options = (field.options || fieldOptions[field.key] || []).map((option) => typeof option === 'string' ? { label: option, value: option } : option);
+      const options = (field.options || fieldOptions[field.key] || []).map((option) =>
+        typeof option === 'string' ? { label: option, value: option } : option,
+      );
       const actual = field.key === 'role' ? trunkRole(row) : value;
-      text = valueText(options.find((option) => option.value === String(actual))?.label ?? (field.key === 'role' ? (trunkRole(row) === 'access' ? '接入中继' : '落地中继') : value));
+      text = valueText(
+        options.find((option) => option.value === String(actual))?.label ??
+          (field.key === 'role' ? (trunkRole(row) === 'access' ? '接入中继' : '落地中继') : value),
+      );
     } else text = valueText(value);
-    return <span className={field.key.includes('id') || field.key.includes('number') ? 'font-mono text-foreground' : 'text-default-600'}>{text}</span>;
+    return (
+      <span
+        className={
+          field.key.includes('id') || field.key.includes('number')
+            ? 'font-mono text-foreground'
+            : 'text-default-600'
+        }
+      >
+        {text}
+      </span>
+    );
   };
 
   return (
     <>
-      <Card shadow="sm" className="p-2">
+      <Card shadow="none" className="overview-card p-2">
         <CardBody className="p-4 flex flex-col gap-4">
           <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-divider">
             <div>
-              <h2 className="text-base font-bold text-foreground">{spec.title}</h2>
-              {spec.description && <p className="text-tiny text-default-500 mt-0.5">{spec.description}</p>}
+              <h2 className="text-base font-semibold text-foreground">{spec.title}</h2>
+              {spec.description && (
+                <p className="text-tiny text-default-500 mt-0.5">{spec.description}</p>
+              )}
             </div>
             <div className="flex items-center gap-2">
-              {headerActions}
-              <Button variant="flat" size="sm" isLoading={loading} onPress={() => load()} startContent={<RefreshCw className="w-4 h-4" />}>
+              {headerActions &&
+                Boolean(
+                  session &&
+                  hasPermission(
+                    session,
+                    headerActionsPermission ?? resourcePermission(spec, 'update'),
+                  ),
+                ) &&
+                headerActions}
+              <Button
+                variant="flat"
+                size="sm"
+                isLoading={loading}
+                onPress={() => load()}
+                startContent={<RefreshCw className="w-4 h-4" />}
+              >
                 刷新
               </Button>
-              <Button variant="flat" size="sm" onPress={exportData} startContent={<Download className="w-4 h-4" />}>
-                导出
-              </Button>
-              {['/extensions', '/numbers', '/billing/rates', '/routing/rules'].includes(spec.path) && (
-                <Button variant="flat" size="sm" onPress={() => setIsImportOpen(true)} startContent={<Upload className="w-4 h-4" />}>
-                  导入
+              {may('export') && (
+                <Button
+                  variant="flat"
+                  size="sm"
+                  onPress={exportData}
+                  startContent={<Download className="w-4 h-4" />}
+                >
+                  导出
                 </Button>
               )}
-              {!spec.readOnly && (
-                <Button color="primary" size="sm" onPress={() => void openForm(null)} startContent={<Plus className="w-4 h-4" />}>
+              {may('import') &&
+                ['/extensions', '/numbers', '/billing/rates', '/routing/rules'].includes(
+                  spec.path,
+                ) && (
+                  <Button
+                    variant="flat"
+                    size="sm"
+                    onPress={() => setIsImportOpen(true)}
+                    startContent={<Upload className="w-4 h-4" />}
+                  >
+                    导入
+                  </Button>
+                )}
+              {!spec.readOnly && may('create') && (
+                <Button
+                  color="primary"
+                  size="sm"
+                  onPress={() => void openForm(null)}
+                  startContent={<Plus className="w-4 h-4" />}
+                >
                   {spec.createLabel || '新建'}
                 </Button>
               )}
@@ -822,7 +1127,9 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                         aria-label={`${f.label}开始`}
                         className="h-8 w-44 rounded-lg border border-default-200 bg-content1 px-2 text-tiny text-foreground outline-none focus:border-primary"
                         value={filters[startKey] ?? ''}
-                        onChange={(e) => setFilters((prev) => ({ ...prev, [startKey]: e.target.value }))}
+                        onChange={(e) =>
+                          setFilters((prev) => ({ ...prev, [startKey]: e.target.value }))
+                        }
                       />
                       <span className="text-tiny text-default-400">至</span>
                       <input
@@ -830,18 +1137,24 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                         aria-label={`${f.label}结束`}
                         className="h-8 w-44 rounded-lg border border-default-200 bg-content1 px-2 text-tiny text-foreground outline-none focus:border-primary"
                         value={filters[endKey] ?? ''}
-                        onChange={(e) => setFilters((prev) => ({ ...prev, [endKey]: e.target.value }))}
+                        onChange={(e) =>
+                          setFilters((prev) => ({ ...prev, [endKey]: e.target.value }))
+                        }
                       />
                     </div>
                   );
                 }
                 // status / select 类型：下拉选项
-                const opts = f.optionsResource === 'tenants'
-                  ? (fieldOptions.tenant_id || [])
-                  : f.optionsResource === 'accounts'
-                    ? (fieldOptions.username || [])
-                    : (f.options || []);
-                const allOpts = [{ label: '全部', value: '' }, ...opts.filter((o) => o.value !== '')];
+                const opts =
+                  f.optionsResource === 'tenants'
+                    ? fieldOptions.tenant_id || []
+                    : f.optionsResource === 'accounts'
+                      ? fieldOptions.username || []
+                      : f.options || [];
+                const allOpts = [
+                  { label: '全部', value: '' },
+                  ...opts.filter((o) => o.value !== ''),
+                ];
                 const sel = filters[f.param] ?? '';
                 return (
                   <Select
@@ -864,7 +1177,9 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                 <span className="text-tiny text-default-400">该资源暂不支持筛选</span>
               )}
               <span className="text-tiny text-default-400">
-                {hasActiveFilter ? `筛选后 ${visibleRows.length} 条` : `共 ${pagination.total} 条记录`}
+                {hasActiveFilter
+                  ? `筛选后 ${visibleRows.length} 条`
+                  : `共 ${pagination.total} 条记录`}
               </span>
               {hasActiveFilter && (
                 <Button
@@ -892,33 +1207,36 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                   ...visibleFields.map((field) => (
                     <TableColumn key={field.key}>{field.label}</TableColumn>
                   )),
-                  <TableColumn key="actions" align="end">操作</TableColumn>,
+                  <TableColumn key="actions" align="end">
+                    操作
+                  </TableColumn>,
                 ]}
               </TableHeader>
               <TableBody
                 items={visibleRows}
                 emptyContent={
-                  <div className="flex flex-col items-center justify-center p-8 gap-4">
-                    <Search className="w-8 h-8 text-default-400" />
-                    <div className="text-center">
-                      <p className="text-sm font-semibold text-foreground">没有找到匹配的数据</p>
-                      <p className="text-xs text-default-400 mt-1">请尝试调整您的筛选条件</p>
-                    </div>
-                    {hasActiveFilter && (
-                      <Button
-                        size="sm"
-                        variant="flat"
-                        color="primary"
-                        onPress={() => {
-                          const empty = initFilterState(spec);
-                          setFilters(empty);
-                          setDebouncedFilters(empty);
-                        }}
-                      >
-                        重置筛选条件
-                      </Button>
-                    )}
-                  </div>
+                  <EmptyState
+                    icon={Search}
+                    title={hasActiveFilter ? '没有匹配的数据' : '暂无数据'}
+                    description={
+                      hasActiveFilter ? '调整筛选条件后再试' : `暂时没有可展示的${spec.title}`
+                    }
+                    action={
+                      hasActiveFilter ? (
+                        <Button
+                          size="sm"
+                          variant="flat"
+                          onPress={() => {
+                            const empty = initFilterState(spec);
+                            setFilters(empty);
+                            setDebouncedFilters(empty);
+                          }}
+                        >
+                          清除筛选
+                        </Button>
+                      ) : undefined
+                    }
+                  />
                 }
               >
                 {(row) => (
@@ -929,8 +1247,12 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                       )),
                       <TableCell key="actions">
                         <div className="flex items-center justify-end gap-1">
-                          {spec.customRowAction && (
-                            <Tooltip content={spec.customRowAction.label} placement="top" delay={300}>
+                          {spec.customRowAction && may('update') && (
+                            <Tooltip
+                              content={spec.customRowAction.label}
+                              placement="top"
+                              delay={300}
+                            >
                               <Button
                                 isIconOnly
                                 size="sm"
@@ -943,19 +1265,29 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                                   const Icon = spec.customRowAction!.icon
                                     ? ROW_ACTION_ICONS[spec.customRowAction!.icon]
                                     : undefined;
-                                  return Icon ? <Icon className="w-4 h-4" /> : <Network className="w-4 h-4" />;
+                                  return Icon ? (
+                                    <Icon className="w-4 h-4" />
+                                  ) : (
+                                    <Network className="w-4 h-4" />
+                                  );
                                 })()}
                               </Button>
                             </Tooltip>
                           )}
                           {spec.detailPath && (
                             <Tooltip content="查看详情" placement="top" delay={300}>
-                              <Button isIconOnly size="sm" variant="light" onPress={() => setDetailModalRow(row)} aria-label="查看详情">
+                              <Button
+                                isIconOnly
+                                size="sm"
+                                variant="light"
+                                onPress={() => setDetailModalRow(row)}
+                                aria-label="查看详情"
+                              >
                                 <Eye className="w-4 h-4 text-default-500" />
                               </Button>
                             </Tooltip>
                           )}
-                          {spec.action === 'credit' && (
+                          {spec.action === 'credit' && may('credit') && (
                             <Tooltip content="充值" placement="top" delay={300}>
                               <Button
                                 isIconOnly
@@ -972,16 +1304,29 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                               </Button>
                             </Tooltip>
                           )}
-                          {!spec.readOnly && (
+                          {!spec.readOnly && may('update') && (
                             <Tooltip content="编辑" placement="top" delay={300}>
-                              <Button isIconOnly size="sm" variant="light" onPress={() => void openForm(row)} aria-label="编辑">
+                              <Button
+                                isIconOnly
+                                size="sm"
+                                variant="light"
+                                onPress={() => void openForm(row)}
+                                aria-label="编辑"
+                              >
                                 <Pencil className="w-4 h-4 text-default-500" />
                               </Button>
                             </Tooltip>
                           )}
-                          {!spec.readOnly && (
+                          {!spec.readOnly && may('delete') && (
                             <Tooltip content="删除" placement="top" delay={300}>
-                              <Button isIconOnly size="sm" variant="light" color="danger" onPress={() => setConfirmRow(row)} aria-label="删除">
+                              <Button
+                                isIconOnly
+                                size="sm"
+                                variant="light"
+                                color="danger"
+                                onPress={() => setConfirmRow(row)}
+                                aria-label="删除"
+                              >
                                 <Trash2 className="w-4 h-4 text-danger" />
                               </Button>
                             </Tooltip>
@@ -997,7 +1342,9 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
 
           {pagination.total > 0 && (
             <div className="flex items-center justify-between pt-4 border-t border-divider">
-              <span className="text-tiny text-default-400">第 {pagination.page} 页，共 {pagination.total_pages || 1} 页</span>
+              <span className="text-tiny text-default-400">
+                第 {pagination.page} 页，共 {pagination.total_pages || 1} 页
+              </span>
               <Pagination
                 total={pagination.total_pages || 1}
                 page={pagination.page}
@@ -1010,7 +1357,11 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
         </CardBody>
       </Card>
 
-      <Modal isOpen={editing !== undefined} onOpenChange={(o) => !o && setEditing(undefined)} size="lg">
+      <Modal
+        isOpen={editing !== undefined}
+        onOpenChange={(o) => !o && setEditing(undefined)}
+        size="lg"
+      >
         <ModalContent>
           <ModalHeader>{isEditing ? `编辑${spec.title}` : `新建${spec.title}`}</ModalHeader>
           <ModalBody>
@@ -1020,10 +1371,20 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                 .map((field) => {
                   const err = validationErrors[field.key];
                   return (
-                    <div key={field.key} className={field.fullWidth ? 'md:col-span-2 col-span-1' : 'col-span-1'}>
-                      <FieldLabel label={field.label} required={field.required && !(isEditing && field.preserveEmptyOnEdit)} />
+                    <div
+                      key={field.key}
+                      className={field.fullWidth ? 'md:col-span-2 col-span-1' : 'col-span-1'}
+                    >
+                      <FieldLabel
+                        label={field.label}
+                        required={field.required && !(isEditing && field.preserveEmptyOnEdit)}
+                      />
                       <FormControl
-                        field={field.optionsResource ? { ...field, options: optionsForField(field) } : field}
+                        field={
+                          field.optionsResource
+                            ? { ...field, options: optionsForField(field) }
+                            : field
+                        }
                         disabled={isEditing && field.key === spec.idKey}
                         value={draft[field.key]}
                         onChange={(value) => updateDraft(field.key, value)}
@@ -1035,8 +1396,12 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
             </div>
           </ModalBody>
           <ModalFooter>
-            <Button variant="flat" onPress={() => setEditing(undefined)}>取消</Button>
-            <Button color="primary" isLoading={saving} onPress={save}>保存</Button>
+            <Button variant="flat" onPress={() => setEditing(undefined)}>
+              取消
+            </Button>
+            <Button color="primary" isLoading={saving} onPress={save}>
+              保存
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
@@ -1067,11 +1432,18 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
             </div>
           </ModalBody>
           <ModalFooter>
-            <Button variant="flat" onPress={() => {
-              setActionRow(null);
-              setActionIdempotencyKey('');
-            }}>取消</Button>
-            <Button color="primary" isLoading={saving} onPress={runAction}>确认充值</Button>
+            <Button
+              variant="flat"
+              onPress={() => {
+                setActionRow(null);
+                setActionIdempotencyKey('');
+              }}
+            >
+              取消
+            </Button>
+            <Button color="primary" isLoading={saving} onPress={runAction}>
+              确认充值
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
@@ -1096,18 +1468,19 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
       >
         <ModalContent>
           <ModalHeader className="text-lg font-bold border-b border-divider flex items-center gap-2">
-            <span>{spec.title}详情 · {detailModalRow ? entityId(detailModalRow, spec.idKey) : ''}</span>
+            <span>
+              {spec.title}详情 · {detailModalRow ? entityId(detailModalRow, spec.idKey) : ''}
+            </span>
           </ModalHeader>
           <ModalBody className="p-6">
-            {detailModalRow && (
-              spec.path === '/extensions' ? (
+            {detailModalRow &&
+              (spec.path === '/extensions' ? (
                 <ExtensionDetailView id={entityId(detailModalRow, spec.idKey)} />
               ) : spec.path === '/calls' ? (
                 <CallDetailView id={entityId(detailModalRow, spec.idKey)} />
               ) : (
                 <TrunkDetailView id={entityId(detailModalRow, spec.idKey)} />
-              )
-            )}
+              ))}
           </ModalBody>
           <ModalFooter className="border-t border-divider">
             <Button color="primary" variant="flat" onPress={() => setDetailModalRow(null)}>
@@ -1140,8 +1513,12 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                     <FileText className="w-5 h-5" />
                   </div>
                   <div>
-                    <h4 className="text-small font-bold text-foreground">第一步：获取导入数据模板</h4>
-                    <p className="text-tiny text-default-500 mt-0.5">使用官方模板避免列名或格式不匹配。</p>
+                    <h4 className="text-small font-bold text-foreground">
+                      第一步：获取导入数据模板
+                    </h4>
+                    <p className="text-tiny text-default-500 mt-0.5">
+                      使用官方模板避免列名或格式不匹配。
+                    </p>
                   </div>
                 </div>
                 <Button size="sm" color="primary" variant="flat" onPress={downloadTemplate}>
@@ -1151,7 +1528,9 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
 
               {/* 第二步：上传 CSV */}
               <div className="flex flex-col gap-2.5">
-                <h4 className="text-small font-bold text-foreground">第二步：选择并上传 CSV 文件</h4>
+                <h4 className="text-small font-bold text-foreground">
+                  第二步：选择并上传 CSV 文件
+                </h4>
                 <div
                   className="flex flex-col items-center justify-center gap-3 border-2 border-dashed border-default-300 hover:border-primary hover:bg-primary/5 rounded-2xl py-12 px-6 bg-content2/40 cursor-pointer transition-all"
                   onClick={() => document.getElementById('csv-import-file')?.click()}
@@ -1171,7 +1550,9 @@ export function ResourceWorkspace({ spec, headerActions }: { spec: ResourceSpec;
                     </div>
                   ) : (
                     <div className="flex flex-col items-center gap-1">
-                      <span className="text-base font-medium text-foreground">点击选择或拖拽 CSV 文件至此</span>
+                      <span className="text-base font-medium text-foreground">
+                        点击选择或拖拽 CSV 文件至此
+                      </span>
                       <span className="text-tiny text-default-500">仅支持 .csv 格式文件</span>
                     </div>
                   )}

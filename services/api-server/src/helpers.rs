@@ -41,27 +41,14 @@ pub(crate) fn validate_runtime_secrets(
     production: bool,
     jwt_secret: &str,
     internal_secret: &str,
-    admin_password: &str,
-    operator_password: &str,
-    financier_password: &str,
 ) -> anyhow::Result<()> {
-    validate_runtime_secrets_for_environment(
-        production,
-        jwt_secret,
-        internal_secret,
-        admin_password,
-        operator_password,
-        financier_password,
-    )
+    validate_runtime_secrets_for_environment(production, jwt_secret, internal_secret)
 }
 
 pub(crate) fn validate_runtime_secrets_for_environment(
     production: bool,
     jwt_secret: &str,
     internal_secret: &str,
-    admin_password: &str,
-    operator_password: &str,
-    financier_password: &str,
 ) -> anyhow::Result<()> {
     if !production {
         return Ok(());
@@ -76,15 +63,6 @@ pub(crate) fn validate_runtime_secrets_for_environment(
         )
     {
         anyhow::bail!("生产环境 VOS_RS_INTERNAL_SECRET 必须是至少 24 字符的随机密钥");
-    }
-    for (name, value, default) in [
-        ("VOS_RS_ADMIN_PASSWORD", admin_password, "admin"),
-        ("VOS_RS_OPERATOR_PASSWORD", operator_password, "operator"),
-        ("VOS_RS_FINANCIER_PASSWORD", financier_password, "financier"),
-    ] {
-        if value.len() < 12 || value == default || value.ends_with("-change-me") {
-            anyhow::bail!("生产环境 {name} 必须是至少 12 字符的非默认密码");
-        }
     }
     Ok(())
 }
@@ -130,9 +108,6 @@ mod tests {
             true,
             "api-jwt-change-in-production",
             "internal-dev-secret",
-            "admin",
-            "operator",
-            "financier",
         )
         .expect_err("production defaults must be rejected");
 
@@ -145,9 +120,6 @@ mod tests {
             false,
             "development",
             "internal-dev-secret",
-            "admin",
-            "operator",
-            "financier",
         )
         .is_ok());
     }
@@ -163,9 +135,6 @@ mod tests {
             production,
             "vos-rs-secret-key-change-in-production",
             "internal-dev-secret",
-            "admin",
-            "operator",
-            "financier",
         );
         assert!(error.is_err());
     }

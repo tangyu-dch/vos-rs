@@ -6,10 +6,7 @@ import { useMemo, useState } from 'react';
 import { Button, Chip } from '@heroui/react';
 import { CheckCircle2, GitBranch, Info } from 'lucide-react';
 import { autoLayoutNodes, RouteCanvas, RouteNodePalette, RouteNodeInspector } from './route-canvas';
-import {
-  genRouteEdgeId,
-  type RouteNode, type RouteTopology,
-} from './route-types';
+import { genRouteEdgeId, type RouteNode, type RouteTopology } from './route-types';
 
 // 表格行数据类型
 export interface RouteRuleFields {
@@ -63,7 +60,9 @@ export function topologyFromRule(rule: RouteRuleFields): RouteTopology {
       id: timeId,
       type: 'time_filter',
       title: '时间路由',
-      description: hasTime ? `${rule.time_start ?? '--:--'} ~ ${rule.time_end ?? '--:--'}` : '未配置时间窗口',
+      description: hasTime
+        ? `${rule.time_start ?? '--:--'} ~ ${rule.time_end ?? '--:--'}`
+        : '未配置时间窗口',
       position: { x: 660, y: 280 },
       config: {
         time_start: rule.time_start ?? '09:00',
@@ -97,9 +96,27 @@ export function topologyFromRule(rule: RouteRuleFields): RouteTopology {
 
   const edges = [
     { id: genRouteEdgeId(), source: inboundId, target: prefixId, sourcePort: 'out', label: '进入' },
-    { id: genRouteEdgeId(), source: prefixId, target: timeId, sourcePort: 'matched', label: '前缀匹配' },
-    { id: genRouteEdgeId(), source: timeId, target: gwId, sourcePort: 'in_window', label: '时段内' },
-    { id: genRouteEdgeId(), source: timeId, target: rejectId, sourcePort: 'out_window', label: '时段外' },
+    {
+      id: genRouteEdgeId(),
+      source: prefixId,
+      target: timeId,
+      sourcePort: 'matched',
+      label: '前缀匹配',
+    },
+    {
+      id: genRouteEdgeId(),
+      source: timeId,
+      target: gwId,
+      sourcePort: 'in_window',
+      label: '时段内',
+    },
+    {
+      id: genRouteEdgeId(),
+      source: timeId,
+      target: rejectId,
+      sourcePort: 'out_window',
+      label: '时段外',
+    },
   ];
 
   return {
@@ -120,7 +137,8 @@ export function ruleFromTopology(topology: RouteTopology): Partial<RouteRuleFiel
   const rejectNode = topology.nodes.find((n) => n.type === 'reject');
 
   if (prefixNode) {
-    const prefixes = prefixNode.config.prefixes as Array<{ prefix: string; label: string }> | undefined;
+    const prefixes = prefixNode.config.prefixes as
+      Array<{ prefix: string; label: string }> | undefined;
     const firstPrefix = prefixes?.[0]?.prefix;
     if (firstPrefix) result.prefix = firstPrefix;
   }
@@ -146,7 +164,10 @@ export function ruleFromTopology(topology: RouteTopology): Partial<RouteRuleFiel
 
 function parseWeekdays(s?: string): number[] {
   if (!s) return [1, 2, 3, 4, 5];
-  return s.split(',').map((x) => Number(x.trim())).filter((n) => n >= 1 && n <= 7);
+  return s
+    .split(',')
+    .map((x) => Number(x.trim()))
+    .filter((n) => n >= 1 && n <= 7);
 }
 
 // 拓扑预览卡片 (在 Modal 中展示, 不允许拖拽, 仅查看)
@@ -238,7 +259,12 @@ function RouteCanvasWithSync({
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {applied && (
-            <Chip size="sm" color="success" variant="flat" startContent={<CheckCircle2 className="w-3 h-3" />}>
+            <Chip
+              size="sm"
+              color="success"
+              variant="flat"
+              startContent={<CheckCircle2 className="w-3 h-3" />}
+            >
               已应用
             </Chip>
           )}

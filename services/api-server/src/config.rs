@@ -42,7 +42,6 @@ pub(crate) struct NatsSection {
 pub(crate) struct ApiServerSection {
     pub(crate) network: Option<ApiNetworkSection>,
     pub(crate) security: Option<ApiSecuritySection>,
-    pub(crate) admin_credentials: Option<AdminCredentialsSection>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -56,13 +55,6 @@ pub(crate) struct ApiNetworkSection {
 pub(crate) struct ApiSecuritySection {
     pub(crate) jwt_secret: Option<String>,
     pub(crate) internal_secret: Option<String>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-pub(crate) struct AdminCredentialsSection {
-    pub(crate) admin_password: Option<String>,
-    pub(crate) operator_password: Option<String>,
-    pub(crate) financier_password: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Default)]

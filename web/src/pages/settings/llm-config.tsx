@@ -3,31 +3,69 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Card, CardBody, Chip, Input, Modal, ModalBody, ModalContent,
-  ModalFooter, ModalHeader, Select, SelectItem,
-  Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Pagination,
+  Button,
+  Card,
+  CardBody,
+  Chip,
+  Input,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  Select,
+  SelectItem,
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
+  TableCell,
+  Pagination,
   Tooltip,
 } from '@heroui/react';
-import {
-  Trash2, CheckCircle2, Pencil, ExternalLink, Cpu, Search,
-} from 'lucide-react';
+import { Trash2, CheckCircle2, Pencil, ExternalLink, Cpu, Search, Plus } from 'lucide-react';
 import { api } from '@/services/client';
 import { message } from '@/utils/toast';
 import {
-  ErrorState, LoadingState, PageHeader, RefreshButton, CreateButton, EmptyState, useRefreshState,
+  ErrorState,
+  LoadingState,
+  PageHeader,
+  RefreshButton,
+  EmptyState,
+  useRefreshState,
 } from '@/components/detail-shell';
 import {
-  LLM_PROVIDER_PRESETS, findPreset, maskApiKey,
-  type LlmConfigRecord, type UpsertLlmConfigInput,
+  LLM_PROVIDER_PRESETS,
+  findPreset,
+  maskApiKey,
+  type LlmConfigRecord,
+  type UpsertLlmConfigInput,
 } from './llm-presets';
+import { useAuth } from '@/auth/AuthContext';
+import { hasPermission } from '@/services/auth';
 
 const EMPTY_FORM: UpsertLlmConfigInput = {
-  name: '', provider: '', api_key: '', base_url: '', model: '', temperature: 0.3,
+  name: '',
+  provider: '',
+  api_key: '',
+  base_url: '',
+  model: '',
+  temperature: 0.3,
 };
 
 const PAGE_SIZE = 10;
 
 export function LlmConfigPage() {
+  const { session } = useAuth();
+  const may = (permission: string) =>
+    Boolean(
+      session && (hasPermission(session, permission) || session.permissions.includes('llm.manage')),
+    );
+  const canCreate = may('llm.create');
+  const canUpdate = may('llm.update');
+  const canDelete = may('llm.delete');
+  const canActivate = may('llm.activate');
   const [configs, setConfigs] = useState<LlmConfigRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const { isRefreshing, setIsRefreshing } = useRefreshState();
@@ -57,17 +95,20 @@ export function LlmConfigPage() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   // 客户端过滤：按名称/厂商/模型 模糊匹配（大小写不敏感）
   const filtered = useMemo(() => {
     const key = searchKey.trim().toLowerCase();
     if (!key) return configs;
-    return configs.filter((c) =>
-      c.name.toLowerCase().includes(key)
-      || c.provider.toLowerCase().includes(key)
-      || c.model.toLowerCase().includes(key)
-      || (findPreset(c.provider)?.label ?? '').toLowerCase().includes(key)
+    return configs.filter(
+      (c) =>
+        c.name.toLowerCase().includes(key) ||
+        c.provider.toLowerCase().includes(key) ||
+        c.model.toLowerCase().includes(key) ||
+        (findPreset(c.provider)?.label ?? '').toLowerCase().includes(key),
     );
   }, [configs, searchKey]);
 
@@ -80,7 +121,9 @@ export function LlmConfigPage() {
   }, [filtered, currentPage]);
 
   // 搜索变化时重置到第 1 页
-  useEffect(() => { setPage(1); }, [searchKey]);
+  useEffect(() => {
+    setPage(1);
+  }, [searchKey]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -91,8 +134,12 @@ export function LlmConfigPage() {
   const openEdit = (rec: LlmConfigRecord) => {
     setEditingId(rec.id);
     setForm({
-      name: rec.name, provider: rec.provider, api_key: rec.api_key,
-      base_url: rec.base_url, model: rec.model, temperature: rec.temperature,
+      name: rec.name,
+      provider: rec.provider,
+      api_key: rec.api_key,
+      base_url: rec.base_url,
+      model: rec.model,
+      temperature: rec.temperature,
     });
     setModalOpen(true);
   };
@@ -110,7 +157,13 @@ export function LlmConfigPage() {
   };
 
   const handleSave = async () => {
-    if (!form.name.trim() || !form.provider.trim() || !form.api_key.trim() || !form.base_url.trim() || !form.model.trim()) {
+    if (
+      !form.name.trim() ||
+      !form.provider.trim() ||
+      !form.api_key.trim() ||
+      !form.base_url.trim() ||
+      !form.model.trim()
+    ) {
       message.warning('请选择厂商并填写名称、API Key、Base URL 和模型');
       return;
     }
@@ -165,16 +218,28 @@ export function LlmConfigPage() {
   return (
     <div className="flex flex-col gap-5 w-full">
       {/* 页头 */}
-      <Card shadow="sm" className="p-2">
+      <Card shadow="none" className="overview-card p-2">
         <CardBody className="p-4 flex flex-col gap-4">
           <PageHeader
             icon={Cpu}
-            title="大模型厂商配置"
+            title="模型配置"
             subtitle="管理大模型厂商配置，Copilot 运行时使用当前启用的模型进行智能分析。切换模型无需重启服务。"
             actions={
               <>
                 <RefreshButton isLoading={isRefreshing} onPress={() => void load(true)} />
-                <CreateButton onPress={openCreate} label="新建配置" />
+                <Tooltip content={canCreate ? '新增模型' : '缺少新增模型权限'}>
+                  <span>
+                    <Button
+                      color="primary"
+                      size="sm"
+                      isDisabled={!canCreate}
+                      startContent={<Plus className="h-4 w-4" />}
+                      onPress={openCreate}
+                    >
+                      新增模型
+                    </Button>
+                  </span>
+                </Tooltip>
               </>
             }
           />
@@ -182,7 +247,7 @@ export function LlmConfigPage() {
       </Card>
 
       {/* Table 卡片 */}
-      <Card shadow="sm" className="w-full">
+      <Card shadow="none" className="overview-card w-full">
         <CardBody className="p-4 flex flex-col gap-3">
           {/* 工具栏：搜索 + 计数 */}
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -203,7 +268,7 @@ export function LlmConfigPage() {
 
           {/* 配置表格 */}
           <Table
-            aria-label="LLM 配置列表"
+            aria-label="大模型配置列表"
             isStriped
             removeWrapper
             bottomContent={
@@ -224,24 +289,44 @@ export function LlmConfigPage() {
             }
           >
             <TableHeader>
-              <TableColumn key="status" width={90}>状态</TableColumn>
+              <TableColumn key="status" width={90}>
+                状态
+              </TableColumn>
               <TableColumn key="name">名称</TableColumn>
-              <TableColumn key="provider" width={140}>厂商</TableColumn>
+              <TableColumn key="provider" width={140}>
+                厂商
+              </TableColumn>
               <TableColumn key="model">模型</TableColumn>
-              <TableColumn key="base_url">Base URL</TableColumn>
-              <TableColumn key="api_key" width={160}>API Key</TableColumn>
-              <TableColumn key="temperature" width={70} align="center">温度</TableColumn>
-              <TableColumn key="updated_at" width={160}>更新时间</TableColumn>
-              <TableColumn key="actions" width={200} align="end">操作</TableColumn>
+              <TableColumn key="base_url">接口地址</TableColumn>
+              <TableColumn key="api_key" width={160}>
+                接口密钥
+              </TableColumn>
+              <TableColumn key="temperature" width={70} align="center">
+                温度
+              </TableColumn>
+              <TableColumn key="updated_at" width={160}>
+                更新时间
+              </TableColumn>
+              <TableColumn key="actions" width={200} align="end">
+                操作
+              </TableColumn>
             </TableHeader>
             <TableBody
               items={paged}
-              className={isRefreshing ? 'opacity-50 transition-opacity duration-300' : 'transition-opacity duration-300'}
+              className={
+                isRefreshing
+                  ? 'opacity-50 transition-opacity duration-300'
+                  : 'transition-opacity duration-300'
+              }
               emptyContent={
                 searchKey ? (
                   <EmptyState icon={Cpu} title="没有匹配的配置" description="尝试更换搜索关键词" />
                 ) : (
-                  <EmptyState icon={Cpu} title="暂无 LLM 配置" description="点击「新建配置」添加第一个大模型厂商" />
+                  <EmptyState
+                    icon={Cpu}
+                    title="暂无模型配置"
+                    description="点击“新增模型”添加第一个大模型厂商"
+                  />
                 )
               }
             >
@@ -251,7 +336,12 @@ export function LlmConfigPage() {
                   <TableRow key={cfg.id}>
                     <TableCell key="status">
                       {cfg.is_active ? (
-                        <Chip size="sm" color="primary" variant="flat" startContent={<CheckCircle2 className="w-3 h-3" />}>
+                        <Chip
+                          size="sm"
+                          color="primary"
+                          variant="flat"
+                          startContent={<CheckCircle2 className="w-3 h-3" />}
+                        >
                           启用中
                         </Chip>
                       ) : (
@@ -270,10 +360,14 @@ export function LlmConfigPage() {
                       <span className="font-mono text-xs text-foreground">{cfg.model}</span>
                     </TableCell>
                     <TableCell key="base_url">
-                      <span className="font-mono text-xs text-default-600 break-all">{cfg.base_url}</span>
+                      <span className="font-mono text-xs text-default-600 break-all">
+                        {cfg.base_url}
+                      </span>
                     </TableCell>
                     <TableCell key="api_key">
-                      <span className="font-mono text-xs text-default-600">{maskApiKey(cfg.api_key)}</span>
+                      <span className="font-mono text-xs text-default-600">
+                        {maskApiKey(cfg.api_key)}
+                      </span>
                     </TableCell>
                     <TableCell key="temperature" align="center">
                       <span className="font-mono text-xs">{cfg.temperature}</span>
@@ -286,32 +380,60 @@ export function LlmConfigPage() {
                     <TableCell key="actions">
                       <div className="flex items-center justify-end gap-1">
                         {!cfg.is_active && (
-                          <Button size="sm" color="primary" variant="flat" onClick={() => handleActivate(cfg.id)}>
-                            启用
-                          </Button>
+                          <Tooltip
+                            content={canActivate ? '启用模型' : '缺少启用模型权限'}
+                            placement="top"
+                          >
+                            <span>
+                              <Button
+                                isIconOnly
+                                size="sm"
+                                color="primary"
+                                variant="flat"
+                                isDisabled={!canActivate}
+                                aria-label="启用模型"
+                                onPress={() => void handleActivate(cfg.id)}
+                              >
+                                <CheckCircle2 className="h-4 w-4" />
+                              </Button>
+                            </span>
+                          </Tooltip>
                         )}
-                        <Tooltip content="编辑" placement="top">
-                          <Button
-                            isIconOnly
-                            size="sm"
-                            variant="light"
-                            aria-label="编辑"
-                            onClick={() => openEdit(cfg)}
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </Button>
+                        <Tooltip
+                          content={canUpdate ? '编辑模型' : '缺少修改模型权限'}
+                          placement="top"
+                        >
+                          <span>
+                            <Button
+                              isIconOnly
+                              size="sm"
+                              variant="light"
+                              isDisabled={!canUpdate}
+                              aria-label="编辑模型"
+                              onPress={() => openEdit(cfg)}
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                          </span>
                         </Tooltip>
-                        <Tooltip content="删除" placement="top" color="danger">
-                          <Button
-                            isIconOnly
-                            size="sm"
-                            variant="light"
-                            color="danger"
-                            aria-label="删除"
-                            onClick={() => setConfirmDeleteId(cfg.id)}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
+                        <Tooltip
+                          content={canDelete ? '删除模型' : '缺少删除模型权限'}
+                          placement="top"
+                          color="danger"
+                        >
+                          <span>
+                            <Button
+                              isIconOnly
+                              size="sm"
+                              variant="light"
+                              color="danger"
+                              isDisabled={!canDelete}
+                              aria-label="删除模型"
+                              onPress={() => setConfirmDeleteId(cfg.id)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </span>
                         </Tooltip>
                       </div>
                     </TableCell>
@@ -326,7 +448,7 @@ export function LlmConfigPage() {
       {/* 新建/编辑 Modal */}
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} size="2xl">
         <ModalContent>
-          <ModalHeader>{editingId !== null ? '编辑 LLM 配置' : '新建 LLM 配置'}</ModalHeader>
+          <ModalHeader>{editingId !== null ? '编辑模型' : '新增模型'}</ModalHeader>
           <ModalBody className="gap-4">
             {/* 厂商预设选择 */}
             <div>
@@ -345,54 +467,80 @@ export function LlmConfigPage() {
                 ))}
               </div>
               {activePreset?.apiKeyUrl && (
-                <a href={activePreset.apiKeyUrl} target="_blank" rel="noopener noreferrer"
-                   className="inline-flex items-center gap-1 text-xs text-primary mt-2 hover:underline">
+                <a
+                  href={activePreset.apiKeyUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-primary mt-2 hover:underline"
+                >
                   <ExternalLink className="w-3 h-3" /> 前往 {activePreset.label} 申请 API Key
                 </a>
               )}
             </div>
 
             <Input
-              label="配置名称" labelPlacement="outside" placeholder="如：智谱生产环境"
-              value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              label="配置名称"
+              labelPlacement="outside"
+              placeholder="如：智谱生产环境"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
             <Input
-              label="API Key" labelPlacement="outside" placeholder="sk-..."
+              label="接口密钥"
+              labelPlacement="outside"
+              placeholder="请输入接口密钥"
               type="password"
-              value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })}
+              value={form.api_key}
+              onChange={(e) => setForm({ ...form, api_key: e.target.value })}
             />
             <Input
-              label="Base URL" labelPlacement="outside" placeholder="https://..."
-              value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })}
-              description="OpenAI 兼容的 chat completions 基础地址"
+              label="接口地址"
+              labelPlacement="outside"
+              placeholder="请输入接口地址"
+              value={form.base_url}
+              onChange={(e) => setForm({ ...form, base_url: e.target.value })}
+              description="兼容对话生成协议的基础地址"
             />
             <div className="flex gap-3">
               {activePreset && activePreset.models.length > 0 ? (
                 <Select
                   className="flex-1"
-                  label="模型" labelPlacement="outside"
+                  label="模型"
+                  labelPlacement="outside"
                   selectedKeys={[form.model]}
                   onChange={(e) => setForm({ ...form, model: e.target.value })}
                 >
-                  {activePreset.models.map((m) => <SelectItem key={m}>{m}</SelectItem>)}
+                  {activePreset.models.map((m) => (
+                    <SelectItem key={m}>{m}</SelectItem>
+                  ))}
                 </Select>
               ) : (
                 <Input
                   className="flex-1"
-                  label="模型" labelPlacement="outside" placeholder="glm-4.7-flash"
-                  value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  label="模型"
+                  labelPlacement="outside"
+                  placeholder="glm-4.7-flash"
+                  value={form.model}
+                  onChange={(e) => setForm({ ...form, model: e.target.value })}
                 />
               )}
               <Input
                 className="w-32"
-                label="温度" labelPlacement="outside" type="number" step="0.1" min="0" max="2"
+                label="温度"
+                labelPlacement="outside"
+                type="number"
+                step="0.1"
+                min="0"
+                max="2"
                 value={String(form.temperature)}
                 onChange={(e) => setForm({ ...form, temperature: parseFloat(e.target.value) || 0 })}
               />
             </div>
           </ModalBody>
           <ModalFooter>
-            <Button variant="flat" onClick={() => setModalOpen(false)}>取消</Button>
+            <Button variant="flat" onClick={() => setModalOpen(false)}>
+              取消
+            </Button>
             <Button color="primary" isLoading={saving} onClick={handleSave}>
               {editingId !== null ? '保存' : '创建'}
             </Button>
@@ -404,11 +552,11 @@ export function LlmConfigPage() {
       <Modal isOpen={confirmDeleteId !== null} onClose={() => setConfirmDeleteId(null)} size="sm">
         <ModalContent>
           <ModalHeader>确认删除</ModalHeader>
-          <ModalBody>
-            确定要删除这条 LLM 配置吗？此操作不可撤销。
-          </ModalBody>
+          <ModalBody>确定要删除这条模型配置吗？此操作不可撤销。</ModalBody>
           <ModalFooter>
-            <Button variant="flat" onClick={() => setConfirmDeleteId(null)}>取消</Button>
+            <Button variant="flat" onClick={() => setConfirmDeleteId(null)}>
+              取消
+            </Button>
             <Button color="danger" onClick={() => confirmDeleteId && handleDelete(confirmDeleteId)}>
               删除
             </Button>

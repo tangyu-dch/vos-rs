@@ -83,19 +83,10 @@ interface ActiveCallDto {
 
 /** RWI 事件类型字面量 */
 type RwiEventType =
-  | 'call_started'
-  | 'call_ringing'
-  | 'call_answered'
-  | 'call_ended'
-  | 'media_event';
+  'call_started' | 'call_ringing' | 'call_answered' | 'call_ended' | 'media_event';
 
 /** RWI 指令类型字面量 */
-type RwiCommandType =
-  | 'barge_in'
-  | 'speak'
-  | 'listen'
-  | 'transfer'
-  | 'hangup';
+type RwiCommandType = 'barge_in' | 'speak' | 'listen' | 'transfer' | 'hangup';
 
 /** RWI WebSocket 消息包（与 call-core::rwi::RwiMessage 对应） */
 interface RwiMessage {
@@ -121,7 +112,8 @@ function genUuid(): string {
 /** 将后端 state 字符串归一化为前端 CallState */
 function normalizeState(raw: string | undefined): CallState {
   const s = String(raw || '').toLowerCase();
-  if (s === 'answered' || s === 'active' || s === 'in_call' || s === 'in_call_early') return 'answered';
+  if (s === 'answered' || s === 'active' || s === 'in_call' || s === 'in_call_early')
+    return 'answered';
   if (s === 'ended' || s === 'terminated' || s === 'completed') return 'ended';
   return 'ringing';
 }
@@ -156,7 +148,11 @@ function nowTimestamp(): string {
 }
 
 /** 在通话内追加系统转写 */
-function appendSystemTranscript(call: LiveCallItem, text: string, interrupted = false): LiveCallItem {
+function appendSystemTranscript(
+  call: LiveCallItem,
+  text: string,
+  interrupted = false,
+): LiveCallItem {
   const item: AsrTranscriptItem = {
     id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     speaker: 'system',
@@ -216,7 +212,9 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
   const listeningSetRef = useRef<Set<string>>(new Set());
 
   // 把 handler 引用放进 ref，避免 WebSocket 回调闭包依赖循环
-  const handleRwiEventRef = useRef<(type: RwiEventType, data: Record<string, unknown>) => void>(() => {});
+  const handleRwiEventRef = useRef<(type: RwiEventType, data: Record<string, unknown>) => void>(
+    () => {},
+  );
   const scheduleReconnectRef = useRef<() => void>(() => {});
 
   // ----------------------------------------------------------------
@@ -258,9 +256,7 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
           return prev.map((c) => (c.callId === callId ? { ...c, state: 'ringing' } : c));
         }
         case 'call_answered': {
-          return prev.map((c) =>
-            c.callId === callId ? { ...c, state: 'answered' } : c,
-          );
+          return prev.map((c) => (c.callId === callId ? { ...c, state: 'answered' } : c));
         }
         case 'call_ended': {
           const duration = Number(data?.duration_secs ?? 0);
@@ -298,18 +294,26 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
             if (c.callId !== callId) return c;
             const nextMedia: Partial<MediaStreamStats> = { ...c.media };
             if (typeof payload.codec === 'string') nextMedia.codec = payload.codec;
-            if (typeof payload.bitrate_kbps === 'number') nextMedia.bitrateKbps = payload.bitrate_kbps;
-            else if (typeof payload.bitrateKbps === 'number') nextMedia.bitrateKbps = payload.bitrateKbps;
-            if (typeof payload.packet_loss_percent === 'number') nextMedia.packetLossPercent = payload.packet_loss_percent;
-            else if (typeof payload.packetLossPercent === 'number') nextMedia.packetLossPercent = payload.packetLossPercent;
+            if (typeof payload.bitrate_kbps === 'number')
+              nextMedia.bitrateKbps = payload.bitrate_kbps;
+            else if (typeof payload.bitrateKbps === 'number')
+              nextMedia.bitrateKbps = payload.bitrateKbps;
+            if (typeof payload.packet_loss_percent === 'number')
+              nextMedia.packetLossPercent = payload.packet_loss_percent;
+            else if (typeof payload.packetLossPercent === 'number')
+              nextMedia.packetLossPercent = payload.packetLossPercent;
             if (typeof payload.jitter_ms === 'number') nextMedia.jitterMs = payload.jitter_ms;
             else if (typeof payload.jitterMs === 'number') nextMedia.jitterMs = payload.jitterMs;
             if (typeof payload.rtt_ms === 'number') nextMedia.rttMs = payload.rtt_ms;
             else if (typeof payload.rttMs === 'number') nextMedia.rttMs = payload.rttMs;
-            if (typeof payload.audio_level_in === 'number') nextMedia.audioLevelIn = payload.audio_level_in;
-            else if (typeof payload.audioLevelIn === 'number') nextMedia.audioLevelIn = payload.audioLevelIn;
-            if (typeof payload.audio_level_out === 'number') nextMedia.audioLevelOut = payload.audio_level_out;
-            else if (typeof payload.audioLevelOut === 'number') nextMedia.audioLevelOut = payload.audioLevelOut;
+            if (typeof payload.audio_level_in === 'number')
+              nextMedia.audioLevelIn = payload.audio_level_in;
+            else if (typeof payload.audioLevelIn === 'number')
+              nextMedia.audioLevelIn = payload.audioLevelIn;
+            if (typeof payload.audio_level_out === 'number')
+              nextMedia.audioLevelOut = payload.audio_level_out;
+            else if (typeof payload.audioLevelOut === 'number')
+              nextMedia.audioLevelOut = payload.audioLevelOut;
 
             // DTMF 事件追加转写
             if (eventType === 'dtmf_received') {
@@ -593,9 +597,7 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
       if (ok) {
         setCalls((prev) =>
           prev.map((c) =>
-            c.callId === callId
-              ? appendSystemTranscript(c, '已发送 BargeIn 强插指令', true)
-              : c,
+            c.callId === callId ? appendSystemTranscript(c, '已发送 BargeIn 强插指令', true) : c,
           ),
         );
         message.warning(`已对通话 ${callId} 触发 BargeIn`);
@@ -616,9 +618,7 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
       if (ok) {
         setCalls((prev) =>
           prev.map((c) =>
-            c.callId === callId
-              ? appendSystemTranscript(c, `[TTS 播报]: ${text.trim()}`)
-              : c,
+            c.callId === callId ? appendSystemTranscript(c, `[TTS 播报]: ${text.trim()}`) : c,
           ),
         );
         message.success(`已向通话 ${callId} 注入 TTS 指令`);
@@ -645,9 +645,7 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
           message.info(`已关闭通话 ${callId} 监听`);
         }
         // 同步到 calls state 以立即反映 UI
-        setCalls((prev) =>
-          prev.map((c) => (c.callId === callId ? { ...c, listening: next } : c)),
-        );
+        setCalls((prev) => prev.map((c) => (c.callId === callId ? { ...c, listening: next } : c)));
       }
     },
     [sendCommand],
@@ -685,9 +683,7 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
       if (ok) {
         setCalls((prev) =>
           prev.map((c) =>
-            c.callId === callId
-              ? appendSystemTranscript(c, '已发送 BYE 挂断指令 (Cause: 16)')
-              : c,
+            c.callId === callId ? appendSystemTranscript(c, '已发送 BYE 挂断指令 (Cause: 16)') : c,
           ),
         );
         message.success(`通话 ${callId} 挂断指令已发送`);

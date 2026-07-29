@@ -15,12 +15,16 @@ export interface ExtensionWorkspaceData {
 export async function getExtensionWorkspace(username: string): Promise<ExtensionWorkspaceData> {
   const result = await api.get<Entity>(`/extensions/${encodeURIComponent(username)}`);
   return {
-    extension: result.extension && typeof result.extension === 'object' ? result.extension as Entity : result,
-    registrations: Array.isArray(result.registrations) ? result.registrations as Entity[] : [],
-    numbers: Array.isArray(result.numbers) ? result.numbers as Entity[] : [],
+    extension:
+      result.extension && typeof result.extension === 'object'
+        ? (result.extension as Entity)
+        : result,
+    registrations: Array.isArray(result.registrations) ? (result.registrations as Entity[]) : [],
+    numbers: Array.isArray(result.numbers) ? (result.numbers as Entity[]) : [],
     credential: result.credential as Entity | undefined,
     system_config: result.system_config as { realm?: string; sip_domain?: string } | undefined,
-    tenant: result.tenant && typeof result.tenant === 'object' ? result.tenant as Entity : undefined,
+    tenant:
+      result.tenant && typeof result.tenant === 'object' ? (result.tenant as Entity) : undefined,
   };
 }
 
@@ -33,5 +37,8 @@ export function getExtensionOutboundPolicy(username: string) {
 }
 
 export function saveExtensionOutboundPolicy(username: string, policy: OutboundPolicy) {
-  return api.put<void>(`/extensions/${encodeURIComponent(username)}/outbound-policy`, policyForSave(policy));
+  return api.put<void>(
+    `/extensions/${encodeURIComponent(username)}/outbound-policy`,
+    policyForSave(policy),
+  );
 }

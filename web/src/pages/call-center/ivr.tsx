@@ -38,7 +38,7 @@ export default function IvrPage() {
     <>
       <ResourceWorkspace key={workspaceKey} spec={ivrSpec} />
 
-      {/* IVR 拓扑编排 Modal - 蓝图渐变 Banner 头部 */}
+      {/* 语音导航拓扑编排 */}
       <Modal
         isOpen={topoIvr !== null}
         onOpenChange={(o) => !o && setTopoIvr(null)}
@@ -52,25 +52,28 @@ export default function IvrPage() {
       >
         <ModalContent className="h-full">
           <ModalHeader className="flex flex-col gap-0 p-0 border-b border-default-200 shrink-0 overflow-hidden">
-            {/* 渐变 Banner */}
-            <div className="relative bg-gradient-to-r from-primary/15 via-primary/5 to-transparent px-6 py-4 flex items-center justify-between gap-4">
+            <div className="bg-content1 px-5 py-4 flex items-center justify-between gap-4">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center shrink-0">
+                <div className="w-9 h-9 rounded-lg bg-default-100 border border-default-200 flex items-center justify-center shrink-0">
                   <Network className="w-5 h-5 text-primary" />
                 </div>
                 <div className="flex flex-col gap-0.5 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-base font-bold text-foreground">IVR 拓扑编排</span>
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-default-400 px-1.5 py-0.5 rounded bg-content2">Blueprint Editor</span>
+                    <span className="text-base font-semibold text-foreground">语音导航编排</span>
                   </div>
                   {topoIvr && (
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <Chip size="sm" variant="flat" color="primary" className="h-5 text-[10px] font-mono">
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        className="h-5 text-[10px] font-mono"
+                      >
                         {topoIvr.id}
                       </Chip>
                       {topoIvr.did && (
                         <Chip size="sm" variant="flat" color="primary" className="h-5 text-[10px]">
-                          DID {topoIvr.did}
+                          接入号码 {topoIvr.did}
                         </Chip>
                       )}
                     </div>

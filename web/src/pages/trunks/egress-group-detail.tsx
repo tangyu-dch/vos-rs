@@ -1,18 +1,49 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Button, Card, CardBody, Input, Select, SelectItem, Switch,
-  Table, TableHeader, TableColumn, TableBody, TableRow, TableCell, Tabs, Tab,
+  Button,
+  Card,
+  CardBody,
+  Input,
+  Select,
+  SelectItem,
+  Switch,
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
+  TableCell,
+  Tabs,
+  Tab,
 } from '@heroui/react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Server, Trash2 } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import type { Entity } from '@/services/resources';
 import { listOptions } from '@/services/trunks';
-import { egressGroupValidationError, getEgressGroup, getEgressGroupMembers, saveEgressGroupMembers, updateEgressGroup, type EgressGroup, type EgressGroupMember } from '@/services/egress-groups';
+import {
+  egressGroupValidationError,
+  getEgressGroup,
+  getEgressGroupMembers,
+  saveEgressGroupMembers,
+  updateEgressGroup,
+  type EgressGroup,
+  type EgressGroupMember,
+} from '@/services/egress-groups';
 import { WorkspaceField } from '@/pages/trunks/trunk-detail';
-import { DetailErrorState, DetailHeader, DetailLoading, FormGrid, SectionBlock } from '@/components/detail-shell';
+import {
+  DetailErrorState,
+  DetailHeader,
+  DetailLoading,
+  EmptyState,
+  FormGrid,
+  SectionBlock,
+} from '@/components/detail-shell';
 import { message } from '@/utils/toast';
+import { useAuth } from '@/auth/AuthContext';
+import { hasPermission } from '@/services/auth';
 
-const genId = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2));
+const genId = () =>
+  crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
 
 interface TabDef {
   key: string;
@@ -21,6 +52,8 @@ interface TabDef {
 }
 
 export default function EgressGroupDetailPage() {
+  const { session } = useAuth();
+  const canManage = Boolean(session && hasPermission(session, 'termination.manage'));
   const { id = '' } = useParams();
   const [group, setGroup] = useState<EgressGroup | null>(null);
   const [members, setMembers] = useState<EgressGroupMember[]>([]);
@@ -48,18 +81,20 @@ export default function EgressGroupDetailPage() {
     }
   }, [id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const save = async () => {
     if (!group) return;
     const validationError = egressGroupValidationError(group, members);
-    if (validationError) { message.error(validationError); return; }
+    if (validationError) {
+      message.error(validationError);
+      return;
+    }
     try {
       setSaving(true);
-      await Promise.all([
-        updateEgressGroup(id, group),
-        saveEgressGroupMembers(id, members),
-      ]);
+      await Promise.all([updateEgressGroup(id, group), saveEgressGroupMembers(id, members)]);
       message.success('落地分组配置已保存');
       await load();
     } catch (reason) {
@@ -71,11 +106,14 @@ export default function EgressGroupDetailPage() {
 
   const patchMember = (index: number, values: Partial<EgressGroupMember>) => {
     setMembers((current) =>
-      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...values } : item))
+      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...values } : item)),
     );
   };
 
-  const trunkOptions = useMemo(() => trunks.map((t) => ({ label: String(t.id), value: String(t.id) })), [trunks]);
+  const trunkOptions = useMemo(
+    () => trunks.map((t) => ({ label: String(t.id), value: String(t.id) })),
+    [trunks],
+  );
 
   const tabs = useMemo<TabDef[]>(() => {
     if (!group) return [];
@@ -92,20 +130,24 @@ export default function EgressGroupDetailPage() {
               <Input
                 variant="bordered"
                 value={group.name}
-                onValueChange={(v) => setGroup((curr) => curr ? { ...curr, name: v } : null)}
+                onValueChange={(v) => setGroup((curr) => (curr ? { ...curr, name: v } : null))}
               />
             </WorkspaceField>
             <WorkspaceField label="分组说明" fullWidth>
               <Input
                 variant="bordered"
                 value={String(group.description ?? '')}
-                onValueChange={(v) => setGroup((curr) => curr ? { ...curr, description: v } : null)}
+                onValueChange={(v) =>
+                  setGroup((curr) => (curr ? { ...curr, description: v } : null))
+                }
               />
             </WorkspaceField>
             <WorkspaceField label="启用状态">
               <Switch
                 isSelected={group.enabled !== false}
-                onChange={(e) => setGroup((curr) => curr ? { ...curr, enabled: e.target.checked } : null)}
+                onChange={(e) =>
+                  setGroup((curr) => (curr ? { ...curr, enabled: e.target.checked } : null))
+                }
               />
             </WorkspaceField>
           </FormGrid>
@@ -119,29 +161,31 @@ export default function EgressGroupDetailPage() {
             title="落地中继列表"
             description="按优先级与权重分配呼叫流量；当高优先级中继无可用并发或故障时，自动故障转移。"
             actions={
-              <Button
-                size="sm"
-                variant="flat"
-                onPress={() =>
-                  setMembers((current) => [
-                    ...current,
-                    {
-                      _key: genId(),
-                      group_id: id,
-                      egress_trunk_id: '',
-                      destination_prefix: '',
-                      priority: 100,
-                      weight: 100,
-                      time_start: null,
-                      time_end: null,
-                      enabled: true,
-                    },
-                  ])
-                }
-                startContent={<Plus className="w-4 h-4" />}
-              >
-                添加中继
-              </Button>
+              canManage && (
+                <Button
+                  size="sm"
+                  variant="flat"
+                  onPress={() =>
+                    setMembers((current) => [
+                      ...current,
+                      {
+                        _key: genId(),
+                        group_id: id,
+                        egress_trunk_id: '',
+                        destination_prefix: '',
+                        priority: 100,
+                        weight: 100,
+                        time_start: null,
+                        time_end: null,
+                        enabled: true,
+                      },
+                    ])
+                  }
+                  startContent={<Plus className="w-4 h-4" />}
+                >
+                  添加中继
+                </Button>
+              )
             }
           >
             <Table aria-label="落地中继成员列表" isStriped>
@@ -153,9 +197,20 @@ export default function EgressGroupDetailPage() {
                 <TableColumn key="time_start">开始时间</TableColumn>
                 <TableColumn key="time_end">结束时间</TableColumn>
                 <TableColumn key="enabled">启用</TableColumn>
-                <TableColumn key="actions" align="end">操作</TableColumn>
+                <TableColumn key="actions" align="end">
+                  操作
+                </TableColumn>
               </TableHeader>
-              <TableBody items={members} emptyContent="尚未配置落地中继成员">
+              <TableBody
+                items={members}
+                emptyContent={
+                  <EmptyState
+                    icon={Server}
+                    title="暂无中继成员"
+                    description="添加落地中继后将在此展示"
+                  />
+                }
+              >
                 {(row) => {
                   const idx = members.findIndex((m) => (m._key || m.id) === (row._key || row.id));
                   const rowKey = row._key || row.id || idx;
@@ -227,15 +282,21 @@ export default function EgressGroupDetailPage() {
                         />
                       </TableCell>
                       <TableCell>
-                        <Button
-                          isIconOnly
-                          size="sm"
-                          color="danger"
-                          variant="light"
-                          onPress={() => setMembers((current) => current.filter((_, itemIndex) => itemIndex !== idx))}
-                        >
-                          <Trash2 className="w-4 h-4 text-danger" />
-                        </Button>
+                        {canManage && (
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            color="danger"
+                            variant="light"
+                            onPress={() =>
+                              setMembers((current) =>
+                                current.filter((_, itemIndex) => itemIndex !== idx),
+                              )
+                            }
+                          >
+                            <Trash2 className="w-4 h-4 text-danger" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   );
@@ -246,12 +307,18 @@ export default function EgressGroupDetailPage() {
         ),
       },
     ];
-  }, [group, members, trunkOptions, id]);
+  }, [canManage, group, members, trunkOptions, id]);
 
   if (loading) {
     return (
       <section>
-        <DetailHeader loading={true} saving={saving} onRefresh={load} onSave={save} />
+        <DetailHeader
+          loading={true}
+          saving={saving}
+          onRefresh={load}
+          onSave={save}
+          canSave={canManage}
+        />
         <DetailLoading />
       </section>
     );
@@ -259,7 +326,13 @@ export default function EgressGroupDetailPage() {
 
   return (
     <section>
-      <DetailHeader loading={loading} saving={saving} onRefresh={load} onSave={save} />
+      <DetailHeader
+        loading={loading}
+        saving={saving}
+        onRefresh={load}
+        onSave={save}
+        canSave={canManage}
+      />
       {error ? (
         <DetailErrorState error={error} />
       ) : group ? (

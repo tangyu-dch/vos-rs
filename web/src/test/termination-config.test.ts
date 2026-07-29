@@ -32,33 +32,50 @@ const member: CallerPoolMember = {
 
 describe('caller pool configuration', () => {
   it('only offers an allocated number that can be presented', () => {
-    expect(numberCanJoinCallerPool({
-      number: '10086',
-      allocation_source_type: 'trunk',
-      allocation_source_id: 'access-a',
-      direction: 'both',
-      status: 'assigned',
-    }, pool)).toBe(true);
-    expect(numberCanJoinCallerPool({
-      number: '10010',
-      allocation_source_type: 'trunk',
-      allocation_source_id: 'access-b',
-      direction: 'both',
-      status: 'assigned',
-    }, pool)).toBe(false);
-    expect(numberCanJoinCallerPool({
-      number: '10000',
-      allocation_source_type: 'trunk',
-      allocation_source_id: 'access-a',
-      direction: 'inbound',
-      status: 'assigned',
-    }, pool)).toBe(false);
+    expect(
+      numberCanJoinCallerPool(
+        {
+          number: '10086',
+          allocation_source_type: 'trunk',
+          allocation_source_id: 'access-a',
+          direction: 'both',
+          status: 'assigned',
+        },
+        pool,
+      ),
+    ).toBe(true);
+    expect(
+      numberCanJoinCallerPool(
+        {
+          number: '10010',
+          allocation_source_type: 'trunk',
+          allocation_source_id: 'access-b',
+          direction: 'both',
+          status: 'assigned',
+        },
+        pool,
+      ),
+    ).toBe(false);
+    expect(
+      numberCanJoinCallerPool(
+        {
+          number: '10000',
+          allocation_source_type: 'trunk',
+          allocation_source_id: 'access-a',
+          direction: 'inbound',
+          status: 'assigned',
+        },
+        pool,
+      ),
+    ).toBe(false);
   });
 
   it('rejects duplicate numbers and invalid numeric limits', () => {
     expect(callerPoolValidationError(pool, [member, { ...member }])).toContain('不能重复');
     expect(callerPoolValidationError(pool, [{ ...member, weight: 0 }])).toContain('权重');
-    expect(callerPoolValidationError(pool, [{ ...member, max_concurrent: -1 }])).toContain('最大并发');
+    expect(callerPoolValidationError(pool, [{ ...member, max_concurrent: -1 }])).toContain(
+      '最大并发',
+    );
     expect(callerPoolValidationError(pool, [member])).toBeNull();
   });
 });
@@ -77,9 +94,15 @@ const groupMember: EgressGroupMember = {
 
 describe('egress group configuration', () => {
   it('validates time windows and destination prefixes', () => {
-    expect(egressGroupValidationError(group, [{ ...groupMember, time_start: '24:00' }])).toContain('HH:MM');
-    expect(egressGroupValidationError(group, [{ ...groupMember, time_end: null }])).toContain('成对');
-    expect(egressGroupValidationError(group, [{ ...groupMember, destination_prefix: '86*' }])).toContain('被叫前缀');
+    expect(egressGroupValidationError(group, [{ ...groupMember, time_start: '24:00' }])).toContain(
+      'HH:MM',
+    );
+    expect(egressGroupValidationError(group, [{ ...groupMember, time_end: null }])).toContain(
+      '成对',
+    );
+    expect(
+      egressGroupValidationError(group, [{ ...groupMember, destination_prefix: '86*' }]),
+    ).toContain('被叫前缀');
     expect(egressGroupValidationError(group, [groupMember])).toBeNull();
   });
 

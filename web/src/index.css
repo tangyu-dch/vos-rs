@@ -1,22 +1,62 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 @plugin './hero.ts';
 @source '../node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}';
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  font-family: Inter, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
   font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-html, body, #root {
+.overview-card {
+  border: 1px solid hsl(var(--heroui-default-200) / 0.72);
+  border-radius: 0.75rem;
+  background: hsl(var(--heroui-content1));
+  box-shadow: 0 1px 2px hsl(var(--heroui-foreground) / 0.035);
+}
+
+.announcement-ai-editor .aie-theme-light,
+.announcement-ai-editor .aie-theme-dark {
+  --aie-bg-color: hsl(var(--heroui-content1));
+  --aie-border-color: hsl(var(--heroui-default-200));
+  --aie-text-color: hsl(var(--heroui-foreground));
+  --aie-text-placeholder-color: hsl(var(--heroui-default-400));
+  --aie-button-bg-color: hsl(var(--heroui-content1));
+  --aie-button-border-color: hsl(var(--heroui-default-200));
+  --aie-button-hover-bg-color: hsl(var(--heroui-default-100));
+  --aie-button-hover-border-color: hsl(var(--heroui-default-300));
+  --aie-input-bg-color: hsl(var(--heroui-content1));
+  --aie-input-border-color: hsl(var(--heroui-default-200));
+  --aie-menus-bg-color: hsl(var(--heroui-content1));
+  --aie-menus-svg-color: hsl(var(--heroui-default-700));
+  --aie-menus-item-hover-color: hsl(var(--heroui-default-100));
+  --aie-menus-divider-color: hsl(var(--heroui-default-200));
+}
+
+.announcement-ai-editor .aie-container {
+  border: 0;
+  font-family: inherit;
+}
+
+.announcement-ai-editor aie-footer {
+  display: none;
+}
+
+html,
+body,
+#root {
   margin: 0;
   padding: 0;
   height: 100%;
   width: 100%;
 }
 
-ul, ol, li {
+ul,
+ol,
+li {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -65,12 +105,14 @@ ul, ol, li {
 /* 等宽数字：让 KPI 数值不抖动，对齐更整齐 */
 .tnum {
   font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum";
+  font-feature-settings: 'tnum';
 }
 
 /* 拓扑画布边线流动动画：让连线有"数据在流动"的视觉反馈 */
 @keyframes flowDash {
-  to { stroke-dashoffset: -16; }
+  to {
+    stroke-dashoffset: -16;
+  }
 }
 .edge-flow {
   stroke-dasharray: 6 4;
@@ -86,6 +128,10 @@ ul, ol, li {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .edge-flow { animation: none; }
-  .topo-node { transition: none; }
+  .edge-flow {
+    animation: none;
+  }
+  .topo-node {
+    transition: none;
+  }
 }

@@ -1,29 +1,29 @@
 // IVR 节点类型枚举 - 支持多种操作行为
 export type IvrNodeType =
-  | 'start'            // 呼入入口 (DID 匹配)
-  | 'prompt'           // 播放语音文件
-  | 'tts'              // 文字转语音
-  | 'collect_dtmf'     // 收集 DTMF 按键
-  | 'menu'             // 多级菜单分支 (按 DTMF 路由到下级)
-  | 'condition'        // 条件判断 (变量比较分支)
-  | 'route'            // 智能路由 (按主叫/被叫/时间选路)
-  | 'transfer_queue'   // 转接坐席队列
-  | 'transfer_ext'     // 转接分机
-  | 'transfer_pstn'    // 转接外线 (PSTN 中继)
-  | 'voicemail'        // 留言录音
-  | 'record'           // 录音节点
-  | 'http_webhook'     // HTTP Webhook 调用
-  | 'set_var'          // 设置上下文变量
-  | 'asr'              // 语音识别
-  | 'ai_agent'         // AI 智能体对话
-  | 'loop'             // 循环跳转
-  | 'hangup';          // 挂断
+  | 'start' // 呼入入口 (DID 匹配)
+  | 'prompt' // 播放语音文件
+  | 'tts' // 文字转语音
+  | 'collect_dtmf' // 收集 DTMF 按键
+  | 'menu' // 多级菜单分支 (按 DTMF 路由到下级)
+  | 'condition' // 条件判断 (变量比较分支)
+  | 'route' // 智能路由 (按主叫/被叫/时间选路)
+  | 'transfer_queue' // 转接坐席队列
+  | 'transfer_ext' // 转接分机
+  | 'transfer_pstn' // 转接外线 (PSTN 中继)
+  | 'voicemail' // 留言录音
+  | 'record' // 录音节点
+  | 'http_webhook' // HTTP Webhook 调用
+  | 'set_var' // 设置上下文变量
+  | 'asr' // 语音识别
+  | 'ai_agent' // AI 智能体对话
+  | 'loop' // 循环跳转
+  | 'hangup'; // 挂断
 
 // 节点端口定义 (用于连线)
 export interface NodePort {
-  id: string;          // 端口唯一 id
-  label: string;       // 端口标签 (如 "按1" / "匹配" / "默认")
-  type: 'out' | 'in';  // 输入/输出端口
+  id: string; // 端口唯一 id
+  label: string; // 端口标签 (如 "按1" / "匹配" / "默认")
+  type: 'out' | 'in'; // 输入/输出端口
 }
 
 // IVR 节点
@@ -39,10 +39,10 @@ export interface IvrNode {
 // IVR 连线
 export interface IvrEdge {
   id: string;
-  source: string;        // 源节点 id
-  target: string;        // 目标节点 id
-  sourcePort?: string;   // 源端口 id (menu 节点按按键区分)
-  label?: string;        // 边标签 (如 "按1" / "超时")
+  source: string; // 源节点 id
+  target: string; // 目标节点 id
+  sourcePort?: string; // 源端口 id (menu 节点按按键区分)
+  label?: string; // 边标签 (如 "按1" / "超时")
 }
 
 // 完整 IVR 流程
@@ -50,9 +50,9 @@ export interface IvrFlow {
   id: string;
   name: string;
   description?: string;
-  did?: string;              // 绑定的 DID 号码
-  welcome_prompt?: string;   // 入口欢迎语音
-  timeout_secs: number;      // 全局超时
+  did?: string; // 绑定的 DID 号码
+  welcome_prompt?: string; // 入口欢迎语音
+  timeout_secs: number; // 全局超时
   enabled: boolean;
   nodes: IvrNode[];
   edges: IvrEdge[];
@@ -65,8 +65,8 @@ export interface NodeCatalogEntry {
   type: IvrNodeType;
   title: string;
   description: string;
-  icon: string;             // lucide icon name
-  color: string;            // tailwind 类名 (bg + text)
+  icon: string; // lucide icon name
+  color: string; // tailwind 类名 (bg + text)
   category: 'flow' | 'media' | 'routing' | 'integration' | 'system';
   defaultConfig: Record<string, unknown>;
   defaultPorts: NodePort[];
@@ -321,7 +321,7 @@ export const NODE_CATALOG_MAP: Record<IvrNodeType, NodeCatalogEntry> = NODE_CATA
     acc[entry.type] = entry;
     return acc;
   },
-  {} as Record<IvrNodeType, NodeCatalogEntry>
+  {} as Record<IvrNodeType, NodeCatalogEntry>,
 );
 
 // 生成节点 id

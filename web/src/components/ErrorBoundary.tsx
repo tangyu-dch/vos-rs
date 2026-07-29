@@ -35,9 +35,7 @@ export default class ErrorBoundary extends Component<Props, State> {
                 <AlertTriangle className="w-6 h-6" />
                 <h2 className="text-lg font-semibold">应用发生意外错误</h2>
               </div>
-              <p className="text-sm text-default-500">
-                {this.state.error?.message || '未知错误'}
-              </p>
+              <p className="text-sm text-default-500">{this.state.error?.message || '未知错误'}</p>
               <Button
                 color="primary"
                 variant="flat"

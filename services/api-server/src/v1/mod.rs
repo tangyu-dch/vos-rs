@@ -25,7 +25,10 @@ pub(crate) fn public_routes() -> Router<AppState> {
 pub(crate) fn protected_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/api/v1/auth/me", get(auth::current_session))
+        .merge(access_control_routes())
         .merge(overview_routes())
+        .merge(notification_routes())
+        .merge(announcement_routes())
         .merge(subscriber_routes())
         .merge(interconnect_routes())
         .merge(termination_routes())
