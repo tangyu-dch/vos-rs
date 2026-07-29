@@ -418,7 +418,7 @@ pub(crate) async fn relay_media_port(
 
                         // 如果开启了录音，我们依然执行录音包落盘
                         if let Some(leg) = &plan.recording {
-                            let _ = leg.session.try_record(leg.channel, rtp);
+                            let _ = leg.session.try_record(leg.channel, plan.codec, rtp);
                         }
                         match socket.try_recv_from(&mut buffer) {
                             Ok((next_size, next_source)) => {
@@ -630,7 +630,7 @@ pub(crate) async fn relay_media_port(
                         }
                     }
                     if let Some(leg) = &plan.recording {
-                        match leg.session.try_record(leg.channel, *rtp_packet) {
+                        match leg.session.try_record(leg.channel, plan.codec, *rtp_packet) {
                             Ok(true) => {
                                 relay.record_metric(local_port, |metrics| {
                                     metrics.recorded_packets += 1

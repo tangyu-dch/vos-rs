@@ -266,7 +266,7 @@ impl MediaRelayState {
         };
         recording
             .session
-            .try_record(recording.channel, packet)
+            .try_record(recording.channel, None, packet)
             .map_err(recording_error)
     }
 

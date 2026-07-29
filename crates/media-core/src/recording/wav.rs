@@ -2,12 +2,12 @@ use super::{
     RecordingChannel, RecordingWriter, RECORDING_BITS_PER_SAMPLE, RECORDING_CHANNELS,
     RECORDING_FLUSH_INTERVAL_FRAMES, RECORDING_SAMPLE_RATE,
 };
+use crate::live_transcode::LiveTranscoder;
 use rtp_core::AudioCodec;
 use std::fs::{self, File};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-#[derive(Debug)]
 pub struct WavCallRecorder {
     file: File,
     frames_written: u64,
@@ -16,27 +16,36 @@ pub struct WavCallRecorder {
     frames_since_flush: u64,
     interleaved_samples: Vec<i16>,
     write_buffer: Vec<u8>,
+    opus_to_pcma: [Option<LiveTranscoder>; 2],
 }
 
 impl RecordingWriter for WavCallRecorder {
     fn record(
         &mut self,
         channel: RecordingChannel,
-        payload_type: u8,
+        codec: AudioCodec,
         timestamp: u32,
         payload: &[u8],
     ) -> io::Result<bool> {
-        WavCallRecorder::record(self, channel, payload_type, timestamp, payload)
+        WavCallRecorder::record(self, channel, codec, timestamp, payload)
     }
 
     fn would_exceed_limit(
         &self,
         channel: RecordingChannel,
+        codec: AudioCodec,
         timestamp: u32,
         payload_len: usize,
         max_frames: Option<u64>,
     ) -> bool {
-        WavCallRecorder::would_exceed_limit(self, channel, timestamp, payload_len, max_frames)
+        WavCallRecorder::would_exceed_limit(
+            self,
+            channel,
+            codec,
+            timestamp,
+            payload_len,
+            max_frames,
+        )
     }
 
     fn flush_recording(&mut self) -> io::Result<()> {
@@ -65,33 +74,54 @@ impl WavCallRecorder {
             frames_since_flush: 0,
             interleaved_samples: Vec::new(),
             write_buffer: Vec::new(),
+            opus_to_pcma: [None, None],
         })
     }
 
     pub fn record(
         &mut self,
         channel: RecordingChannel,
-        payload_type: u8,
+        codec: AudioCodec,
         timestamp: u32,
         payload: &[u8],
     ) -> io::Result<bool> {
-        let codec = match AudioCodec::from_static_payload_type(payload_type) {
-            Some(codec) => codec,
-            None => return Ok(false),
-        };
         if payload.is_empty() {
             return Ok(false);
         }
 
-        let num_samples = payload.len();
-        let start_frame = self.start_frame(channel, timestamp);
+        let start_frame = self.start_frame(channel, codec, timestamp);
+        let transcoded_payload;
+        let (recording_codec, recording_payload) = match codec {
+            AudioCodec::Pcma | AudioCodec::Pcmu => (codec, payload),
+            AudioCodec::Opus => {
+                let transcoder = &mut self.opus_to_pcma[channel.index()];
+                if transcoder.is_none() {
+                    *transcoder = Some(
+                        LiveTranscoder::new(AudioCodec::Opus, AudioCodec::Pcma)
+                            .map_err(io::Error::other)?,
+                    );
+                }
+                transcoded_payload = transcoder
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("Opus recording transcoder unavailable"))?
+                    .transcode(payload)
+                    .map_err(io::Error::other)?;
+                if transcoded_payload.is_empty() {
+                    return Ok(true);
+                }
+                (AudioCodec::Pcma, transcoded_payload.as_slice())
+            }
+            AudioCodec::G722 | AudioCodec::G729 => return Ok(false),
+        };
+
+        let num_samples = recording_payload.len();
         self.ensure_frames(start_frame + num_samples as u64)?;
         if start_frame < self.flushed_frames {
             return Ok(true);
         }
 
-        for (sample_index, &payload_byte) in payload.iter().enumerate() {
-            let sample = match codec {
+        for (sample_index, &payload_byte) in recording_payload.iter().enumerate() {
+            let sample = match recording_codec {
                 AudioCodec::Pcmu => decode_pcmu(payload_byte),
                 AudioCodec::Pcma => decode_pcma(payload_byte),
                 _ => continue,
@@ -111,6 +141,7 @@ impl WavCallRecorder {
     pub fn would_exceed_limit(
         &self,
         channel: RecordingChannel,
+        codec: AudioCodec,
         timestamp: u32,
         payload_len: usize,
         max_frames: Option<u64>,
@@ -119,15 +150,15 @@ impl WavCallRecorder {
             return false;
         };
         let base = self.base_timestamps[channel.index()].unwrap_or(timestamp);
-        let start_frame = u64::from(timestamp.wrapping_sub(base));
+        let start_frame = timestamp_to_recording_frame(timestamp.wrapping_sub(base), codec);
         self.frames_written > 0
             && (start_frame.saturating_add(payload_len as u64) > max_frames
                 || self.frames_written.saturating_add(payload_len as u64) > max_frames)
     }
 
-    fn start_frame(&mut self, channel: RecordingChannel, timestamp: u32) -> u64 {
+    fn start_frame(&mut self, channel: RecordingChannel, codec: AudioCodec, timestamp: u32) -> u64 {
         let base = self.base_timestamps[channel.index()].get_or_insert(timestamp);
-        u64::from(timestamp.wrapping_sub(*base))
+        timestamp_to_recording_frame(timestamp.wrapping_sub(*base), codec)
     }
 
     fn ensure_frames(&mut self, target_frames: u64) -> io::Result<()> {
@@ -202,6 +233,11 @@ impl WavCallRecorder {
     pub fn flush_recording(&mut self) -> io::Result<()> {
         self.flush_ready_frames(true)
     }
+}
+
+fn timestamp_to_recording_frame(timestamp_delta: u32, codec: AudioCodec) -> u64 {
+    u64::from(timestamp_delta).saturating_mul(u64::from(RECORDING_SAMPLE_RATE))
+        / u64::from(codec.clock_rate())
 }
 
 pub fn write_wav_header(file: &mut File, data_bytes: u32) -> io::Result<()> {

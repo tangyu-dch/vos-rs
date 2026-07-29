@@ -136,6 +136,7 @@ fn handle_packet(
     let should_rotate = recorders.get(&session.id).is_some_and(|recording_file| {
         recording_file.recorder.would_exceed_limit(
             packet.channel,
+            packet.codec,
             packet.timestamp,
             packet.payload.as_slice().len(),
             session.max_file_frames(),
@@ -162,7 +163,7 @@ fn handle_packet(
     };
     if let Err(error) = recording_file.recorder.record(
         packet.channel,
-        packet.payload_type,
+        packet.codec,
         packet.timestamp,
         packet.payload.as_slice(),
     ) {

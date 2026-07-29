@@ -68,15 +68,19 @@ impl RecordingSession {
     pub fn try_record(
         &self,
         channel: RecordingChannel,
+        negotiated_codec: Option<AudioCodec>,
         packet: RtpPacketView<'_>,
     ) -> io::Result<bool> {
         if self.info.has_error.load(Ordering::Acquire) {
             return Err(io::Error::other("recording session has encountered error"));
         }
 
-        if AudioCodec::from_static_payload_type(packet.payload_type).is_none()
-            || packet.payload.is_empty()
-        {
+        let Some(codec) =
+            negotiated_codec.or_else(|| AudioCodec::from_static_payload_type(packet.payload_type))
+        else {
+            return Ok(false);
+        };
+        if packet.payload.is_empty() {
             return Ok(false);
         }
 
@@ -84,7 +88,7 @@ impl RecordingSession {
             Arc::clone(&self.info),
             RecordedRtpPacket {
                 channel,
-                payload_type: packet.payload_type,
+                codec,
                 timestamp: packet.timestamp,
                 payload: self.pool.copy_payload(packet.payload),
             },

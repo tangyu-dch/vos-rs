@@ -38,6 +38,8 @@ prompts/
 !services/api-server/src/recording/**
 !crates/media-core/src/recording/
 !crates/media-core/src/recording/**
+!services/media-edge/src/media/recording/
+!services/media-edge/src/media/recording/**
 /test_recordings/**/
 **/test-recordings/
 tools/sipp/test_speech.wav

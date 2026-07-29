@@ -194,7 +194,7 @@ impl RecordingPool {
 
 pub struct RecordedRtpPacket {
     pub channel: RecordingChannel,
-    pub payload_type: u8,
+    pub codec: rtp_core::AudioCodec,
     pub timestamp: u32,
     pub payload: ReusablePacket,
 }
@@ -244,7 +244,7 @@ mod tests {
                 .unwrap();
             let packet = RtpPacketView::parse(&encoded).unwrap();
             session
-                .try_record(RecordingChannel::Caller, packet)
+                .try_record(RecordingChannel::Caller, None, packet)
                 .unwrap();
             session.flush().unwrap();
         }

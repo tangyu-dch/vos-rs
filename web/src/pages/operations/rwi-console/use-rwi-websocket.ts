@@ -112,7 +112,13 @@ function genUuid(): string {
 /** 将后端 state 字符串归一化为前端 CallState */
 function normalizeState(raw: string | undefined): CallState {
   const s = String(raw || '').toLowerCase();
-  if (s === 'answered' || s === 'active' || s === 'in_call' || s === 'in_call_early')
+  if (
+    s === 'answered' ||
+    s === 'established' ||
+    s === 'active' ||
+    s === 'in_call' ||
+    s === 'in_call_early'
+  )
     return 'answered';
   if (s === 'ended' || s === 'terminated' || s === 'completed') return 'ended';
   return 'ringing';

@@ -7,7 +7,7 @@ pub trait RecordingWriter: Send {
     fn record(
         &mut self,
         channel: super::RecordingChannel,
-        payload_type: u8,
+        codec: rtp_core::AudioCodec,
         timestamp: u32,
         payload: &[u8],
     ) -> io::Result<bool>;
@@ -15,6 +15,7 @@ pub trait RecordingWriter: Send {
     fn would_exceed_limit(
         &self,
         channel: super::RecordingChannel,
+        codec: rtp_core::AudioCodec,
         timestamp: u32,
         payload_len: usize,
         max_frames: Option<u64>,
