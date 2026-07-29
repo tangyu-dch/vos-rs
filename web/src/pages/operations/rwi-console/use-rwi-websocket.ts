@@ -137,7 +137,15 @@ function activeCallToLiveItem(dto: ActiveCallDto): LiveCallItem {
     durationSec: state === 'ended' ? 0 : Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
     gateway: dto.gateway || undefined,
     media: {},
-    transcripts: [],
+    transcripts: [
+      {
+        id: `sync-${dto.call_id ?? startedAt}`,
+        speaker: 'system',
+        text:
+          state === 'answered' ? '已同步当前通话，通话处于接通状态' : '已同步当前通话，等待接通',
+        timestamp: nowTimestamp(),
+      },
+    ],
     listening: false,
   };
 }
@@ -228,8 +236,14 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
     setCalls((prev) => {
       switch (type) {
         case 'call_started': {
-          // 已存在则不重复添加
-          if (prev.some((c) => c.callId === callId)) return prev;
+          // REST 初始化可能先同步到同一通话，此时补充事件而不是丢弃。
+          if (prev.some((c) => c.callId === callId)) {
+            return prev.map((call) =>
+              call.callId === callId
+                ? appendSystemTranscript(call, '收到呼叫建立事件，正在选择路由')
+                : call,
+            );
+          }
           const item: LiveCallItem = {
             callId,
             caller: String(data?.caller ?? ''),
@@ -244,7 +258,7 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
               {
                 id: `t-${ts}`,
                 speaker: 'system',
-                text: '收到 SIP INVITE，呼叫建立中…',
+                text: '收到呼叫请求，正在建立通话…',
                 timestamp: nowTimestamp(),
               },
             ],
@@ -253,10 +267,18 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
           return [item, ...prev];
         }
         case 'call_ringing': {
-          return prev.map((c) => (c.callId === callId ? { ...c, state: 'ringing' } : c));
+          return prev.map((call) =>
+            call.callId === callId
+              ? appendSystemTranscript({ ...call, state: 'ringing' }, '被叫振铃中')
+              : call,
+          );
         }
         case 'call_answered': {
-          return prev.map((c) => (c.callId === callId ? { ...c, state: 'answered' } : c));
+          return prev.map((call) =>
+            call.callId === callId
+              ? appendSystemTranscript({ ...call, state: 'answered' }, '通话已接通')
+              : call,
+          );
         }
         case 'call_ended': {
           const duration = Number(data?.duration_secs ?? 0);
@@ -327,7 +349,7 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
                     {
                       id: `t-${ts}-${Math.random().toString(36).slice(2, 6)}`,
                       speaker: 'system',
-                      text: `收到 DTMF 按键: ${digit}`,
+                      text: `收到按键: ${digit}`,
                       timestamp: nowTimestamp(),
                     },
                   ],
@@ -597,10 +619,10 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
       if (ok) {
         setCalls((prev) =>
           prev.map((c) =>
-            c.callId === callId ? appendSystemTranscript(c, '已发送 BargeIn 强插指令', true) : c,
+            c.callId === callId ? appendSystemTranscript(c, '已发送强插指令', true) : c,
           ),
         );
-        message.warning(`已对通话 ${callId} 触发 BargeIn`);
+        message.warning(`已对通话 ${callId} 触发强插`);
       }
     },
     [sendCommand],
@@ -618,10 +640,10 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
       if (ok) {
         setCalls((prev) =>
           prev.map((c) =>
-            c.callId === callId ? appendSystemTranscript(c, `[TTS 播报]: ${text.trim()}`) : c,
+            c.callId === callId ? appendSystemTranscript(c, `[文本播报]: ${text.trim()}`) : c,
           ),
         );
-        message.success(`已向通话 ${callId} 注入 TTS 指令`);
+        message.success(`已向通话 ${callId} 注入文本播报指令`);
       }
     },
     [sendCommand],
@@ -662,9 +684,7 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
       if (ok) {
         setCalls((prev) =>
           prev.map((c) =>
-            c.callId === callId
-              ? appendSystemTranscript(c, `已发起 SIP REFER 转接 -> ${target.trim()}`)
-              : c,
+            c.callId === callId ? appendSystemTranscript(c, `已发起转接 → ${target.trim()}`) : c,
           ),
         );
         message.success(`已发送转接指令至目标: ${target.trim()}`);
@@ -683,7 +703,7 @@ export function useRwiWebSocket(): UseRwiWebSocketResult {
       if (ok) {
         setCalls((prev) =>
           prev.map((c) =>
-            c.callId === callId ? appendSystemTranscript(c, '已发送 BYE 挂断指令 (Cause: 16)') : c,
+            c.callId === callId ? appendSystemTranscript(c, '已发送挂断指令（原因码：16）') : c,
           ),
         );
         message.success(`通话 ${callId} 挂断指令已发送`);

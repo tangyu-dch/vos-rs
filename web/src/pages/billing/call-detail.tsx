@@ -3,10 +3,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Card, CardBody, Chip, Tabs, Tab } from '@heroui/react';
-import { PhoneCall, Radio, Activity, FileAudio } from 'lucide-react';
+import { PhoneCall, Radio, Activity, FileAudio, Route } from 'lucide-react';
 import { api } from '@/services/client';
 import { DetailErrorState, DetailLoading, SectionBlock } from '@/components/detail-shell';
 import { RecordingPlayer } from '@/components/recording-player';
+import { CallSipFlowTab } from '@/pages/billing/call-sipflow-tab';
 import {
   callDetailText,
   datetimeText,
@@ -105,6 +106,13 @@ function runtimeLabel(avail: string | undefined): {
   }
 }
 
+function sipIdentityText(value: unknown): string {
+  const text = valueText(value);
+  if (text === '—') return text;
+  const sipUser = text.match(/sip:([^@;>]+)/i)?.[1];
+  return sipUser || text.match(/^"([^"]+)"/)?.[1] || text;
+}
+
 // 键值展示行
 function DetailRow({
   label,
@@ -175,7 +183,7 @@ export function CallDetailView({ id }: CallDetailProps) {
                   </Chip>
                 </div>
                 <div className="text-tiny text-default-400 mt-0.5">
-                  {valueText(cdr?.caller)} → {valueText(cdr?.callee)}
+                  {sipIdentityText(cdr?.caller)} → {sipIdentityText(cdr?.callee)}
                 </div>
               </div>
             </div>
@@ -209,8 +217,8 @@ export function CallDetailView({ id }: CallDetailProps) {
             <CardBody className="p-4">
               {cdr ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
-                  <DetailRow label="主叫号码" value={cdr.caller} />
-                  <DetailRow label="被叫号码" value={cdr.callee} />
+                  <DetailRow label="主叫号码" value={sipIdentityText(cdr.caller)} />
+                  <DetailRow label="被叫号码" value={sipIdentityText(cdr.callee)} />
                   <DetailRow label="呼叫方向" value={cdr.direction} />
                   <DetailRow label="通话状态" value={cdr.status} />
                   <DetailRow
@@ -245,6 +253,18 @@ export function CallDetailView({ id }: CallDetailProps) {
               )}
             </CardBody>
           </Card>
+        </Tab>
+
+        <Tab
+          key="signaling"
+          title={
+            <div className="flex items-center gap-1.5">
+              <Route className="w-3.5 h-3.5" />
+              <span>信令流程</span>
+            </div>
+          }
+        >
+          <CallSipFlowTab id={id} />
         </Tab>
 
         {/* 媒体质量标签 */}
@@ -313,7 +333,7 @@ export function CallDetailView({ id }: CallDetailProps) {
                   <DetailRow label="通话质量评分" value={cdr.mos} />
                 </div>
               ) : (
-                <p className="text-small text-default-400">无 RTCP 媒体质量数据</p>
+                <p className="text-small text-default-400">无媒体质量数据</p>
               )}
             </CardBody>
           </Card>
@@ -385,18 +405,18 @@ export function CallDetailView({ id }: CallDetailProps) {
               </Card>
             </SectionBlock>
 
-            <SectionBlock title="按键记录" description="通话过程中的 DTMF 按键序列">
+            <SectionBlock title="按键记录" description="通话过程中的按键序列">
               <Card className="border border-default-200">
                 <CardBody className="p-4">
                   {cdr?.dtmf_digits ? (
                     <div className="flex items-center gap-2">
-                      <span className="text-tiny text-default-400">DTMF</span>
+                      <span className="text-tiny text-default-400">按键</span>
                       <span className="text-small font-mono text-foreground bg-content2 px-2 py-1 rounded">
                         {valueText(cdr.dtmf_digits)}
                       </span>
                     </div>
                   ) : (
-                    <p className="text-small text-default-400">无 DTMF 按键记录</p>
+                    <p className="text-small text-default-400">无按键记录</p>
                   )}
                 </CardBody>
               </Card>

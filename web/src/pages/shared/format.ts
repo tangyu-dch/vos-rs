@@ -36,12 +36,12 @@ const durationSecondsText = (value: unknown) => {
 /// 后端 `time::serde::rfc3339` 输出形如 "2026-07-28T10:30:00Z"。
 const datetimeText = (value: unknown) => {
   if (value === null || value === undefined || value === '') return '—';
-  const str = String(value);
-  const date = new Date(str);
+  const numericValue = typeof value === 'number' ? value : Number.NaN;
+  const date = new Date(Number.isFinite(numericValue) ? numericValue : String(value));
   if (!Number.isNaN(date.getTime())) {
     return date.toLocaleString('zh-CN', { hour12: false });
   }
-  return str;
+  return String(value);
 };
 
 const callDetailLabels: Record<string, string> = {

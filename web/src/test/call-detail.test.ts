@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { callDetailLabel, callDetailText } from '@/pages/shared/format';
+import { callDetailLabel, callDetailText, datetimeText } from '@/pages/shared/format';
 
 describe('call detail presentation', () => {
   it('uses Chinese labels instead of exposing CDR snake case fields', () => {
@@ -19,6 +19,10 @@ describe('call detail presentation', () => {
     expect(callDetailText('outbound', 'direction')).toBe('呼出');
     expect(callDetailText('answered', 'status')).toBe('已接通');
     expect(callDetailText(1_784_216_708_295, 'started_at_ms')).not.toContain('1784216708295');
+  });
+
+  it('formats numeric millisecond timestamps in detail cards', () => {
+    expect(datetimeText(1_785_314_746_947)).not.toBe('1785314746947');
   });
 
   it('translates routing audit decisions for operators', () => {

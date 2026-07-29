@@ -59,10 +59,10 @@ export function SipTraceModal({ isOpen, onClose, callId }: SipTraceModalProps) {
     try {
       setLoading(true);
       setError('');
-      const data = await api.get<SipFlowEvent[]>(`/calls/${callId}/sip-trace`);
+      const data = await api.get<SipFlowEvent[]>(`/calls/${encodeURIComponent(callId)}/sipflow`);
       setEvents(data);
     } catch (e) {
-      if (e instanceof Error) setError(e.message);
+      setError(e instanceof Error ? e.message : '请求失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -93,8 +93,11 @@ export function SipTraceModal({ isOpen, onClose, callId }: SipTraceModalProps) {
               <p className="text-sm text-default-500">正在追踪并解析全链路信令报文...</p>
             </div>
           ) : error ? (
-            <div className="p-4 bg-danger/10 text-danger rounded-xl text-sm border border-danger/20">
-              加载失败: {error}
+            <div className="flex items-center justify-between gap-3 p-4 bg-danger/10 text-danger rounded-xl text-sm border border-danger/20">
+              <span>加载失败：{error}</span>
+              <Button size="sm" color="danger" variant="flat" onPress={fetchTrace}>
+                重新加载
+              </Button>
             </div>
           ) : events.length === 0 ? (
             <div className="text-center py-12 text-default-400 text-sm">

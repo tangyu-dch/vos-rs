@@ -36,33 +36,45 @@ pub async fn call_sipflow(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // 1. Try to query the real captured SIP flows from the database
+    let flows = state
+        .store
+        .get_sip_flows(&call_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !flows.is_empty() {
+        let first_flow_ms = flows
+            .first()
+            .map(|flow| {
+                flow.timestamp.unix_timestamp() * 1000 + i64::from(flow.timestamp.millisecond())
+            })
+            .unwrap_or_default();
+        let start_ms = cdr
+            .as_ref()
+            .map_or(first_flow_ms, |value| value.started_at_ms);
+        let mut events = Vec::with_capacity(flows.len());
+        for flow in flows {
+            let flow_ms =
+                flow.timestamp.unix_timestamp() * 1000 + i64::from(flow.timestamp.millisecond());
+            events.push(SipFlowEvent {
+                offset_ms: (flow_ms - start_ms).max(0),
+                message: flow.method,
+                direction: flow.direction,
+                note: format!("From: {} → To: {}", flow.from_addr, flow.to_addr),
+                raw_message: Some(flow.raw_message),
+            });
+        }
+        return Ok((StatusCode::OK, Json(events)));
+    }
+
+    // 活跃通话尚未生成 CDR，也可能暂未捕获到报文；返回空列表供前端持续重试。
     let Some(cdr) = cdr else {
-        return Err((StatusCode::NOT_FOUND, "CDR not found".to_string()));
+        return Ok((StatusCode::OK, Json(Vec::new())));
     };
 
     let start_ms = cdr.started_at_ms;
     let answered_ms = cdr.answered_at_ms;
     let ended_ms = cdr.ended_at_ms;
-
-    // 1. Try to query the real captured SIP flows from the database
-    if let Ok(flows) = state.store.get_sip_flows(&call_id).await {
-        if !flows.is_empty() {
-            let mut events = Vec::with_capacity(flows.len());
-            for flow in flows {
-                let flow_ms =
-                    flow.timestamp.unix_timestamp() * 1000 + (flow.timestamp.millisecond() as i64);
-                let offset_ms = (flow_ms - start_ms).max(0);
-                events.push(SipFlowEvent {
-                    offset_ms,
-                    message: flow.method,
-                    direction: flow.direction,
-                    note: format!("From: {} → To: {}", flow.from_addr, flow.to_addr),
-                    raw_message: Some(flow.raw_message),
-                });
-            }
-            return Ok((StatusCode::OK, Json(events)));
-        }
-    }
 
     // 2. Fallback to synthesizing a canonical SIP flow timeline from CDR timestamps
     let mut events: Vec<SipFlowEvent> = Vec::new();

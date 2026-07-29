@@ -191,10 +191,16 @@ async fn process_ws_message(
     tx: &tokio::sync::mpsc::Sender<Message>,
 ) -> Result<(), String> {
     let (rwi_msg, is_binary) = match msg {
-        Message::Text(text) => (
-            serde_json::from_str::<RwiMessage>(&text).map_err(|e| e.to_string())?,
-            false,
-        ),
+        Message::Text(text) => {
+            if let Some(pong) = application_pong(&text) {
+                let _ = tx.send(Message::Text(pong)).await;
+                return Ok(());
+            }
+            (
+                serde_json::from_str::<RwiMessage>(&text).map_err(|e| e.to_string())?,
+                false,
+            )
+        }
         Message::Binary(bin) => (
             serde_json::from_slice::<RwiMessage>(&bin).map_err(|e| e.to_string())?,
             true,
@@ -224,6 +230,20 @@ async fn process_ws_message(
         let _ = tx.send(response_msg).await;
     }
     Ok(())
+}
+
+/// Handles browser-level application heartbeats, because browser WebSocket APIs
+/// cannot emit protocol-level ping frames.
+fn application_pong(text: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("ping") {
+        return None;
+    }
+    let timestamp = value
+        .get("ts")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_default();
+    Some(serde_json::json!({ "type": "pong", "ts": timestamp }).to_string())
 }
 
 /// 对升级后的每一条实时控制命令重新检查数据库权限快照。
@@ -424,5 +444,17 @@ mod tests {
         for (command, permission) in commands {
             assert_eq!(rwi_command_permission(&command), permission);
         }
+    }
+
+    #[test]
+    fn application_heartbeat_preserves_timestamp() {
+        let pong = application_pong(r#"{"type":"ping","ts":1720000000123}"#)
+            .expect("ping message should produce pong");
+        let value: serde_json::Value =
+            serde_json::from_str(&pong).expect("pong should be valid JSON");
+
+        assert_eq!(value["type"], "pong");
+        assert_eq!(value["ts"], 1_720_000_000_123_i64);
+        assert!(application_pong(r#"{"type":"command"}"#).is_none());
     }
 }

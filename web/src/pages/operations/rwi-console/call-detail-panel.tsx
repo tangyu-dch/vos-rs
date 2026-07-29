@@ -33,8 +33,14 @@ export function CallDetailPanel({
   onTransfer,
   onHangup,
 }: CallDetailPanelProps) {
+  const stateText =
+    currentCall.state === 'answered'
+      ? '已接通'
+      : currentCall.state === 'ended'
+        ? '已结束'
+        : '响铃中';
   // 媒体统计字段（后端可能仅推送部分，使用默认值兜底）
-  const codec = currentCall.media.codec ?? 'PCM';
+  const codec = currentCall.media.codec ?? '基础音频';
   const bitrateKbps = currentCall.media.bitrateKbps ?? 0;
   const packetLossPercent = currentCall.media.packetLossPercent ?? 0;
   const jitterMs = currentCall.media.jitterMs ?? 0;
@@ -116,10 +122,10 @@ export function CallDetailPanel({
               <AudioWaveform active={audioIn > 5} level={audioIn} color="primary" />
               <div className="text-right font-mono text-tiny text-default-400 space-y-0.5">
                 <div>
-                  Bitrate: <span className="text-foreground">{bitrateKbps} kbps</span>
+                  码率: <span className="text-foreground">{bitrateKbps} 千比特/秒</span>
                 </div>
                 <div>
-                  Loss: <span className="text-success">{packetLossPercent}%</span>
+                  丢包: <span className="text-success">{packetLossPercent}%</span>
                 </div>
               </div>
             </div>
@@ -130,7 +136,7 @@ export function CallDetailPanel({
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
                 <Phone className="w-3.5 h-3.5 text-primary" />
-                系统下行媒体流 (Outbound)
+                系统下行媒体流
               </span>
               <span className="font-mono text-tiny text-primary">{codec}</span>
             </div>
@@ -139,10 +145,10 @@ export function CallDetailPanel({
               <AudioWaveform active={audioOut > 5} level={audioOut} color="primary" />
               <div className="text-right font-mono text-tiny text-default-400 space-y-0.5">
                 <div>
-                  Jitter: <span className="text-foreground">{jitterMs} ms</span>
+                  抖动: <span className="text-foreground">{jitterMs} 毫秒</span>
                 </div>
                 <div>
-                  RTT: <span className="text-primary">{rttMs} ms</span>
+                  往返时延: <span className="text-primary">{rttMs} 毫秒</span>
                 </div>
               </div>
             </div>
@@ -157,7 +163,7 @@ export function CallDetailPanel({
               <h4 className="text-xs font-bold text-foreground">事件流 / 系统消息</h4>
             </div>
             <div className="text-[10px] text-default-400 font-mono">
-              实时事件: <span className="text-success">{currentCall.state}</span>
+              实时事件: <span className="text-success">{stateText}</span>
             </div>
           </div>
 
@@ -193,11 +199,11 @@ export function CallDetailPanel({
                     </div>
                     <div>
                       <div className="flex items-center gap-2 mb-1 text-[10px] text-default-400">
-                        <span className="font-semibold">用户 (Caller)</span>
+                        <span className="font-semibold">主叫用户</span>
                         <span>•</span>
                         <span className="font-mono">{t.timestamp}</span>
                         {t.latencyMs && (
-                          <span className="text-success font-mono">({t.latencyMs}ms)</span>
+                          <span className="text-success font-mono">({t.latencyMs} 毫秒)</span>
                         )}
                       </div>
                       <div className="p-3 rounded-2xl text-xs leading-relaxed bg-default-100 text-foreground rounded-tl-none border border-default-200/60">
