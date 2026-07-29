@@ -7,6 +7,7 @@ mod call_status;
 mod calls;
 mod cluster;
 mod conference;
+mod config;
 mod media_control;
 mod metrics;
 mod monitor;
@@ -84,6 +85,10 @@ pub async fn serve(
         .route("/manage/route-preview", get(calls::route_preview))
         .route("/manage/media-metrics", get(metrics::media_metrics))
         .route("/manage/cdr-metrics", get(metrics::cdr_metrics))
+        .route(
+            "/manage/config/recording",
+            get(config::recording_config).put(config::reload_recording_config),
+        )
         .route("/manage/calls/:call_id/play", post(media_control::play))
         .route(
             "/manage/calls/:call_id/stop-play",

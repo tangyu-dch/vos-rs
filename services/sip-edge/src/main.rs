@@ -151,7 +151,17 @@ async fn main() -> Result<(), AnyError> {
     let socket_addr = socket.local_addr()?;
     info!("SIP Edge UDP Listening on {}", socket_addr);
 
-    let storage_config = storage_core::StorageConfig::from_env();
+    let mut storage_config = storage_core::StorageConfig::from_env();
+    if let Some(ref db) = db_store {
+        if let Some(backend) = db.get_system_config("storage_backend").await? {
+            storage_config.backend = backend.parse().map_err(std::io::Error::other)?;
+        }
+    }
+    storage_config.local_dir = edge_config
+        .media
+        .recording_dir
+        .to_string_lossy()
+        .into_owned();
     let storage = match storage_core::create_storage(&storage_config).await {
         Ok(s) => {
             tracing::info!("Storage backend initialized: {}", s.backend_name());

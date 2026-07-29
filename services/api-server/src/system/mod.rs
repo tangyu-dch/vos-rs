@@ -2,6 +2,7 @@
 
 pub mod audit;
 pub mod auth;
+pub mod config_reload;
 pub mod hot_cache;
 pub mod metrics;
 pub mod permissions;

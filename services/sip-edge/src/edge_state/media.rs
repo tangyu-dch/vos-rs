@@ -35,6 +35,7 @@ impl EdgeState {
         caller_relay_rtp: RtpEndpoint,
         media_config: &MediaConfig,
     ) {
+        let recording_config = self.recording_media_config(media_config);
         let media_session = self.inbound_transactions.get(call_id).map(|transaction| {
             (
                 transaction
@@ -54,7 +55,7 @@ impl EdgeState {
                     &session_id,
                     caller_relay_rtp.port,
                     gw_port,
-                    media_config,
+                    &recording_config,
                 ) {
                     Ok(Some(path)) => {
                         self.call_manager.set_recording_path(

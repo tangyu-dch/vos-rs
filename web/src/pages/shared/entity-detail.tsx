@@ -8,6 +8,7 @@ import { useParams } from 'react-router-dom';
 import { api } from '@/services/client';
 import { getResource, type Entity } from '@/services/resources';
 import { ErrorState } from '@/components/detail-shell';
+import { RecordingPlayer } from '@/components/recording-player';
 import { callDetailLabel, callDetailText, valueText } from '@/pages/shared/format';
 import {
   CallMediaDiagnostics,
@@ -84,7 +85,7 @@ export function EntityDetail({
     try {
       const value =
         subpath === 'recording'
-          ? URL.createObjectURL(await api.blob(`${path}/${encodeURIComponent(id)}/${subpath}`))
+          ? true
           : await api.get(`${path}/${encodeURIComponent(id)}/${subpath}`);
       setRelated((old) => ({ ...old, [key]: value }));
     } catch (e) {
@@ -102,8 +103,8 @@ export function EntityDetail({
           <Spinner color="primary" />
         </div>
       );
-    if (typeof value === 'string' && value.startsWith('blob:')) {
-      return <audio className="w-full" controls src={value} />;
+    if (tabKey === 'recording') {
+      return <RecordingPlayer source={`${path}/${encodeURIComponent(id)}/recording`} />;
     }
     if (value && typeof value === 'object' && 'error' in value) {
       return (

@@ -194,12 +194,28 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Redis 存储连接成功 (必须要求)");
 
     // 使用数据库配置直接读取本地录音配置默认值
-    let storage_config = storage_core::StorageConfig::from_env();
+    let mut storage_config = storage_core::StorageConfig::from_env();
+    if let Some(backend) = store
+        .get_system_config("storage_backend")
+        .await?
+        .filter(|value| !value.trim().is_empty())
+    {
+        storage_config.backend = backend
+            .parse()
+            .map_err(|error: String| anyhow::anyhow!(error))?;
+    }
+    let recording_local_dir = store
+        .get_system_config("recording_dir")
+        .await?
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| storage_config.local_dir.clone().into());
+    storage_config.local_dir = recording_local_dir.to_string_lossy().into_owned();
     let recording_storage: Arc<dyn storage_core::StorageBackend> =
         storage_core::create_storage(&storage_config).await?.into();
     if recording_storage.backend_name() != "local" {
         let storage = Arc::clone(&recording_storage);
-        let recording_dir = storage_config.local_dir.clone();
+        let recording_dir = recording_local_dir.clone();
         tokio::spawn(async move {
             let mut uploaded_sizes = std::collections::HashMap::new();
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
@@ -207,7 +223,7 @@ async fn main() -> anyhow::Result<()> {
                 interval.tick().await;
                 let uploaded = crate::recording::sync_local_recordings(
                     storage.as_ref(),
-                    std::path::Path::new(&recording_dir),
+                    &recording_dir,
                     &mut uploaded_sizes,
                 )
                 .await;
@@ -326,7 +342,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         store: Arc::new(store),
         recording_storage,
-        recording_local_dir: storage_config.local_dir.into(),
+        recording_local_dir,
         sip_manage_base,
         internal_client,
         nats_client,

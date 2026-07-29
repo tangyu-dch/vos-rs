@@ -248,11 +248,12 @@ pub(super) async fn execute_record(
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
+        let media_config = edge_state.recording_media_config(&edge_config.media);
         let _ = edge_state.media_relay.start_call_recording(
             &session_id,
             caller_port,
             gateway_port,
-            &edge_config.media,
+            &media_config,
         );
 
         let edge_state_clone = Arc::clone(edge_state);

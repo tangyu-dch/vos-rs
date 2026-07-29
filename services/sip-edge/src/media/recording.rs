@@ -187,6 +187,7 @@ impl MediaRelayState {
             target,
             "start_call_recording",
             serde_json::json!({
+                "call_id": call_id,
                 "port_a": caller_relay_port,
                 "port_b": gateway_relay_port,
                 "wav_path": wav_path,

@@ -13,7 +13,7 @@ use storage_core::StorageBackend;
 mod audio;
 mod loader;
 
-use audio::build_audio_response;
+use audio::{build_audio_response, recording_not_available_response};
 use loader::{load_legacy_recording, load_recording_path};
 
 /// 将已经停止写入的本地 WAV 归档到对象存储。
@@ -141,10 +141,15 @@ pub async fn get_recording_audio(
             None
         }
     };
-    let bytes = if let Some(path) = cdr_recording_path.as_deref() {
-        load_recording_path(&state, path).await?
+    let loaded = if let Some(path) = cdr_recording_path.as_deref() {
+        load_recording_path(&state, path).await
     } else {
-        load_legacy_recording(storage.as_ref(), &prefix).await?
+        load_legacy_recording(storage.as_ref(), &prefix).await
+    };
+    let bytes = match loaded {
+        Ok(bytes) => bytes,
+        Err((StatusCode::NOT_FOUND, _)) => return Ok(recording_not_available_response()),
+        Err(error) => return Err(error),
     };
 
     let requested_range = request_headers

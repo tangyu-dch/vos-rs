@@ -63,6 +63,7 @@ pub async fn execute_record(
     edge_state: &EdgeState,
     edge_config: &EdgeConfig,
 ) -> NodeExecuteResult {
+    let mut media_config = edge_state.recording_media_config(&edge_config.media);
     // 录音决策：租户策略优先于全局配置
     // - 租户 recording_enabled=Some(true)  → 强制录音（即使全局未启用）
     // - 租户 recording_enabled=Some(false) → 强制不录音
@@ -71,8 +72,8 @@ pub async fn execute_record(
         .inbound_transactions
         .get(&context.call_id)
         .and_then(|t| t.tenant.clone());
-    let recording_enabled = edge_state
-        .tenant_recording_override(tenant_ctx.as_ref(), edge_config.media.recording_enabled);
+    let recording_enabled =
+        edge_state.tenant_recording_override(tenant_ctx.as_ref(), media_config.recording_enabled);
     if !recording_enabled {
         warn!(
             call_id = %context.call_id,
@@ -88,13 +89,16 @@ pub async fn execute_record(
         .config
         .get("max_duration")
         .and_then(|v| v.as_u64())
-        .unwrap_or(edge_config.media.recording_max_duration_secs);
+        .unwrap_or(media_config.recording_max_duration_secs);
     let format = node
         .config
         .get("format")
         .and_then(|v| v.as_str())
-        .unwrap_or(&edge_config.media.recording_format)
+        .unwrap_or(&media_config.recording_format)
         .to_string();
+    media_config.recording_enabled = recording_enabled;
+    media_config.recording_max_duration_secs = max_duration;
+    media_config.recording_format = format.clone();
 
     info!(
         call_id = %context.call_id,
@@ -107,7 +111,7 @@ pub async fn execute_record(
     );
 
     // IVR 单腿录音：caller 与 gateway 端口同为 a_port
-    start_recording_or_error(edge_state, context, a_port, &edge_config.media)
+    start_recording_or_error(edge_state, context, a_port, &media_config)
 }
 
 /// 调用媒体层启动单腿录音，返回对应 NodeExecuteResult

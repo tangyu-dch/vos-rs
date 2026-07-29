@@ -302,6 +302,7 @@ async fn clear_target(
 
 #[derive(serde::Deserialize)]
 struct StartCallRecordingReq {
+    call_id: String,
     port_a: u16,
     port_b: u16,
     wav_path: std::path::PathBuf,
@@ -327,11 +328,12 @@ async fn start_call_recording(
     config.recording_max_duration_secs = payload.max_duration_secs;
     config.recording_format = payload.format_str;
 
-    match state.media_relay.start_call_recording(
-        "remote_call",
+    match state.media_relay.start_call_recording_at_path(
+        &payload.call_id,
         payload.port_a,
         payload.port_b,
         &config,
+        payload.wav_path,
     ) {
         Ok(_) => Json(Ok(true)),
         Err(e) => Json(Err(e.to_string())),
@@ -555,11 +557,12 @@ async fn handle_uds_client(
                         config.recording_max_duration_secs = payload.max_duration_secs;
                         config.recording_format = payload.format_str;
 
-                        match state.media_relay.start_call_recording(
-                            "remote_call",
+                        match state.media_relay.start_call_recording_at_path(
+                            &payload.call_id,
                             payload.port_a,
                             payload.port_b,
                             &config,
+                            payload.wav_path,
                         ) {
                             Ok(_) => UdsResponse {
                                 result: Some(serde_json::json!(true)),

@@ -6,6 +6,7 @@ import { Card, CardBody, Chip, Tabs, Tab } from '@heroui/react';
 import { PhoneCall, Radio, Activity, FileAudio } from 'lucide-react';
 import { api } from '@/services/client';
 import { DetailErrorState, DetailLoading, SectionBlock } from '@/components/detail-shell';
+import { RecordingPlayer } from '@/components/recording-player';
 import {
   callDetailText,
   datetimeText,
@@ -371,10 +372,9 @@ export function CallDetailView({ id }: CallDetailProps) {
                         <p className="text-small text-foreground font-mono truncate">
                           {valueText(cdr.recording_path)}
                         </p>
-                        <audio
-                          controls
+                        <RecordingPlayer
                           className="mt-2 w-full h-8"
-                          src={`/api/v1/calls/${encodeURIComponent(id)}/recording`}
+                          source={`/calls/${encodeURIComponent(id)}/recording`}
                         />
                       </div>
                     </div>

@@ -62,6 +62,9 @@ impl EdgeState {
             ),
             inbound_transactions: CallSessionStore::default(),
             media_relay,
+            recording_runtime_config: arc_swap::ArcSwap::from_pointee(
+                super::runtime_config::RecordingRuntimeConfig::from(&config.media),
+            ),
             registrar: tokio::sync::RwLock::new(RegistrationStore::new()),
             subscription_store: SubscriptionStore::new(),
             db_store,

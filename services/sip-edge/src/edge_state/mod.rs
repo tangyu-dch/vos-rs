@@ -46,6 +46,7 @@ pub(crate) mod inbound_dialog;
 pub(crate) mod media;
 pub(crate) mod models;
 pub(crate) mod registration;
+pub(crate) mod runtime_config;
 pub(crate) mod server_transaction;
 pub(crate) mod session;
 pub(crate) mod tenant;
@@ -89,6 +90,7 @@ pub(crate) struct EdgeState {
     pub(crate) gateway_health: GatewayHealthTracker,
     pub(crate) inbound_transactions: CallSessionStore,
     pub(crate) media_relay: MediaRelayState,
+    pub(crate) recording_runtime_config: arc_swap::ArcSwap<runtime_config::RecordingRuntimeConfig>,
     pub(crate) registrar: tokio::sync::RwLock<RegistrationStore>,
     /// SUBSCRIBE/NOTIFY 订阅状态（RFC 6665）。
     pub(crate) subscription_store: SubscriptionStore,

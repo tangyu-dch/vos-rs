@@ -13,9 +13,11 @@ use std::{fs, io};
 use crate::media::config::MediaConfig;
 use crate::media::relay::MediaRelayState;
 use direct_writer::DirectIoWavWriterFactory;
+#[cfg(test)]
+use media_core::recording::recording_file_stem;
 pub use media_core::recording::{
-    available_disk_bytes, cleanup_expired_recordings, decode_pcma, decode_pcmu,
-    recording_file_stem, RecordingChannel, RecordingLeg, RecordingPool, RecordingSession,
+    available_disk_bytes, cleanup_expired_recordings, decode_pcma, decode_pcmu, RecordingChannel,
+    RecordingLeg, RecordingPool, RecordingSession,
 };
 use media_core::recording::{RecordingFinalizer, RecordingWriterFactory};
 
@@ -95,6 +97,7 @@ impl From<SdpError> for MediaError {
 }
 
 impl MediaRelayState {
+    #[cfg(test)]
     pub fn start_call_recording(
         &self,
         call_id: &str,
@@ -102,10 +105,32 @@ impl MediaRelayState {
         gateway_relay_port: u16,
         config: &MediaConfig,
     ) -> Result<Option<PathBuf>, MediaError> {
+        let wav_path = config
+            .recording_dir
+            .join(format!("{}.wav", recording_file_stem(call_id)));
+        self.start_call_recording_at_path(
+            call_id,
+            caller_relay_port,
+            gateway_relay_port,
+            config,
+            wav_path,
+        )
+    }
+
+    pub fn start_call_recording_at_path(
+        &self,
+        call_id: &str,
+        caller_relay_port: u16,
+        gateway_relay_port: u16,
+        config: &MediaConfig,
+        wav_path: PathBuf,
+    ) -> Result<Option<PathBuf>, MediaError> {
         if !config.recording_enabled {
             return Ok(None);
         }
-
+        if wav_path.extension().and_then(|value| value.to_str()) != Some("wav") {
+            return Err(MediaError::Recording("录音文件必须使用 WAV 扩展名".into()));
+        }
         let caller_relay_port = normalize_rtp_port(caller_relay_port);
         let gateway_relay_port = normalize_rtp_port(gateway_relay_port);
         self.ensure_recording_dir(&config.recording_dir)
@@ -116,10 +141,6 @@ impl MediaRelayState {
             config.recording_min_free_bytes,
         )
         .map_err(recording_error)?;
-
-        let wav_path = config
-            .recording_dir
-            .join(format!("{}.wav", recording_file_stem(call_id)));
         let session = Arc::new(RecordingSession::new(
             call_id.to_string(),
             wav_path.clone(),

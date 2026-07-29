@@ -3840,6 +3840,7 @@ version = "0.1.0"
 name = "sip-edge"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "async-nats",
  "axum",
  "call-core",

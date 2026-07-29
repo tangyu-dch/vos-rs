@@ -1,7 +1,7 @@
 // 系统管理 - 核心运行参数设置
 // 从 console.tsx 拆分
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, CardBody, Input, Switch, Spinner } from '@heroui/react';
 import { RefreshCw, Save, Settings2 } from 'lucide-react';
 import { api } from '@/services/client';
@@ -24,6 +24,13 @@ interface ConfigGroup {
   label: string;
   description: string;
   fields: ConfigField[];
+}
+interface SettingsSaveResult {
+  values: {
+    hot_reload_applied: string[];
+    hot_reload_error?: string | null;
+  };
+  restart_required: boolean;
 }
 
 const systemConfigGroups: ConfigGroup[] = [
@@ -214,6 +221,10 @@ const systemConfigGroups: ConfigGroup[] = [
   },
 ];
 
+const editableSystemConfigKeys = new Set(
+  systemConfigGroups.flatMap((group) => group.fields.map((field) => field.key)),
+);
+
 export function SettingsPage() {
   const { session } = useAuth();
   const canManage = Boolean(session && hasPermission(session, 'settings.manage'));
@@ -221,6 +232,7 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [configValues, setConfigValues] = useState<Entity>({});
+  const loadedConfigValues = useRef<Entity>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -228,7 +240,13 @@ export function SettingsPage() {
     try {
       const result = await api.get<{ values: Entity }>('/infrastructure/settings');
       const configs = result.values.configs;
-      setConfigValues(configs && typeof configs === 'object' ? (configs as Entity) : result.values);
+      const loadedValues =
+        configs && typeof configs === 'object' ? (configs as Entity) : result.values;
+      const editableValues = Object.fromEntries(
+        Object.entries(loadedValues).filter(([key]) => editableSystemConfigKeys.has(key)),
+      );
+      loadedConfigValues.current = editableValues;
+      setConfigValues(editableValues);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -249,13 +267,30 @@ export function SettingsPage() {
         Object.entries(configValues)
           .filter(
             ([key, value]) =>
-              value !== undefined && value !== null && !(key === 'secret_key' && !value),
+              editableSystemConfigKeys.has(key) &&
+              value !== undefined &&
+              value !== null &&
+              !(key === 'secret_key' && !value) &&
+              String(value) !== String(loadedConfigValues.current[key] ?? ''),
           )
           .map(([key, value]) => [key, String(value)]),
       );
+      if (Object.keys(payload).length === 0) {
+        message.info('配置没有变化');
+        return;
+      }
       setSaving(true);
-      await api.post('/infrastructure/settings', payload);
-      message.success('配置已保存，重启相关节点后生效');
+      const result = await api.post<SettingsSaveResult>('/infrastructure/settings', payload);
+      loadedConfigValues.current = { ...loadedConfigValues.current, ...payload };
+      if (result.values.hot_reload_error) {
+        message.warning(`配置已保存；${result.values.hot_reload_error}`);
+      } else if (result.values.hot_reload_applied.length > 0 && result.restart_required) {
+        message.success('录音运行配置已热更新，新通话立即生效；其余配置重启节点后生效');
+      } else if (result.values.hot_reload_applied.length > 0) {
+        message.success('配置已热更新，新通话立即生效');
+      } else {
+        message.success('配置已保存，重启相关节点后生效');
+      }
     } catch (e) {
       if (e instanceof Error) message.error(e.message);
     } finally {
@@ -273,7 +308,7 @@ export function SettingsPage() {
               系统设置
             </h1>
             <p className="mt-1 text-small text-default-500">
-              配置信令、媒体、录音、计费、安全与节点运行参数，保存后需重启相关节点生效
+              录音开关与安全限制保存后热更新，其余配置重启相关节点后生效
             </p>
           </div>
           <div className="flex items-center gap-2">

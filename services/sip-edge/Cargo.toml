@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-nats = "0.38"
+arc-swap = "1"
 cdr-core = { path = "../../crates/cdr-core" }
 call-core = { path = "../../crates/call-core" }
 media-core = { path = "../../crates/media-core" }
@@ -55,4 +56,3 @@ enterprise = ["enterprise-ivr", "enterprise-anti-fraud", "enterprise-ai-voice"]
 enterprise-ivr = []
 enterprise-anti-fraud = []
 enterprise-ai-voice = ["dep:sherpa-rs"]
-

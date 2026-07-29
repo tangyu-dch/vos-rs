@@ -134,11 +134,22 @@ fn success_data(value: Value, path: &str) -> Value {
             let size_value = page_size.as_i64().unwrap_or(1).max(1);
             return json!({"items": items, "pagination": {"page": page, "page_size": page_size, "total": total, "total_pages": (total_value + size_value - 1) / size_value}});
         }
-        let value = Value::Object(object);
         if path == "/api/v1/infrastructure/settings" {
-            return json!({"values": value, "apply_mode": "restart_required", "restart_required": true});
+            let apply_mode = object
+                .get("apply_mode")
+                .cloned()
+                .unwrap_or_else(|| json!("restart_required"));
+            let restart_required = object
+                .get("restart_required")
+                .cloned()
+                .unwrap_or(Value::Bool(true));
+            return json!({
+                "values": Value::Object(object),
+                "apply_mode": apply_mode,
+                "restart_required": restart_required
+            });
         }
-        return value;
+        return Value::Object(object);
     }
     if path == "/api/v1/infrastructure/settings" {
         return json!({"values": value, "apply_mode": "restart_required", "restart_required": true});
@@ -227,13 +238,18 @@ mod tests {
     }
 
     #[test]
-    fn settings_explicitly_require_restart() {
+    fn settings_preserve_runtime_apply_result() {
         let data = success_data(
-            json!({"recording_enabled": "true"}),
+            json!({
+                "recording_enabled": "true",
+                "apply_mode": "hot_reload",
+                "restart_required": false
+            }),
             "/api/v1/infrastructure/settings",
         );
-        assert_eq!(data["apply_mode"], "restart_required");
-        assert_eq!(data["restart_required"], true);
+        assert_eq!(data["apply_mode"], "hot_reload");
+        assert_eq!(data["restart_required"], false);
+        assert_eq!(data["values"]["recording_enabled"], "true");
     }
 
     #[test]

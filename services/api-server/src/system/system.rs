@@ -1,3 +1,4 @@
+use super::config_reload;
 use super::metrics::{CdrMetricsSnapshot, MediaMetricsSnapshot, Metrics};
 use crate::AppState;
 use axum::{
@@ -158,7 +159,9 @@ pub async fn get_system_configs(State(state): State<AppState>) -> impl IntoRespo
             for item in items {
                 let key: String = item.get("config_key");
                 let val: String = item.get("config_value");
-                if key == "media_cluster_json" {
+                // 系统设置页面只返回可由该接口安全修改的配置，避免其他模块的
+                // 运行配置被前端原样回传后触发白名单校验。
+                if config_value_kind(&key).is_none() {
                     continue;
                 }
                 configs.insert(
@@ -248,6 +251,15 @@ pub async fn update_system_configs(
         tracing::error!(%error, "Redis 系统配置批量更新失败");
     }
 
+    let reload = config_reload::apply_recording_config(&state, &payload).await;
+    let mut restart_required_keys: Vec<_> = payload
+        .keys()
+        .filter(|key| !reload.applied.contains(key))
+        .cloned()
+        .collect();
+    restart_required_keys.sort();
+    let restart_required = !restart_required_keys.is_empty();
+
     let metadata: HashMap<_, _> = payload
         .keys()
         .filter_map(|key| config_metadata(key).map(|value| (key.clone(), value)))
@@ -257,8 +269,11 @@ pub async fn update_system_configs(
         Json(json!({
             "updated": payload.keys().collect::<Vec<_>>(),
             "metadata": metadata,
-            "apply_mode": "restart_required",
-            "restart_required": true,
+            "hot_reload_applied": reload.applied,
+            "hot_reload_error": reload.error,
+            "restart_required_keys": restart_required_keys,
+            "apply_mode": if restart_required { "mixed" } else { "hot_reload" },
+            "restart_required": restart_required,
         })),
     )
         .into_response()
@@ -310,23 +325,38 @@ fn validate_realm_transition(
     }
 }
 
-fn validate_system_configs(configs: &HashMap<String, String>) -> Result<(), &'static str> {
+fn validate_system_configs(configs: &HashMap<String, String>) -> Result<(), String> {
     validate_config_types(configs)?;
-    validate_positive_config_values(configs)?;
-    validate_config_relationships(configs)
+    validate_positive_config_values(configs).map_err(str::to_string)?;
+    validate_config_relationships(configs).map_err(str::to_string)
 }
 
-fn validate_config_types(configs: &HashMap<String, String>) -> Result<(), &'static str> {
+fn validate_config_types(configs: &HashMap<String, String>) -> Result<(), String> {
+    let mut unsupported_keys: Vec<_> = configs
+        .keys()
+        .filter(|key| config_value_kind(key).is_none())
+        .cloned()
+        .collect();
+    unsupported_keys.sort();
+    if !unsupported_keys.is_empty() {
+        return Err(format!(
+            "不支持的系统配置项：{}",
+            unsupported_keys.join("、")
+        ));
+    }
+
     for (key, value) in configs {
-        let Some(kind) = config_value_kind(key) else {
-            return Err("包含不支持的系统配置项");
-        };
+        let kind = config_value_kind(key).ok_or_else(|| format!("不支持的系统配置项：{key}"))?;
         match kind {
             "bool" if !matches!(value.as_str(), "true" | "false" | "1" | "0") => {
-                return Err("布尔配置值无效");
+                return Err(format!("配置项 {key} 的布尔值无效"));
             }
-            "integer" if value.parse::<u64>().is_err() => return Err("整数配置值无效"),
-            "number" if value.parse::<f64>().is_err() => return Err("数值配置值无效"),
+            "integer" if value.parse::<u64>().is_err() => {
+                return Err(format!("配置项 {key} 的整数值无效"));
+            }
+            "number" if value.parse::<f64>().is_err() => {
+                return Err(format!("配置项 {key} 的数值无效"));
+            }
             _ => {}
         }
     }
@@ -458,7 +488,11 @@ fn config_metadata(key: &str) -> Option<SystemConfigMetadata> {
     Some(SystemConfigMetadata {
         category,
         value_type,
-        apply_mode: "restart_required",
+        apply_mode: if config_reload::is_hot_reload_key(key) {
+            "hot_new_sessions"
+        } else {
+            "restart_required"
+        },
         sensitive: matches!(key, "secret_key" | "tls_key_path"),
     })
 }
@@ -471,7 +505,10 @@ mod tests {
     #[test]
     fn rejects_unknown_system_config_key() {
         let configs = HashMap::from([("unknown".to_string(), "1".to_string())]);
-        assert!(validate_system_configs(&configs).is_err());
+        assert_eq!(
+            validate_system_configs(&configs),
+            Err("不支持的系统配置项：unknown".to_string())
+        );
     }
 
     #[test]
@@ -548,7 +585,12 @@ mod tests {
         ];
         for key in keys {
             let metadata = config_metadata(key).expect("config key should be supported");
-            assert_eq!(metadata.apply_mode, "restart_required");
+            let expected_apply_mode = if key == "recording_enabled" {
+                "hot_new_sessions"
+            } else {
+                "restart_required"
+            };
+            assert_eq!(metadata.apply_mode, expected_apply_mode);
         }
         assert_eq!(
             config_metadata("cluster_node_timeout_secs")
