@@ -215,6 +215,13 @@ export const numbers: ResourceSpec = {
       required: true,
       placeholder: '选择已存在的接入中继或分机',
     },
+    {
+      key: 'tenant_id',
+      label: '所属租户',
+      kind: 'select',
+      optionsResource: 'tenants',
+      placeholder: '选择号码归属的开户租户 (留空表示系统公用)',
+    },
     { key: 'max_concurrent', label: '号码并发', kind: 'number', defaultValue: 1 },
     { key: 'can_receive', label: '允许呼入', kind: 'switch', defaultValue: true },
     { key: 'can_present', label: '允许显号', kind: 'switch', defaultValue: true },
@@ -337,6 +344,13 @@ export const callerPools: ResourceSpec = {
       optionsResource: 'allocation-source',
       required: true,
       placeholder: '选择已存在的接入中继或分机',
+    },
+    {
+      key: 'tenant_id',
+      label: '所属租户',
+      kind: 'select',
+      optionsResource: 'tenants',
+      placeholder: '选择号码池归属的开户租户 (留空自动继承来源租户)',
     },
     {
       key: 'strategy',
