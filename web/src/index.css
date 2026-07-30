@@ -135,3 +135,12 @@ li {
     transition: none;
   }
 }
+
+/* 桌面大屏 Modal 宽度优化：确保在 768px 以上设备上弹窗宽度至少占 60% 屏幕宽度 */
+@media (min-width: 768px) {
+  div[role="dialog"]:not(.max-w-xs):not(.max-w-sm):not([class*="w-screen"]):not([class*="h-full"]) {
+    min-width: 60vw !important;
+    max-width: 85vw !important;
+  }
+}
+
