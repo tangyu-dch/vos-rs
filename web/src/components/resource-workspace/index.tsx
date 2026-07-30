@@ -202,14 +202,7 @@ export function FormControl({
         step={field.step ?? 'any'}
         placeholder={field.placeholder}
         value={value !== undefined && value !== null ? String(value) : ''}
-        onValueChange={(v) => {
-          if (v === '' || v === undefined) {
-            onChange(undefined);
-          } else {
-            const num = Number(v);
-            onChange(Number.isNaN(num) ? v : num);
-          }
-        }}
+        onValueChange={(v) => onChange(v)}
       />
     );
   }
@@ -410,6 +403,18 @@ export function resourceSaveValues(spec: ResourceSpec, values: Entity, editing: 
       result.gateway_ids = [];
     }
   }
+  // 自动将种为 number 的字段强转为数值（解决编辑表单中保持原始字符串的问题）
+  spec.fields
+    .filter((field) => field.kind === 'number')
+    .forEach((field) => {
+      const val = result[field.key];
+      if (val === '' || val === undefined || val === null) {
+        delete result[field.key];
+      } else if (typeof val === 'string' && !isNaN(Number(val))) {
+        result[field.key] = Number(val);
+      }
+    });
+
   if (!editing) return result;
   spec.fields
     .filter((field) => field.kind === 'secret' && field.preserveEmptyOnEdit)
