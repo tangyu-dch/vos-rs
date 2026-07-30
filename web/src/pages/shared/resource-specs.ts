@@ -382,8 +382,8 @@ export const egressGroups: ResourceSpec = {
     },
   ],
   fields: [
-    { key: 'id', label: '分组 ID', required: true },
-    { key: 'name', label: '分组名称', required: true },
+    { key: 'id', label: '分组 ID', formHidden: true, readonly: true },
+    { key: 'name', label: '分组名称', required: true, placeholder: '请输入分组名称' },
     { key: 'description', label: '分组说明', kind: 'textarea', fullWidth: true },
     { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
   ],

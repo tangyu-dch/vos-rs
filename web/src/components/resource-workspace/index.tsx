@@ -383,6 +383,9 @@ export function resourceSaveValues(spec: ResourceSpec, values: Entity, editing: 
   delete result.billing_account;
   delete result.associated_tenants_summary;
   delete result.associated_gateways_summary;
+  if (!editing && (result.id === '' || result.id === undefined || result.id === null)) {
+    delete result.id;
+  }
   if (['/billing/access-accounts', '/billing/egress-accounts'].includes(spec.path)) {
     delete result.id;
     delete result.balance;
