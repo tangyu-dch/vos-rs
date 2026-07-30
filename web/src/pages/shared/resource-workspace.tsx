@@ -202,7 +202,14 @@ export function FormControl({
         step={field.step ?? 'any'}
         placeholder={field.placeholder}
         value={value !== undefined && value !== null ? String(value) : ''}
-        onValueChange={(v) => onChange(v === '' ? undefined : Number(v))}
+        onValueChange={(v) => {
+          if (v === '' || v === undefined) {
+            onChange(undefined);
+          } else {
+            const num = Number(v);
+            onChange(Number.isNaN(num) ? v : num);
+          }
+        }}
       />
     );
   }
@@ -1576,9 +1583,10 @@ export function ResourceWorkspace({
                 type="number"
                 variant="bordered"
                 min={0.001}
+                step="any"
                 max={100000000}
                 value={String(amount)}
-                onValueChange={(v) => setAmount(Number(v) || 0)}
+                onValueChange={(v) => setAmount(v === '' ? ('' as unknown as number) : Number(v))}
               />
               <div className="mt-4">
                 <FieldLabel label="充值说明" />
