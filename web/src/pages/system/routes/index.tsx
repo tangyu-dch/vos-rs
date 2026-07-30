@@ -271,7 +271,7 @@ export function RoutesPage() {
       </Modal>
 
       {/* 路由仿真 Modal */}
-      <Modal isOpen={simOpen} onOpenChange={(o) => !o && setSimOpen(false)} size="lg">
+      <Modal isOpen={simOpen} onOpenChange={(o) => !o && setSimOpen(false)} size="4xl">
         <ModalContent>
           <ModalHeader>路由仿真测试</ModalHeader>
           <ModalBody>

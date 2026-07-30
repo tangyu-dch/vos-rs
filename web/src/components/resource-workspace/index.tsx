@@ -1526,7 +1526,7 @@ export function ResourceWorkspace({
       <Modal
         isOpen={editing !== undefined}
         onOpenChange={(o) => !o && setEditing(undefined)}
-        size="lg"
+        size="4xl"
       >
         <ModalContent>
           <ModalHeader>{isEditing ? `编辑${spec.title}` : `新建${spec.title}`}</ModalHeader>
