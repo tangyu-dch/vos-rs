@@ -56,7 +56,9 @@ impl EdgeState {
         };
         let target_id = self.did_destinations.read().ok().and_then(|dids| {
             dids.get(number)
-                .filter(|did| did.enabled && did.target_type == "extension")
+                .filter(|did| {
+                    did.enabled && ["extension", "extension_group", "ivr"].contains(&did.target_type.as_str())
+                })
                 .map(|did| did.target_id.clone())
         });
         let Some(target_id) = target_id else {
