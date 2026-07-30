@@ -37,7 +37,9 @@ pub async fn create_gateway(
     if req
         .access_realm
         .as_deref()
-        .is_some_and(|realm| realm.trim() != state.sip_auth_realm)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some_and(|realm| realm != state.sip_auth_realm)
     {
         return Err(ApiError::internal(format!(
             "参数无效: 认证 Realm 必须使用系统配置 {}",
@@ -202,7 +204,9 @@ pub async fn update_gateway(
     if req
         .access_realm
         .as_deref()
-        .is_some_and(|realm| realm.trim() != state.sip_auth_realm)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some_and(|realm| realm != state.sip_auth_realm)
     {
         return Err(ApiError::internal(format!(
             "参数无效: 认证 Realm 必须使用系统配置 {}",
