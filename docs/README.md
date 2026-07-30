@@ -36,7 +36,8 @@ docs/
 │
 └── user-guide/            # 用户操作指南
     ├── WEB_GUIDE.md                           # Web 管理界面操作手册
-    └── ROUTING_TRUNK_GUIDE.md                 # 中继与路由管理配置指南
+    ├── ROUTING_TRUNK_GUIDE.md                 # 中继与路由管理配置指南
+    └── ROUTING_TRUNK_TEST_GUIDE.md            # 中继路由测试指南与 FreeSWITCH 落地对接验证
 ```
 
 ---
