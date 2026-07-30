@@ -322,43 +322,43 @@ export function RoutesPage() {
                 )}
 
                 {/* 节点拓扑链 */}
-                <div className="flex flex-wrap items-center gap-2 py-2 px-3 bg-content1 rounded-xl border border-default-200">
-                  <div className="flex flex-col items-center">
-                    <span className="text-[10px] text-default-400">呼入源</span>
-                    <Chip size="sm" variant="bordered" className="font-semibold">
-                      INBOUND
-                    </Chip>
-                  </div>
-                  <span className="text-default-300 font-bold">→</span>
-                  <div className="flex flex-col items-center">
-                    <span className="text-[10px] text-default-400">前缀匹配</span>
-                    <Chip size="sm" color="primary" variant="flat" className="font-bold">
-                      {String(simResult.prefix || '全前缀 *')}
-                    </Chip>
-                  </div>
-                  <span className="text-default-300 font-bold">→</span>
-                  <div className="flex flex-col items-center">
-                    <span className="text-[10px] text-default-400">时间窗口</span>
-                    <Chip size="sm" color="warning" variant="flat" className="font-semibold">
-                      {String(simResult.time_start ?? '--:--')} ~{' '}
-                      {String(simResult.time_end ?? '--:--')}
-                    </Chip>
-                  </div>
-                  <span className="text-default-300 font-bold">→</span>
-                  <div className="flex flex-col items-center">
-                    <span className="text-[10px] text-default-400">优先级/成本</span>
-                    <Chip size="sm" color="warning" variant="flat" className="font-semibold">
-                      P:{String(simResult.priority ?? 100)} / C:{String(simResult.cost ?? 0)}
-                    </Chip>
-                  </div>
-                  <span className="text-default-300 font-bold">→</span>
-                  <div className="flex flex-col items-center">
-                    <span className="text-[10px] text-default-400">落地网关</span>
-                    <Chip size="sm" color="primary" className="font-extrabold text-white">
-                      {String(simResult.gateway_id || simResult.target_gateway || 'TRUNK-GW')}
-                    </Chip>
-                  </div>
-                </div>
+                {(() => {
+                  const candidates = Array.isArray(simResult.candidates) ? simResult.candidates : [];
+                  const firstCandidate = candidates[0] || {};
+                  const gatewayId = String(
+                    firstCandidate.gateway_id || simResult.gateway_id || simResult.target_gateway || 'TRUNK-GW'
+                  );
+                  const host = firstCandidate.host ? `${firstCandidate.host}:${firstCandidate.port || 5060}` : '';
+                  return (
+                    <div className="flex flex-wrap items-center gap-2 py-2 px-3 bg-content1 rounded-xl border border-default-200">
+                      <div className="flex flex-col items-center">
+                        <span className="text-[10px] text-default-400">接入源/中继</span>
+                        <Chip size="sm" variant="bordered" className="font-semibold">
+                          {String(simResult.access_trunk_id || 'INBOUND')}
+                        </Chip>
+                      </div>
+                      <span className="text-default-300 font-bold">→</span>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[10px] text-default-400">前缀规则</span>
+                        <Chip size="sm" color="primary" variant="flat" className="font-bold">
+                          {String(firstCandidate.route_id || simResult.prefix || '前缀匹配')}
+                        </Chip>
+                      </div>
+                      <span className="text-default-300 font-bold">→</span>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[10px] text-default-400">落地网关</span>
+                        <Chip size="sm" color="primary" className="font-extrabold text-white">
+                          {gatewayId} {host ? `(${host})` : ''}
+                        </Chip>
+                      </div>
+                      {candidates.length > 1 && (
+                        <Chip size="sm" color="warning" variant="flat" className="text-[10px] ml-auto">
+                          包含 {candidates.length} 个 Failover 备用节点
+                        </Chip>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <pre className="text-[11px] font-mono whitespace-pre-wrap text-default-600 bg-default-100 p-2.5 rounded-xl border border-default-200 max-h-48 overflow-y-auto">
                   {JSON.stringify(simResult, null, 2)}
