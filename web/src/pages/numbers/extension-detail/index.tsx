@@ -202,6 +202,7 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
     try {
       const workspace = await getExtensionWorkspace(username);
       setData(workspace);
+      const tenantId = workspace.extension?.tenant_id ? String(workspace.extension.tenant_id) : '';
       const optional = await Promise.allSettled([
         getExtensionOutboundPolicy(username),
         listOptions('/egress-groups'),
@@ -212,8 +213,22 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
       if (optional[0].status === 'fulfilled') setPolicy({ ...emptyPolicy, ...optional[0].value });
       if (optional[1].status === 'fulfilled') setGroups(optional[1].value);
       if (optional[2].status === 'fulfilled') setTrunks(optional[2].value);
-      if (optional[3].status === 'fulfilled') setPools(optional[3].value);
-      if (optional[4].status === 'fulfilled') setAllNumbers(optional[4].value);
+      if (optional[3].status === 'fulfilled') {
+        const allPools = optional[3].value;
+        setPools(
+          tenantId
+            ? allPools.filter((pool) => String(pool.tenant_id || pool.owner_source_id || '') === tenantId || pool.owner_source_id === username)
+            : allPools,
+        );
+      }
+      if (optional[4].status === 'fulfilled') {
+        const numbers = optional[4].value;
+        setAllNumbers(
+          tenantId
+            ? numbers.filter((num) => String(num.tenant_id || '') === tenantId)
+            : numbers,
+        );
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '分机加载失败');
     } finally {

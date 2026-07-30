@@ -37,12 +37,17 @@ async fn validate_caller_reference(
     let valid: bool = match policy.caller_mode.as_str() {
         "strict_passthrough" => true,
         "fixed_number" => sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM number_inventory n \
-             JOIN number_allocations a ON a.number=n.number AND a.enabled \
-             WHERE n.number=$1 AND a.source_type=$2 AND a.source_id=$3 \
-               AND LOWER(n.status) IN ('available','assigned','active') \
-               AND LOWER(COALESCE(n.direction,'both')) IN ('outbound','both','bidirectional') \
-               AND COALESCE(NULLIF(n.owner_egress_trunk_id,''),NULLIF(n.gateway_id,'')) IS NOT NULL)",
+            "SELECT EXISTS(
+               SELECT 1 FROM number_inventory n 
+               LEFT JOIN number_allocations a ON a.number=n.number AND a.enabled AND a.source_type=$2 AND a.source_id=$3 
+               LEFT JOIN sip_users u ON $2='extension' AND u.username=$3
+               LEFT JOIN sip_gateways g ON $2='trunk' AND g.id=$3
+               WHERE n.number=$1 
+                 AND LOWER(n.status) IN ('available','assigned','active') 
+                 AND LOWER(COALESCE(n.direction,'both')) IN ('outbound','both','bidirectional') 
+                 AND COALESCE(NULLIF(n.owner_egress_trunk_id,''),NULLIF(n.gateway_id,'')) IS NOT NULL
+                 AND (a.id IS NOT NULL OR n.tenant_id = COALESCE(u.tenant_id, g.tenant_id))
+             )",
         )
         .bind(policy.fixed_number.as_deref())
         .bind(&policy.source_type)
@@ -51,7 +56,13 @@ async fn validate_caller_reference(
         .await
         .map_err(database)?,
         "virtual_pool" => sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM caller_pools WHERE id=$1 AND owner_source_type=$2 AND owner_source_id=$3 AND enabled)",
+            "SELECT EXISTS(
+               SELECT 1 FROM caller_pools p
+               LEFT JOIN sip_users u ON $2='extension' AND u.username=$3
+               LEFT JOIN sip_gateways g ON $2='trunk' AND g.id=$3
+               WHERE p.id=$1 AND p.enabled 
+                 AND ((p.owner_source_type=$2 AND p.owner_source_id=$3) OR p.tenant_id = COALESCE(u.tenant_id, g.tenant_id))
+             )",
         )
         .bind(policy.caller_pool_id.as_deref())
         .bind(&policy.source_type)

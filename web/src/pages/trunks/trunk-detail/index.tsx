@@ -790,7 +790,7 @@ export function CallerPolicyForm({
             variant="bordered"
             selectedKeys={policy.fixed_number ? [String(policy.fixed_number)] : []}
             onChange={(e) => set('fixed_number', e.target.value)}
-            placeholder="选择已授权真实号码"
+            placeholder={numberOptions.length ? "选择已授权真实号码" : "当前租户暂无授权号码，请先在【号码管理】中分配号码"}
           >
             {numberOptions.map((opt) => (
               <SelectItem key={opt.value}>{opt.label}</SelectItem>
@@ -804,7 +804,7 @@ export function CallerPolicyForm({
             variant="bordered"
             selectedKeys={policy.caller_pool_id ? [String(policy.caller_pool_id)] : []}
             onChange={(e) => set('caller_pool_id', e.target.value)}
-            placeholder="选择当前来源的号码池"
+            placeholder={poolOptions.length ? "选择当前来源的号码池" : "当前租户暂无可用号码池，请先在【号码池】中创建"}
           >
             {poolOptions.map((opt) => (
               <SelectItem key={opt.value}>{opt.label}</SelectItem>
@@ -900,6 +900,7 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
   const [policy, setPolicy] = useState<OutboundPolicy>(emptyPolicy);
   const [groups, setGroups] = useState<Entity[]>([]);
   const [pools, setPools] = useState<Entity[]>([]);
+  const [numbers, setNumbers] = useState<Entity[]>([]);
   const [trunks, setTrunks] = useState<Entity[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -941,19 +942,31 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
         const loadedEndpoints = await getTrunkEgressEndpoints(id);
         setEndpoints(loadedEndpoints.map((ep) => ({ ...ep, _key: ep.id || genId() })));
       }
+      const tenantId = workspace.trunk?.tenant_id ? String(workspace.trunk.tenant_id) : '';
       const optional = await Promise.allSettled([
         listOptions('/egress-groups'),
         listOptions('/trunks'),
         listOptions('/caller-pools'),
+        listOptions('/numbers'),
       ]);
       if (optional[0].status === 'fulfilled') setGroups(optional[0].value);
       if (optional[1].status === 'fulfilled') setTrunks(optional[1].value);
-      if (optional[2].status === 'fulfilled')
+      if (optional[2].status === 'fulfilled') {
+        const allPools = optional[2].value;
         setPools(
-          optional[2].value.filter(
-            (pool) => pool.owner_source_type === 'trunk' && pool.owner_source_id === id,
-          ),
+          tenantId
+            ? allPools.filter((pool) => String(pool.tenant_id || pool.owner_source_id || '') === tenantId || pool.owner_source_id === id)
+            : allPools,
         );
+      }
+      if (optional[3].status === 'fulfilled') {
+        const allNumbers = optional[3].value;
+        setNumbers(
+          tenantId
+            ? allNumbers.filter((num) => String(num.tenant_id || '') === tenantId)
+            : allNumbers,
+        );
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '中继加载失败');
     } finally {
@@ -1082,7 +1095,7 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
             policy={policy}
             set={setPolicyField}
             pools={pools}
-            numbers={data?.numbers || []}
+            numbers={numbers.length ? numbers : (data?.numbers || [])}
           />
         ),
         hide: role !== 'access',
