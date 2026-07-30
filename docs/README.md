@@ -18,6 +18,7 @@ docs/
 │   ├── NATS_VCI_COMMAND_DESIGN.md             # NATS 会话控制协议与 VCI 2.0 命令设计规范
 │   ├── TRUNK_CALLER_TERMINATION_DESIGN.md     # 接入认证、主叫号码池与落地决策设计
 │   ├── TRUNK_FLOWCHART.md                     # 中继设计与呼叫选路流程图
+│   ├── ROUTING_TRUNK_BUSINESS_LOGIC.md        # 中继、路由与号码池关联业务逻辑说明
 │   └── VOS_RS_BUSINESS_GAPS_REQUIREMENTS.md   # 业务缺失与后续开发需求 (PRD)
 │
 ├── development/           # 开发与集成接入指南
