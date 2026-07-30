@@ -286,8 +286,8 @@ export function RoutesPage() {
                 />
                 <Input
                   variant="bordered"
-                  label="接入中继 (可选)"
-                  placeholder="如 access-alpha (填入可模拟号码池显号)"
+                  label="接入中继 (模拟接入源)"
+                  placeholder="请输入接入中继标识 (例如 access-alpha)"
                   value={simAccessTrunkId}
                   onValueChange={setSimAccessTrunkId}
                 />
