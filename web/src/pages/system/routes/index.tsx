@@ -38,14 +38,16 @@ export function RoutesPage() {
       idKey: 'id',
       createLabel: '新建路由规则',
       fields: [
-        { key: 'id', label: '规则 ID', required: true, placeholder: '例如 cn-mobile-primary' },
+        { key: 'id', label: '规则 ID', formHidden: true, readonly: true },
         { key: 'prefix', label: '匹配前缀', placeholder: '留空表示匹配全部号码' },
         { key: 'priority', label: '优先级', kind: 'number', required: true, defaultValue: 100 },
         {
           key: 'gateway_id',
           label: '目标中继',
+          kind: 'select',
+          optionsResource: 'egress-trunks',
           required: true,
-          placeholder: '填写已存在的中继 ID',
+          placeholder: '选择已存在的落地中继',
         },
         { key: 'cost', label: '路由成本', kind: 'number', required: true, defaultValue: 0 },
         { key: 'weight', label: '分流权重', kind: 'number', min: 1, defaultValue: 100 },

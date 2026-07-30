@@ -310,7 +310,7 @@ export const callerPools: ResourceSpec = {
     },
   ],
   fields: [
-    { key: 'id', label: '号码池 ID', required: true },
+    { key: 'id', label: '号码池 ID', formHidden: true, readonly: true },
     { key: 'virtual_alias', label: '虚拟主叫', required: true },
     {
       key: 'owner_source_type',

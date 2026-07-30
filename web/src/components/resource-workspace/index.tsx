@@ -888,6 +888,9 @@ export function ResourceWorkspace({
               value: String(item.id ?? ''),
             };
           }),
+          gateway_id: trunks
+            .filter((item) => trunkRole(item) === 'egress')
+            .map((item) => ({ label: String(item.name ?? item.id), value: String(item.id) })),
           gateway_ids: trunks
             .filter((item) =>
               wantAccess
@@ -909,6 +912,7 @@ export function ResourceWorkspace({
           billing_account_id: [],
           username: [],
           tenant_id: [],
+          gateway_id: [],
           gateway_ids: [],
         }),
       );
