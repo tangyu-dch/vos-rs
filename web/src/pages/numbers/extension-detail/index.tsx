@@ -186,6 +186,7 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
   const [groups, setGroups] = useState<Entity[]>([]);
   const [trunks, setTrunks] = useState<Entity[]>([]);
   const [pools, setPools] = useState<Entity[]>([]);
+  const [allNumbers, setAllNumbers] = useState<Entity[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -206,16 +207,13 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
         listOptions('/egress-groups'),
         listOptions('/trunks'),
         listOptions('/caller-pools'),
+        listOptions('/numbers'),
       ]);
       if (optional[0].status === 'fulfilled') setPolicy({ ...emptyPolicy, ...optional[0].value });
       if (optional[1].status === 'fulfilled') setGroups(optional[1].value);
       if (optional[2].status === 'fulfilled') setTrunks(optional[2].value);
-      if (optional[3].status === 'fulfilled')
-        setPools(
-          optional[3].value.filter(
-            (pool) => pool.owner_source_type === 'extension' && pool.owner_source_id === username,
-          ),
-        );
+      if (optional[3].status === 'fulfilled') setPools(optional[3].value);
+      if (optional[4].status === 'fulfilled') setAllNumbers(optional[4].value);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '分机加载失败');
     } finally {
@@ -364,7 +362,7 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
             policy={policy}
             set={setPolicyField}
             pools={pools}
-            numbers={data?.numbers || []}
+            numbers={allNumbers.length ? allNumbers : (data?.numbers || [])}
           />
         ),
       },
