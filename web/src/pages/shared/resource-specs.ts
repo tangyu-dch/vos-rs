@@ -295,7 +295,7 @@ export const callerPools: ResourceSpec = {
     icon: 'Network',
     color: 'primary',
     onPress: (row) => {
-      window.location.hash = `#/caller-pools/${encodeURIComponent(String(row.id))}`;
+      window.location.href = `/caller-pools/${encodeURIComponent(String(row.id))}`;
     },
   },
   // 后端无分页/筛选，使用客户端筛选
@@ -374,7 +374,7 @@ export const egressGroups: ResourceSpec = {
     icon: 'Network',
     color: 'primary',
     onPress: (row) => {
-      window.location.hash = `#/egress-groups/${encodeURIComponent(String(row.id))}`;
+      window.location.href = `/egress-groups/${encodeURIComponent(String(row.id))}`;
     },
   },
   // 后端无分页/筛选，使用客户端筛选
