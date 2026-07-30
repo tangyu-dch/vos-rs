@@ -761,6 +761,10 @@ impl CallManager {
         (**self.routes.load()).clone()
     }
 
+    pub fn outbound_policies(&self) -> Arc<OutboundPolicyDirectory> {
+        self.outbound_policies.load_full()
+    }
+
     pub fn active_calls_count(&self) -> usize {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

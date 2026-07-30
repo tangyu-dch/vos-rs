@@ -23,6 +23,10 @@ impl CallSource {
             source_id: source_id.into(),
         }
     }
+
+    pub fn trunk(id: impl Into<String>) -> Self {
+        Self::new("trunk", id)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +101,18 @@ impl OutboundPolicyDirectory {
                 .or_else(|| Some(policy.caller_mode.clone()));
         }
         audit
+    }
+
+    /// Returns `(caller_pool_id, selected_number_or_alias)` for simulation / preview tools.
+    pub fn preview_caller_selection(&self, source: &CallSource) -> Option<(Option<String>, String)> {
+        let policy = self.policies.get(source)?;
+        if let Some(ref pool_id) = policy.caller_pool_id {
+            let pool = self.pools.get(pool_id)?;
+            let selected = pool.members.first()?.number.clone();
+            Some((Some(pool_id.clone()), selected))
+        } else {
+            policy.fixed_number.as_ref().map(|fixed| (None, fixed.clone()))
+        }
     }
 
     pub fn new(

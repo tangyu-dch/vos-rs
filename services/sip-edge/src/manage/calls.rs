@@ -74,9 +74,10 @@ pub(super) async fn terminate(
 #[derive(Deserialize)]
 pub(super) struct RoutePreviewQuery {
     destination: String,
+    access_trunk_id: Option<String>,
 }
 
-/// 选路试算：返回某被叫号码的候选路由序列（failover 顺序）。
+/// 选路试算：返回某被叫号码的候选路由序列（failover 顺序），若指定接入中继则联动选选主叫号码。
 pub(super) async fn route_preview(
     State(state): State<Arc<EdgeState>>,
     Query(q): Query<RoutePreviewQuery>,
@@ -94,9 +95,27 @@ pub(super) async fn route_preview(
             }));
         }
     };
+
+    let mut selected_caller_number: Option<String> = None;
+    let mut caller_pool_id: Option<String> = None;
+
+    if let Some(ref access_id) = q.access_trunk_id {
+        if !access_id.trim().is_empty() {
+            let source = call_core::CallSource::trunk(access_id.trim());
+            let directory = cm.outbound_policies();
+            if let Some((pool_id, selected)) = directory.preview_caller_selection(&source) {
+                caller_pool_id = pool_id;
+                selected_caller_number = Some(selected);
+            }
+        }
+    }
+
     match routes.select_candidates(&uri) {
         Ok(candidates) => Json(serde_json::json!({
             "destination": q.destination,
+            "access_trunk_id": q.access_trunk_id,
+            "selected_caller_number": selected_caller_number,
+            "caller_pool_id": caller_pool_id,
             "candidates": candidates.iter().map(|c| serde_json::json!({
                 "route_id": c.route_id,
                 "gateway_id": c.target.gateway_id.as_str(),
@@ -106,6 +125,9 @@ pub(super) async fn route_preview(
         })),
         Err(_) => Json(serde_json::json!({
             "destination": q.destination,
+            "access_trunk_id": q.access_trunk_id,
+            "selected_caller_number": selected_caller_number,
+            "caller_pool_id": caller_pool_id,
             "candidates": [],
             "error": "no matching route"
         })),

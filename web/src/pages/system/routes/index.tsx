@@ -128,6 +128,7 @@ export function RoutesPage() {
   const [simOpen, setSimOpen] = useState(false);
   const [simLoading, setSimLoading] = useState(false);
   const [simDestination, setSimDestination] = useState('');
+  const [simAccessTrunkId, setSimAccessTrunkId] = useState('');
   const [simError, setSimError] = useState('');
   const [simResult, setSimResult] = useState<Entity | null>(null);
 
@@ -139,7 +140,11 @@ export function RoutesPage() {
     try {
       setSimError('');
       setSimLoading(true);
-      setSimResult(await api.get<Entity>('/routing/simulations', { destination: simDestination }));
+      const params: Record<string, string> = { destination: simDestination.trim() };
+      if (simAccessTrunkId.trim()) {
+        params.access_trunk_id = simAccessTrunkId.trim();
+      }
+      setSimResult(await api.get<Entity>('/routing/simulations', params));
     } catch (e) {
       if (e instanceof Error) setSimError(e.message);
     } finally {
@@ -271,13 +276,22 @@ export function RoutesPage() {
           <ModalHeader>路由仿真测试</ModalHeader>
           <ModalBody>
             <div className="flex flex-col gap-2 py-2">
-              <Input
-                variant="bordered"
-                label="目标号码"
-                placeholder="输入目标号码"
-                value={simDestination}
-                onValueChange={setSimDestination}
-              />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Input
+                  variant="bordered"
+                  label="目标号码 (被叫)"
+                  placeholder="输入目标号码 (如 13800001001)"
+                  value={simDestination}
+                  onValueChange={setSimDestination}
+                />
+                <Input
+                  variant="bordered"
+                  label="接入中继 (可选)"
+                  placeholder="如 access-alpha (填入可模拟号码池显号)"
+                  value={simAccessTrunkId}
+                  onValueChange={setSimAccessTrunkId}
+                />
+              </div>
               {simError && <p className="text-tiny text-danger">{simError}</p>}
             </div>
             {simResult && (
@@ -291,6 +305,21 @@ export function RoutesPage() {
                     匹配成功
                   </Chip>
                 </div>
+
+                {/* 选号显号信息 */}
+                {Boolean(simResult.selected_caller_number || simResult.caller_pool_id) && (
+                  <div className="flex items-center gap-3 p-2.5 rounded-xl bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
+                    <span className="text-xs font-semibold text-primary">号码池抽号结果:</span>
+                    <Chip size="sm" color="primary" variant="solid" className="font-mono font-bold">
+                      主叫号码: {String(simResult.selected_caller_number || '无')}
+                    </Chip>
+                    {Boolean(simResult.caller_pool_id) && (
+                      <Chip size="sm" color="secondary" variant="flat" className="font-mono">
+                        号码池: {String(simResult.caller_pool_id)}
+                      </Chip>
+                    )}
+                  </div>
+                )}
 
                 {/* 节点拓扑链 */}
                 <div className="flex flex-wrap items-center gap-2 py-2 px-3 bg-content1 rounded-xl border border-default-200">
@@ -344,6 +373,7 @@ export function RoutesPage() {
                 setSimOpen(false);
                 setSimResult(null);
                 setSimDestination('');
+                setSimAccessTrunkId('');
                 setSimError('');
               }}
             >

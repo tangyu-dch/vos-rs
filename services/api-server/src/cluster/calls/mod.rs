@@ -148,6 +148,7 @@ pub async fn terminate_call(
 #[derive(Deserialize)]
 pub struct RoutePreviewQuery {
     pub destination: String,
+    pub access_trunk_id: Option<String>,
 }
 
 /// 选路试算（转发到 sip-edge 管理 API）。
@@ -155,11 +156,17 @@ pub async fn route_preview(
     State(state): State<AppState>,
     Query(q): Query<RoutePreviewQuery>,
 ) -> Result<(StatusCode, Json<Value>), E> {
-    let url = format!(
+    let mut url = format!(
         "{}/manage/route-preview?destination={}",
         state.sip_manage_base,
         urlencoding(&q.destination)
     );
+    if let Some(ref access_id) = q.access_trunk_id {
+        if !access_id.trim().is_empty() {
+            url.push_str("&access_trunk_id=");
+            url.push_str(&urlencoding(access_id.trim()));
+        }
+    }
     let token = get_internal_token(&state.internal_secret)?;
     relay_json(state.internal_client.get(&url).header("X-VOS-Token", token)).await
 }
