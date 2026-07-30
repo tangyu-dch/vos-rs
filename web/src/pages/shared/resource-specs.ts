@@ -80,6 +80,15 @@ export const accessTrunks: ResourceSpec = {
       defaultValue: 'ip_allowlist',
     },
     {
+      key: 'host',
+      label: 'IP 白名单 / 允许来源地址',
+      required: true,
+      fullWidth: true,
+      placeholder: '请输入允许接入的 IP 地址或网关，支持多个 IP（逗号或分号分隔）',
+      showWhen: (draft) =>
+        ['ip_allowlist', 'ip_and_digest'].includes(String(draft.access_auth_mode)),
+    },
+    {
       key: 'access_username',
       label: '注册用户',
       required: true,
@@ -112,9 +121,8 @@ export const accessTrunks: ResourceSpec = {
       placeholder: '选择对接扣费账户',
     },
     { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
-    { key: 'host', label: '内部主机', readonly: true, defaultValue: '' },
-    { key: 'port', label: '内部端口', readonly: true, defaultValue: 5060 },
-    { key: 'transport', label: '内部协议', readonly: true, defaultValue: 'udp' },
+    { key: 'port', label: '内部端口', readonly: true, defaultValue: 5060, formHidden: true },
+    { key: 'transport', label: '内部协议', readonly: true, defaultValue: 'udp', formHidden: true },
   ],
 };
 

@@ -867,7 +867,7 @@ export function ResourceWorkspace({
           })),
           account_id: accounts.map((acc) => ({
             label: `${acc.username} (余额: ¥${acc.balance ?? 0})`,
-            value: String(acc.username),
+            value: String(acc.id),
           })),
           billing_account_id: accounts.map((acc) => ({
             label: `${acc.username} (余额: ¥${acc.balance ?? 0})`,
