@@ -740,7 +740,7 @@ fn unused_even_udp_port() -> u16 {
         let Some(rtcp_port) = port.checked_add(1) else {
             continue;
         };
-        if port % 2 == 0 && std::net::UdpSocket::bind(("127.0.0.1", rtcp_port)).is_ok() {
+        if port.is_multiple_of(2) && std::net::UdpSocket::bind(("127.0.0.1", rtcp_port)).is_ok() {
             return port;
         }
     }
@@ -753,7 +753,7 @@ fn unused_even_udp_port_pair() -> (u16, u16) {
         let Some(second_port) = first_port.checked_add(2) else {
             continue;
         };
-        if first_port % 2 != 0 {
+        if !first_port.is_multiple_of(2) {
             continue;
         }
 
