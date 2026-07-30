@@ -29,7 +29,6 @@ import {
 import { listOptions, policyValidationError, type OutboundPolicy } from '@/services/trunks';
 import {
   CallerPolicyForm,
-  EgressBindingForm,
   WorkspaceField,
   emptyPolicy,
 } from '@/pages/trunks/trunk-detail';
@@ -183,8 +182,6 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
   const [policy, setPolicy] = useState<OutboundPolicy>(emptyPolicy);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [groups, setGroups] = useState<Entity[]>([]);
-  const [trunks, setTrunks] = useState<Entity[]>([]);
   const [pools, setPools] = useState<Entity[]>([]);
   const [allNumbers, setAllNumbers] = useState<Entity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -205,24 +202,20 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
       const tenantId = workspace.extension?.tenant_id ? String(workspace.extension.tenant_id) : '';
       const optional = await Promise.allSettled([
         getExtensionOutboundPolicy(username),
-        listOptions('/egress-groups'),
-        listOptions('/trunks'),
         listOptions('/caller-pools'),
         listOptions('/numbers'),
       ]);
       if (optional[0].status === 'fulfilled') setPolicy({ ...emptyPolicy, ...optional[0].value });
-      if (optional[1].status === 'fulfilled') setGroups(optional[1].value);
-      if (optional[2].status === 'fulfilled') setTrunks(optional[2].value);
-      if (optional[3].status === 'fulfilled') {
-        const allPools = optional[3].value;
+      if (optional[1].status === 'fulfilled') {
+        const allPools = optional[1].value;
         setPools(
           tenantId
             ? allPools.filter((pool) => !pool.tenant_id || String(pool.tenant_id) === tenantId)
             : allPools,
         );
       }
-      if (optional[4].status === 'fulfilled') {
-        const numbers = optional[4].value;
+      if (optional[2].status === 'fulfilled') {
+        const numbers = optional[2].value;
         setAllNumbers(
           tenantId
             ? numbers.filter((num) => String(num.tenant_id || '') === tenantId)
@@ -371,7 +364,7 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
       },
       {
         key: 'caller',
-        title: '主叫策略',
+        title: '主叫显号与号码池',
         content: (
           <CallerPolicyForm
             policy={policy}
@@ -382,19 +375,12 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
         ),
       },
       {
-        key: 'binding',
-        title: '落地绑定',
-        content: (
-          <EgressBindingForm policy={policy} set={setPolicyField} groups={groups} trunks={trunks} />
-        ),
-      },
-      {
         key: 'numbers',
         title: '号码归属',
         content: <NumberOwnership numbers={data?.numbers || []} />,
       },
     ];
-  }, [confirmPassword, data, groups, loading, load, password, policy, pools, trunks, username]);
+  }, [confirmPassword, data, loading, load, password, policy, pools, username]);
 
   if (loading) {
     return (

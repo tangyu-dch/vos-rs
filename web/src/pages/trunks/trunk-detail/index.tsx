@@ -1146,14 +1146,6 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
             </SectionBlock>
           ),
       },
-      {
-        key: 'binding',
-        title: '落地绑定',
-        content: (
-          <EgressBindingForm policy={policy} set={setPolicyField} groups={groups} trunks={trunks} />
-        ),
-        hide: role !== 'access',
-      },
     ];
     return list.filter((tab) => !tab.hide);
   }, [
