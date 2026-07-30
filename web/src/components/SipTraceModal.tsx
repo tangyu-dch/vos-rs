@@ -10,7 +10,7 @@ import {
 } from '@heroui/react';
 import { Activity } from 'lucide-react';
 import { api } from '@/services/client';
-import { SipFlowDiagram, type SipFlowEvent } from '@/pages/shared/call-detail';
+import { SipFlowDiagram, type SipFlowEvent } from '@/components/sip-flow-diagram';
 
 interface SipTraceModalProps {
   isOpen: boolean;

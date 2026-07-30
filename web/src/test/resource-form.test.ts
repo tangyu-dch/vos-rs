@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resourceFormValues, resourceSaveValues } from '@/pages/shared/resource-workspace';
+import { resourceFormValues, resourceSaveValues } from '@/components/resource-workspace';
 
 const routeSpec = {
   title: '路由策略',
