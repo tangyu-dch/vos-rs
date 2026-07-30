@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { useAuth } from '@/auth/AuthContext';
 import { canAccessPage, firstMenuPath } from '@/services/auth';
 import ConsoleShell from '@/components/ConsoleShell';
-import Login from '@/pages/Login';
+import Login from '@/pages/login';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { DashboardPage } from '@/pages/operations/dashboard';
 import { ActiveCallsPage } from '@/pages/operations/active-calls';
