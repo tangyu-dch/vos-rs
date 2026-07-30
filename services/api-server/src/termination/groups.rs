@@ -40,10 +40,10 @@ pub async fn create_egress_group(
     State(state): State<AppState>,
     Json(body): Json<EgressGroupBody>,
 ) -> EmptyResult {
-    let id = body
-        .id
-        .clone()
-        .ok_or_else(|| invalid("落地组 ID 不能为空"))?;
+    let id = match body.id.clone().map(|s| s.trim().to_string()) {
+        Some(val) if !val.is_empty() => val,
+        _ => uuid::Uuid::new_v4().to_string(),
+    };
     save_egress_group(state, id, body, StatusCode::CREATED).await
 }
 pub async fn update_egress_group(

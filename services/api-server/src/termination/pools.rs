@@ -65,10 +65,10 @@ pub async fn create_caller_pool(
     State(state): State<AppState>,
     Json(body): Json<CallerPoolBody>,
 ) -> EmptyResult {
-    let id = body
-        .id
-        .clone()
-        .ok_or_else(|| invalid("号码池 ID 不能为空"))?;
+    let id = match body.id.clone().map(|s| s.trim().to_string()) {
+        Some(val) if !val.is_empty() => val,
+        _ => uuid::Uuid::new_v4().to_string(),
+    };
     save_caller_pool(state, id, body, StatusCode::CREATED).await
 }
 pub async fn update_caller_pool(

@@ -10,7 +10,7 @@ use crate::{normalize_page, ApiError, AppState, PageQuery, PaginatedResponse};
 
 #[derive(Debug, Deserialize)]
 pub struct CreateRouteRequest {
-    pub id: String,
+    pub id: Option<String>,
     pub prefix: String,
     pub priority: i32,
     pub gateway_id: String,
@@ -178,8 +178,12 @@ pub async fn create_route(
     State(state): State<AppState>,
     Json(req): Json<CreateRouteRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let id = match req.id.as_deref().map(str::trim) {
+        Some(val) if !val.is_empty() => val.to_string(),
+        _ => uuid::Uuid::new_v4().to_string(),
+    };
     let weight = validate_route(
-        &req.id,
+        &id,
         &req.prefix,
         req.priority,
         &req.gateway_id,
@@ -191,7 +195,7 @@ pub async fn create_route(
     state
         .store
         .insert_route_with_cost(
-            &req.id,
+            &id,
             &req.prefix,
             req.priority,
             &req.gateway_id,
