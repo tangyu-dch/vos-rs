@@ -33,6 +33,10 @@ pub(crate) async fn handle_datagram(
         Ok(sip_core::SipMessageBorrow::Response(response)) => {
             response::dispatch_response(response.into_owned(), peer, edge_state, edge_config).await
         }
+        Err(sip_core::SipParseError::EmptyMessage) => {
+            // NAT 保活心跳（CRLF / 0 字节数据包），属于常见网络行为，静默忽略不报 warn
+            Vec::new()
+        }
         Err(error) => {
             warn!(%error, "failed to parse SIP datagram");
             Vec::new()

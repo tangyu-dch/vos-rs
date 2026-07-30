@@ -130,6 +130,16 @@ ON CONFLICT (pool_id, number) DO UPDATE SET
   priority = EXCLUDED.priority,
   weight = EXCLUDED.weight;
 
+-- 11. 呼出主叫与落地关联策略 (Source Outbound Policies)
+-- 接入中继 access-alpha 使用号码池 pool-alpha-mobile，落地走移动分组 group-cmcc
+INSERT INTO source_outbound_policies (source_type, source_id, caller_mode, caller_pool_id, egress_mode, egress_group_id, fallback_mode, enabled)
+VALUES
+  ('trunk', 'access-alpha', 'virtual_pool', 'pool-alpha-mobile', 'group', 'group-cmcc', 'reject', TRUE),
+  ('trunk', 'access-beta',  'virtual_pool', 'pool-beta-mixed',   'group', 'group-all-carriers', 'reject', TRUE)
+ON CONFLICT (source_type, source_id) DO UPDATE SET
+  caller_pool_id = EXCLUDED.caller_pool_id,
+  egress_group_id = EXCLUDED.egress_group_id;
+
 EOSQL
 
 echo ""
