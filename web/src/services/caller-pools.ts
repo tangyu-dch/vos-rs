@@ -26,8 +26,8 @@ export function callerPoolValidationError(
   pool: CallerPool,
   members: CallerPoolMember[],
 ): string | null {
-  if (!pool.virtual_alias?.trim() || !pool.owner_source_id?.trim())
-    return '虚拟主叫与来源标识不能为空';
+  if (!pool.virtual_alias?.trim()) return '虚拟主叫别名不能为空';
+  if (!pool.tenant_id && !pool.owner_source_id?.trim()) return '必须指定归属租户或来源标识';
   const seen = new Set<string>();
   for (const member of members) {
     const number = member.number?.trim();
@@ -58,9 +58,16 @@ export function numberCanJoinCallerPool(number: Entity, pool: CallerPool): boole
     number.can_present === undefined
       ? ['outbound', 'both', 'bidirectional'].includes(direction)
       : Boolean(number.can_present);
+  const statusOk = number.status !== 'disabled';
+  if (!statusOk || !canPresent) return false;
+
+  // 1. 如果号码池指定了租户，号码与号码池同租户 (或者无租户公用) 即可加入
+  if (pool.tenant_id) {
+    return !number.tenant_id || String(number.tenant_id) === String(pool.tenant_id);
+  }
+
+  // 2. 兼容历史模式：检查显式授权来源
   return (
-    number.status !== 'disabled' &&
-    canPresent &&
     number.allocation_source_type === pool.owner_source_type &&
     String(number.allocation_source_id ?? '') === pool.owner_source_id
   );

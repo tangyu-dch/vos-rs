@@ -227,7 +227,7 @@ impl PostgresCdrStore {
 
     /// Lists caller pools.
     pub async fn list_caller_pools(&self) -> Result<Vec<CallerPool>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM caller_pools ORDER BY id")
+        sqlx::query_as("SELECT id,owner_source_type,owner_source_id,virtual_alias,strategy,fallback_mode,tenant_id,enabled,created_at,updated_at FROM caller_pools ORDER BY id")
             .fetch_all(&self.pool)
             .await
     }
@@ -235,11 +235,11 @@ impl PostgresCdrStore {
     /// Creates or updates a caller pool.
     pub async fn upsert_caller_pool(&self, pool: &CallerPool) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO caller_pools(id,owner_source_type,owner_source_id,virtual_alias,strategy,fallback_mode,enabled) \
-             VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET \
+            "INSERT INTO caller_pools(id,owner_source_type,owner_source_id,virtual_alias,strategy,fallback_mode,tenant_id,enabled) \
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET \
              owner_source_type=EXCLUDED.owner_source_type,owner_source_id=EXCLUDED.owner_source_id, \
              virtual_alias=EXCLUDED.virtual_alias,strategy=EXCLUDED.strategy, \
-             fallback_mode=EXCLUDED.fallback_mode,enabled=EXCLUDED.enabled,updated_at=now()",
+             fallback_mode=EXCLUDED.fallback_mode,tenant_id=EXCLUDED.tenant_id,enabled=EXCLUDED.enabled,updated_at=now()",
         )
         .bind(&pool.id)
         .bind(&pool.owner_source_type)
@@ -247,6 +247,7 @@ impl PostgresCdrStore {
         .bind(&pool.virtual_alias)
         .bind(&pool.strategy)
         .bind(&pool.fallback_mode)
+        .bind(&pool.tenant_id)
         .bind(pool.enabled)
         .execute(&self.pool)
         .await?;

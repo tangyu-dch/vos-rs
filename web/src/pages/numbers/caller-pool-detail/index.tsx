@@ -16,7 +16,7 @@ import {
   Tabs,
   Tab,
 } from '@heroui/react';
-import { Plus, Trash2, Users } from 'lucide-react';
+import { Layers, Plus, Trash2, Users } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import type { Entity } from '@/services/resources';
 import { listOptions } from '@/services/trunks';
@@ -250,27 +250,58 @@ export default function CallerPoolDetailPage() {
             description="仅展示已授权给当前来源且允许显号的真实号码；历史成员仍会保留回显以便修正。"
             actions={
               canManage && (
-                <Button
-                  size="sm"
-                  variant="flat"
-                  onPress={() =>
-                    setMembers((current) => [
-                      ...current,
-                      {
-                        _key: genId(),
-                        pool_id: id,
-                        number: '',
-                        priority: 100,
-                        weight: 100,
-                        max_concurrent: 0,
-                        enabled: true,
-                      },
-                    ])
-                  }
-                  startContent={<Plus className="w-4 h-4" />}
-                >
-                  添加号码
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    color="primary"
+                    variant="flat"
+                    onPress={() => {
+                      const available = numberOptions.map((opt) => opt.value);
+                      const currentNumbers = new Set(members.map((m) => m.number));
+                      const newMembers = available
+                        .filter((num) => !currentNumbers.has(num))
+                        .map((num) => ({
+                          _key: genId(),
+                          pool_id: id,
+                          number: num,
+                          priority: 100,
+                          weight: 100,
+                          max_concurrent: 0,
+                          enabled: true,
+                        }));
+                      if (newMembers.length === 0) {
+                        message.info('当前可用号码已全部加入号码池');
+                        return;
+                      }
+                      setMembers((current) => [...current, ...newMembers]);
+                      message.success(`已批量添加 ${newMembers.length} 个可用号码到号码池`);
+                    }}
+                    startContent={<Layers className="w-4 h-4" />}
+                  >
+                    一键加入全部可用号码
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    onPress={() =>
+                      setMembers((current) => [
+                        ...current,
+                        {
+                          _key: genId(),
+                          pool_id: id,
+                          number: '',
+                          priority: 100,
+                          weight: 100,
+                          max_concurrent: 0,
+                          enabled: true,
+                        },
+                      ])
+                    }
+                    startContent={<Plus className="w-4 h-4" />}
+                  >
+                    添加单个号码
+                  </Button>
+                </div>
               )
             }
           >

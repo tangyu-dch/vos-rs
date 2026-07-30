@@ -42,6 +42,7 @@ pub struct CallerPool {
     pub virtual_alias: String,
     pub strategy: String,
     pub fallback_mode: String,
+    pub tenant_id: Option<String>,
     pub enabled: bool,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,

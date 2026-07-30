@@ -54,11 +54,12 @@ pub struct AllocationBody {
 #[derive(Debug, Deserialize)]
 pub struct CallerPoolBody {
     pub id: Option<String>,
-    pub owner_source_type: String,
-    pub owner_source_id: String,
+    pub owner_source_type: Option<String>,
+    pub owner_source_id: Option<String>,
     pub virtual_alias: String,
     pub strategy: String,
     pub fallback_mode: Option<String>,
+    pub tenant_id: Option<String>,
     pub enabled: Option<bool>,
 }
 

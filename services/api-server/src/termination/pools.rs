@@ -17,14 +17,15 @@ async fn save_caller_pool(
     body: CallerPoolBody,
     status: StatusCode,
 ) -> EmptyResult {
-    validate_source_type(&body.owner_source_type)?;
-    if id.trim().is_empty()
-        || body.owner_source_id.trim().is_empty()
-        || body.virtual_alias.trim().is_empty()
-    {
-        return Err(invalid("号码池 ID、来源和虚拟别名不能为空"));
+    let source_type = body.owner_source_type.unwrap_or_else(|| "trunk".to_string());
+    let source_id = body.owner_source_id.unwrap_or_default();
+    if id.trim().is_empty() || body.virtual_alias.trim().is_empty() {
+        return Err(invalid("号码池 ID 与虚拟别名不能为空"));
     }
-    ensure_source_exists(&state, &body.owner_source_type, &body.owner_source_id).await?;
+    if !source_id.is_empty() {
+        validate_source_type(&source_type)?;
+        ensure_source_exists(&state, &source_type, &source_id).await?;
+    }
     if !matches!(
         body.strategy.as_str(),
         "random" | "round_robin" | "weighted_random" | "stable_hash" | "weighted" | "hash"
@@ -46,11 +47,12 @@ async fn save_caller_pool(
         .store
         .upsert_caller_pool(&CallerPool {
             id,
-            owner_source_type: body.owner_source_type,
-            owner_source_id: body.owner_source_id,
+            owner_source_type: source_type,
+            owner_source_id: source_id,
             virtual_alias: body.virtual_alias,
             strategy,
             fallback_mode,
+            tenant_id: body.tenant_id,
             enabled: body.enabled.unwrap_or(true),
             created_at: now,
             updated_at: now,
@@ -133,13 +135,15 @@ pub async fn replace_caller_pool_members(
         }
         let authorized: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM number_inventory n \
-             JOIN number_allocations a ON a.number=n.number AND a.enabled \
-             WHERE n.number=$1 AND a.source_type=$2 AND a.source_id=$3 \
+             LEFT JOIN number_allocations a ON a.number=n.number AND a.enabled \
+             WHERE n.number=$1 \
+               AND ($2::TEXT IS NULL OR n.tenant_id = $2 OR (a.source_type=$3 AND a.source_id=$4)) \
                AND LOWER(n.status) IN ('available','assigned','active') \
                AND LOWER(COALESCE(n.direction,'both')) IN ('outbound','both','bidirectional') \
                AND COALESCE(NULLIF(n.owner_egress_trunk_id,''),NULLIF(n.gateway_id,'')) IS NOT NULL)",
         )
         .bind(&item.number)
+        .bind(&pool.tenant_id)
         .bind(&pool.owner_source_type)
         .bind(&pool.owner_source_id)
         .fetch_one(state.store.pool())
@@ -147,7 +151,7 @@ pub async fn replace_caller_pool_members(
         .map_err(database)?;
         if !authorized {
             return Err(invalid(format!(
-                "号码 {} 未授权给当前来源、不可显号或没有落地归属",
+                "号码 {} 未归属于当前租户/来源、不可显号或没有落地归属",
                 item.number
             )));
         }
