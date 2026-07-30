@@ -108,6 +108,6 @@ export interface ResourceSpec {
     label: string;
     icon?: string;
     color?: 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
-    onPress: (row: Entity) => void;
+    onPress: (row: Entity, navigate: (path: string) => void) => void;
   };
 }

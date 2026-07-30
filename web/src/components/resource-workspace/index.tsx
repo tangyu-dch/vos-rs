@@ -2,6 +2,7 @@
 // 从 console.tsx 拆分
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Button,
   Card,
@@ -556,6 +557,7 @@ export function ResourceWorkspace({
   const may = (action: string) =>
     Boolean(session && hasPermission(session, resourcePermission(spec, action)));
   const [rows, setRows] = useState<Entity[]>([]);
+  const navigate = useNavigate();
   const [pagination, setPagination] = useState({
     page: 1,
     page_size: 20,
@@ -1421,7 +1423,7 @@ export function ResourceWorkspace({
                                 size="sm"
                                 color={spec.customRowAction.color ?? 'primary'}
                                 variant="flat"
-                                onPress={() => spec.customRowAction!.onPress(row)}
+                                onPress={() => spec.customRowAction!.onPress(row, navigate)}
                                 aria-label={spec.customRowAction.label}
                               >
                                 {(() => {
