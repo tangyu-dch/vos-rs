@@ -39,6 +39,15 @@ const durationSecondsText = (value: unknown) => {
 /// 后端 `time::serde::rfc3339` 输出形如 "2026-07-28T10:30:00Z"。
 const datetimeText = (value: unknown) => {
   if (value === null || value === undefined || value === '') return '—';
+  if (Array.isArray(value)) {
+    // 兼容 Rust time/time::serde::tuple 序列化出的数组 [year, ordinal_day, hour, minute, second, nanosecond, ...]
+    const [year, ordinalDay, hour = 0, minute = 0, second = 0] = value;
+    if (typeof year === 'number' && typeof ordinalDay === 'number') {
+      const date = new Date(year, 0, ordinalDay, hour, minute, second);
+      return date.toLocaleString('zh-CN', { hour12: false });
+    }
+    return String(value);
+  }
   const numericValue = typeof value === 'number' ? value : Number.NaN;
   const date = new Date(Number.isFinite(numericValue) ? numericValue : String(value));
   if (!Number.isNaN(date.getTime())) {
