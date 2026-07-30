@@ -955,7 +955,7 @@ export function TrunkDetailView({ id: propId }: { id?: string }) {
         const allPools = optional[2].value;
         setPools(
           tenantId
-            ? allPools.filter((pool) => String(pool.tenant_id || pool.owner_source_id || '') === tenantId || pool.owner_source_id === id)
+            ? allPools.filter((pool: Record<string, unknown>) => !pool.tenant_id || String(pool.tenant_id) === tenantId)
             : allPools,
         );
       }

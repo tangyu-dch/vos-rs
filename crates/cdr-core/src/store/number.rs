@@ -22,7 +22,7 @@ impl PostgresCdrStore {
 
     pub async fn list_numbers(&self) -> Result<Vec<NumberInventory>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT n.number,n.username,a.source_type,a.source_id,n.gateway_id,n.owner_egress_trunk_id,n.direction,n.max_concurrent,n.current_concurrent,n.status,n.created_at,n.updated_at \
+            "SELECT n.number,n.username,a.source_type,a.source_id,n.gateway_id,n.owner_egress_trunk_id,n.tenant_id,n.direction,n.max_concurrent,n.current_concurrent,n.status,n.created_at,n.updated_at \
              FROM number_inventory n LEFT JOIN number_allocations a ON a.number=n.number AND a.enabled \
              ORDER BY n.number",
         )
@@ -37,12 +37,13 @@ impl PostgresCdrStore {
                 allocation_source_id: row.get(3),
                 gateway_id: row.get(4),
                 owner_egress_trunk_id: row.get(5),
-                direction: row.get(6),
-                max_concurrent: row.get(7),
-                current_concurrent: row.get(8),
-                status: row.get(9),
-                created_at: row.get(10),
-                updated_at: row.get(11),
+                tenant_id: row.get(6),
+                direction: row.get(7),
+                max_concurrent: row.get(8),
+                current_concurrent: row.get(9),
+                status: row.get(10),
+                created_at: row.get(11),
+                updated_at: row.get(12),
             });
         }
         Ok(numbers)
@@ -61,7 +62,7 @@ impl PostgresCdrStore {
     ) -> Result<Vec<NumberInventory>, sqlx::Error> {
         let like = q.map(|s| format!("%{s}%"));
         let rows = sqlx::query(
-            "SELECT n.number,n.username,a.source_type,a.source_id,n.gateway_id,n.owner_egress_trunk_id,n.direction,n.max_concurrent,n.current_concurrent,n.status,n.created_at,n.updated_at \
+            "SELECT n.number,n.username,a.source_type,a.source_id,n.gateway_id,n.owner_egress_trunk_id,n.tenant_id,n.direction,n.max_concurrent,n.current_concurrent,n.status,n.created_at,n.updated_at \
              FROM number_inventory n LEFT JOIN number_allocations a ON a.number=n.number AND a.enabled \
              WHERE ($3::TEXT IS NULL OR LOWER(n.number) LIKE LOWER($3)) \
                AND ($4::TEXT IS NULL OR n.status = $4) \
@@ -82,12 +83,13 @@ impl PostgresCdrStore {
                 allocation_source_id: row.get(3),
                 gateway_id: row.get(4),
                 owner_egress_trunk_id: row.get(5),
-                direction: row.get(6),
-                max_concurrent: row.get(7),
-                current_concurrent: row.get(8),
-                status: row.get(9),
-                created_at: row.get(10),
-                updated_at: row.get(11),
+                tenant_id: row.get(6),
+                direction: row.get(7),
+                max_concurrent: row.get(8),
+                current_concurrent: row.get(9),
+                status: row.get(10),
+                created_at: row.get(11),
+                updated_at: row.get(12),
             })
             .collect())
     }
@@ -118,21 +120,23 @@ impl PostgresCdrStore {
         username: Option<&str>,
         gateway_id: Option<&str>,
         owner_egress_trunk_id: Option<&str>,
+        tenant_id: Option<&str>,
         direction: Option<&str>,
         max_concurrent: Option<i32>,
         status: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO number_inventory (number, username, gateway_id, owner_egress_trunk_id, direction, max_concurrent, status, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, now()) \
+            "INSERT INTO number_inventory (number, username, gateway_id, owner_egress_trunk_id, tenant_id, direction, max_concurrent, status, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) \
              ON CONFLICT (number) DO UPDATE SET username=EXCLUDED.username, gateway_id=EXCLUDED.gateway_id, \
-             owner_egress_trunk_id=EXCLUDED.owner_egress_trunk_id, direction=EXCLUDED.direction, \
+             owner_egress_trunk_id=EXCLUDED.owner_egress_trunk_id, tenant_id=EXCLUDED.tenant_id, direction=EXCLUDED.direction, \
              max_concurrent=EXCLUDED.max_concurrent, status=EXCLUDED.status, updated_at=now()",
         )
         .bind(number)
         .bind(username)
         .bind(gateway_id)
         .bind(owner_egress_trunk_id)
+        .bind(tenant_id)
         .bind(direction)
         .bind(max_concurrent)
         .bind(status)

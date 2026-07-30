@@ -241,6 +241,7 @@ pub struct NumberInventory {
     pub allocation_source_id: Option<String>,
     pub gateway_id: Option<String>,
     pub owner_egress_trunk_id: Option<String>,
+    pub tenant_id: Option<String>,
     pub direction: Option<String>,
     pub max_concurrent: Option<i32>,
     pub current_concurrent: Option<i32>,

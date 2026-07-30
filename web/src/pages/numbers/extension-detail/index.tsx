@@ -217,7 +217,7 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
         const allPools = optional[3].value;
         setPools(
           tenantId
-            ? allPools.filter((pool) => String(pool.tenant_id || pool.owner_source_id || '') === tenantId || pool.owner_source_id === username)
+            ? allPools.filter((pool) => !pool.tenant_id || String(pool.tenant_id) === tenantId)
             : allPools,
         );
       }
