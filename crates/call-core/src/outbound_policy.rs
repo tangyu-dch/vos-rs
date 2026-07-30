@@ -714,6 +714,58 @@ mod pool_fallback_tests {
         assert_eq!(candidates[0].target.gateway_id.as_str(), "egress-a");
         assert_eq!(candidates[1].target.gateway_id.as_str(), "egress-b");
     }
+
+    #[test]
+    fn test_preview_caller_selection_pool_and_fixed() {
+        let source_pool = CallSource::trunk("access-alpha");
+        let source_fixed = CallSource::trunk("access-fixed");
+        let source_none = CallSource::trunk("access-none");
+
+        let directory = OutboundPolicyDirectory::new(
+            [],
+            [],
+            [
+                RuntimeSourcePolicy {
+                    source: source_pool.clone(),
+                    caller_mode: "virtual_pool".to_string(),
+                    fixed_number: None,
+                    caller_pool_id: Some("pool-alpha".to_string()),
+                    egress: RuntimeEgressPolicy::Direct("egress-gw".to_string()),
+                },
+                RuntimeSourcePolicy {
+                    source: source_fixed.clone(),
+                    caller_mode: "fixed_number".to_string(),
+                    fixed_number: Some("13800009999".to_string()),
+                    caller_pool_id: None,
+                    egress: RuntimeEgressPolicy::Direct("egress-gw".to_string()),
+                },
+            ],
+            [RuntimeCallerPool {
+                id: "pool-alpha".to_string(),
+                owner: source_pool.clone(),
+                strategy: CallerPoolStrategy::RoundRobin,
+                members: vec![RuntimeCallerPoolMember {
+                    number: "13800001001".to_string(),
+                    priority: 10,
+                    weight: 100,
+                    max_concurrent: 5,
+                }],
+            }],
+            [],
+        );
+
+        let preview_pool = directory.preview_caller_selection(&source_pool);
+        assert_eq!(
+            preview_pool,
+            Some((Some("pool-alpha".to_string()), "13800001001".to_string()))
+        );
+
+        let preview_fixed = directory.preview_caller_selection(&source_fixed);
+        assert_eq!(preview_fixed, Some((None, "13800009999".to_string())));
+
+        let preview_none = directory.preview_caller_selection(&source_none);
+        assert_eq!(preview_none, None);
+    }
 }
 
 fn pool_strategy_name(strategy: CallerPoolStrategy) -> &'static str {

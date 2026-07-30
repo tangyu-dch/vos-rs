@@ -75,9 +75,12 @@ pub(super) async fn terminate(
 pub(super) struct RoutePreviewQuery {
     destination: String,
     access_trunk_id: Option<String>,
+    source_type: Option<String>,
+    source_id: Option<String>,
+    caller_number: Option<String>,
 }
 
-/// 选路试算：返回某被叫号码的候选路由序列（failover 顺序），若指定接入中继则联动选选主叫号码。
+/// 选路试算：返回某被叫号码的候选路由序列（failover 顺序），若指定呼叫来源（中继/分机/分机组）或主叫号码则联动试算主叫号码与落地。
 pub(super) async fn route_preview(
     State(state): State<Arc<EdgeState>>,
     Query(q): Query<RoutePreviewQuery>,
@@ -99,14 +102,35 @@ pub(super) async fn route_preview(
     let mut selected_caller_number: Option<String> = None;
     let mut caller_pool_id: Option<String> = None;
 
-    if let Some(ref access_id) = q.access_trunk_id {
+    // 解析呼叫来源：优先取指定 source_type + source_id，其次兼容 access_trunk_id，再次根据 caller_number 反查分机/中继
+    let source = if let (Some(ref stype), Some(ref sid)) = (&q.source_type, &q.source_id) {
+        if !stype.trim().is_empty() && !sid.trim().is_empty() {
+            Some(call_core::CallSource::new(stype.trim(), sid.trim()))
+        } else {
+            None
+        }
+    } else if let Some(ref access_id) = q.access_trunk_id {
         if !access_id.trim().is_empty() {
-            let source = call_core::CallSource::trunk(access_id.trim());
-            let directory = cm.outbound_policies();
-            if let Some((pool_id, selected)) = directory.preview_caller_selection(&source) {
-                caller_pool_id = pool_id;
-                selected_caller_number = Some(selected);
-            }
+            Some(call_core::CallSource::trunk(access_id.trim()))
+        } else {
+            None
+        }
+    } else if let Some(ref caller) = q.caller_number {
+        if !caller.trim().is_empty() {
+            // 分机呼出：如果传入了分机号码（如 1001），对应 source_type = "extension", source_id = "1001"
+            Some(call_core::CallSource::new("extension", caller.trim()))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(ref src) = source {
+        let directory = cm.outbound_policies();
+        if let Some((pool_id, selected)) = directory.preview_caller_selection(src) {
+            caller_pool_id = pool_id;
+            selected_caller_number = Some(selected);
         }
     }
 

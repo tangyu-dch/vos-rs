@@ -149,6 +149,9 @@ pub async fn terminate_call(
 pub struct RoutePreviewQuery {
     pub destination: String,
     pub access_trunk_id: Option<String>,
+    pub source_type: Option<String>,
+    pub source_id: Option<String>,
+    pub caller_number: Option<String>,
 }
 
 /// 选路试算（转发到 sip-edge 管理 API）。
@@ -165,6 +168,24 @@ pub async fn route_preview(
         if !access_id.trim().is_empty() {
             url.push_str("&access_trunk_id=");
             url.push_str(&urlencoding(access_id.trim()));
+        }
+    }
+    if let Some(ref stype) = q.source_type {
+        if !stype.trim().is_empty() {
+            url.push_str("&source_type=");
+            url.push_str(&urlencoding(stype.trim()));
+        }
+    }
+    if let Some(ref sid) = q.source_id {
+        if !sid.trim().is_empty() {
+            url.push_str("&source_id=");
+            url.push_str(&urlencoding(sid.trim()));
+        }
+    }
+    if let Some(ref caller) = q.caller_number {
+        if !caller.trim().is_empty() {
+            url.push_str("&caller_number=");
+            url.push_str(&urlencoding(caller.trim()));
         }
     }
     let token = get_internal_token(&state.internal_secret)?;
