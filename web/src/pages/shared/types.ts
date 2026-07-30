@@ -41,6 +41,7 @@ export interface FieldSpec {
   defaultValue?: unknown;
   fullWidth?: boolean;
   min?: number;
+  step?: number | string;
   placeholder?: string;
   pattern?: RegExp;
   patternMessage?: string;

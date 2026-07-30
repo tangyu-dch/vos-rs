@@ -4,7 +4,7 @@ const commonAccountFields: ResourceSpec['fields'] = [
   { key: 'id', label: '账户标识', readonly: true, formHidden: true },
   { key: 'username', label: '账户名称', required: true, placeholder: '请输入唯一账户名称' },
   { key: 'balance', label: '账户余额', kind: 'number', readonly: true },
-  { key: 'credit_limit', label: '授信额度', kind: 'number', min: 0, defaultValue: 0 },
+  { key: 'credit_limit', label: '授信额度', kind: 'number', min: 0, step: 0.001, defaultValue: 0 },
   {
     key: 'billing_interval_secs',
     label: '计费周期（秒）',
@@ -18,6 +18,7 @@ const commonAccountFields: ResourceSpec['fields'] = [
     label: '周期价格（元）',
     kind: 'number',
     min: 0,
+    step: 0.001,
     required: true,
     defaultValue: 0,
   },

@@ -199,6 +199,7 @@ export function FormControl({
         variant="bordered"
         isDisabled={disabled}
         min={field.min ?? 0}
+        step={field.step ?? 'any'}
         placeholder={field.placeholder}
         value={value !== undefined && value !== null ? String(value) : ''}
         onValueChange={(v) => onChange(v === '' ? undefined : Number(v))}
