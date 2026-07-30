@@ -124,13 +124,21 @@ impl MediaNodePool {
     }
 
     pub(crate) fn node_for_port(&self, port: u16) -> Option<Arc<MediaNodeRuntime>> {
-        let rtp_port = if port % 2 == 0 { port } else { port - 1 };
+        let rtp_port = if port.is_multiple_of(2) {
+            port
+        } else {
+            port - 1
+        };
         let index = self.port_nodes.get(&rtp_port).map(|entry| *entry)?;
         self.nodes.get(index).map(Arc::clone)
     }
 
     pub(crate) fn release_port(&self, port: u16) {
-        let rtp_port = if port % 2 == 0 { port } else { port - 1 };
+        let rtp_port = if port.is_multiple_of(2) {
+            port
+        } else {
+            port - 1
+        };
         if let Some((_, index)) = self.port_nodes.remove(&rtp_port) {
             self.nodes[index]
                 .active_endpoints

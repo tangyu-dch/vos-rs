@@ -90,7 +90,7 @@ pub fn load_wav_pcm<P: AsRef<Path>>(path: P) -> io::Result<Vec<i16>> {
             format!("仅支持 16-bit 深度采样，当前为 {bits_per_sample}-bit"),
         ));
     }
-    if data_size % 2 != 0 || offset.saturating_add(u64::from(data_size)) > file_len {
+    if !data_size.is_multiple_of(2) || offset.saturating_add(u64::from(data_size)) > file_len {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "WAV data chunk 长度无效或文件已截断",
@@ -145,7 +145,7 @@ fn skip_chunk(file: &mut File, chunk_size: u32) -> io::Result<()> {
 }
 
 fn skip_chunk_padding(file: &mut File, chunk_size: u32) -> io::Result<()> {
-    if chunk_size % 2 != 0 {
+    if !chunk_size.is_multiple_of(2) {
         file.seek(SeekFrom::Current(1))?;
     }
     Ok(())

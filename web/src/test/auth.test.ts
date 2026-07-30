@@ -48,7 +48,7 @@ describe('frontend RBAC', () => {
   it('uses database menus to limit pages', () => {
     expect(canAccessPage(session, '/calls')).toBe(true);
     expect(canAccessPage(session, '/calls/example')).toBe(false);
-    expect(canAccessPage(session, '/billing/accounts')).toBe(false);
+    expect(canAccessPage(session, '/billing/access-accounts')).toBe(false);
   });
 
   it('uses the first enabled database menu as the home page', () => {

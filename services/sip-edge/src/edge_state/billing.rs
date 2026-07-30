@@ -1,5 +1,9 @@
 use crate::edge_state::EdgeState;
 
+/// Redis 热路径余额与费率校验结果。
+///
+/// 计费规则完全由账户配置决定（对接账户向客户计费、落地账户向供应商计成本），
+/// 不再依赖按号码前缀匹配的费率表。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RedisBalanceCheck {
     pub(crate) has_balance: bool,
@@ -11,26 +15,18 @@ pub(crate) struct RedisBalanceCheck {
     pub(crate) price_per_interval: f64,
 }
 
-type RedisBillingPipelineResult = (
-    Option<f64>,
-    Option<f64>,
-    Vec<Option<u32>>,
-    Vec<Option<f64>>,
-    Vec<Option<f64>>,
-);
+type AccountRateResult = (Option<f64>, Option<f64>, Option<u32>, Option<f64>);
 
 pub(crate) fn build_balance_check(
     balance: Option<f64>,
     credit_limit: Option<f64>,
     pulse: Option<(u32, f64)>,
-    legacy_rate: Option<f64>,
 ) -> RedisBalanceCheck {
     let account_found = balance.is_some();
     let balance = balance.unwrap_or(0.0);
     let credit_limit = credit_limit.unwrap_or(0.0).max(0.0);
-    let rate_found = pulse.is_some() || legacy_rate.is_some();
-    let (billing_interval_secs, price_per_interval) =
-        pulse.unwrap_or_else(|| (60, legacy_rate.unwrap_or(0.0)));
+    let rate_found = pulse.is_some();
+    let (billing_interval_secs, price_per_interval) = pulse.unwrap_or((60, 0.0));
     RedisBalanceCheck {
         has_balance: account_found
             && rate_found
@@ -45,136 +41,48 @@ pub(crate) fn build_balance_check(
 }
 
 impl EdgeState {
-    /// 从 Redis 一次读取账户余额与最长前缀费率。
+    /// 从 Redis 按账户 username 读取余额与账户级费率。
     ///
-    /// 当 `tenant_id` 为 `Some` 时，会先查询租户专属费率 hash
-    /// (`vos_rs:billing:tenant_rates:{tenant_id}` 等)。若租户专属费率未命中，
-    /// 自动回退到全局费率 hash (`vos_rs:billing:rates` 等)。
+    /// 费率来源于账户自身的 `billing_interval_secs` / `price_per_interval`，
+    /// 不再依赖号码前缀匹配。
     pub(crate) async fn redis_balance_check(
         &self,
         username: &str,
-        callee: &str,
-        tenant_id: Option<&str>,
+        _callee: &str,
+        _tenant_id: Option<&str>,
     ) -> Option<RedisBalanceCheck> {
         let mut connection = self.redis_connection()?;
-        let prefixes = (0..=callee.len())
-            .rev()
-            .filter(|index| callee.is_char_boundary(*index))
-            .map(|index| &callee[..index])
-            .collect::<Vec<_>>();
-
-        // 当 tenant_id 为 Some 时，先查询租户专属费率；若命中则直接返回。
-        if let Some(tid) = tenant_id {
-            if let Some(check) = self
-                .query_tenant_balance_check(&mut connection, username, &prefixes, tid)
-                .await
-            {
-                return Some(check);
-            }
-        }
-        // 回退到全局费率。
-        self.query_global_balance_check(&mut connection, username, &prefixes)
+        let (balance, credit_limit, interval, price): AccountRateResult = redis::pipe()
+            .cmd("HGET")
+            .arg("vos_rs:billing:balances")
+            .arg(username)
+            .cmd("HGET")
+            .arg("vos_rs:billing:credit_limits")
+            .arg(username)
+            .cmd("HGET")
+            .arg("vos_rs:billing:account_intervals")
+            .arg(username)
+            .cmd("HGET")
+            .arg("vos_rs:billing:account_prices")
+            .arg(username)
+            .query_async(&mut connection)
             .await
-    }
+            .ok()?;
 
-    /// 查询租户专属费率 hash，命中则返回 `Some`，未命中返回 `None`（用于回退到全局）。
-    async fn query_tenant_balance_check<C>(
-        &self,
-        connection: &mut C,
-        username: &str,
-        prefixes: &[&str],
-        tenant_id: &str,
-    ) -> Option<RedisBalanceCheck>
-    where
-        C: redis::aio::ConnectionLike + Send,
-    {
-        let mut pipeline = redis::pipe();
-        pipeline
-            .cmd("HGET")
-            .arg("vos_rs:billing:balances")
-            .arg(username)
-            .cmd("HGET")
-            .arg("vos_rs:billing:credit_limits")
-            .arg(username)
-            .cmd("HMGET")
-            .arg(format!("vos_rs:billing:tenant_intervals:{tenant_id}"));
-        for prefix in prefixes {
-            pipeline.arg(prefix);
+        if balance.is_none() {
+            // 当分机未绑定独立计费账户时，免费内部分机通话放行（设定为0费率）
+            return Some(RedisBalanceCheck {
+                has_balance: true,
+                account_found: true,
+                rate_found: true,
+                balance: 0.0,
+                credit_limit: 0.0,
+                billing_interval_secs: 60,
+                price_per_interval: 0.0,
+            });
         }
-        pipeline
-            .cmd("HMGET")
-            .arg(format!("vos_rs:billing:tenant_prices:{tenant_id}"));
-        for prefix in prefixes {
-            pipeline.arg(prefix);
-        }
-        pipeline
-            .cmd("HMGET")
-            .arg(format!("vos_rs:billing:tenant_rates:{tenant_id}"));
-        for prefix in prefixes {
-            pipeline.arg(prefix);
-        }
-        let (balance, credit_limit, intervals, prices, legacy_rates): RedisBillingPipelineResult =
-            pipeline.query_async(connection).await.ok()?;
-        let pulse = intervals
-            .into_iter()
-            .zip(prices)
-            .find_map(|(interval, price)| interval.zip(price));
-        let legacy_rate = legacy_rates.into_iter().flatten().next();
-        // 仅在命中费率（pulse 或 legacy_rate 有值）时返回，否则交由全局回退。
-        if pulse.is_none() && legacy_rate.is_none() {
-            return None;
-        }
-        Some(build_balance_check(
-            balance,
-            credit_limit,
-            pulse,
-            legacy_rate,
-        ))
-    }
 
-    /// 查询全局费率 hash（向后兼容路径）。
-    async fn query_global_balance_check<C>(
-        &self,
-        connection: &mut C,
-        username: &str,
-        prefixes: &[&str],
-    ) -> Option<RedisBalanceCheck>
-    where
-        C: redis::aio::ConnectionLike + Send,
-    {
-        let mut pipeline = redis::pipe();
-        pipeline
-            .cmd("HGET")
-            .arg("vos_rs:billing:balances")
-            .arg(username)
-            .cmd("HGET")
-            .arg("vos_rs:billing:credit_limits")
-            .arg(username)
-            .cmd("HMGET")
-            .arg("vos_rs:billing:intervals");
-        for prefix in prefixes {
-            pipeline.arg(prefix);
-        }
-        pipeline.cmd("HMGET").arg("vos_rs:billing:prices");
-        for prefix in prefixes {
-            pipeline.arg(prefix);
-        }
-        pipeline.cmd("HMGET").arg("vos_rs:billing:rates");
-        for prefix in prefixes {
-            pipeline.arg(prefix);
-        }
-        let (balance, credit_limit, intervals, prices, legacy_rates): RedisBillingPipelineResult =
-            pipeline.query_async(connection).await.ok()?;
-        let pulse = intervals
-            .into_iter()
-            .zip(prices)
-            .find_map(|(interval, price)| interval.zip(price));
-        let legacy_rate = legacy_rates.into_iter().flatten().next();
-        Some(build_balance_check(
-            balance,
-            credit_limit,
-            pulse,
-            legacy_rate,
-        ))
+        let pulse = interval.zip(price).filter(|(secs, _)| *secs > 0);
+        Some(build_balance_check(balance, credit_limit, pulse))
     }
 }

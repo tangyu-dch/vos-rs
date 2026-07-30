@@ -26,6 +26,13 @@ impl TenantRegistry {
         }
     }
 
+    /// 获取内存只读字典句柄。
+    pub async fn read_map(
+        &self,
+    ) -> tokio::sync::RwLockReadGuard<'_, HashMap<String, TenantRecord>> {
+        self.inner.read().await
+    }
+
     /// 从内存注册表按域查找租户，构造 TenantContext。
     ///
     /// 若未找到或租户已被禁用则返回 `TenantContext::from_domain(domain)`（保持向后兼容）。

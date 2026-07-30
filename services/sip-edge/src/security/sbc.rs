@@ -225,7 +225,7 @@ impl RateLimiter {
         };
 
         let count = self.insert_count.fetch_add(1, Ordering::Relaxed);
-        if count % 1000 == 0 && self.buckets.len() > self.max_entries {
+        if count.is_multiple_of(1000) && self.buckets.len() > self.max_entries {
             self.evict_stale(now);
         }
 

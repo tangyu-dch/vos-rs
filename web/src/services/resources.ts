@@ -31,18 +31,14 @@ export async function listResource<T extends Entity>(
   params: object = {},
   signal?: AbortSignal,
 ): Promise<PageResult<T>> {
-  try {
-    const result = await api.get<PageResult<T> | T[]>(path, params, signal);
-    if (!Array.isArray(result)) return result;
-    const page = Number((params as { page?: number }).page ?? 1);
-    const pageSize = Number((params as { page_size?: number }).page_size ?? (result.length || 1));
-    return {
-      items: result,
-      pagination: { page, page_size: pageSize, total: result.length, total_pages: 1 },
-    };
-  } catch (_err) {
-    return { items: [], pagination: { page: 1, page_size: 10, total: 0, total_pages: 1 } };
-  }
+  const result = await api.get<PageResult<T> | T[]>(path, params, signal);
+  if (!Array.isArray(result)) return result;
+  const page = Number((params as { page?: number }).page ?? 1);
+  const pageSize = Number((params as { page_size?: number }).page_size ?? (result.length || 1));
+  return {
+    items: result,
+    pagination: { page, page_size: pageSize, total: result.length, total_pages: 1 },
+  };
 }
 
 export function getResource<T extends Entity>(path: string, id: string) {

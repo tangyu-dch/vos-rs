@@ -83,7 +83,7 @@ pub fn rtcp_port_for(rtp_port: u16) -> Option<u16> {
 
 /// Normalizes an RTP or RTCP relay port to the corresponding RTP port.
 pub fn rtp_port_for(relay_port: u16) -> Option<u16> {
-    if relay_port % 2 == 0 {
+    if relay_port.is_multiple_of(2) {
         Some(relay_port)
     } else {
         relay_port.checked_sub(1)

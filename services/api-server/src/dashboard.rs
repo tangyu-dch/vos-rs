@@ -260,7 +260,7 @@ pub async fn get_node_traffic(
         let pipe_result: Vec<std::collections::HashMap<String, u64>> =
             pipeline.query_async(&mut conn).await.unwrap_or_default();
 
-        for ((node_id, node_type), traffic_map) in all_nodes.iter().zip(pipe_result.into_iter()) {
+        for ((node_id, node_type), traffic_map) in all_nodes.iter().zip(pipe_result) {
             let series: Vec<NodeTrafficItem> = hour_strs
                 .iter()
                 .map(|hs| NodeTrafficItem {
@@ -301,11 +301,7 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
         // 仅在有真实活跃通话时写入流量；无通话时写入 0，避免图表出现伪基线曲线
         let sip_count = sip_nodes.len() as u64;
         for node_id in sip_nodes {
-            let node_calls = if sip_count > 0 {
-                active_calls / sip_count
-            } else {
-                0
-            };
+            let node_calls = active_calls.checked_div(sip_count).unwrap_or(0);
             let kbps = if active_calls > 0 { node_calls * 8 } else { 0 };
             let redis_key = format!("vos_rs:traffic:{}", node_id);
             let _: Result<(), redis::RedisError> = redis::cmd("HSET")
@@ -319,11 +315,7 @@ pub async fn start_traffic_telemetry_loop(state: AppState) {
         // 4. Update Media Nodes traffic in Redis
         let media_count = media_nodes.len() as u64;
         for node_id in media_nodes {
-            let node_calls = if media_count > 0 {
-                active_calls / media_count
-            } else {
-                0
-            };
+            let node_calls = active_calls.checked_div(media_count).unwrap_or(0);
             let kbps = if active_calls > 0 {
                 node_calls * 160
             } else {

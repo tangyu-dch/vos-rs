@@ -312,9 +312,10 @@ pub(super) fn percent_decode(s: &str) -> String {
 pub(super) fn proxy_unauthorized_for_request(
     request: &SipRequest,
     auth_config: &AuthConfig,
+    realm_override: Option<&str>,
 ) -> Vec<u8> {
     let nonce = auth_config.select_nonce();
-    let challenge = auth_config.challenge_header_with_nonce(&nonce);
+    let challenge = auth_config.challenge_header_with_nonce_and_realm(&nonce, realm_override);
     response::build_response_with_owned_headers(
         request,
         407,

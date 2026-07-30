@@ -4,21 +4,74 @@ use crate::PostgresCdrStore;
 use sqlx::Row;
 use time::OffsetDateTime;
 
+const CDR_SELECT_COLUMNS: &str = "call_id, caller, callee, started_at, ringing_at, \
+    answered_at, ended_at, duration_ms, billable_duration_ms, talk_duration_ms, \
+    ringing_duration_ms, access_billable_duration_ms, access_charge_amount, \
+    egress_billable_duration_ms, egress_cost_amount, status, failure_status_code, \
+    failure_reason, caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms, \
+    gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms, mos, \
+    dtmf_digits, recording_path, direction, tenant_id, tenant_name, auth_realm, audit";
+
 impl PostgresCdrStore {
     pub async fn insert_call_cdr(&self, cdr: &call_core::CallCdr) -> Result<(), sqlx::Error> {
         self.insert_event(&CdrEvent::from_call_cdr(cdr)).await
+    }
+
+    /// 按通话 ID 和计费类型回写双向计费快照（计费时长 + 金额）。
+    ///
+    /// entry_type='call_charge' 回写 access_billable_duration_ms + access_charge_amount；
+    /// entry_type='call_cost'   回写 egress_billable_duration_ms + egress_cost_amount。
+    /// 其他 entry_type 静默忽略。已存在非空值时不覆盖（保留首次成功结算快照）。
+    pub async fn update_call_billing_snapshot(
+        &self,
+        call_id: &str,
+        entry_type: &str,
+        billed_duration_ms: i64,
+        amount: f64,
+    ) -> Result<(), sqlx::Error> {
+        match entry_type {
+            "call_charge" => {
+                sqlx::query(
+                    "UPDATE call_cdrs SET access_billable_duration_ms = $2, \
+                     access_charge_amount = $3 \
+                     WHERE call_id = $1 AND access_billable_duration_ms IS NULL",
+                )
+                .bind(call_id)
+                .bind(billed_duration_ms)
+                .bind(amount)
+                .execute(&self.pool)
+                .await?;
+            }
+            "call_cost" => {
+                sqlx::query(
+                    "UPDATE call_cdrs SET egress_billable_duration_ms = $2, \
+                     egress_cost_amount = $3 \
+                     WHERE call_id = $1 AND egress_billable_duration_ms IS NULL",
+                )
+                .bind(call_id)
+                .bind(billed_duration_ms)
+                .bind(amount)
+                .execute(&self.pool)
+                .await?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     pub async fn insert_event(&self, event: &CdrEvent) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
             INSERT INTO call_cdrs (
-                call_id, caller, callee, started_at, answered_at, ended_at,
-                duration_ms, billable_duration_ms, status, failure_status_code, failure_reason,
+                call_id, caller, callee, started_at, ringing_at, answered_at, ended_at,
+                duration_ms, billable_duration_ms, talk_duration_ms, ringing_duration_ms,
+                access_billable_duration_ms, access_charge_amount,
+                egress_billable_duration_ms, egress_cost_amount,
+                status, failure_status_code, failure_reason,
                 caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms,
                 gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
                 mos, dtmf_digits, recording_path, direction, audit
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
             ON CONFLICT (call_id) DO NOTHING
             "#,
         )
@@ -26,10 +79,17 @@ impl PostgresCdrStore {
         .bind(&event.caller)
         .bind(&event.callee)
         .bind(utils::offset_from_millis(event.started_at_ms))
+        .bind(event.ringing_at_ms.map(utils::offset_from_millis))
         .bind(event.answered_at_ms.map(utils::offset_from_millis))
         .bind(utils::offset_from_millis(event.ended_at_ms))
         .bind(event.duration_ms)
         .bind(event.billable_duration_ms)
+        .bind(event.talk_duration_ms)
+        .bind(event.ringing_duration_ms)
+        .bind(event.access_billable_duration_ms)
+        .bind(event.access_charge_amount)
+        .bind(event.egress_billable_duration_ms)
+        .bind(event.egress_cost_amount)
         .bind(&event.status)
         .bind(event.failure_status_code.map(|c| c as i32))
         .bind(&event.failure_reason)
@@ -58,10 +118,17 @@ impl PostgresCdrStore {
         let mut callers = Vec::with_capacity(events.len());
         let mut callees = Vec::with_capacity(events.len());
         let mut started_ats = Vec::with_capacity(events.len());
+        let mut ringing_ats = Vec::with_capacity(events.len());
         let mut answered_ats = Vec::with_capacity(events.len());
         let mut ended_ats = Vec::with_capacity(events.len());
         let mut durations = Vec::with_capacity(events.len());
         let mut billable_durations = Vec::with_capacity(events.len());
+        let mut talk_durations = Vec::with_capacity(events.len());
+        let mut ringing_durations = Vec::with_capacity(events.len());
+        let mut access_billable_durations = Vec::with_capacity(events.len());
+        let mut access_charge_amounts = Vec::with_capacity(events.len());
+        let mut egress_billable_durations = Vec::with_capacity(events.len());
+        let mut egress_cost_amounts = Vec::with_capacity(events.len());
         let mut statuses = Vec::with_capacity(events.len());
         let mut failure_codes = Vec::with_capacity(events.len());
         let mut failure_reasons = Vec::with_capacity(events.len());
@@ -75,6 +142,9 @@ impl PostgresCdrStore {
         let mut dtmf_digits_list = Vec::with_capacity(events.len());
         let mut recording_paths = Vec::with_capacity(events.len());
         let mut directions = Vec::with_capacity(events.len());
+        let mut tenant_ids = Vec::with_capacity(events.len());
+        let mut tenant_names = Vec::with_capacity(events.len());
+        let mut auth_realms = Vec::with_capacity(events.len());
         let mut audits = Vec::with_capacity(events.len());
 
         for event in events {
@@ -82,10 +152,17 @@ impl PostgresCdrStore {
             callers.push(event.caller.clone());
             callees.push(event.callee.clone());
             started_ats.push(utils::offset_from_millis(event.started_at_ms));
+            ringing_ats.push(event.ringing_at_ms.map(utils::offset_from_millis));
             answered_ats.push(event.answered_at_ms.map(utils::offset_from_millis));
             ended_ats.push(utils::offset_from_millis(event.ended_at_ms));
             durations.push(event.duration_ms);
             billable_durations.push(event.billable_duration_ms);
+            talk_durations.push(event.talk_duration_ms);
+            ringing_durations.push(event.ringing_duration_ms);
+            access_billable_durations.push(event.access_billable_duration_ms);
+            access_charge_amounts.push(event.access_charge_amount);
+            egress_billable_durations.push(event.egress_billable_duration_ms);
+            egress_cost_amounts.push(event.egress_cost_amount);
             statuses.push(event.status.clone());
             failure_codes.push(event.failure_status_code.map(|c| c as i32));
             failure_reasons.push(event.failure_reason.clone());
@@ -99,24 +176,30 @@ impl PostgresCdrStore {
             dtmf_digits_list.push(event.dtmf_digits.clone());
             recording_paths.push(event.recording_path.clone());
             directions.push(event.direction.clone());
+            tenant_ids.push(event.tenant_id.clone());
+            tenant_names.push(event.tenant_name.clone());
+            auth_realms.push(event.auth_realm.clone());
             audits.push(sqlx::types::Json(event.audit.clone()));
         }
 
         sqlx::query(
             r#"
             INSERT INTO call_cdrs (
-                call_id, caller, callee, started_at, answered_at, ended_at,
-                duration_ms, billable_duration_ms, status, failure_status_code, failure_reason,
+                call_id, caller, callee, started_at, ringing_at, answered_at, ended_at,
+                duration_ms, billable_duration_ms, talk_duration_ms, ringing_duration_ms,
+                access_billable_duration_ms, access_charge_amount,
+                egress_billable_duration_ms, egress_cost_amount,
+                status, failure_status_code, failure_reason,
                 caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms,
                 gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms,
-                mos, dtmf_digits, recording_path, direction, audit
+                mos, dtmf_digits, recording_path, direction, tenant_id, tenant_name, auth_realm, audit
             )
             SELECT * FROM UNNEST(
-                $1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::timestamptz[], $6::timestamptz[],
-                $7::int8[], $8::int8[], $9::text[], $10::int4[], $11::text[],
-                $12::float8[], $13::float8[], $14::int4[],
-                $15::float8[], $16::float8[], $17::int4[],
-                $18::float8[], $19::text[], $20::text[], $21::text[], $22::jsonb[]
+                $1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::timestamptz[], $6::timestamptz[], $7::timestamptz[],
+                $8::int8[], $9::int8[], $10::int8[], $11::int8[], $12::int8[], $13::float8[], $14::int8[], $15::float8[],
+                $16::text[], $17::int4[], $18::text[], $19::float8[], $20::float8[], $21::int4[],
+                $22::float8[], $23::float8[], $24::int4[],
+                $25::float8[], $26::text[], $27::text[], $28::text[], $29::text[], $30::text[], $31::text[], $32::jsonb[]
             )
             ON CONFLICT (call_id) DO NOTHING
             "#
@@ -125,10 +208,17 @@ impl PostgresCdrStore {
         .bind(&callers)
         .bind(&callees)
         .bind(&started_ats)
+        .bind(&ringing_ats)
         .bind(&answered_ats)
         .bind(&ended_ats)
         .bind(&durations)
         .bind(&billable_durations)
+        .bind(&talk_durations)
+        .bind(&ringing_durations)
+        .bind(&access_billable_durations)
+        .bind(&access_charge_amounts)
+        .bind(&egress_billable_durations)
+        .bind(&egress_cost_amounts)
         .bind(&statuses)
         .bind(&failure_codes)
         .bind(&failure_reasons)
@@ -142,6 +232,9 @@ impl PostgresCdrStore {
         .bind(&dtmf_digits_list)
         .bind(&recording_paths)
         .bind(&directions)
+        .bind(&tenant_ids)
+        .bind(&tenant_names)
+        .bind(&auth_realms)
         .bind(&audits)
         .execute(&self.pool)
         .await?;
@@ -204,12 +297,8 @@ impl PostgresCdrStore {
         before_id: Option<i64>,
     ) -> Result<(Vec<CdrEvent>, i64), sqlx::Error> {
         let offset = (page - 1) * page_size;
-        let rows = sqlx::query(
-            "SELECT call_id, caller, callee, started_at, answered_at, ended_at, \
-              duration_ms, billable_duration_ms, status, failure_status_code, failure_reason, \
-              caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms, \
-              gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms, \
-              mos, dtmf_digits, recording_path, direction, audit \
+        let list_sql = format!(
+            "SELECT {CDR_SELECT_COLUMNS} \
               FROM call_cdrs \
               WHERE ($1::text IS NULL OR status = $1) \
                 AND ($2::text IS NULL OR call_id LIKE '%' || $2 || '%') \
@@ -219,19 +308,20 @@ impl PostgresCdrStore {
                 AND ($6::timestamptz IS NULL OR started_at <= $6) \
                 AND ($7::int8 IS NULL OR id < $7) \
               ORDER BY started_at DESC, id DESC \
-              LIMIT $8 OFFSET $9",
-        )
-        .bind(status)
-        .bind(call_id)
-        .bind(caller)
-        .bind(callee)
-        .bind(start)
-        .bind(end)
-        .bind(before_id)
-        .bind(page_size)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+              LIMIT $8 OFFSET $9"
+        );
+        let rows = sqlx::query(&list_sql)
+            .bind(status)
+            .bind(call_id)
+            .bind(caller)
+            .bind(callee)
+            .bind(start)
+            .bind(end)
+            .bind(before_id)
+            .bind(page_size)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
 
         let count_row = sqlx::query_scalar(
             "SELECT COUNT(*) FROM call_cdrs \
@@ -259,17 +349,11 @@ impl PostgresCdrStore {
     }
 
     pub async fn get_cdr(&self, call_id: &str) -> Result<Option<CdrEvent>, sqlx::Error> {
-        let row = sqlx::query(
-            "SELECT call_id, caller, callee, started_at, answered_at, ended_at, \
-              duration_ms, billable_duration_ms, status, failure_status_code, failure_reason, \
-              caller_rtcp_loss_rate, caller_rtcp_jitter_ms, caller_rtcp_rtt_ms, \
-              gateway_rtcp_loss_rate, gateway_rtcp_jitter_ms, gateway_rtcp_rtt_ms, \
-              mos, dtmf_digits, recording_path, direction, audit \
-              FROM call_cdrs WHERE call_id = $1",
-        )
-        .bind(call_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let get_sql = format!("SELECT {CDR_SELECT_COLUMNS} FROM call_cdrs WHERE call_id = $1");
+        let row = sqlx::query(&get_sql)
+            .bind(call_id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.map(|r| utils::cdr_event_from_row(&r)))
     }
 
@@ -610,5 +694,22 @@ impl PostgresCdrStore {
             });
         }
         Ok(events)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CDR_SELECT_COLUMNS;
+
+    #[test]
+    fn cdr_projection_matches_row_decoder_contract() {
+        let columns: Vec<_> = CDR_SELECT_COLUMNS.split(',').map(str::trim).collect();
+        assert_eq!(columns.len(), 32);
+        assert_eq!(columns[4], "ringing_at");
+        assert_eq!(columns[9], "talk_duration_ms");
+        assert_eq!(columns[28], "tenant_id");
+        assert_eq!(columns[29], "tenant_name");
+        assert_eq!(columns[30], "auth_realm");
+        assert_eq!(columns[31], "audit");
     }
 }

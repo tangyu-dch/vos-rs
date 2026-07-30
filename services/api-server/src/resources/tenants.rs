@@ -13,25 +13,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
-use crate::{normalize_page, ApiError, AppState, PageQuery, PaginatedResponse};
-use cdr_core::{TenantRecord, UpsertTenantInput};
+use crate::{
+    deserialize_optional_bool_from_str, normalize_page, ApiError, AppState, PageQuery,
+    PaginatedResponse,
+};
+use cdr_core::{TenantBillingSummary, TenantRecord, UpsertTenantInput};
 
-/// 计费账户简要信息（用于租户列表展示关联账户）
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub(crate) struct BillingAccountSummary {
-    pub id: i64,
-    pub username: String,
-    pub balance: rust_decimal::Decimal,
-    pub currency: String,
-}
-
-/// 租户列表项：租户记录 + 关联计费账户摘要（若已关联）
+/// 租户列表项：租户记录 + 关联对接账户聚合摘要（含欠费状态）
 #[derive(Debug, Serialize)]
 pub(crate) struct TenantListItem {
     #[serde(flatten)]
     pub tenant: TenantRecord,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub billing_account: Option<BillingAccountSummary>,
+    /// 关联对接账户的聚合摘要（总余额、欠费账户数、状态等）。
+    /// 无关联账户时为空摘要（status=no_accounts）。
+    pub billing_summary: TenantBillingSummary,
 }
 
 /// 创建租户请求：复用 `UpsertTenantInput`，但 `id` 由服务端生成
@@ -40,17 +35,15 @@ pub(crate) struct CreateTenantRequest {
     pub name: String,
     pub domain: String,
     #[serde(default)]
-    pub max_concurrent_calls: i64,
+    pub max_concurrent_calls: i32,
     #[serde(default)]
-    pub max_cps: i64,
+    pub max_cps: i32,
     #[serde(default = "default_cross_tenant_policy")]
     pub cross_tenant_policy: String,
     #[serde(default)]
     pub recording_enabled: Option<bool>,
     #[serde(default)]
     pub allowed_gateway_ids: Option<Vec<String>>,
-    #[serde(default)]
-    pub billing_account_id: Option<i64>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     /// 可选：调用方指定 ID（缺省由服务端生成 UUID v4）
@@ -76,7 +69,7 @@ impl From<CreateTenantRequest> for UpsertTenantInput {
             cross_tenant_policy: req.cross_tenant_policy,
             recording_enabled: req.recording_enabled,
             allowed_gateway_ids: req.allowed_gateway_ids,
-            billing_account_id: req.billing_account_id,
+            billing_account_id: None,
             enabled: req.enabled,
         }
     }
@@ -89,10 +82,11 @@ pub(crate) struct TenantQuery {
     /// 按名称或域模糊过滤
     pub q: Option<String>,
     /// 仅返回启用/禁用租户
+    #[serde(default, deserialize_with = "deserialize_optional_bool_from_str")]
     pub enabled: Option<bool>,
 }
 
-/// 列出租户（含关联计费账户摘要）
+/// 列出租户（含关联对接账户聚合摘要与欠费状态）
 pub(crate) async fn list_tenants(
     State(state): State<AppState>,
     Query(query): Query<TenantQuery>,
@@ -112,6 +106,19 @@ pub(crate) async fn list_tenants(
         .await
         .map_err(|e| ApiError::internal(format!("统计租户总数失败: {e}")))?;
 
+    // 批量加载所有租户的对接账户摘要，按 tenant_id 分组组装聚合摘要
+    let tenant_ids: Vec<String> = tenants.iter().map(|t| t.id.clone()).collect();
+    let summaries = state
+        .store
+        .list_account_summaries_by_tenants(&tenant_ids)
+        .await
+        .map_err(|e| ApiError::internal(format!("加载租户计费摘要失败: {e}")))?;
+    let mut grouped: std::collections::HashMap<String, Vec<cdr_core::TenantAccountSummary>> =
+        std::collections::HashMap::new();
+    for (tenant_id, summary) in summaries {
+        grouped.entry(tenant_id).or_default().push(summary);
+    }
+
     // 导出 CSV
     if query.page.export.unwrap_or(false) {
         let headers = vec![
@@ -122,12 +129,18 @@ pub(crate) async fn list_tenants(
             "最大CPS",
             "跨租户策略",
             "录音",
-            "计费账户ID",
+            "账户数",
+            "总余额",
+            "欠费账户数",
+            "状态",
             "启用",
             "更新时间",
         ];
         let mut rows = Vec::new();
         for t in &tenants {
+            let summary = TenantBillingSummary::from_accounts(
+                grouped.get(&t.id).cloned().unwrap_or_default(),
+            );
             rows.push(vec![
                 t.id.clone(),
                 t.name.clone(),
@@ -138,9 +151,10 @@ pub(crate) async fn list_tenants(
                 t.recording_enabled
                     .map(|b| b.to_string())
                     .unwrap_or_default(),
-                t.billing_account_id
-                    .map(|i| i.to_string())
-                    .unwrap_or_default(),
+                summary.account_count.to_string(),
+                summary.total_balance.to_string(),
+                summary.overdue_count.to_string(),
+                summary.status.to_string(),
                 t.enabled.to_string(),
                 t.updated_at.to_string(),
             ]);
@@ -152,30 +166,14 @@ pub(crate) async fn list_tenants(
         ));
     }
 
-    // 批量加载关联计费账户摘要
-    let account_ids: Vec<i64> = tenants
-        .iter()
-        .filter_map(|t| t.billing_account_id)
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    let accounts = if account_ids.is_empty() {
-        Vec::new()
-    } else {
-        load_billing_accounts_by_ids(&state, &account_ids).await?
-    };
-    let account_map: std::collections::HashMap<i64, BillingAccountSummary> =
-        accounts.into_iter().map(|a| (a.id, a)).collect();
-
     let items: Vec<TenantListItem> = tenants
         .into_iter()
         .map(|t| {
-            let billing_account = t
-                .billing_account_id
-                .and_then(|id| account_map.get(&id).cloned());
+            let accounts = grouped.get(&t.id).cloned().unwrap_or_default();
+            let billing_summary = TenantBillingSummary::from_accounts(accounts);
             TenantListItem {
                 tenant: t,
-                billing_account,
+                billing_summary,
             }
         })
         .collect();
@@ -189,7 +187,7 @@ pub(crate) async fn list_tenants(
     .into_response())
 }
 
-/// 获取单个租户详情（含关联计费账户摘要）
+/// 获取单个租户详情（含关联对接账户聚合摘要）
 pub(crate) async fn get_tenant(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -201,18 +199,26 @@ pub(crate) async fn get_tenant(
         .map_err(|e| ApiError::internal(format!("查询租户失败: {e}")))?
         .ok_or_else(|| ApiError::not_found(format!("租户不存在: {id}")))?;
 
-    let billing_account = if let Some(acct_id) = tenant.billing_account_id {
-        load_billing_accounts_by_ids(&state, &[acct_id])
-            .await?
-            .into_iter()
-            .next()
-    } else {
-        None
-    };
+    let accounts = state
+        .store
+        .list_access_accounts_by_tenant(&id)
+        .await
+        .map_err(|e| ApiError::internal(format!("加载租户计费账户失败: {e}")))?
+        .into_iter()
+        .map(|account| cdr_core::TenantAccountSummary {
+            id: account.id,
+            username: account.username,
+            balance: account.balance,
+            credit_limit: account.credit_limit,
+            price_per_interval: account.price_per_interval,
+            enabled: account.enabled,
+        })
+        .collect();
+    let billing_summary = TenantBillingSummary::from_accounts(accounts);
 
     Ok(Json(TenantListItem {
         tenant,
-        billing_account,
+        billing_summary,
     }))
 }
 
@@ -222,7 +228,6 @@ pub(crate) async fn create_tenant(
     Json(req): Json<CreateTenantRequest>,
 ) -> Result<(StatusCode, Json<TenantRecord>), ApiError> {
     validate_tenant_input(&req.name, &req.domain)?;
-    validate_billing_account_exists(&state, req.billing_account_id).await?;
 
     // 校验 domain 唯一性
     if let Some(existing) = state
@@ -261,7 +266,6 @@ pub(crate) async fn update_tenant(
     Json(req): Json<CreateTenantRequest>,
 ) -> Result<Json<TenantRecord>, ApiError> {
     validate_tenant_input(&req.name, &req.domain)?;
-    validate_billing_account_exists(&state, req.billing_account_id).await?;
 
     // 校验 domain 唯一性（排除自身）
     if let Some(existing) = state
@@ -343,44 +347,6 @@ pub(crate) async fn toggle_tenant_enabled(
     })))
 }
 
-/// 关联租户到计费账户
-#[derive(Debug, Deserialize)]
-pub(crate) struct AssociateBillingBody {
-    pub billing_account_id: Option<i64>,
-}
-
-pub(crate) async fn associate_billing_account(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(body): Json<AssociateBillingBody>,
-) -> Result<Json<TenantRecord>, ApiError> {
-    // 校验目标账户存在
-    validate_billing_account_exists(&state, body.billing_account_id).await?;
-
-    let pool = state.store.pool();
-    let row = sqlx::query(
-        "UPDATE tenants SET billing_account_id = $2, updated_at = now() \
-         WHERE id = $1 \
-         RETURNING id, name, domain, max_concurrent_calls, max_cps, cross_tenant_policy, \
-         recording_enabled, allowed_gateway_ids, billing_account_id, enabled, \
-         created_at, updated_at",
-    )
-    .bind(&id)
-    .bind(body.billing_account_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ApiError::internal(format!("关联计费账户失败: {e}")))?
-    .ok_or_else(|| ApiError::not_found(format!("租户不存在: {id}")))?;
-
-    let record = parse_tenant_row_from_sqlx(row);
-    tracing::info!(
-        tenant_id = %record.id,
-        billing_account_id = ?record.billing_account_id,
-        "租户计费账户已关联"
-    );
-    Ok(Json(record))
-}
-
 // ===== 内部辅助函数 =====
 
 fn validate_tenant_input(name: &str, domain: &str) -> Result<(), ApiError> {
@@ -406,44 +372,6 @@ fn validate_tenant_input(name: &str, domain: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-async fn validate_billing_account_exists(
-    state: &AppState,
-    account_id: Option<i64>,
-) -> Result<(), ApiError> {
-    if let Some(id) = account_id {
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM billing_accounts WHERE id = $1)")
-                .bind(id)
-                .fetch_one(state.store.pool())
-                .await
-                .map_err(|e| ApiError::internal(format!("校验计费账户存在失败: {e}")))?;
-        if !exists {
-            return Err(ApiError::bad_request(format!(
-                "参数无效: 计费账户不存在 (id={id})"
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// 批量按 ID 加载计费账户摘要
-async fn load_billing_accounts_by_ids(
-    state: &AppState,
-    ids: &[i64],
-) -> Result<Vec<BillingAccountSummary>, ApiError> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    // 用 ANY($1) 数组绑定避免 IN 列表拼接
-    sqlx::query_as::<_, BillingAccountSummary>(
-        "SELECT id, username, balance, currency FROM billing_accounts WHERE id = ANY($1)",
-    )
-    .bind(ids)
-    .fetch_all(state.store.pool())
-    .await
-    .map_err(|e| ApiError::internal(format!("批量加载计费账户失败: {e}")))
-}
-
 /// 将 sqlx 错误映射为业务错误
 fn map_tenant_db_error(e: sqlx::Error) -> ApiError {
     if let Some(db_err) = e.as_database_error() {
@@ -455,25 +383,6 @@ fn map_tenant_db_error(e: sqlx::Error) -> ApiError {
         }
     }
     ApiError::internal(format!("租户数据库操作失败: {e}"))
-}
-
-/// 从 sqlx::Row 解析 TenantRecord
-fn parse_tenant_row_from_sqlx(row: sqlx::postgres::PgRow) -> TenantRecord {
-    use sqlx::Row;
-    TenantRecord {
-        id: row.get("id"),
-        name: row.get("name"),
-        domain: row.get("domain"),
-        max_concurrent_calls: row.get("max_concurrent_calls"),
-        max_cps: row.get("max_cps"),
-        cross_tenant_policy: row.get("cross_tenant_policy"),
-        recording_enabled: row.get("recording_enabled"),
-        allowed_gateway_ids: row.get("allowed_gateway_ids"),
-        billing_account_id: row.get("billing_account_id"),
-        enabled: row.get("enabled"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    }
 }
 
 #[cfg(test)]
@@ -518,7 +427,6 @@ mod tests {
             cross_tenant_policy: "deny".to_string(),
             recording_enabled: Some(true),
             allowed_gateway_ids: Some(vec!["gw1".to_string()]),
-            billing_account_id: Some(5),
             enabled: false,
             id: None,
         };
@@ -529,7 +437,6 @@ mod tests {
         assert_eq!(input.max_cps, 10);
         assert_eq!(input.cross_tenant_policy, "deny");
         assert_eq!(input.recording_enabled, Some(true));
-        assert_eq!(input.billing_account_id, Some(5));
         assert!(!input.enabled);
     }
 }

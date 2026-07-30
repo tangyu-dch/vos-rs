@@ -4,8 +4,8 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use rust_decimal::prelude::FromStr;
 use serde_json::{json, Value};
+use std::str::FromStr;
 
 async fn get_csv_content(mut multipart: Multipart) -> Result<String, ApiError> {
     while let Some(field) = multipart
@@ -219,112 +219,6 @@ pub async fn import_numbers(
 
     // 通知 sip-edge 重新加载路由
     crate::resources::routes::publish_route_reload(&state.nats_client).await;
-
-    Ok(Json(json!({ "success": true, "imported_count": imported })))
-}
-
-// === Rates Import ===
-
-pub async fn import_rates_template() -> impl IntoResponse {
-    crate::system::utils::to_csv_response(
-        "rates_import_template.csv",
-        &[
-            "费率标识",
-            "前缀号码",
-            "每分钟费率",
-            "计费周期(秒)",
-            "单周期价格",
-        ],
-        &[vec![
-            "cn-rate".to_string(),
-            "86".to_string(),
-            "0.1".to_string(),
-            "60".to_string(),
-            "0.1".to_string(),
-        ]],
-    )
-}
-
-pub async fn import_rates(
-    State(state): State<AppState>,
-    multipart: Multipart,
-) -> Result<Json<Value>, ApiError> {
-    let content = get_csv_content(multipart).await?;
-    let parsed = crate::system::utils::parse_csv(&content);
-    if parsed.len() < 2 {
-        return Err(ApiError::internal("CSV 模板为空或缺少数据行"));
-    }
-
-    let pool = state.store.pool();
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let mut imported = 0;
-
-    for (idx, row) in parsed.iter().skip(1).enumerate() {
-        if row.len() < 5 {
-            return Err(ApiError::internal(format!(
-                "第 {} 行格式错误：需要包含 5 个字段",
-                idx + 2
-            )));
-        }
-        let id = row[0].trim();
-        let prefix = row[1].trim();
-        let rate_str = row[2].trim();
-        let interval_str = row[3].trim();
-        let price_str = row[4].trim();
-
-        if id.is_empty() || prefix.is_empty() {
-            return Err(ApiError::internal(format!(
-                "第 {} 行包含空标识或空前缀",
-                idx + 2
-            )));
-        }
-
-        let rate = rust_decimal::Decimal::from_str(rate_str).map_err(|_| {
-            ApiError::internal(format!("第 {} 行费率数值无效: {}", idx + 2, rate_str))
-        })?;
-        let interval = interval_str.parse::<i32>().map_err(|_| {
-            ApiError::internal(format!(
-                "第 {} 行计费周期数值无效: {}",
-                idx + 2,
-                interval_str
-            ))
-        })?;
-        let price = rust_decimal::Decimal::from_str(price_str).map_err(|_| {
-            ApiError::internal(format!(
-                "第 {} 行单周期价格数值无效: {}",
-                idx + 2,
-                price_str
-            ))
-        })?;
-
-        sqlx::query(
-            "INSERT INTO billing_rates (id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7) \
-             ON CONFLICT (id) DO UPDATE SET prefix=EXCLUDED.prefix, rate_per_minute=EXCLUDED.rate_per_minute, billing_interval_secs=EXCLUDED.billing_interval_secs, price_per_interval=EXCLUDED.price_per_interval, description=EXCLUDED.description, tenant_id=EXCLUDED.tenant_id"
-        )
-        .bind(id)
-        .bind(prefix)
-        .bind(rate)
-        .bind(interval)
-        .bind(price)
-        .bind(None::<&str>)
-        .bind(None::<&str>)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| ApiError::internal(format!("导入费率 {} 失败: {e}", id)))?;
-
-        imported += 1;
-    }
-
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    // 预热/刷新内存中的费率配置
-    let _ = crate::system::hot_cache::rebuild_billing_rates(&state).await;
 
     Ok(Json(json!({ "success": true, "imported_count": imported })))
 }

@@ -195,7 +195,8 @@ export async function listOptions(
     | '/trunks'
     | '/numbers'
     | '/extensions'
-    | '/billing/accounts'
+    | '/billing/access-accounts'
+    | '/billing/egress-accounts'
     | '/tenants',
 ): Promise<Entity[]> {
   const result = await api.get<PageResult<Entity> | Entity[]>(path, { page: 1, page_size: 200 });

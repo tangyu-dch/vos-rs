@@ -17,7 +17,8 @@ pub struct CreateUserRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserRequest {
-    pub password: String,
+    /// 注册密码（编辑时可空，留空表示不修改密码）。
+    pub password: Option<String>,
     /// 更新关联租户 ID（可空，不传则保留原值）。
     pub tenant_id: Option<String>,
 }
@@ -85,7 +86,18 @@ pub async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let realm = digest_realm(&state).await?;
+    // 检查相同鉴权域（同一租户或系统默认域）下分机号是否已存在
+    if let Ok(users) = state
+        .store
+        .list_users_page(1000, 0, Some(&req.username), req.tenant_id.as_deref())
+        .await
+    {
+        if users.iter().any(|u| u.username == req.username) {
+            return Err(ApiError::bad_request("同鉴权域（租户）下分机号已存在"));
+        }
+    }
+
+    let realm = digest_realm(&state, req.tenant_id.as_deref()).await?;
     // 强制转换为 HA1 哈希，防止明文存储
     let ha1 = format!(
         "{:x}",
@@ -110,27 +122,77 @@ pub async fn update_user(
     Path(username): Path<String>,
     Json(req): Json<UpdateUserRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let realm = digest_realm(&state).await?;
-    // 强制转换为 HA1 哈希，防止明文存储
-    let ha1 = format!(
-        "{:x}",
-        md5::compute(format!("{}:{}:{}", username, realm, req.password).as_bytes())
-    );
-    state
-        .store
-        .insert_user(&username, &ha1, req.tenant_id.as_deref())
-        .await
-        .map_err(|e| ApiError {
-            error: e.to_string(),
-        })?;
-    crate::system::hot_cache::set_auth_user(&state, &username, &ha1).await?;
-    // 同步更新 Redis 中的分机-租户映射
-    crate::system::hot_cache::set_extension_tenant(&state, &username, req.tenant_id.as_deref())
-        .await?;
+    let effective_tenant_id = match req.tenant_id {
+        Some(ref tid) => Some(tid.clone()),
+        None => {
+            if let Ok(users) = state
+                .store
+                .list_users_page(1, 0, Some(&username), None)
+                .await
+            {
+                users
+                    .into_iter()
+                    .find(|u| u.username == username)
+                    .and_then(|u| u.tenant_id)
+            } else {
+                None
+            }
+        }
+    };
+
+    let new_pwd = req
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(pwd) = new_pwd {
+        let realm = digest_realm(&state, effective_tenant_id.as_deref()).await?;
+        let ha1 = format!(
+            "{:x}",
+            md5::compute(format!("{}:{}:{}", username, realm, pwd).as_bytes())
+        );
+        state
+            .store
+            .insert_user(&username, &ha1, req.tenant_id.as_deref())
+            .await
+            .map_err(|e| ApiError {
+                error: e.to_string(),
+            })?;
+        crate::system::hot_cache::set_auth_user(&state, &username, &ha1).await?;
+    } else if req.tenant_id.is_some() {
+        state
+            .store
+            .update_user_tenant(&username, req.tenant_id.as_deref())
+            .await
+            .map_err(|e| ApiError {
+                error: e.to_string(),
+            })?;
+    }
+
+    if let Some(ref tid) = effective_tenant_id {
+        crate::system::hot_cache::set_extension_tenant(&state, &username, Some(tid)).await?;
+    }
     Ok(StatusCode::OK)
 }
 
-async fn digest_realm(state: &AppState) -> Result<String, ApiError> {
+async fn digest_realm(state: &AppState, tenant_id: Option<&str>) -> Result<String, ApiError> {
+    if let Some(tid) = tenant_id {
+        if !tid.trim().is_empty() {
+            let tenant_domain = sqlx::query_scalar::<_, String>(
+                "SELECT domain FROM tenants WHERE id = $1 AND enabled = TRUE",
+            )
+            .bind(tid)
+            .fetch_optional(state.store.pool())
+            .await
+            .map_err(|error| ApiError::internal(format!("读取租户域名失败: {error}")))?;
+            if let Some(domain) = tenant_domain {
+                if !domain.trim().is_empty() {
+                    return Ok(domain);
+                }
+            }
+        }
+    }
+
     let realm = sqlx::query_scalar::<_, String>(
         "SELECT config_value FROM system_configs WHERE config_key = 'realm'",
     )

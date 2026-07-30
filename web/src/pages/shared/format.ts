@@ -13,6 +13,9 @@ const moneyFields = new Set([
   'amount',
   'balance_after',
   'cost',
+  'access_amount',
+  'egress_cost',
+  'balance_before',
 ]);
 
 const moneyText = (value: unknown) => {
@@ -49,10 +52,16 @@ const callDetailLabels: Record<string, string> = {
   caller: '主叫号码',
   callee: '被叫号码',
   started_at_ms: '开始时间',
+  ringing_at_ms: '振铃时间',
   answered_at_ms: '接通时间',
   ended_at_ms: '结束时间',
   duration_ms: '通话时长',
   billable_duration_ms: '计费时长',
+  ringing_duration_ms: '振铃时长',
+  access_billed_duration_ms: '对接计费时长',
+  access_amount: '对接费用',
+  egress_billed_duration_ms: '落地计费时长',
+  egress_cost: '成本费用',
   status: '通话状态',
   failure_status_code: '失败状态码',
   failure_reason: '失败原因',
@@ -118,9 +127,67 @@ const callValueLabels: Record<string, string> = {
   available: '实时可用',
   not_active: '通话已结束',
   unavailable: '控制面不可用',
+  access: '对接账户',
+  egress: '落地账户',
+  call_charge: '通话扣费',
+  call_cost: '落地成本',
+  credit: '账户充值',
+  adjustment: '余额调整',
+  reversal: '费用冲正',
   rtp: 'RTP 事件',
   'sip-info': 'SIP INFO',
 };
+
+const hangupCauseMap: Record<string, string> = {
+  // Q.850 / Standard SIP Status Code Hangup Causes
+  '16': 'NORMAL_CLEARING (正常挂机 / 主被叫主动挂机)',
+  '17': 'USER_BUSY (用户忙 / 对方拒接或占线)',
+  '18': 'NO_USER_RESPONSE (无响应 / 对方超时未接听)',
+  '19': 'NO_ANSWER (无应答 / 振铃超时)',
+  '20': 'SUBSCRIBER_ABSENT (用户不在 / 离线不可达)',
+  '21': 'CALL_REJECTED (呼叫被拒绝 / 拒接)',
+  '27': 'DESTINATION_OUT_OF_ORDER (目标故障 / 线路异常)',
+  '28': 'INVALID_NUMBER_FORMAT (空号 / 无效号码格式)',
+  '31': 'NORMAL_UNSPECIFIED (普通未指定)',
+  '34': 'CIRCUIT_CONGESTION (线路拥塞 / 中继满载)',
+  '38': 'NETWORK_OUT_OF_ORDER (网络故障)',
+  '41': 'TEMPORARY_FAILURE (临时故障 / 服务不可用)',
+  '42': 'SWITCH_CONGESTION (交换机拥塞)',
+  '57': 'BEARERCAPABILITY_NOTAUTH (未授权 / 认证失败或鉴权拒绝)',
+  '127': 'INTERWORKING (互通故障)',
+
+  // SIP Specific Status Mappings
+  '200': 'NORMAL_CLEARING (正常挂机 [SIP 200 OK])',
+  '400': 'INVALID_NUMBER_FORMAT (错误请求 [SIP 400 Bad Request])',
+  '401': 'BEARERCAPABILITY_NOTAUTH (未授权 [SIP 401 Unauthorized])',
+  '403': 'CALL_REJECTED (禁止呼叫 [SIP 403 Forbidden])',
+  '404': 'UNALLOCATED_NUMBER (空号 / 未找到号码 [SIP 404 Not Found])',
+  '408': 'RECOVERY_ON_TIMER_EXPIRY (请求超时 [SIP 408 Request Timeout])',
+  '480': 'SUBSCRIBER_ABSENT (用户不可达 [SIP 480 Temporarily Unavailable])',
+  '486': 'USER_BUSY (线路忙 [SIP 486 Busy Here])',
+  '487': 'ORIGINATOR_CANCEL (主叫取消 [SIP 487 Request Terminated])',
+  '488': 'INCOMPATIBLE_DESTINATION (媒体协商失败 / Codec 不匹配 [SIP 488 Not Acceptable])',
+  '500': 'NETWORK_OUT_OF_ORDER (服务器内部错误 [SIP 500 Server Error])',
+  '502': 'NETWORK_OUT_OF_ORDER (网关错误 [SIP 502 Bad Gateway])',
+  '503': 'CIRCUIT_CONGESTION (服务不可用 / 网关满载 [SIP 503 Service Unavailable])',
+  '504': 'RECOVERY_ON_TIMER_EXPIRY (网关超时 [SIP 504 Gateway Timeout])',
+};
+
+export function hangupCauseText(
+  code: number | null | undefined,
+  reason: string | null | undefined,
+): string {
+  if (!code && !reason) return '—';
+  const key = code ? String(code) : '';
+  const mapped = hangupCauseMap[key];
+  if (mapped) {
+    return `${code} ${reason ? `(${reason})` : ''} — ${mapped}`;
+  }
+  if (code && reason) {
+    return `${code} - ${reason}`;
+  }
+  return String(code || reason || '—');
+}
 
 export const callDetailLabel = (key: string) => callDetailLabels[key] ?? '其他信息';
 

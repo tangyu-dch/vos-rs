@@ -4,7 +4,15 @@
 import type { Entity } from '@/services/resources';
 
 export type FieldKind =
-  'text' | 'textarea' | 'number' | 'duration' | 'switch' | 'select' | 'secret' | 'datetime';
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'duration'
+  | 'switch'
+  | 'select'
+  | 'multiselect'
+  | 'secret'
+  | 'datetime';
 
 export interface SelectOptionSpec {
   label: string;
@@ -17,8 +25,19 @@ export interface FieldSpec {
   kind?: FieldKind;
   required?: boolean;
   options?: Array<string | SelectOptionSpec>;
-  optionsResource?: 'egress-trunks' | 'allocation-source' | 'accounts' | 'tenants';
+  optionsResource?:
+    | 'egress-trunks'
+    | 'access-trunks'
+    | 'allocation-source'
+    | 'accounts'
+    | 'access-accounts'
+    | 'egress-accounts'
+    | 'tenants';
   readonly?: boolean;
+  /** 仅用于表单，不在列表列中展示。 */
+  tableHidden?: boolean;
+  /** 仅用于列表，不在新增/编辑表单中展示。 */
+  formHidden?: boolean;
   defaultValue?: unknown;
   fullWidth?: boolean;
   min?: number;
@@ -79,6 +98,8 @@ export interface ResourceSpec {
   createLabel?: string;
   readOnly?: boolean;
   action?: 'credit';
+  /** 列表最多展示的业务字段数，默认 7。 */
+  tableFieldLimit?: number;
   /** 服务端筛选配置：定义该资源后端支持的查询参数 */
   serverFilters?: ServerFilterSpec[];
   /** 自定义行操作按钮 (在操作列最左侧渲染) */

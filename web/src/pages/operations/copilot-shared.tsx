@@ -92,21 +92,16 @@ export const TOOL_LABELS: Record<string, string> = {
   vos_delete_route: '删除路由',
   vos_list_billing_accounts: '计费账户列表',
   vos_recharge_billing_account: '账户充值',
-  vos_list_rates: '费率表',
-  vos_upsert_rate: '创建/修改费率',
-  vos_delete_rate: '删除费率',
   vos_create_anti_fraud_rule: '创建风控规则',
   vos_delete_anti_fraud_rule: '删除风控规则',
   vos_export_cdrs: '导出呼叫详单',
   vos_export_extensions: '导出分机',
   vos_export_gateways: '导出网关',
   vos_export_routes: '导出路由',
-  vos_export_rates: '导出费率',
   vos_export_billing_accounts: '导出计费账户',
   vos_import_extensions: '批量导入分机',
   vos_import_gateways: '批量导入网关',
   vos_import_routes: '批量导入路由',
-  vos_import_rates: '批量导入费率',
 };
 
 /** Copilot 会话元数据（对齐后端 CopilotSession 结构） */

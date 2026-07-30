@@ -191,7 +191,9 @@ async fn visible_categories(state: &AppState, claims: &Claims) -> Vec<&'static s
         return ALL.to_vec();
     }
     let can_bill = permissions.is_some_and(|items| {
-        items.contains("billing.accounts.view") || items.contains("billing.ledger.view")
+        items.contains("billing.access_accounts.view")
+            || items.contains("billing.egress_accounts.view")
+            || items.contains("billing.ledger.view")
     });
     let can_operate = permissions.is_some_and(|items| {
         items.contains("infrastructure.view")

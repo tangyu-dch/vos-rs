@@ -88,7 +88,8 @@ function RegistrationStatus({
         <Table aria-label="注册终端列表">
           <TableHeader>
             <TableColumn key="contact">联系地址</TableColumn>
-            <TableColumn key="received_from">来源 Socket / 设备标识</TableColumn>
+            <TableColumn key="received_from">来源 Socket</TableColumn>
+            <TableColumn key="user_agent">客户端名称</TableColumn>
             <TableColumn key="status">状态</TableColumn>
             <TableColumn key="expires_at">过期时间</TableColumn>
           </TableHeader>
@@ -100,8 +101,11 @@ function RegistrationStatus({
                 <TableCell className="font-mono text-tiny">
                   {String(row.contact_uri ?? row.contact ?? '')}
                 </TableCell>
+                <TableCell className="font-mono text-tiny">
+                  {String(row.received_from ?? row.node ?? '')}
+                </TableCell>
                 <TableCell>
-                  {String(row.received_from ?? row.user_agent ?? row.node ?? '')}
+                  {String(row.user_agent ?? '') || <span className="text-default-400">未上报</span>}
                 </TableCell>
                 <TableCell>
                   <Chip size="sm" variant="dot" color="success">
@@ -256,7 +260,7 @@ export function ExtensionDetailView({ id: propId }: { id?: string }) {
 
   const tabs = useMemo<TabDef[]>(() => {
     const sipDomain = data?.system_config?.sip_domain || '127.0.0.1:5060';
-    const realm = data?.system_config?.realm || 'vos-rs';
+    const realm = (data?.tenant?.domain as string) || data?.system_config?.realm || 'vos-rs';
 
     return [
       {

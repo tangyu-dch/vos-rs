@@ -210,6 +210,8 @@ pub struct Call {
     pub failure_cause: Option<FailureCause>,
     /// 呼叫开始时间
     pub started_at: SystemTime,
+    /// 首次收到振铃响应的时间（180/183）。
+    pub ringing_at: Option<SystemTime>,
     /// 呼叫接通时间（收到 200 OK）
     pub answered_at: Option<SystemTime>,
     /// 呼叫结束时间（收到 BYE）
@@ -283,6 +285,7 @@ impl Call {
             state: CallState::Routing,
             failure_cause: None,
             started_at,
+            ringing_at: None,
             answered_at: None,
             ended_at: None,
             recording_path: None,
@@ -388,6 +391,10 @@ impl Call {
     }
 
     pub fn mark_ringing(&mut self) -> CallResult<()> {
+        self.mark_ringing_at(SystemTime::now())
+    }
+
+    pub fn mark_ringing_at(&mut self, ringing_at: SystemTime) -> CallResult<()> {
         // Allow re-entry from Ringing (for 183 early media after 180)
         if self.state == CallState::Ringing {
             return Ok(());
@@ -401,6 +408,7 @@ impl Call {
         outbound.state = LegState::Ringing;
         self.inbound.state = LegState::Ringing;
         self.state = CallState::Ringing;
+        self.ringing_at = Some(ringing_at);
         Ok(())
     }
 

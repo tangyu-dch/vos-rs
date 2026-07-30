@@ -7,9 +7,10 @@ impl PostgresCdrStore {
     pub async fn get_registrations(
         &self,
         aor: &str,
-    ) -> Result<Vec<(String, String, OffsetDateTime, Vec<String>)>, sqlx::Error> {
+    ) -> Result<Vec<(String, String, Option<String>, OffsetDateTime, Vec<String>)>, sqlx::Error>
+    {
         let rows = sqlx::query(
-            "SELECT contact_uri, received_from, expires_at, path FROM sip_registrations \
+            "SELECT contact_uri, received_from, user_agent, expires_at, path FROM sip_registrations \
              WHERE aor = $1 AND expires_at > now()",
         )
         .bind(aor)
@@ -19,15 +20,16 @@ impl PostgresCdrStore {
         for row in rows {
             let contact: String = row.get(0);
             let received: String = row.get(1);
-            let expires: OffsetDateTime = row.get(2);
-            let path_str: Option<String> = row.get(3);
+            let user_agent: Option<String> = row.get(2);
+            let expires: OffsetDateTime = row.get(3);
+            let path_str: Option<String> = row.get(4);
             let path = path_str
                 .unwrap_or_default()
                 .split(',')
                 .map(|s| s.to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            list.push((contact, received, expires, path));
+            list.push((contact, received, user_agent, expires, path));
         }
         Ok(list)
     }
@@ -51,15 +53,17 @@ impl PostgresCdrStore {
         aor: &str,
         contact_uri: &str,
         received_from: &str,
+        user_agent: Option<&str>,
         expires_at: OffsetDateTime,
         path: &[String],
     ) -> Result<(), sqlx::Error> {
         let path_str = path.join(",");
         sqlx::query(
-            "INSERT INTO sip_registrations (aor, contact_uri, received_from, expires_at, path, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, now()) \
+            "INSERT INTO sip_registrations (aor, contact_uri, received_from, user_agent, expires_at, path, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, now()) \
              ON CONFLICT (aor, contact_uri) DO UPDATE \
              SET received_from = EXCLUDED.received_from, \
+                 user_agent = EXCLUDED.user_agent, \
                  expires_at = EXCLUDED.expires_at, \
                  path = EXCLUDED.path, \
                  updated_at = now()",
@@ -67,6 +71,7 @@ impl PostgresCdrStore {
         .bind(aor)
         .bind(contact_uri)
         .bind(received_from)
+        .bind(user_agent)
         .bind(expires_at)
         .bind(path_str)
         .execute(&self.pool)
@@ -105,14 +110,14 @@ impl PostgresCdrStore {
 
     pub async fn list_registrations(&self) -> Result<Vec<SipRegistration>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT aor, contact_uri, received_from, expires_at, path, updated_at \
+            "SELECT aor, contact_uri, received_from, user_agent, expires_at, path, updated_at \
              FROM sip_registrations WHERE expires_at > now() ORDER BY aor",
         )
         .fetch_all(&self.pool)
         .await?;
         let mut registrations = Vec::with_capacity(rows.len());
         for row in rows {
-            let path_str: Option<String> = row.get(4);
+            let path_str: Option<String> = row.get(5);
             let path = path_str
                 .unwrap_or_default()
                 .split(',')
@@ -123,9 +128,10 @@ impl PostgresCdrStore {
                 aor: row.get(0),
                 contact_uri: row.get(1),
                 received_from: row.get(2),
-                expires_at: row.get(3),
+                user_agent: row.get(3),
+                expires_at: row.get(4),
                 path,
-                updated_at: row.get(5),
+                updated_at: row.get(6),
             });
         }
         Ok(registrations)
@@ -139,12 +145,13 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<SipRegistration>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT aor, contact_uri, received_from, expires_at, path, updated_at \
+            "SELECT aor, contact_uri, received_from, user_agent, expires_at, path, updated_at \
              FROM sip_registrations \
              WHERE expires_at > now() \
                AND ($1::TEXT IS NULL OR aor ILIKE '%' || $1 || '%' \
                     OR contact_uri ILIKE '%' || $1 || '%' \
-                    OR received_from ILIKE '%' || $1 || '%') \
+                    OR received_from ILIKE '%' || $1 || '%' \
+                    OR user_agent ILIKE '%' || $1 || '%') \
              ORDER BY aor LIMIT $2 OFFSET $3",
         )
         .bind(keyword)
@@ -158,15 +165,16 @@ impl PostgresCdrStore {
                 aor: row.get(0),
                 contact_uri: row.get(1),
                 received_from: row.get(2),
-                expires_at: row.get(3),
+                user_agent: row.get(3),
+                expires_at: row.get(4),
                 path: row
-                    .get::<Option<String>, _>(4)
+                    .get::<Option<String>, _>(5)
                     .unwrap_or_default()
                     .split(',')
                     .filter(|value| !value.is_empty())
                     .map(str::to_string)
                     .collect(),
-                updated_at: row.get(5),
+                updated_at: row.get(6),
             })
             .collect())
     }
@@ -178,7 +186,8 @@ impl PostgresCdrStore {
              WHERE expires_at > now() \
                AND ($1::TEXT IS NULL OR aor ILIKE '%' || $1 || '%' \
                     OR contact_uri ILIKE '%' || $1 || '%' \
-                    OR received_from ILIKE '%' || $1 || '%')",
+                    OR received_from ILIKE '%' || $1 || '%' \
+                    OR user_agent ILIKE '%' || $1 || '%')",
         )
         .bind(keyword)
         .fetch_one(&self.pool)

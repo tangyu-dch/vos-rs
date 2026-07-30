@@ -52,7 +52,7 @@ pub(crate) async fn reload_routes_from_database(
                         caller_id_mode,
                         virtual_caller,
                         prefix_rules,
-                        max_concurrent.and_then(|c| if c > 0 { Some(c) } else { None }),
+                        max_concurrent.filter(|&c| c > 0),
                     ),
                 )
             },

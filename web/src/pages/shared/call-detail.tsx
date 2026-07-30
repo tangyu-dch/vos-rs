@@ -20,25 +20,19 @@ import { callDetailText } from '@/pages/shared/format';
 import { DetailFields } from '@/pages/shared/entity-detail';
 
 export interface SipFlowEvent {
+  timestamp_str?: string;
+  diff_ms?: number;
   offset_ms: number;
   message: string;
   direction: string;
+  from_addr?: string;
+  to_addr?: string;
   note: string;
   raw_message?: string;
 }
 
 const PARTIES = ['UAC', 'B2BUA', 'UAS'] as const;
 type Party = (typeof PARTIES)[number];
-const PARTY_LABELS: Record<Party, string> = {
-  UAC: '主叫 (UAC)',
-  B2BUA: 'vos-rs (B2BUA)',
-  UAS: '落地中继 (UAS)',
-};
-const PARTY_COLORS: Record<Party, string> = {
-  UAC: 'text-primary',
-  B2BUA: 'text-success',
-  UAS: 'text-warning',
-};
 
 function directionToParties(direction: string): [Party, Party] {
   const map: Record<string, [Party, Party]> = {
@@ -48,14 +42,6 @@ function directionToParties(direction: string): [Party, Party] {
     uas_to_b2bua: ['UAS', 'B2BUA'],
   };
   return map[direction] ?? ['UAC', 'B2BUA'];
-}
-
-function msgColor(msg: string): string {
-  if (/^INVITE|^ACK|^BYE|^CANCEL/.test(msg)) return 'text-primary';
-  if (/^100|^180/.test(msg)) return 'text-default-400';
-  if (/^200/.test(msg)) return 'text-success';
-  if (/^4|^5|^6/.test(msg)) return 'text-danger';
-  return 'text-default-500';
 }
 
 function parseSDP(rawMessage: string | undefined) {
@@ -95,166 +81,285 @@ function parseSDP(rawMessage: string | undefined) {
 
 export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
   const [selectedEvent, setSelectedEvent] = useState<SipFlowEvent | null>(null);
+  const [hideRetransmissions, setHideRetransmissions] = useState(false);
 
-  const visibleParties = useMemo<readonly Party[]>(() => {
-    const hasEgressLeg = events.some((event) =>
-      directionToParties(event.direction).includes('UAS'),
-    );
-    return hasEgressLeg ? PARTIES : ['UAC', 'B2BUA'];
+  // Filter retransmissions if user toggles filter
+  const displayedEvents = useMemo(() => {
+    if (!hideRetransmissions) return events;
+    return events.filter((e) => !e.message.includes('[重传]') && !e.note.includes('Re-tx'));
+  }, [events, hideRetransmissions]);
+
+  // Extract endpoints from events or defaults
+  const uacAddr = useMemo(() => {
+    const ev = events.find((e) => e.direction === 'uac_to_b2bua');
+    return ev?.from_addr || '主叫 (UAC)';
   }, [events]);
-  const columns = visibleParties.length === 3 ? [80, 320, 560] : [160, 520];
-  const ROW_H = 58;
-  const HEADER_H = 60;
-  const LANE_W = 24;
-  const svgWidth = 680;
-  const svgHeight = HEADER_H + events.length * ROW_H + 24;
 
-  const colFor = (party: Party) => columns[visibleParties.indexOf(party)];
+  const b2buaAddr = useMemo(() => {
+    const ev = events.find((e) => e.direction === 'uac_to_b2bua' || e.direction === 'b2bua_to_uac');
+    return ev?.to_addr || '127.0.0.1:5060';
+  }, [events]);
+
+  const uasAddr = useMemo(() => {
+    const ev = events.find((e) => e.direction === 'b2bua_to_uas' || e.direction === 'uas_to_b2bua');
+    return ev?.to_addr || ev?.from_addr || '被叫 (UAS)';
+  }, [events]);
+
+  // Always display 3 columns (UAC, B2BUA, UAS) as in 图2
+  const TIME_COL_W = 140;
+  const COL_SPACING = 240;
+  const columns: Record<Party, number> = {
+    UAC: TIME_COL_W + 60,
+    B2BUA: TIME_COL_W + 60 + COL_SPACING,
+    UAS: TIME_COL_W + 60 + COL_SPACING * 2,
+  };
+
+  const ROW_H = 64;
+  const HEADER_H = 50;
+  const svgWidth = TIME_COL_W + 60 + COL_SPACING * 2 + 100;
+  const svgHeight = HEADER_H + displayedEvents.length * ROW_H + 30;
+
   const parsedSDP = useMemo(() => parseSDP(selectedEvent?.raw_message), [selectedEvent]);
 
   return (
     <div
-      className="bg-content1 text-default-600 rounded-medium border border-default-200 p-3"
+      className="bg-content1 text-foreground rounded-medium border border-divider p-4 font-mono select-none transition-colors"
       style={{ overflowX: 'auto' }}
     >
+      <div className="flex justify-between items-center mb-3 text-tiny">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-foreground">信令统计:</span>
+          <Chip size="sm" variant="flat" color="primary">
+            共 {events.length} 条报文
+          </Chip>
+          {events.some((e) => e.message.includes('[重传]')) && (
+            <Chip size="sm" variant="flat" color="warning">
+              检测到重传
+            </Chip>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 cursor-pointer text-default-600 hover:text-foreground">
+            <input
+              type="checkbox"
+              checked={hideRetransmissions}
+              onChange={(e) => setHideRetransmissions(e.target.checked)}
+              className="rounded border-default-400 text-primary focus:ring-primary"
+            />
+            隐藏 UDP 重传
+          </label>
+        </div>
+      </div>
+
       <svg
         width={svgWidth}
         height={svgHeight}
         role="img"
         aria-label="SIP 信令时序图"
+        className="text-foreground"
         style={{
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: 'Consolas, Monaco, "Courier New", monospace',
           display: 'block',
           margin: '0 auto',
-          color: 'currentColor',
         }}
       >
-        {visibleParties.map((party, i) => (
-          <g key={party}>
-            <rect
-              x={columns[i] - 60}
-              y={8}
-              width={120}
-              height={36}
-              rx={8}
-              className={PARTY_COLORS[party]}
-              fill="currentColor"
-              fillOpacity={0.15}
-              stroke="currentColor"
-              strokeWidth={1.5}
-            />
-            <text
-              x={columns[i]}
-              y={30}
-              textAnchor="middle"
-              className={PARTY_COLORS[party]}
-              fill="currentColor"
-              fontSize={13}
-              fontWeight={600}
-            >
-              {PARTY_LABELS[party]}
-            </text>
-          </g>
-        ))}
+        {/* Header Entity Labels */}
+        <g key="headers">
+          <text
+            x={columns.UAC}
+            y={24}
+            textAnchor="middle"
+            fill="currentColor"
+            className="text-primary font-bold"
+            fontSize={13}
+          >
+            {uacAddr}
+          </text>
+          <text
+            x={columns.B2BUA}
+            y={24}
+            textAnchor="middle"
+            fill="currentColor"
+            className="text-success font-bold"
+            fontSize={13}
+          >
+            {b2buaAddr}
+          </text>
+          <text
+            x={columns.UAS}
+            y={24}
+            textAnchor="middle"
+            fill="currentColor"
+            className="text-warning font-bold"
+            fontSize={13}
+          >
+            {uasAddr}
+          </text>
 
-        {visibleParties.map((party, i) => (
+          {/* Underline for Header */}
+          <line
+            x1={columns.UAC - 80}
+            y1={36}
+            x2={columns.UAC + 80}
+            y2={36}
+            stroke="currentColor"
+            strokeOpacity={0.2}
+            strokeWidth={1}
+          />
+          <line
+            x1={columns.B2BUA - 80}
+            y1={36}
+            x2={columns.B2BUA + 80}
+            y2={36}
+            stroke="currentColor"
+            strokeOpacity={0.2}
+            strokeWidth={1}
+          />
+          <line
+            x1={columns.UAS - 80}
+            y1={36}
+            x2={columns.UAS + 80}
+            y2={36}
+            stroke="currentColor"
+            strokeOpacity={0.2}
+            strokeWidth={1}
+          />
+        </g>
+
+        {/* Time Column Separator Vertical Line */}
+        <line
+          x1={TIME_COL_W}
+          y1={HEADER_H}
+          x2={TIME_COL_W}
+          y2={svgHeight - 10}
+          stroke="currentColor"
+          strokeOpacity={0.15}
+          strokeWidth={1}
+        />
+
+        {/* Vertical Lifelines for 3 Entities */}
+        {PARTIES.map((party) => (
           <line
             key={`line-${party}`}
-            x1={columns[i]}
+            x1={columns[party]}
             y1={HEADER_H}
-            x2={columns[i]}
-            y2={svgHeight - 8}
-            className={PARTY_COLORS[party]}
+            x2={columns[party]}
+            y2={svgHeight - 10}
             stroke="currentColor"
+            strokeOpacity={0.15}
             strokeWidth={1}
-            strokeOpacity={0.3}
-            strokeDasharray="4 3"
           />
         ))}
 
-        {events.map((event, idx) => {
+        {/* Message Flows */}
+        {displayedEvents.map((event, idx) => {
           const y = HEADER_H + idx * ROW_H + ROW_H / 2;
           const [from, to] = directionToParties(event.direction);
-          const x1 = colFor(from);
-          const x2 = colFor(to);
+          const x1 = columns[from];
+          const x2 = columns[to];
           const rightward = x2 > x1;
-          const color = msgColor(event.message);
-          const midX = (x1 + x2) / 2;
-          const arrowPad = LANE_W;
-          const lineX1 = rightward ? x1 + arrowPad / 2 : x1 - arrowPad / 2;
-          const lineX2 = rightward ? x2 - arrowPad : x2 + arrowPad;
-          const arrowTip = rightward ? lineX2 + 8 : lineX2 - 8;
-          const [ay1, ay2] = rightward ? [y - 5, y + 5] : [y + 5, y - 5];
+          const isRetransmission = event.message.includes('[重传]');
+
+          // Theme-aware adaptive colors
+          let msgColor = 'hsl(var(--heroui-primary))';
+          if (isRetransmission) msgColor = 'hsl(var(--heroui-warning))';
+          else if (/100|180/.test(event.message)) msgColor = 'hsl(var(--heroui-success))';
+          else if (/200/.test(event.message)) msgColor = 'hsl(var(--heroui-success))';
+          else if (/INVITE/.test(event.message)) msgColor = 'hsl(var(--heroui-primary))';
+          else if (/ACK|BYE/.test(event.message)) msgColor = 'hsl(var(--heroui-warning))';
+          else if (/4|5|6/.test(event.message)) msgColor = 'hsl(var(--heroui-danger))';
 
           const hasRaw = Boolean(event.raw_message);
+          const diffStr =
+            event.diff_ms !== undefined
+              ? `+${event.diff_ms.toFixed(6)}`
+              : `+${(event.offset_ms / 1000).toFixed(6)}`;
 
           return (
             <g
               key={idx}
+              className="hover:opacity-80 transition-opacity"
               style={{ cursor: hasRaw ? 'pointer' : 'default' }}
               onClick={() => {
                 if (hasRaw) setSelectedEvent(event);
               }}
             >
+              {/* Left Column Timestamps */}
               <text
-                x={12}
-                y={y + 4}
-                fontSize={10}
+                x={TIME_COL_W - 12}
+                y={y - 8}
+                fontSize={11}
                 fill="currentColor"
-                fillOpacity={0.7}
-                textAnchor="start"
+                opacity={0.6}
+                textAnchor="end"
               >
-                +{event.offset_ms}ms
+                {event.timestamp_str || `+${event.offset_ms}ms`}
               </text>
-              <line
-                x1={lineX1}
-                y1={y}
-                x2={lineX2}
-                y2={y}
-                className={color}
-                stroke="currentColor"
-                strokeWidth={2}
-              />
-              <polygon
-                points={`${arrowTip},${y} ${lineX2},${ay1} ${lineX2},${ay2}`}
-                className={color}
-                fill="currentColor"
-              />
               <text
-                x={midX}
+                x={TIME_COL_W - 12}
+                y={y + 10}
+                fontSize={11}
+                fill="hsl(var(--heroui-success))"
+                fontWeight="bold"
+                textAnchor="end"
+              >
+                {diffStr}
+              </text>
+
+              {/* Message Arrow Line (Dashed if retransmission) */}
+              <line
+                x1={x1}
+                y1={y}
+                x2={x2}
+                y2={y}
+                stroke={msgColor}
+                strokeWidth={isRetransmission ? 1.2 : 1.5}
+                strokeDasharray={isRetransmission ? '4 3' : undefined}
+              />
+
+              {/* Arrow Head */}
+              {rightward ? (
+                <path
+                  d={`M ${x2 - 10} ${y - 4} L ${x2} ${y} L ${x2 - 10} ${y + 4}`}
+                  fill="none"
+                  stroke={msgColor}
+                  strokeWidth={2}
+                />
+              ) : (
+                <path
+                  d={`M ${x2 + 10} ${y - 4} L ${x2} ${y} L ${x2 + 10} ${y + 4}`}
+                  fill="none"
+                  stroke={msgColor}
+                  strokeWidth={2}
+                />
+              )}
+
+              {/* Message Name Label */}
+              <text
+                x={(x1 + x2) / 2}
                 y={y - 7}
                 textAnchor="middle"
                 fontSize={12}
-                fontWeight={600}
-                className={color}
-                fill="currentColor"
+                fontWeight="bold"
+                fill={msgColor}
               >
                 {event.message}
               </text>
-              {event.note && (
-                <text
-                  x={midX}
-                  y={y + 16}
-                  textAnchor="middle"
-                  fontSize={10}
-                  fill="currentColor"
-                  fillOpacity={0.6}
-                >
-                  {event.note}
-                </text>
-              )}
             </g>
           );
         })}
       </svg>
 
+      {/* Raw SIP Message Modal */}
       <Modal
         isOpen={Boolean(selectedEvent)}
         onOpenChange={(o) => !o && setSelectedEvent(null)}
         size="lg"
       >
         <ModalContent>
-          <ModalHeader>SIP 信令报文详情 - {selectedEvent?.message}</ModalHeader>
+          <ModalHeader className="text-small font-mono text-primary">
+            SIP 信令报文详情 - {selectedEvent?.message}
+          </ModalHeader>
           <ModalBody>
             <div className="bg-content2 rounded-medium p-4 max-h-[500px] overflow-y-auto">
               <pre className="text-tiny font-mono whitespace-pre-wrap text-foreground">
@@ -262,7 +367,7 @@ export function SipFlowDiagram({ events }: { events: SipFlowEvent[] }) {
               </pre>
               {parsedSDP && parsedSDP.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-divider">
-                  <h4 className="text-small font-semibold text-foreground mb-3">
+                  <h4 className="text-small font-semibold text-primary mb-3">
                     SDP 媒体协商 (解析)
                   </h4>
                   {parsedSDP.map((media, i) => (

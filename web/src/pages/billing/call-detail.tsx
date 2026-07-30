@@ -12,6 +12,7 @@ import {
   callDetailText,
   datetimeText,
   durationSecondsText,
+  hangupCauseText,
   moneyText,
   valueText,
 } from '@/pages/shared/format';
@@ -39,13 +40,19 @@ interface HistoricalCdr {
   direction?: string;
   status?: string;
   started_at_ms?: number;
+  ringing_at_ms?: number | null;
   answered_at_ms?: number | null;
   ended_at_ms?: number | null;
   duration_ms?: number;
   billable_duration_ms?: number;
+  talk_duration_ms?: number | null;
+  ringing_duration_ms?: number | null;
+  access_billable_duration_ms?: number | null;
+  access_charge_amount?: number | null;
+  egress_billable_duration_ms?: number | null;
+  egress_cost_amount?: number | null;
   failure_status_code?: number | null;
   failure_reason?: string | null;
-  gateway_trunk_id?: string | null;
   caller_rtcp_loss_rate?: number | null;
   caller_rtcp_jitter_ms?: number | null;
   caller_rtcp_rtt_ms?: number | null;
@@ -55,7 +62,25 @@ interface HistoricalCdr {
   mos?: number | null;
   dtmf_digits?: string | null;
   recording_path?: string | null;
-  tenant_id?: string | null;
+  audit?: {
+    source_type?: string | null;
+    source_id?: string | null;
+    billing_account?: string | null;
+    original_caller?: string | null;
+    presented_caller?: string | null;
+    caller_mode?: string | null;
+    caller_pool_id?: string | null;
+    caller_selection?: string | null;
+    ingress_trunk_id?: string | null;
+    egress_trunk_id?: string | null;
+    selected_route_id?: string | null;
+    fallback_used?: boolean;
+    billing_interval_secs?: number | null;
+    price_per_interval?: number | null;
+    egress_billing_account?: string | null;
+    egress_billing_interval_secs?: number | null;
+    egress_price_per_interval?: number | null;
+  } | null;
 }
 
 interface CallDetailResponse {
@@ -164,6 +189,11 @@ export function CallDetailView({ id }: CallDetailProps) {
   const runtime = detail.runtime;
   const rt = runtimeLabel(detail.runtime_availability);
   const mosInfo = cdr ? mosLevel(cdr.mos) : { color: 'default' as never, label: '未评估' };
+  const ringingDuration =
+    cdr?.ringing_duration_ms ??
+    (cdr?.ringing_at_ms && (cdr.answered_at_ms || cdr.ended_at_ms)
+      ? Math.max(0, (cdr.answered_at_ms || cdr.ended_at_ms || 0) - cdr.ringing_at_ms)
+      : null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -213,46 +243,175 @@ export function CallDetailView({ id }: CallDetailProps) {
             </div>
           }
         >
-          <Card className="border border-default-200">
-            <CardBody className="p-4">
-              {cdr ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
-                  <DetailRow label="主叫号码" value={sipIdentityText(cdr.caller)} />
-                  <DetailRow label="被叫号码" value={sipIdentityText(cdr.callee)} />
-                  <DetailRow label="呼叫方向" value={cdr.direction} />
-                  <DetailRow label="通话状态" value={cdr.status} />
-                  <DetailRow
-                    label="通话时长"
-                    value={cdr.duration_ms ? `${durationSecondsText(cdr.duration_ms)} 秒` : '—'}
-                  />
-                  <DetailRow
-                    label="计费时长"
-                    value={
-                      cdr.billable_duration_ms
-                        ? `${durationSecondsText(cdr.billable_duration_ms)} 秒`
-                        : '—'
-                    }
-                  />
-                  <DetailRow
-                    label="开始时间"
-                    value={cdr.started_at_ms ? datetimeText(cdr.started_at_ms) : '—'}
-                  />
-                  <DetailRow
-                    label="接通时间"
-                    value={cdr.answered_at_ms ? datetimeText(cdr.answered_at_ms) : '—'}
-                  />
-                  <DetailRow
-                    label="结束时间"
-                    value={cdr.ended_at_ms ? datetimeText(cdr.ended_at_ms) : '—'}
-                  />
-                  <DetailRow label="中继标识" value={cdr.gateway_trunk_id} mono />
-                  {cdr.tenant_id && <DetailRow label="租户标识" value={cdr.tenant_id} mono />}
-                </div>
-              ) : (
-                <p className="text-small text-default-400">无历史 CDR 数据</p>
-              )}
-            </CardBody>
-          </Card>
+          <div className="flex flex-col gap-4">
+            <Card className="border border-default-200">
+              <CardBody className="p-4">
+                {cdr ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
+                    <DetailRow label="主叫号码" value={sipIdentityText(cdr.caller)} />
+                    <DetailRow label="被叫号码" value={sipIdentityText(cdr.callee)} />
+                    <DetailRow label="呼叫方向" value={cdr.direction} />
+                    <DetailRow label="通话状态" value={cdr.status} />
+                    <DetailRow
+                      label="挂断原因 (Hangup Cause)"
+                      value={hangupCauseText(cdr.failure_status_code, cdr.failure_reason)}
+                    />
+                    <DetailRow
+                      label="总时长"
+                      value={cdr.duration_ms ? `${durationSecondsText(cdr.duration_ms)} 秒` : '—'}
+                    />
+                    {ringingDuration !== null && ringingDuration !== undefined && (
+                      <DetailRow
+                        label="振铃时长"
+                        value={`${durationSecondsText(ringingDuration)} 秒`}
+                      />
+                    )}
+                    {cdr.talk_duration_ms !== null && cdr.talk_duration_ms !== undefined && (
+                      <DetailRow
+                        label="通话时长"
+                        value={`${durationSecondsText(cdr.talk_duration_ms)} 秒`}
+                      />
+                    )}
+                    {cdr.billable_duration_ms !== null &&
+                      cdr.billable_duration_ms !== undefined && (
+                        <DetailRow
+                          label="计费时长"
+                          value={`${durationSecondsText(cdr.billable_duration_ms)} 秒`}
+                        />
+                      )}
+                    <DetailRow
+                      label="开始时间"
+                      value={cdr.started_at_ms ? datetimeText(cdr.started_at_ms) : '—'}
+                    />
+                    {cdr.ringing_at_ms && (
+                      <DetailRow label="振铃时间" value={datetimeText(cdr.ringing_at_ms)} />
+                    )}
+                    <DetailRow
+                      label="接通时间"
+                      value={cdr.answered_at_ms ? datetimeText(cdr.answered_at_ms) : '—'}
+                    />
+                    <DetailRow
+                      label="结束时间"
+                      value={cdr.ended_at_ms ? datetimeText(cdr.ended_at_ms) : '—'}
+                    />
+                    {cdr.access_billable_duration_ms !== null &&
+                      cdr.access_billable_duration_ms !== undefined && (
+                        <DetailRow
+                          label="对接计费时长"
+                          value={`${durationSecondsText(cdr.access_billable_duration_ms)} 秒`}
+                        />
+                      )}
+                    {cdr.access_charge_amount !== null &&
+                      cdr.access_charge_amount !== undefined && (
+                        <DetailRow
+                          label="对接费用"
+                          value={`${moneyText(cdr.access_charge_amount)} 元`}
+                        />
+                      )}
+                    {cdr.egress_billable_duration_ms !== null &&
+                      cdr.egress_billable_duration_ms !== undefined && (
+                        <DetailRow
+                          label="落地计费时长"
+                          value={`${durationSecondsText(cdr.egress_billable_duration_ms)} 秒`}
+                        />
+                      )}
+                    {cdr.egress_cost_amount !== null && cdr.egress_cost_amount !== undefined && (
+                      <DetailRow
+                        label="成本费用"
+                        value={`${moneyText(cdr.egress_cost_amount)} 元`}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-small text-default-400">无历史 CDR 数据</p>
+                )}
+              </CardBody>
+            </Card>
+            {cdr?.audit && (
+              <SectionBlock title="路由与计费" description="呼叫建立时的路由与计费决策快照">
+                <Card className="border border-default-200">
+                  <CardBody className="p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
+                      {cdr.audit.billing_account && (
+                        <DetailRow label="对接账户" value={cdr.audit.billing_account} mono />
+                      )}
+                      {cdr.audit.billing_interval_secs !== null &&
+                        cdr.audit.billing_interval_secs !== undefined && (
+                          <DetailRow
+                            label="对接计费周期"
+                            value={`${cdr.audit.billing_interval_secs} 秒`}
+                          />
+                        )}
+                      {cdr.audit.price_per_interval !== null &&
+                        cdr.audit.price_per_interval !== undefined && (
+                          <DetailRow
+                            label="对接周期价格"
+                            value={`${moneyText(cdr.audit.price_per_interval)} 元`}
+                          />
+                        )}
+                      {cdr.audit.egress_billing_account && (
+                        <DetailRow label="落地账户" value={cdr.audit.egress_billing_account} mono />
+                      )}
+                      {cdr.audit.egress_billing_interval_secs !== null &&
+                        cdr.audit.egress_billing_interval_secs !== undefined && (
+                          <DetailRow
+                            label="落地计费周期"
+                            value={`${cdr.audit.egress_billing_interval_secs} 秒`}
+                          />
+                        )}
+                      {cdr.audit.egress_price_per_interval !== null &&
+                        cdr.audit.egress_price_per_interval !== undefined && (
+                          <DetailRow
+                            label="落地周期价格"
+                            value={`${moneyText(cdr.audit.egress_price_per_interval)} 元`}
+                          />
+                        )}
+                      {cdr.audit.ingress_trunk_id && (
+                        <DetailRow label="对接中继" value={cdr.audit.ingress_trunk_id} mono />
+                      )}
+                      {cdr.audit.egress_trunk_id && (
+                        <DetailRow label="落地中继" value={cdr.audit.egress_trunk_id} mono />
+                      )}
+                      {cdr.audit.selected_route_id && (
+                        <DetailRow label="选中路由" value={cdr.audit.selected_route_id} mono />
+                      )}
+                      {cdr.audit.original_caller && (
+                        <DetailRow
+                          label="原始主叫"
+                          value={sipIdentityText(cdr.audit.original_caller)}
+                        />
+                      )}
+                      {cdr.audit.presented_caller && (
+                        <DetailRow
+                          label="显示主叫"
+                          value={sipIdentityText(cdr.audit.presented_caller)}
+                        />
+                      )}
+                      {cdr.audit.caller_mode && (
+                        <DetailRow label="主叫模式" value={cdr.audit.caller_mode} />
+                      )}
+                      {cdr.audit.caller_pool_id && (
+                        <DetailRow label="主叫号码池" value={cdr.audit.caller_pool_id} mono />
+                      )}
+                      {cdr.audit.caller_selection && (
+                        <DetailRow label="选号策略" value={cdr.audit.caller_selection} />
+                      )}
+                      {cdr.audit.source_type && (
+                        <DetailRow label="路由来源类型" value={cdr.audit.source_type} />
+                      )}
+                      {cdr.audit.source_id && (
+                        <DetailRow label="路由来源标识" value={cdr.audit.source_id} mono />
+                      )}
+                      <DetailRow
+                        label="是否故障切换"
+                        value={cdr.audit.fallback_used ? '是' : '否'}
+                      />
+                    </div>
+                  </CardBody>
+                </Card>
+              </SectionBlock>
+            )}
+          </div>
         </Tab>
 
         <Tab

@@ -109,7 +109,7 @@ function defaultActionUrl(category: NotificationCategory): string {
     server: '/infrastructure',
     trunk: '/trunks/egress',
     registration: '/extensions',
-    balance: '/billing/accounts',
+    balance: '/billing/access-accounts',
     call_quality: '/calls',
     risk: '/security',
     security: '/security',

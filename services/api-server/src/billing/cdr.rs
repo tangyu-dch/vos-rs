@@ -60,12 +60,23 @@ pub async fn list_cdrs(
             "通话 ID",
             "主叫号码",
             "被叫号码",
+            "呼叫方向",
             "状态",
             "呼叫开始时间",
+            "振铃时间",
             "应答时间",
             "结束时间",
             "通话时长(毫秒)",
             "计费时长(毫秒)",
+            "振铃时长(毫秒)",
+            "对接计费时长(毫秒)",
+            "对接费用",
+            "落地计费时长(毫秒)",
+            "成本费用",
+            "对接中继",
+            "对接账户",
+            "落地中继",
+            "落地账户",
             "失败代码",
             "失败原因",
         ];
@@ -75,14 +86,40 @@ pub async fn list_cdrs(
                 item.call_id.clone(),
                 item.caller.clone().unwrap_or_default(),
                 item.callee.clone().unwrap_or_default(),
+                item.direction.clone(),
                 item.status.clone(),
                 item.started_at_ms.to_string(),
+                item.ringing_at_ms
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
                 item.answered_at_ms
                     .map(|t| t.to_string())
                     .unwrap_or_default(),
                 item.ended_at_ms.to_string(),
                 item.duration_ms.to_string(),
                 item.billable_duration_ms.to_string(),
+                item.ringing_duration_ms
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+                item.access_billable_duration_ms
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+                item.access_charge_amount
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                item.egress_billable_duration_ms
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+                item.egress_cost_amount
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                item.audit.ingress_trunk_id.clone().unwrap_or_default(),
+                item.audit.billing_account.clone().unwrap_or_default(),
+                item.audit.egress_trunk_id.clone().unwrap_or_default(),
+                item.audit
+                    .egress_billing_account
+                    .clone()
+                    .unwrap_or_default(),
                 item.failure_status_code
                     .map(|c| c.to_string())
                     .unwrap_or_default(),

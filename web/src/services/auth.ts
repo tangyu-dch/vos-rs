@@ -104,10 +104,14 @@ export function canWriteDomain(
     extensions: ['extensions.create', 'extensions.update', 'extensions.delete'],
     operations: ['calls.terminate', 'calls.play', 'calls.mute', 'calls.monitor'],
     billing: [
-      'billing.accounts.credit',
-      'billing.rates.create',
-      'billing.rates.update',
-      'billing.rates.delete',
+      'billing.access_accounts.create',
+      'billing.access_accounts.update',
+      'billing.access_accounts.delete',
+      'billing.access_accounts.credit',
+      'billing.egress_accounts.create',
+      'billing.egress_accounts.update',
+      'billing.egress_accounts.delete',
+      'billing.egress_accounts.credit',
     ],
     system: [
       'settings.manage',

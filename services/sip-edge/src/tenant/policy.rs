@@ -1,7 +1,7 @@
 //! 租户级运行时策略。
 
 /// 跨租户呼叫策略。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CrossTenantPolicy {
     /// 允许跨租户呼叫（开放模式，适合单一运营商场景）。
@@ -9,13 +9,8 @@ pub enum CrossTenantPolicy {
     /// 拒绝所有跨租户呼叫（严格隔离模式）。
     Deny,
     /// 仅允许同域内呼叫（默认模式，向后兼容现有 check_cross_tenant 行为）。
+    #[default]
     AllowIfSameDomain,
-}
-
-impl Default for CrossTenantPolicy {
-    fn default() -> Self {
-        Self::AllowIfSameDomain
-    }
 }
 
 /// 租户级运行时策略快照。

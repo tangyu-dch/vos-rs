@@ -253,8 +253,8 @@ async fn collect_alert_candidates(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<Vec<AlertCandidate>, sqlx::Error> {
     let mut candidates = collect_gateway_alerts(transaction).await?;
-    let accounts: Vec<(String, f64, f64, String)> = sqlx::query_as(
-        "SELECT username, balance::DOUBLE PRECISION, credit_limit::DOUBLE PRECISION, currency \
+    let accounts: Vec<(String, f64, f64)> = sqlx::query_as(
+        "SELECT username, balance::DOUBLE PRECISION, credit_limit::DOUBLE PRECISION \
          FROM billing_accounts \
          WHERE balance + credit_limit <= 10",
     )
@@ -327,9 +327,7 @@ async fn collect_quality_alerts(
     Ok(candidates)
 }
 
-fn balance_alert(
-    (username, balance, credit_limit, currency): (String, f64, f64, String),
-) -> AlertCandidate {
+fn balance_alert((username, balance, credit_limit): (String, f64, f64)) -> AlertCandidate {
     let available = balance + credit_limit;
     let severity = if available <= 0.0 {
         NotificationSeverity::Critical
@@ -340,15 +338,14 @@ fn balance_alert(
         category: NotificationCategory::Billing,
         severity,
         title: "商户可用余额不足".to_string(),
-        content: format!("计费账户 {username} 当前可用余额为 {available:.2} {currency}"),
+        content: format!("计费账户 {username} 当前可用余额为 {available:.2} 元"),
         source: "billing_accounts".to_string(),
         dedup_key: format!("scanner:billing:{username}"),
         metadata: json!({
             "username": username,
             "balance": balance,
             "credit_limit": credit_limit,
-            "available": available,
-            "currency": currency
+            "available": available
         }),
     }
 }
@@ -439,7 +436,7 @@ mod tests {
 
     #[test]
     fn balance_alert_includes_credit_limit_in_available_funds() {
-        let alert = balance_alert(("merchant-a".to_string(), -5.0, 3.0, "CNY".to_string()));
+        let alert = balance_alert(("merchant-a".to_string(), -5.0, 3.0));
         assert_eq!(alert.severity, NotificationSeverity::Critical);
         assert_eq!(alert.dedup_key, "scanner:billing:merchant-a");
         assert!(alert.content.contains("-2.00"));

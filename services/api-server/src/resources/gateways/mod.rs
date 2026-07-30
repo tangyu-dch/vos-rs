@@ -5,7 +5,10 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{normalize_page, ApiError, AppState, PageQuery, PaginatedResponse};
+use crate::{
+    deserialize_optional_bool_from_str, normalize_page, ApiError, AppState, PageQuery,
+    PaginatedResponse,
+};
 
 mod manage;
 pub(crate) use manage::{create_gateway, update_gateway};
@@ -21,6 +24,7 @@ pub struct ListTrunksQuery {
     /// 按中继 ID / 主机地址模糊搜索
     pub q: Option<String>,
     /// 按启用状态精确过滤
+    #[serde(default, deserialize_with = "deserialize_optional_bool_from_str")]
     pub enabled: Option<bool>,
 }
 
@@ -47,6 +51,7 @@ pub struct CreateGatewayRequest {
     pub virtual_caller: Option<String>,
     pub max_concurrent: Option<i32>,
     pub account_id: Option<i64>,
+    pub tenant_id: Option<String>,
     pub enabled: Option<bool>,
 }
 
@@ -72,6 +77,7 @@ pub struct UpdateGatewayRequest {
     pub virtual_caller: Option<String>,
     pub max_concurrent: Option<i32>,
     pub account_id: Option<i64>,
+    pub tenant_id: Option<String>,
     pub enabled: Option<bool>,
 }
 

@@ -1,6 +1,5 @@
 //! Copilot 工具实现：CSV 导入导出
 
-use rust_decimal::Decimal;
 use serde_json::{json, Value};
 
 use super::urlencoding_str;
@@ -100,17 +99,8 @@ impl<'a> TelecomCopilotEngine<'a> {
         })
     }
 
-    pub(crate) async fn tool_export_rates(&self) -> Value {
-        let download_url = "/api/v1/rates?export=true";
-        json!({
-            "success": true,
-            "download_endpoint": download_url,
-            "download_markdown": format!("[📥 点击导出下载全量呼叫资费表 (CSV)]({})", download_url)
-        })
-    }
-
     pub(crate) async fn tool_export_billing_accounts(&self) -> Value {
-        let download_url = "/api/v1/billing/accounts?export=true";
+        let download_url = "/api/v1/billing/access-accounts?export=true";
         json!({
             "success": true,
             "download_endpoint": download_url,
@@ -314,50 +304,6 @@ impl<'a> TelecomCopilotEngine<'a> {
             "skipped_count": skipped,
             "errors": errors,
             "message": format!("批量路由导入完成并已重载选路引擎：成功 {} 条，失败/跳过 {} 条。", imported, skipped)
-        })
-    }
-
-    pub(crate) async fn tool_import_rates(&self, args: &Value) -> Value {
-        let content = args
-            .get("content")
-            .or_else(|| args.get("csv_content"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if content.is_empty() {
-            return json!({ "success": false, "error": "导入内容不能为空" });
-        }
-        let rows = crate::system::utils::parse_csv(content);
-        let mut imported = 0;
-        let mut skipped = 0;
-
-        for row in rows {
-            if row.len() < 2 || row[0].eq_ignore_ascii_case("prefix") || row[0].contains("前缀") {
-                continue;
-            }
-            let prefix = row[0].trim();
-            let rate_val: f64 = row[1].trim().parse().unwrap_or(0.0);
-            let id = format!("rate_{}", prefix);
-
-            let dec = Decimal::from_f64_retain(rate_val).unwrap_or_default();
-            let input = cdr_core::RateUpsert {
-                id: &id,
-                prefix,
-                rate_per_minute: dec,
-                billing_interval_secs: 60,
-                price_per_interval: dec,
-                description: Some("由 Copilot 批量导入"),
-                tenant_id: None,
-            };
-            match self.state.store.upsert_rate(&input).await {
-                Ok(_) => imported += 1,
-                Err(_) => skipped += 1,
-            }
-        }
-        json!({
-            "success": true,
-            "imported_count": imported,
-            "skipped_count": skipped,
-            "message": format!("资费表批量导入完成：成功 {} 条，失败 {} 条。", imported, skipped)
         })
     }
 }

@@ -3,6 +3,7 @@ pub mod announcement;
 pub mod anti_fraud;
 pub mod audit;
 pub mod billing;
+pub mod billing_account;
 pub mod cdr;
 pub mod copilot;
 pub mod copilot_action;

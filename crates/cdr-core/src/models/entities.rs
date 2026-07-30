@@ -144,6 +144,7 @@ pub struct SipGateway {
     pub current_concurrent: Option<i32>,
     pub circuit_state: Option<String>,
     pub account_id: Option<i64>,
+    pub tenant_id: Option<String>,
     pub max_concurrent: Option<i32>,
     pub enabled: Option<bool>,
     #[serde(
@@ -179,6 +180,9 @@ pub struct SipRegistration {
     pub aor: String,
     pub contact_uri: String,
     pub received_from: String,
+    /// SIP 终端的 User-Agent 头（客户端名称）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
     pub path: Vec<String>,
@@ -191,65 +195,10 @@ pub struct SipRegistration {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BillingRate {
-    pub id: String,
-    pub prefix: String,
-    pub rate_per_minute: Decimal,
-    pub billing_interval_secs: i32,
-    pub price_per_interval: Decimal,
-    pub description: Option<String>,
-    /// 关联的租户 ID（可空，NULL 表示全局费率，对所有租户生效）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tenant_id: Option<String>,
-    #[serde(
-        with = "time::serde::rfc3339::option",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub created_at: Option<OffsetDateTime>,
-}
-
-/// `upsert_rate` 的入参集合，避免函数参数超过 7 个（clippy::too_many_arguments）。
-///
-/// 调用方构造时按需填写字段；`description` 与 `tenant_id` 均为 `Option`，可置 `None`。
-#[derive(Debug, Clone)]
-pub struct RateUpsert<'a> {
-    pub id: &'a str,
-    pub prefix: &'a str,
-    pub rate_per_minute: Decimal,
-    pub billing_interval_secs: i32,
-    pub price_per_interval: Decimal,
-    pub description: Option<&'a str>,
-    /// 关联的租户 ID（可空，None 表示全局费率）。
-    pub tenant_id: Option<&'a str>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct BillingAccount {
-    pub id: i64,
-    pub username: String,
-    pub balance: Decimal,
-    pub credit_limit: Decimal,
-    pub currency: String,
-    #[serde(
-        with = "time::serde::rfc3339::option",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub created_at: Option<OffsetDateTime>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum CreditAccountOutcome {
-    Applied(Decimal),
-    Replayed(Decimal),
-    Conflict,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LedgerEntry {
     pub id: i64,
     pub call_id: String,
+    pub entry_type: String,
     pub username: String,
     pub duration_ms: i64,
     pub rate_per_minute: Decimal,
@@ -265,11 +214,23 @@ pub struct LedgerEntry {
     pub created_at: Option<OffsetDateTime>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ReconcileResult {
-    pub processed: i64,
-    pub skipped: i64,
-    pub total_amount: Decimal,
+/// Immutable input for settling one side of a completed call.
+#[derive(Debug, Clone, Copy)]
+pub struct CallSettlementInput<'a> {
+    pub call_id: &'a str,
+    pub entry_type: &'a str,
+    pub username: &'a str,
+    pub callee: &'a str,
+    pub duration_ms: i64,
+    pub tenant_id: Option<&'a str>,
+}
+
+/// Persisted pulse-rating result for one side of a call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallSettlementResult {
+    pub balance_after: Decimal,
+    pub billed_duration_ms: i64,
+    pub amount: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

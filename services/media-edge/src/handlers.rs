@@ -337,7 +337,7 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         .bytes()
         .filter(|&b| b != b'\n' && b != b'\r' && b != b' ')
         .collect();
-    if input.len() % 4 != 0 {
+    if !input.len().is_multiple_of(4) {
         return Err(format!("invalid base64 length: {}", input.len()));
     }
     let mut out = Vec::with_capacity(input.len() * 3 / 4);

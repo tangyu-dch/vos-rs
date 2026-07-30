@@ -203,8 +203,8 @@ impl PostgresCdrStore {
         let port_val = gw.port.map(|p| p as i32);
         let cap_val = gw.max_capacity.map(|c| c as i32);
         sqlx::query(
-            "INSERT INTO sip_gateways (id, host, port, transport, max_capacity, gateway_type, role, access_auth_mode, access_username, access_realm, access_password_hash, prefix_rules, supports_registration, reg_auth_type, reg_username, reg_password, parent_gateway_id, caller_id_mode, virtual_caller, max_concurrent, account_id, enabled) \
-              VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'peer'), COALESCE($7, 'egress'), COALESCE($8, 'none'), COALESCE($9, ''), COALESCE($10, ''), COALESCE($11, ''), COALESCE($12, ''), COALESCE($13, FALSE), COALESCE($14, 'none'), COALESCE($15, ''), COALESCE($22, ''), $16, COALESCE($17, 'passthrough'), COALESCE($18, ''), COALESCE($19, 100), $20, COALESCE($21, TRUE)) \
+            "INSERT INTO sip_gateways (id, host, port, transport, max_capacity, gateway_type, role, access_auth_mode, access_username, access_realm, access_password_hash, prefix_rules, supports_registration, reg_auth_type, reg_username, reg_password, parent_gateway_id, caller_id_mode, virtual_caller, max_concurrent, account_id, tenant_id, enabled) \
+              VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'peer'), COALESCE($7, 'egress'), COALESCE($8, 'none'), COALESCE($9, ''), COALESCE($10, ''), COALESCE($11, ''), COALESCE($12, ''), COALESCE($13, FALSE), COALESCE($14, 'none'), COALESCE($15, ''), COALESCE($22, ''), $16, COALESCE($17, 'passthrough'), COALESCE($18, ''), COALESCE($19, 100), $20, $23, COALESCE($21, TRUE)) \
               ON CONFLICT (id) DO UPDATE \
               SET host = EXCLUDED.host, \
                   port = EXCLUDED.port, \
@@ -226,6 +226,7 @@ impl PostgresCdrStore {
                   virtual_caller = EXCLUDED.virtual_caller, \
                   max_concurrent = EXCLUDED.max_concurrent, \
                   account_id = EXCLUDED.account_id, \
+                  tenant_id = EXCLUDED.tenant_id, \
                   enabled = EXCLUDED.enabled"
         )
         .bind(&gw.id)
@@ -250,6 +251,7 @@ impl PostgresCdrStore {
         .bind(gw.account_id)
         .bind(gw.enabled)
         .bind(&gw.reg_password)
+        .bind(&gw.tenant_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -259,7 +261,7 @@ impl PostgresCdrStore {
         let rows = sqlx::query(
             "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.role, g.access_auth_mode, g.access_username, g.access_realm, (g.access_password_hash <> '') AS has_access_password, g.prefix_rules, \
              g.supports_registration, g.reg_auth_type, g.reg_username, g.parent_gateway_id, \
-             g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, g.enabled, g.created_at, \
+             g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, g.tenant_id, g.enabled, g.created_at, \
              h.active_calls, h.state \
              FROM sip_gateways g \
              LEFT JOIN gateway_health_status h ON g.id = h.gateway_id \
@@ -298,6 +300,7 @@ impl PostgresCdrStore {
                 current_concurrent: Some(active_calls.unwrap_or(0)),
                 circuit_state: Some(state.unwrap_or_else(|| "closed".to_string())),
                 account_id: row.get("account_id"),
+                tenant_id: row.get("tenant_id"),
                 max_concurrent: row.get("max_concurrent"),
                 enabled: row.get("enabled"),
                 created_at: row.get("created_at"),
@@ -326,7 +329,7 @@ impl PostgresCdrStore {
         let rows = sqlx::query(
             "SELECT g.id, g.host, g.port, g.transport, g.max_capacity, g.gateway_type, g.role, g.access_auth_mode, g.access_username, g.access_realm, (g.access_password_hash <> '') AS has_access_password, g.prefix_rules, \
              g.supports_registration, g.reg_auth_type, g.reg_username, g.parent_gateway_id, \
-             g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, g.enabled, g.created_at, \
+             g.caller_id_mode, g.virtual_caller, g.max_concurrent, g.account_id, g.tenant_id, g.enabled, g.created_at, \
              h.active_calls, h.state \
              FROM sip_gateways g \
              LEFT JOIN gateway_health_status h ON g.id = h.gateway_id \
@@ -375,6 +378,7 @@ impl PostgresCdrStore {
                         .unwrap_or_else(|| "closed".to_string()),
                 ),
                 account_id: row.get("account_id"),
+                tenant_id: row.get("tenant_id"),
                 max_concurrent: row.get("max_concurrent"),
                 enabled: row.get("enabled"),
                 created_at: row.get("created_at"),

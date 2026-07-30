@@ -19,6 +19,7 @@ pub(crate) fn offset_from_millis(millis: i64) -> OffsetDateTime {
         + time::Duration::nanoseconds(nanos as i64)
 }
 
+#[cfg(test)]
 pub(crate) fn extract_sip_user(value: &str) -> Option<&str> {
     let idx = value.find("sip:")?;
     let rest = &value[idx + 4..];
@@ -28,22 +29,6 @@ pub(crate) fn extract_sip_user(value: &str) -> Option<&str> {
     } else {
         Some(&rest[..end])
     }
-}
-
-#[cfg(test)]
-pub(crate) fn match_rate(callee: &str, rates: &[(String, f64)]) -> f64 {
-    let mut best: Option<(&str, f64)> = None;
-    let mut fallback = 0.0;
-    for (prefix, rate) in rates {
-        if prefix.is_empty() {
-            fallback = *rate;
-        } else if callee.starts_with(prefix)
-            && best.is_none_or(|(current, _)| prefix.len() > current.len())
-        {
-            best = Some((prefix, *rate));
-        }
-    }
-    best.map_or(fallback, |(_, rate)| rate)
 }
 
 pub(crate) fn cdr_event_from_row(row: &sqlx::postgres::PgRow) -> crate::models::CdrEvent {
@@ -56,30 +41,42 @@ pub(crate) fn cdr_event_from_row(row: &sqlx::postgres::PgRow) -> crate::models::
             let ts: time::OffsetDateTime = row.get(3);
             ts.unix_timestamp_nanos() as i64 / 1_000_000
         },
-        answered_at_ms: row
+        ringing_at_ms: row
             .get::<Option<time::OffsetDateTime>, _>(4)
             .map(|ts| ts.unix_timestamp_nanos() as i64 / 1_000_000),
+        answered_at_ms: row
+            .get::<Option<time::OffsetDateTime>, _>(5)
+            .map(|ts| ts.unix_timestamp_nanos() as i64 / 1_000_000),
         ended_at_ms: {
-            let ts: time::OffsetDateTime = row.get(5);
+            let ts: time::OffsetDateTime = row.get(6);
             ts.unix_timestamp_nanos() as i64 / 1_000_000
         },
-        duration_ms: row.get(6),
-        billable_duration_ms: row.get(7),
-        status: row.get(8),
-        failure_status_code: row.get::<Option<i32>, _>(9).map(|v| v as u16),
-        failure_reason: row.get(10),
-        caller_rtcp_loss_rate: row.get(11),
-        caller_rtcp_jitter_ms: row.get(12),
-        caller_rtcp_rtt_ms: row.get::<Option<i32>, _>(13).map(|v| v as u32),
-        gateway_rtcp_loss_rate: row.get(14),
-        gateway_rtcp_jitter_ms: row.get(15),
-        gateway_rtcp_rtt_ms: row.get::<Option<i32>, _>(16).map(|v| v as u32),
-        mos: row.get(17),
-        dtmf_digits: row.get(18),
-        recording_path: row.get(19),
-        direction: row.get(20),
+        duration_ms: row.get(7),
+        billable_duration_ms: row.get(8),
+        talk_duration_ms: row.get(9),
+        ringing_duration_ms: row.get(10),
+        access_billable_duration_ms: row.get(11),
+        access_charge_amount: row.get(12),
+        egress_billable_duration_ms: row.get(13),
+        egress_cost_amount: row.get(14),
+        status: row.get(15),
+        failure_status_code: row.get::<Option<i32>, _>(16).map(|v| v as u16),
+        failure_reason: row.get(17),
+        caller_rtcp_loss_rate: row.get(18),
+        caller_rtcp_jitter_ms: row.get(19),
+        caller_rtcp_rtt_ms: row.get::<Option<i32>, _>(20).map(|v| v as u32),
+        gateway_rtcp_loss_rate: row.get(21),
+        gateway_rtcp_jitter_ms: row.get(22),
+        gateway_rtcp_rtt_ms: row.get::<Option<i32>, _>(23).map(|v| v as u32),
+        mos: row.get(24),
+        dtmf_digits: row.get(25),
+        recording_path: row.get(26),
+        direction: row.get(27),
+        tenant_id: row.get(28),
+        tenant_name: row.get(29),
+        auth_realm: row.get(30),
         audit: row
-            .get::<sqlx::types::Json<call_core::CdrAuditSnapshot>, _>(21)
+            .get::<sqlx::types::Json<call_core::CdrAuditSnapshot>, _>(31)
             .0,
     }
 }

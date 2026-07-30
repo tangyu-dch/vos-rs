@@ -63,9 +63,6 @@ impl<'a> TelecomCopilotEngine<'a> {
             "vos_delete_route" => self.tool_delete_route(args).await,
             "vos_list_billing_accounts" => self.tool_list_billing_accounts().await,
             "vos_recharge_billing_account" => self.tool_recharge_billing_account(args).await,
-            "vos_list_rates" => self.tool_list_rates().await,
-            "vos_upsert_rate" => self.tool_upsert_rate(args).await,
-            "vos_delete_rate" => self.tool_delete_rate(args).await,
             "vos_add_ivr_node" => self.tool_add_ivr_node(args).await,
             "vos_delete_ivr_menu" => self.tool_delete_ivr_menu(args).await,
             "vos_create_anti_fraud_rule" => self.tool_create_anti_fraud_rule(args).await,
@@ -74,12 +71,10 @@ impl<'a> TelecomCopilotEngine<'a> {
             "vos_export_extensions" => self.tool_export_extensions().await,
             "vos_export_gateways" => self.tool_export_gateways().await,
             "vos_export_routes" => self.tool_export_routes().await,
-            "vos_export_rates" => self.tool_export_rates().await,
             "vos_export_billing_accounts" => self.tool_export_billing_accounts().await,
             "vos_import_extensions" => self.tool_import_extensions(args).await,
             "vos_import_gateways" => self.tool_import_gateways(args).await,
             "vos_import_routes" => self.tool_import_routes(args).await,
-            "vos_import_rates" => self.tool_import_rates(args).await,
             _ => json!({ "error": format!("未知工具: {name}") }),
         }
     }
@@ -229,8 +224,8 @@ impl<'a> TelecomCopilotEngine<'a> {
             &payload.billing_accounts,
             |a| {
                 format!(
-                    "- **账户名称**: `{}` | **余额**: `{} {}` | **信用额度**: `{}`\n",
-                    a.username, a.balance, a.currency, a.credit_limit
+                    "- **账户名称**: `{}` | **余额**: `{} 元` | **信用额度**: `{}`\n",
+                    a.username, a.balance, a.credit_limit
                 )
             },
         );

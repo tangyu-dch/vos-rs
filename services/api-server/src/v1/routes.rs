@@ -5,7 +5,7 @@ use axum::{
 
 use crate::{
     access_control, announcements,
-    billing::{anti_fraud, billing, cdr, report},
+    billing::{accounts, anti_fraud, cdr, operations, report},
     cluster::{calls, media_cluster, sip_cluster},
     copilot::history as copilot_history,
     copilot::safety as copilot_safety,
@@ -321,28 +321,31 @@ pub(super) fn call_routes() -> Router<AppState> {
 pub(super) fn billing_routes() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/v1/billing/rates",
-            get(billing::list_rates).post(billing::create_rate),
+            "/api/v1/billing/access-accounts",
+            get(accounts::list_access_accounts).post(accounts::create_access_account),
         )
         .route(
-            "/api/v1/billing/rates/import",
-            post(crate::import::import_rates),
+            "/api/v1/billing/access-accounts/:id",
+            put(accounts::update_access_account).delete(accounts::delete_access_account),
         )
         .route(
-            "/api/v1/billing/rates/import-template",
-            get(crate::import::import_rates_template),
+            "/api/v1/billing/access-accounts/:id/credit",
+            post(accounts::credit_access_account),
         )
         .route(
-            "/api/v1/billing/rates/:id",
-            put(billing::update_rate).delete(billing::delete_rate),
+            "/api/v1/billing/egress-accounts",
+            get(accounts::list_egress_accounts).post(accounts::create_egress_account),
         )
-        .route("/api/v1/billing/accounts", get(billing::list_accounts))
         .route(
-            "/api/v1/billing/accounts/:username/credit",
-            post(billing::credit_account),
+            "/api/v1/billing/egress-accounts/:id",
+            put(accounts::update_egress_account).delete(accounts::delete_egress_account),
         )
-        .route("/api/v1/billing/transactions", get(billing::list_ledger))
-        .route("/api/v1/billing/reconciliations", post(billing::reconcile))
+        .route(
+            "/api/v1/billing/egress-accounts/:id/credit",
+            post(accounts::credit_egress_account),
+        )
+        .route("/api/v1/billing/credits", get(accounts::list_journal))
+        .route("/api/v1/billing/transactions", get(operations::list_ledger))
 }
 
 pub(super) fn security_routes() -> Router<AppState> {
@@ -498,9 +501,5 @@ pub(super) fn tenant_routes() -> Router<AppState> {
         .route(
             "/api/v1/tenants/:id/enabled",
             post(tenants::toggle_tenant_enabled),
-        )
-        .route(
-            "/api/v1/tenants/:id/billing-account",
-            put(tenants::associate_billing_account),
         )
 }

@@ -210,15 +210,15 @@ mod gateway_identity_tests {
 
     #[test]
     fn billing_check_distinguishes_missing_data_and_uses_credit_limit() {
-        let missing_account = build_balance_check(None, None, Some((60, 0.5)), None);
+        let missing_account = build_balance_check(None, None, Some((60, 0.5)));
         assert!(!missing_account.account_found);
         assert!(!missing_account.has_balance);
 
-        let missing_rate = build_balance_check(Some(10.0), Some(0.0), None, None);
+        let missing_rate = build_balance_check(Some(10.0), Some(0.0), None);
         assert!(!missing_rate.rate_found);
         assert!(!missing_rate.has_balance);
 
-        let credit = build_balance_check(Some(-0.25), Some(1.0), Some((6, 0.05)), None);
+        let credit = build_balance_check(Some(-0.25), Some(1.0), Some((6, 0.05)));
         assert!(credit.has_balance);
         assert_eq!(credit.balance + credit.credit_limit, 0.75);
     }

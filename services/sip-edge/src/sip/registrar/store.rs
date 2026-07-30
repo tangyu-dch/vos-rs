@@ -85,7 +85,7 @@ impl RegistrationStore {
             match db.get_registrations(aor).await {
                 Ok(rows) => {
                     let mut contacts = Vec::new();
-                    for (uri, received_from, expires_at, path) in rows {
+                    for (uri, received_from, _user_agent, expires_at, path) in rows {
                         let nanos = expires_at.unix_timestamp_nanos();
                         let sys_expires_at = if nanos > 0 {
                             SystemTime::UNIX_EPOCH + Duration::from_nanos(nanos as u64)
@@ -239,6 +239,10 @@ impl RegistrationStore {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<String>>();
+                let user_agent = request
+                    .headers
+                    .get("user-agent")
+                    .map(|v| v.as_str().to_string());
                 let expires_at = now + Duration::from_secs(u64::from(expires));
                 let binding = RegistrationBinding {
                     uri: uri.clone(),
@@ -259,7 +263,14 @@ impl RegistrationStore {
                         OffsetDateTime::from_unix_timestamp_nanos(since_epoch.as_nanos() as i128)
                             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
                     let _ = db
-                        .upsert_registration(aor, &uri, &peer.to_string(), offset_dt, &path)
+                        .upsert_registration(
+                            aor,
+                            &uri,
+                            &peer.to_string(),
+                            user_agent.as_deref(),
+                            offset_dt,
+                            &path,
+                        )
                         .await;
                 }
                 let msg = RegistrationInvalidateMsg {

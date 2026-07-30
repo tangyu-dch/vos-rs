@@ -36,10 +36,16 @@ pub(super) async fn enforce_balance_check(ctx: &OutboundContext<'_>) -> BalanceC
 
     let callee = ctx.request.uri.user.as_deref().unwrap_or("");
     let Some(caller_user) = ctx.billing_account.as_deref() else {
-        return BalanceCheckOutcome::Continue {
-            calculated_max_duration,
-            billing_pulse,
-        };
+        // 中继来源未绑定计费账户时拒绝呼叫，避免静默放行不计费。
+        // 分机来源的 billing_account 在 resolution 阶段一定为 Some，此处 None 仅出现在中继未绑账户的场景。
+        warn!("pre-call billing account is not bound to the access trunk, rejecting call");
+        return BalanceCheckOutcome::Reject(vec![PendingDatagram::new(
+            ctx.peer.to_string(),
+            response::error_for_call_error(
+                ctx.request,
+                &call_core::CallError::GatewayUnavailable("中继未绑定计费账户".to_string()),
+            ),
+        )]);
     };
     // 从 TenantContext 提取 tenant_id，按租户查找专属费率（未命中时 redis_balance_check 会自动回退到全局）。
     let tenant_id = if ctx.tenant_ctx.is_bound() {

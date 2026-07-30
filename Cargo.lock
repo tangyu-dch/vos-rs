@@ -3858,6 +3858,7 @@ dependencies = [
  "redis",
  "reqwest",
  "rtp-core",
+ "rust_decimal",
  "rustls 0.23.41",
  "rustls-native-certs 0.8.4",
  "rustls-pemfile",

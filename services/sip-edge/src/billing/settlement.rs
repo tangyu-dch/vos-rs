@@ -1,6 +1,8 @@
 use std::time::SystemTime;
 
 use call_core::CallId;
+use cdr_core::{CallSettlementInput, PostgresCdrStore};
+use rust_decimal::prelude::ToPrimitive;
 
 use crate::edge_state::EdgeState;
 
@@ -48,9 +50,6 @@ pub(crate) fn settle_completed_call(edge_state: &EdgeState, call_id: &CallId) {
     let Some(call) = edge_state.call_manager.get(call_id) else {
         return;
     };
-    let Some(account) = call.billing_account.clone() else {
-        return;
-    };
     let duration_ms = answered_duration_ms(call.answered_at, call.ended_at);
     if duration_ms <= 0 {
         return;
@@ -59,35 +58,90 @@ pub(crate) fn settle_completed_call(edge_state: &EdgeState, call_id: &CallId) {
     // 结算时使用 Call 上已注入的 tenant_id，按租户查找专属费率（回退全局）。
     let tenant_id = call.tenant_id.clone();
     let call_id = call_id.as_str().to_string();
-    let redis_connection = edge_state.redis_connection();
+    let access_account = call.billing_account.clone();
+    let egress_account = call.audit.egress_billing_account.clone();
+    let access_redis = edge_state.redis_connection();
+    let egress_redis = edge_state.redis_connection();
     tokio::spawn(async move {
-        match db
-            .settle_call(
-                &call_id,
-                &account,
-                &callee,
-                duration_ms,
-                tenant_id.as_deref(),
+        if let Some(account) = access_account {
+            settle_account(
+                &db,
+                CallSettlementInput {
+                    call_id: &call_id,
+                    entry_type: "call_charge",
+                    username: &account,
+                    callee: &callee,
+                    duration_ms,
+                    tenant_id: tenant_id.as_deref(),
+                },
+                access_redis,
             )
-            .await
-        {
-            Ok(Some(balance)) => {
-                if let Some(mut connection) = redis_connection {
-                    let _: Result<(), redis::RedisError> = redis::cmd("HSET")
-                        .arg("vos_rs:billing:balances")
-                        .arg(&account)
-                        .arg(balance.to_string())
-                        .query_async(&mut connection)
-                        .await;
-                }
-                tracing::info!(%call_id, %account, %balance, "实时计费结算完成");
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(%call_id, %account, %error, "实时计费结算失败");
-            }
+            .await;
+        }
+        if let Some(account) = egress_account {
+            settle_account(
+                &db,
+                CallSettlementInput {
+                    call_id: &call_id,
+                    entry_type: "call_cost",
+                    username: &account,
+                    callee: &callee,
+                    duration_ms,
+                    tenant_id: tenant_id.as_deref(),
+                },
+                egress_redis,
+            )
+            .await;
         }
     });
+}
+
+async fn settle_account(
+    db: &PostgresCdrStore,
+    input: CallSettlementInput<'_>,
+    redis_connection: Option<redis::aio::ConnectionManager>,
+) {
+    match db.settle_call_entry(input).await {
+        Ok(Some(result)) => {
+            update_cached_balance(
+                redis_connection,
+                input.username,
+                result.balance_after.to_string(),
+            )
+            .await;
+            if let Err(error) = db
+                .update_call_billing_snapshot(
+                    input.call_id,
+                    input.entry_type,
+                    result.billed_duration_ms,
+                    result.amount.to_f64().unwrap_or(0.0),
+                )
+                .await
+            {
+                tracing::warn!(call_id = input.call_id, entry_type = input.entry_type, %error, "CDR 计费快照回写失败");
+            }
+            tracing::info!(call_id = input.call_id, account = input.username, entry_type = input.entry_type, amount = %result.amount, "实时计费结算完成");
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(call_id = input.call_id, account = input.username, entry_type = input.entry_type, %error, "实时计费结算失败")
+        }
+    }
+}
+
+async fn update_cached_balance(
+    connection: Option<redis::aio::ConnectionManager>,
+    account: &str,
+    balance: String,
+) {
+    if let Some(mut connection) = connection {
+        let _: Result<(), redis::RedisError> = redis::cmd("HSET")
+            .arg("vos_rs:billing:balances")
+            .arg(account)
+            .arg(balance)
+            .query_async(&mut connection)
+            .await;
+    }
 }
 
 #[cfg(test)]

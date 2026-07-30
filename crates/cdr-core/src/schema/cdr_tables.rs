@@ -5,10 +5,17 @@ CREATE TABLE IF NOT EXISTS call_cdrs (
     caller TEXT,
     callee TEXT,
     started_at TIMESTAMPTZ NOT NULL,
+    ringing_at TIMESTAMPTZ,
     answered_at TIMESTAMPTZ,
     ended_at TIMESTAMPTZ NOT NULL,
     duration_ms BIGINT NOT NULL,
     billable_duration_ms BIGINT NOT NULL,
+    talk_duration_ms BIGINT,
+    ringing_duration_ms BIGINT,
+    access_billable_duration_ms BIGINT,
+    access_charge_amount DOUBLE PRECISION,
+    egress_billable_duration_ms BIGINT,
+    egress_cost_amount DOUBLE PRECISION,
     status TEXT NOT NULL,
     failure_status_code INTEGER,
     failure_reason TEXT,
@@ -29,6 +36,43 @@ CREATE TABLE IF NOT EXISTS call_cdrs (
 
 pub(crate) const MIGRATE_CDR_AUDIT_SQL: &str =
     "ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS audit JSONB NOT NULL DEFAULT '{}'::jsonb";
+
+pub(crate) const MIGRATE_CDR_TIMING_BILLING_SQL: &str = r#"
+ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS ringing_at TIMESTAMPTZ;
+ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS talk_duration_ms BIGINT;
+ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS ringing_duration_ms BIGINT;
+ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS access_billable_duration_ms BIGINT;
+ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS access_charge_amount DOUBLE PRECISION;
+ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS egress_billable_duration_ms BIGINT;
+ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS egress_cost_amount DOUBLE PRECISION;
+"#;
+
+pub(crate) const MIGRATE_CDR_TENANT_REALM_SQL: &[&str] = &[
+    "ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS tenant_id TEXT",
+    "ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS tenant_name TEXT",
+    "ALTER TABLE call_cdrs ADD COLUMN IF NOT EXISTS auth_realm TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_call_cdrs_tenant ON call_cdrs (tenant_id)",
+    "CREATE INDEX IF NOT EXISTS idx_call_cdrs_realm ON call_cdrs (auth_realm)",
+];
+
+/// 回填历史 CDR 的振铃时长和通话时长。
+///
+/// - `ringing_duration_ms`：振铃时间到接通时间（未接通则到结束时间）的毫秒数
+/// - `talk_duration_ms`：接通时间到结束时间的毫秒数
+///
+/// 仅更新值为 NULL 的行，可安全重复执行。
+pub(crate) const BACKFILL_CDR_TIMING_SQL: &str = r#"
+UPDATE call_cdrs
+SET ringing_duration_ms = GREATEST(0,
+    EXTRACT(EPOCH FROM (COALESCE(answered_at, ended_at) - ringing_at)) * 1000)::BIGINT
+WHERE ringing_duration_ms IS NULL
+  AND ringing_at IS NOT NULL;
+UPDATE call_cdrs
+SET talk_duration_ms = GREATEST(0,
+    EXTRACT(EPOCH FROM (ended_at - answered_at)) * 1000)::BIGINT
+WHERE talk_duration_ms IS NULL
+  AND answered_at IS NOT NULL;
+"#;
 
 pub(crate) const CREATE_CALL_ID_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_call_cdrs_call_id ON call_cdrs (call_id)";

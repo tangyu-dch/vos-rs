@@ -22,8 +22,9 @@ import EgressGroupDetailPage from '@/pages/trunks/egress-group-detail';
 import AgentsPage from '@/pages/call-center/agents';
 import QueuesPage from '@/pages/call-center/queues';
 import IvrPage from '@/pages/call-center/ivr';
-import { AccountsPage } from '@/pages/billing/accounts';
-import { RatesPage } from '@/pages/billing/rates';
+import { AccessBillingAccountsPage } from '@/pages/billing/access-accounts';
+import { EgressBillingAccountsPage } from '@/pages/billing/egress-accounts';
+import { CreditsPage } from '@/pages/billing/credits';
 import { TransactionsPage } from '@/pages/billing/transactions';
 import { CallsPage } from '@/pages/billing/calls';
 import { RoutesPage } from '@/pages/system/routes';
@@ -248,18 +249,26 @@ function PrivateConsole() {
             }
           />
           <Route
-            path="/billing/accounts"
+            path="/billing/access-accounts"
             element={
-              <ProtectedPage path="/billing/accounts">
-                <AccountsPage />
+              <ProtectedPage path="/billing/access-accounts">
+                <AccessBillingAccountsPage />
               </ProtectedPage>
             }
           />
           <Route
-            path="/billing/rates"
+            path="/billing/egress-accounts"
             element={
-              <ProtectedPage path="/billing/rates">
-                <RatesPage />
+              <ProtectedPage path="/billing/egress-accounts">
+                <EgressBillingAccountsPage />
+              </ProtectedPage>
+            }
+          />
+          <Route
+            path="/billing/credits"
+            element={
+              <ProtectedPage path="/billing/credits">
+                <CreditsPage />
               </ProtectedPage>
             }
           />

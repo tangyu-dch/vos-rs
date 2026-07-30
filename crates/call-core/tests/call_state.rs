@@ -1,6 +1,7 @@
 use call_core::{Call, CallCdr, CallDirection, CallState, CdrAuditSnapshot, LegState};
 use sip_core::{parse_message, SipMessage, SipUri};
 use std::str::FromStr;
+use std::time::{Duration, SystemTime};
 
 #[test]
 fn creates_call_from_inbound_invite() {
@@ -112,6 +113,33 @@ fn completed_cdr_preserves_frozen_audit_context() {
     assert_eq!(cdr.audit.billing_account.as_deref(), Some("account-a"));
     assert_eq!(cdr.audit.billing_interval_secs, Some(6));
     assert_eq!(cdr.audit.price_per_interval, Some(0.05));
+}
+
+#[test]
+fn completed_cdr_captures_ringing_and_independent_billing_durations() {
+    let started_at = SystemTime::UNIX_EPOCH;
+    let mut call = routed_call();
+    call.started_at = started_at;
+    call.audit.billing_interval_secs = Some(60);
+    call.audit.price_per_interval = Some(0.5);
+    call.audit.egress_billing_interval_secs = Some(6);
+    call.audit.egress_price_per_interval = Some(0.03);
+    call.mark_ringing_at(started_at + Duration::from_secs(10))
+        .expect("call should ring");
+    call.mark_answered_at(started_at + Duration::from_secs(20))
+        .expect("call should be answered");
+    call.terminate_at(started_at + Duration::from_secs(81))
+        .expect("call should terminate");
+
+    let cdr = CallCdr::from_completed_call(&call).expect("terminated call should create CDR");
+    assert_eq!(cdr.duration, Duration::from_secs(81));
+    assert_eq!(cdr.ringing_duration, Some(Duration::from_secs(10)));
+    assert_eq!(cdr.billable_duration, Duration::from_secs(61));
+    assert_eq!(cdr.access_billable_duration, Some(Duration::from_secs(120)));
+    assert_eq!(cdr.access_charge_amount, Some(1.0));
+    assert_eq!(cdr.egress_billable_duration, Some(Duration::from_secs(66)));
+    let egress_cost = cdr.egress_cost_amount.expect("egress cost should exist");
+    assert!((egress_cost - 0.33).abs() < f64::EPSILON * 2.0);
 }
 
 #[test]

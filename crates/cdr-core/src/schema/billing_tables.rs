@@ -87,36 +87,21 @@ INSERT INTO anti_fraud_config (config_key, config_value, description) VALUES
 ON CONFLICT (config_key) DO NOTHING
 "#;
 
-pub(crate) const CREATE_BILLING_RATES_TABLE_SQL: &str = r#"
-CREATE TABLE IF NOT EXISTS billing_rates (
-    id TEXT PRIMARY KEY,
-    prefix TEXT NOT NULL,
-    rate_per_minute NUMERIC(20, 8) NOT NULL,
-    billing_interval_secs INTEGER NOT NULL DEFAULT 60 CHECK (billing_interval_secs > 0),
-    price_per_interval NUMERIC(20, 8) NOT NULL DEFAULT 0,
-    description TEXT,
-    tenant_id TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-)
-"#;
-
-/// billing_rates 添加 tenant_id 字段。
-///
-/// 可空（NULL 表示全局费率，对所有租户生效）。
-pub(crate) const MIGRATE_BILLING_RATES_TENANT_SQL: &str =
-    "ALTER TABLE billing_rates ADD COLUMN IF NOT EXISTS tenant_id TEXT";
-
-pub(crate) const CREATE_BILLING_RATES_TENANT_INDEX_SQL: &str =
-    "CREATE INDEX IF NOT EXISTS idx_billing_rates_tenant ON billing_rates (tenant_id)";
-
 pub(crate) const CREATE_BILLING_ACCOUNTS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS billing_accounts (
     id BIGSERIAL UNIQUE,
     username TEXT PRIMARY KEY,
+    account_type TEXT NOT NULL DEFAULT 'access' CHECK (account_type IN ('access', 'egress')),
     balance NUMERIC(20, 8) NOT NULL DEFAULT 0.0,
     credit_limit NUMERIC(20, 8) NOT NULL DEFAULT 0.0,
     currency TEXT NOT NULL DEFAULT 'CNY',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    billing_interval_secs INTEGER NOT NULL DEFAULT 60 CHECK (billing_interval_secs > 0),
+    price_per_interval NUMERIC(20, 8) NOT NULL DEFAULT 0,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    tenant_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at TIMESTAMPTZ
 )
 "#;
 
@@ -138,9 +123,12 @@ CREATE TABLE IF NOT EXISTS billing_ledger (
 pub(crate) const CREATE_BILLING_CREDITS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS billing_credits (
     idempotency_key TEXT PRIMARY KEY,
+    account_id BIGINT REFERENCES billing_accounts(id) ON DELETE RESTRICT,
     username TEXT NOT NULL,
     amount NUMERIC(20, 8) NOT NULL CHECK (amount > 0),
     balance_after NUMERIC(20, 8) NOT NULL,
+    operator_username TEXT NOT NULL DEFAULT 'system',
+    remark TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
@@ -148,20 +136,15 @@ CREATE TABLE IF NOT EXISTS billing_credits (
 pub(crate) const CREATE_BILLING_CREDITS_USERNAME_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_billing_credits_username ON billing_credits (username, created_at DESC)";
 
+pub(crate) const CREATE_BILLING_CREDITS_ACCOUNT_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_billing_credits_account ON billing_credits (account_id, created_at DESC)";
+
 pub(crate) const CREATE_LEDGER_USERNAME_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_billing_ledger_username ON billing_ledger (username)";
 pub(crate) const CREATE_LEDGER_CREATED_AT_INDEX_SQL: &str =
     "CREATE INDEX IF NOT EXISTS idx_billing_ledger_created_at ON billing_ledger (created_at DESC)";
 
 pub(crate) const MIGRATE_BILLING_INTERVALS_SQL: &str = r#"
-ALTER TABLE billing_rates ADD COLUMN IF NOT EXISTS billing_interval_secs INTEGER;
-ALTER TABLE billing_rates ADD COLUMN IF NOT EXISTS price_per_interval NUMERIC(20, 8);
-UPDATE billing_rates SET billing_interval_secs = 60 WHERE billing_interval_secs IS NULL;
-UPDATE billing_rates SET price_per_interval = rate_per_minute WHERE price_per_interval IS NULL;
-ALTER TABLE billing_rates ALTER COLUMN billing_interval_secs SET DEFAULT 60;
-ALTER TABLE billing_rates ALTER COLUMN billing_interval_secs SET NOT NULL;
-ALTER TABLE billing_rates ALTER COLUMN price_per_interval SET DEFAULT 0;
-ALTER TABLE billing_rates ALTER COLUMN price_per_interval SET NOT NULL;
 ALTER TABLE billing_ledger ADD COLUMN IF NOT EXISTS billing_interval_secs INTEGER;
 ALTER TABLE billing_ledger ADD COLUMN IF NOT EXISTS price_per_interval NUMERIC(20, 8);
 UPDATE billing_ledger SET billing_interval_secs = 60 WHERE billing_interval_secs IS NULL;
@@ -188,10 +171,118 @@ CREATE TABLE IF NOT EXISTS number_inventory (
 
 pub(crate) const MIGRATE_BILLING_ACCOUNTS_SQL: &[&str] = &[
     "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS id BIGSERIAL",
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'access'",
     "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(20, 8) NOT NULL DEFAULT 0.0",
     "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'CNY'",
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS billing_interval_secs INTEGER NOT NULL DEFAULT 60",
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS price_per_interval NUMERIC(20, 8) NOT NULL DEFAULT 0",
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE",
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
+    "ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS tenant_id TEXT",
+    "UPDATE billing_accounts SET account_type = 'egress' WHERE id IN (SELECT account_id FROM sip_gateways WHERE role = 'egress' AND account_id IS NOT NULL) AND id NOT IN (SELECT account_id FROM sip_gateways WHERE role = 'access' AND account_id IS NOT NULL)",
+    "ALTER TABLE billing_accounts DROP CONSTRAINT IF EXISTS billing_accounts_account_type_check",
+    "ALTER TABLE billing_accounts ADD CONSTRAINT billing_accounts_account_type_check CHECK (account_type IN ('access', 'egress')) NOT VALID",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_accounts_id ON billing_accounts (id)",
+    "CREATE INDEX IF NOT EXISTS idx_billing_accounts_type ON billing_accounts (account_type, username)",
+    "CREATE INDEX IF NOT EXISTS idx_billing_accounts_tenant ON billing_accounts (tenant_id) WHERE deleted_at IS NULL",
 ];
+
+/// 将旧的 tenants.billing_account_id 单关联迁移到 billing_accounts.tenant_id 一对多关联。
+///
+/// 仅回填 tenant_id 为空的账户，避免覆盖已显式设置的归属关系。
+pub(crate) const MIGRATE_TENANT_ACCOUNT_LINK_SQL: &str = r#"
+UPDATE billing_accounts
+SET tenant_id = tenant.id
+FROM tenants tenant
+WHERE tenant.billing_account_id = billing_accounts.id
+  AND billing_accounts.tenant_id IS NULL
+  AND billing_accounts.deleted_at IS NULL
+"#;
+
+pub(crate) const MIGRATE_BILLING_CREDITS_SQL: &str = r#"
+ALTER TABLE billing_credits ADD COLUMN IF NOT EXISTS account_id BIGINT;
+ALTER TABLE billing_credits ADD COLUMN IF NOT EXISTS operator_username TEXT NOT NULL DEFAULT 'system';
+ALTER TABLE billing_credits ADD COLUMN IF NOT EXISTS remark TEXT NOT NULL DEFAULT '';
+UPDATE billing_credits credits
+SET account_id = accounts.id
+FROM billing_accounts accounts
+WHERE credits.account_id IS NULL AND credits.username = accounts.username;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fk_billing_credits_account'
+    ) THEN
+        ALTER TABLE billing_credits
+            ADD CONSTRAINT fk_billing_credits_account
+            FOREIGN KEY (account_id) REFERENCES billing_accounts(id)
+            ON DELETE RESTRICT NOT VALID;
+    END IF;
+END $$;
+CREATE OR REPLACE FUNCTION reject_billing_credit_mutation()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'billing credit records are immutable';
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS billing_credits_immutable ON billing_credits;
+CREATE TRIGGER billing_credits_immutable
+BEFORE UPDATE OR DELETE ON billing_credits
+FOR EACH ROW EXECUTE FUNCTION reject_billing_credit_mutation();
+"#;
+
+pub(crate) const CREATE_BILLING_JOURNAL_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS billing_journal (
+    id BIGSERIAL PRIMARY KEY,
+    account_id BIGINT NOT NULL REFERENCES billing_accounts(id) ON DELETE RESTRICT,
+    account_type TEXT NOT NULL CHECK (account_type IN ('access', 'egress')),
+    entry_type TEXT NOT NULL CHECK (
+        entry_type IN ('credit', 'call_charge', 'call_cost', 'adjustment', 'refund', 'reversal')
+    ),
+    amount NUMERIC(20, 8) NOT NULL CHECK (amount <> 0),
+    balance_before NUMERIC(20, 8) NOT NULL,
+    balance_after NUMERIC(20, 8) NOT NULL,
+    call_id TEXT,
+    operator_username TEXT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    remark TEXT NOT NULL DEFAULT '',
+    idempotency_key TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"#;
+
+pub(crate) const MIGRATE_BILLING_JOURNAL_SQL: &str = r#"
+INSERT INTO billing_journal (
+    account_id, account_type, entry_type, amount, balance_before, balance_after,
+    operator_username, occurred_at, remark, idempotency_key
+)
+SELECT credits.account_id, accounts.account_type, 'credit', credits.amount,
+       credits.balance_after - credits.amount, credits.balance_after,
+       credits.operator_username, credits.created_at, credits.remark, credits.idempotency_key
+FROM billing_credits credits
+JOIN billing_accounts accounts ON accounts.id = credits.account_id
+WHERE credits.account_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM billing_journal journal
+      WHERE journal.idempotency_key = credits.idempotency_key
+  );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_journal_idempotency
+    ON billing_journal (idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_billing_journal_account_time
+    ON billing_journal (account_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_billing_journal_type_time
+    ON billing_journal (entry_type, occurred_at DESC);
+CREATE OR REPLACE FUNCTION reject_billing_journal_mutation()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'billing journal records are immutable';
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS billing_journal_immutable ON billing_journal;
+CREATE TRIGGER billing_journal_immutable
+BEFORE UPDATE OR DELETE ON billing_journal
+FOR EACH ROW EXECUTE FUNCTION reject_billing_journal_mutation();
+"#;
 
 pub(crate) const MIGRATE_NUMBER_INVENTORY_SQL: &[&str] = &[
     "ALTER TABLE number_inventory ADD COLUMN IF NOT EXISTS gateway_id TEXT",

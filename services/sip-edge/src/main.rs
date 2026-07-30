@@ -464,7 +464,7 @@ async fn main() -> Result<(), AnyError> {
                 if worker_txs[worker_idx].try_send((packet, peer)).is_err() {
                     static DROP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
                     let cnt = DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if cnt % 1000 == 0 {
+                    if cnt.is_multiple_of(1000) {
                         tracing::warn!("UDP Worker {} 队列满，丢弃入站数据包 (当前累计丢包数: {})", worker_idx, cnt);
                     }
                 }

@@ -49,10 +49,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use billing::billing::{
-    create_rate, credit_account, delete_rate, list_accounts, list_ledger, list_rates,
-    reconcile as billing_reconcile, update_rate,
-};
+use billing::operations::list_ledger;
 use billing::report::{export_cdrs_csv, get_report_summary};
 use cdr_core::PostgresCdrStore;
 use cluster::calls::{
@@ -102,13 +99,170 @@ pub(crate) struct AppState {
 }
 
 /// 管理列表统一分页参数；服务端限制单页最大 100 条，避免大响应拖慢 API。
+///
+/// `page` / `page_size` / `export` 使用自定义反序列化器以兼容
+/// `#[serde(flatten)]` 场景下 `serde_urlencoded` 传入的字符串值——
+/// 否则会出现 `invalid type: string "1", expected i64` 错误。
 #[derive(Debug, Deserialize)]
 pub(crate) struct PageQuery {
+    #[serde(default, deserialize_with = "deserialize_optional_i64_from_str")]
     pub page: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_optional_i64_from_str")]
     pub page_size: Option<i64>,
+    #[serde(default)]
     pub gateway_type: Option<String>,
+    #[serde(default)]
     pub role: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool_from_str")]
     pub export: Option<bool>,
+}
+
+/// 从查询字符串中反序列化 `Option<i64>`，兼容字符串和数字两种形式。
+///
+/// `serde_urlencoded` 在 `#[serde(flatten)]` 场景下会以字符串形式
+/// 传递查询参数，默认 `i64` 反序列化器无法接受字符串，因此需要
+/// 自定义反序列化器先尝试字符串再尝试数字。
+pub(crate) fn deserialize_optional_i64_from_str<'de, D>(
+    deserializer: D,
+) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptionalI64Visitor;
+
+    impl<'de> serde::de::Visitor<'de> for OptionalI64Visitor {
+        type Value = Option<i64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("可选的整数或整数字符串")
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            struct I64FromString;
+
+            impl<'de> serde::de::Visitor<'de> for I64FromString {
+                type Value = i64;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    formatter.write_str("整数或整数字符串")
+                }
+
+                fn visit_str<E>(self, s: &str) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    s.parse::<i64>()
+                        .map_err(|_| E::custom(format!("无法将 '{s}' 解析为整数")))
+                }
+
+                fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(v)
+                }
+
+                fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    i64::try_from(v).map_err(|_| E::custom("数字超出 i64 范围"))
+                }
+            }
+
+            let value = deserializer.deserialize_any(I64FromString)?;
+            Ok(Some(value))
+        }
+    }
+
+    deserializer.deserialize_option(OptionalI64Visitor)
+}
+
+/// 从查询字符串中反序列化 `Option<bool>`，兼容 "true"/"false" 字符串。
+pub(crate) fn deserialize_optional_bool_from_str<'de, D>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptionalBoolVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for OptionalBoolVisitor {
+        type Value = Option<bool>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("可选的布尔值或布尔字符串")
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            struct BoolFromString;
+
+            impl<'de> serde::de::Visitor<'de> for BoolFromString {
+                type Value = bool;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    formatter.write_str("布尔值或布尔字符串")
+                }
+
+                fn visit_str<E>(self, s: &str) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    match s.to_ascii_lowercase().as_str() {
+                        "true" | "1" => Ok(true),
+                        "false" | "0" | "" => Ok(false),
+                        _ => Err(E::custom(format!("无法将 '{s}' 解析为布尔值"))),
+                    }
+                }
+
+                fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(v)
+                }
+            }
+
+            let value = deserializer.deserialize_any(BoolFromString)?;
+            Ok(Some(value))
+        }
+    }
+
+    deserializer.deserialize_option(OptionalBoolVisitor)
 }
 
 #[derive(Debug, Serialize)]
@@ -455,17 +609,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/recordings/:call_id/audio", get(get_recording_audio))
         .route("/api/reports/summary", get(get_report_summary))
         .route("/api/reports/export", get(export_cdrs_csv))
-        .route("/api/rates", get(list_rates).post(create_rate))
-        .route("/api/rates/:id", put(update_rate).delete(delete_rate))
-        .route("/api/rates/import", post(import::import_rates))
-        .route(
-            "/api/rates/import-template",
-            get(import::import_rates_template),
-        )
-        .route("/api/accounts", get(list_accounts))
-        .route("/api/accounts/:username/credit", post(credit_account))
         .route("/api/ledger", get(list_ledger))
-        .route("/api/billing/reconcile", post(billing_reconcile))
         .route("/api/calls/active", get(list_active))
         .route("/api/calls/:call_id/terminate", post(calls_terminate))
         .route("/api/route-preview", get(route_preview))

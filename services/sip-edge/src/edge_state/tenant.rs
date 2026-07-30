@@ -162,13 +162,6 @@ impl EdgeState {
         ctx.and_then(|c| c.policy.recording_enabled)
             .unwrap_or(global_recording_enabled)
     }
-
-    /// 返回租户计费账户 ID（若策略指定了 per-tenant 计费账户）。
-    ///
-    /// 优先级：`TenantPolicy::billing_account_id` > per-user/per-trunk 计费账户。
-    pub(crate) fn tenant_billing_account(&self, ctx: Option<&TenantContext>) -> Option<i64> {
-        ctx.and_then(|c| c.policy.billing_account_id)
-    }
 }
 
 #[cfg(test)]

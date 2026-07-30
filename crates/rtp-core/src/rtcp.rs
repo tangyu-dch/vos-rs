@@ -129,10 +129,10 @@ impl RtcpPacket {
         validate_count(self.count)?;
 
         let total_len = RTCP_HEADER_LEN + self.payload.len() + usize::from(self.padding_len);
-        if total_len % 4 != 0 || total_len < RTCP_HEADER_LEN {
+        if !total_len.is_multiple_of(4) || total_len < RTCP_HEADER_LEN {
             return Err(RtpError::RtcpInvalidLength);
         }
-        if self.padding_len == 0 && self.payload.len() % 4 != 0 {
+        if self.padding_len == 0 && !self.payload.len().is_multiple_of(4) {
             return Err(RtpError::RtcpInvalidLength);
         }
         if self.padding_len > 0 && usize::from(self.padding_len) > total_len - RTCP_HEADER_LEN {

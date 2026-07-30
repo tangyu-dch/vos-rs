@@ -11,7 +11,7 @@ describe('通知数据规范化', () => {
       content: '商户账户即将欠费',
       timestamp: '2026-07-29T10:00:00Z',
       read: false,
-      link: '/billing/accounts',
+      link: '/billing/access-accounts',
     });
 
     expect(item).toMatchObject({
@@ -20,7 +20,7 @@ describe('通知数据规范化', () => {
       severity: 'critical',
       message: '商户账户即将欠费',
       isRead: false,
-      actionUrl: '/billing/accounts',
+      actionUrl: '/billing/access-accounts',
     });
   });
 

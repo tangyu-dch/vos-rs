@@ -60,6 +60,14 @@ export const accessTrunks: ResourceSpec = {
   fields: [
     { key: 'id', label: '中继标识', required: true, placeholder: '例如 customer-a' },
     {
+      key: 'tenant_id',
+      label: '所属租户',
+      kind: 'select',
+      optionsResource: 'tenants',
+      required: true,
+      placeholder: '必须选择开户租户',
+    },
+    {
       key: 'access_auth_mode',
       label: '认证方式',
       kind: 'select',
@@ -98,10 +106,10 @@ export const accessTrunks: ResourceSpec = {
     { key: 'max_capacity', label: '容量上限', kind: 'number', defaultValue: 100 },
     {
       key: 'account_id',
-      label: '计费账户',
+      label: '对接账户',
       kind: 'select',
-      optionsResource: 'accounts',
-      placeholder: '选择主叫扣费账户',
+      optionsResource: 'access-accounts',
+      placeholder: '选择对接扣费账户',
     },
     { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
     { key: 'host', label: '内部主机', readonly: true, defaultValue: '' },
@@ -141,9 +149,9 @@ export const egressTrunks: ResourceSpec = {
     { key: 'max_capacity', label: '容量上限', kind: 'number', defaultValue: 100 },
     {
       key: 'account_id',
-      label: '计费账户',
+      label: '落地账户',
       kind: 'select',
-      optionsResource: 'accounts',
+      optionsResource: 'egress-accounts',
       placeholder: '选择落地成本/扣费账户',
     },
     { key: 'enabled', label: '启用状态', kind: 'switch', defaultValue: true },
@@ -214,142 +222,6 @@ export const numbers: ResourceSpec = {
       ],
       defaultValue: 'available',
     },
-  ],
-};
-
-export const accounts: ResourceSpec = {
-  title: '计费账户',
-  description: '查看余额、授信额度、币种、账户可用状态及关联租户。',
-  path: '/billing/accounts',
-  idKey: 'username',
-  readOnly: true,
-  action: 'credit',
-  serverFilters: [{ param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索账户名...' }],
-  fields: [
-    { key: 'username', label: '账户' },
-    { key: 'balance', label: '余额', kind: 'number' },
-    { key: 'credit_limit', label: '授信额度', kind: 'number' },
-    { key: 'currency', label: '币种' },
-    { key: 'associated_tenants_summary', label: '关联租户', readonly: true },
-    { key: 'created_at', label: '创建时间', readonly: true, kind: 'datetime' },
-  ],
-};
-
-export const rates: ResourceSpec = {
-  title: '费率管理',
-  description: '按号码前缀配置计费周期与周期价格。',
-  path: '/billing/rates',
-  idKey: 'id',
-  createLabel: '新建费率',
-  serverFilters: [
-    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索前缀 / 说明...' },
-    { param: 'tenant_id', label: '所属商户', kind: 'select', optionsResource: 'tenants' },
-  ],
-  fields: [
-    { key: 'id', label: '费率 ID', required: true },
-    { key: 'prefix', label: '号码前缀', placeholder: '留空表示默认费率' },
-    {
-      key: 'tenant_id',
-      label: '所属商户',
-      kind: 'select',
-      optionsResource: 'tenants',
-      placeholder: '留空为全局费率',
-    },
-    {
-      key: 'billing_interval_secs',
-      label: '计费周期（秒）',
-      kind: 'number',
-      min: 1,
-      required: true,
-      defaultValue: 60,
-    },
-    {
-      key: 'price_per_interval',
-      label: '周期价格（元）',
-      kind: 'number',
-      min: 0.001,
-      required: true,
-      defaultValue: 0.5,
-    },
-    { key: 'rate_per_minute', label: '等效每分钟费率（元）', readonly: true, kind: 'number' },
-    { key: 'description', label: '说明', kind: 'textarea', fullWidth: true },
-    { key: 'created_at', label: '创建时间', readonly: true, kind: 'datetime' },
-  ],
-};
-
-export const transactions: ResourceSpec = {
-  title: '账务流水',
-  description: '按通话追踪扣费、余额变化和处理结果。',
-  path: '/billing/transactions',
-  idKey: 'id',
-  readOnly: true,
-  serverFilters: [
-    { param: 'username', label: '账户', kind: 'select', optionsResource: 'accounts' },
-    { param: 'call_id', label: '搜索', kind: 'keyword', placeholder: '按通话 ID 过滤...' },
-    {
-      param: 'time',
-      label: '发生时间',
-      kind: 'dateRange',
-      startParam: 'start_time',
-      endParam: 'end_time',
-    },
-  ],
-  fields: [
-    { key: 'id', label: '流水号' },
-    { key: 'call_id', label: '通话 ID' },
-    { key: 'username', label: '账户' },
-    { key: 'duration_ms', label: '计费时长（秒）', kind: 'duration' },
-    { key: 'billing_interval_secs', label: '计费周期（秒）' },
-    { key: 'price_per_interval', label: '周期价格（元）' },
-    { key: 'amount', label: '金额（元）' },
-    { key: 'balance_after', label: '余额（元）' },
-    { key: 'created_at', label: '发生时间', kind: 'datetime' },
-  ],
-};
-
-export const calls: ResourceSpec = {
-  title: '通话记录',
-  description: '查询呼叫结果、时长、路由和媒体质量。',
-  path: '/calls',
-  idKey: 'call_id',
-  detailPath: '/calls',
-  readOnly: true,
-  serverFilters: [
-    {
-      param: 'call_id',
-      label: '搜索',
-      kind: 'keyword',
-      placeholder: '搜索通话 ID / 主叫 / 被叫...',
-    },
-    {
-      param: 'status',
-      label: '通话结果',
-      kind: 'status',
-      options: [
-        { label: '全部', value: '' },
-        { label: '已接通', value: 'answered' },
-        { label: '未接通', value: 'failed' },
-        { label: '已取消', value: 'canceled' },
-        { label: '忙线', value: 'busy' },
-        { label: '无应答', value: 'no_answer' },
-      ],
-    },
-    {
-      param: 'time',
-      label: '呼叫时间',
-      kind: 'dateRange',
-      startParam: 'start_time',
-      endParam: 'end_time',
-    },
-  ],
-  fields: [
-    { key: 'call_id', label: '通话 ID' },
-    { key: 'caller', label: '主叫' },
-    { key: 'callee', label: '被叫' },
-    { key: 'direction', label: '方向' },
-    { key: 'status', label: '结果' },
-    { key: 'duration_ms', label: '时长（秒）', kind: 'duration' },
-    { key: 'started_at_ms', label: '开始时间' },
   ],
 };
 
@@ -560,7 +432,7 @@ export const ivrMenus: ResourceSpec = {
 
 export const tenants: ResourceSpec = {
   title: '租户管理',
-  description: '维护多租户隔离策略、并发和每秒呼叫上限、网关白名单与统一计费账户关联。',
+  description: '维护多租户隔离策略、并发和每秒呼叫上限、网关白名单与关联对接计费账户。',
   path: '/tenants',
   idKey: 'id',
   createLabel: '新建租户',
@@ -571,7 +443,7 @@ export const tenants: ResourceSpec = {
   fields: [
     { key: 'name', label: '租户名称', required: true, placeholder: '例如 客户A-售前中心' },
     { key: 'domain', label: '租户域', required: true, placeholder: '例如 tenant-a.example.com' },
-    { key: 'billing_account_summary', label: '关联计费账户', readonly: true },
+    { key: 'billing_summary', label: '计费状态', readonly: true, formHidden: true },
     { key: 'max_concurrent_calls', label: '最大并发', kind: 'number', defaultValue: 100, min: 0 },
     { key: 'max_cps', label: '每秒呼叫上限', kind: 'number', defaultValue: 10, min: 0 },
     {
@@ -590,12 +462,5 @@ export const tenants: ResourceSpec = {
     // 以下字段仅在编辑表单中显示，不作为表格列（visibleFields 截断后不显示）
     { key: 'id', label: '租户 ID', readonly: true, placeholder: '创建后由系统生成 UUID' },
     { key: 'recording_enabled', label: '启用录音', kind: 'switch', defaultValue: true },
-    {
-      key: 'billing_account_id',
-      label: '计费账户',
-      kind: 'select',
-      optionsResource: 'accounts',
-      placeholder: '选择租户统一计费账户',
-    },
   ],
 };

@@ -20,21 +20,22 @@ pub(crate) async fn handle_register_request(
         .authorization_username(&request)
         .unwrap_or_default();
     let is_trunk = edge_state.is_registered_access_username(&username);
+    let realm = edge_state.resolve_auth_realm(&request).await;
     let auth_res = edge_state
-        .verify_sip_auth(&edge_config.auth, &request, is_trunk)
+        .verify_sip_auth(&edge_config.auth, &request, is_trunk, realm.as_deref())
         .await;
     match auth_res {
         AuthDecision::Challenge => {
             return vec![PendingDatagram::new(
                 peer.to_string(),
-                unauthorized_for_request(&request, &edge_config.auth),
+                unauthorized_for_request(&request, &edge_config.auth, realm.as_deref()),
             )];
         }
         AuthDecision::ChallengeWithFailure => {
             edge_state.sbc_engine.register_auth_failure(peer.ip());
             return vec![PendingDatagram::new(
                 peer.to_string(),
-                unauthorized_for_request(&request, &edge_config.auth),
+                unauthorized_for_request(&request, &edge_config.auth, realm.as_deref()),
             )];
         }
         _ => {}
@@ -142,9 +143,13 @@ fn registration_transport(request: &SipRequest) -> Option<&'static str> {
     }
 }
 
-fn unauthorized_for_request(request: &SipRequest, auth_config: &AuthConfig) -> Vec<u8> {
+fn unauthorized_for_request(
+    request: &SipRequest,
+    auth_config: &AuthConfig,
+    realm_override: Option<&str>,
+) -> Vec<u8> {
     let nonce = auth_config.select_nonce();
-    let challenge = auth_config.challenge_header_with_nonce(&nonce);
+    let challenge = auth_config.challenge_header_with_nonce_and_realm(&nonce, realm_override);
     response::build_response_with_owned_headers(
         request,
         401,

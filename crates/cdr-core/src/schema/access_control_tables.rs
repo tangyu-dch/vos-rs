@@ -149,18 +149,22 @@ INSERT INTO access_permissions (permission_key, name, group_name, description) V
 ('ivr.update', '编辑导航', '呼叫中心', '编辑语音导航'),
 ('ivr.delete', '删除导航', '呼叫中心', '删除语音导航'),
 ('ivr.prompts', '管理提示', '呼叫中心', '管理语音提示文件'),
-('billing.accounts.view', '查看账户', '计费账务', '查看计费账户'),
-('billing.accounts.export', '导出账户', '计费账务', '导出计费账户'),
-('billing.accounts.credit', '账户充值', '计费账务', '调整计费账户余额'),
-('billing.rates.view', '查看费率', '计费账务', '查看费率'),
-('billing.rates.create', '新建费率', '计费账务', '新建费率'),
-('billing.rates.update', '编辑费率', '计费账务', '编辑费率'),
-('billing.rates.delete', '删除费率', '计费账务', '删除费率'),
-('billing.rates.import', '导入费率', '计费账务', '批量导入费率'),
-('billing.rates.export', '导出费率', '计费账务', '导出费率'),
+('billing.access_accounts.view', '查看对接账户', '计费账务', '查看对接账户'),
+('billing.access_accounts.create', '新建对接账户', '计费账务', '新建对接账户'),
+('billing.access_accounts.update', '编辑对接账户', '计费账务', '编辑对接账户'),
+('billing.access_accounts.delete', '删除对接账户', '计费账务', '删除对接账户'),
+('billing.access_accounts.credit', '充值对接账户', '计费账务', '向对接账户充值'),
+('billing.access_accounts.export', '导出对接账户', '计费账务', '导出对接账户'),
+('billing.egress_accounts.view', '查看落地账户', '计费账务', '查看落地账户'),
+('billing.egress_accounts.create', '新建落地账户', '计费账务', '新建落地账户'),
+('billing.egress_accounts.update', '编辑落地账户', '计费账务', '编辑落地账户'),
+('billing.egress_accounts.delete', '删除落地账户', '计费账务', '删除落地账户'),
+('billing.egress_accounts.credit', '充值落地账户', '计费账务', '向落地账户充值'),
+('billing.egress_accounts.export', '导出落地账户', '计费账务', '导出落地账户'),
+('billing.credits.view', '查看充值流水', '计费账务', '查看充值及账务流水'),
+('billing.credits.export', '导出充值流水', '计费账务', '导出充值及账务流水'),
 ('billing.ledger.view', '查看流水', '计费账务', '查看账务流水'),
 ('billing.ledger.export', '导出流水', '计费账务', '导出账务流水'),
-('billing.reconcile', '账务对账', '计费账务', '执行账务对账'),
 ('security.view', '查看安全', '系统安全', '查看反欺诈规则和安全事件'),
 ('security.manage', '管理安全', '系统安全', '管理反欺诈规则和安全事件'),
 ('security.audit', '查看审计', '系统安全', '查看接口审计日志'),
@@ -238,13 +242,14 @@ SELECT seeds.role_key, seeds.permission_key FROM (VALUES
 ('financier', 'notifications.read'), ('financier', 'calls.view'),
 ('financier', 'announcements.view'),
 ('financier', 'calls.export'), ('financier', 'registrations.view'),
-('financier', 'billing.accounts.view'), ('financier', 'billing.accounts.credit'),
-('financier', 'billing.accounts.export'),
-('financier', 'billing.rates.view'), ('financier', 'billing.rates.create'),
-('financier', 'billing.rates.update'), ('financier', 'billing.rates.delete'),
-('financier', 'billing.rates.import'), ('financier', 'billing.rates.export'),
-('financier', 'billing.ledger.view'), ('financier', 'billing.ledger.export'),
-('financier', 'billing.reconcile')
+('financier', 'billing.access_accounts.view'), ('financier', 'billing.access_accounts.create'),
+('financier', 'billing.access_accounts.update'), ('financier', 'billing.access_accounts.delete'),
+('financier', 'billing.access_accounts.credit'), ('financier', 'billing.access_accounts.export'),
+('financier', 'billing.egress_accounts.view'), ('financier', 'billing.egress_accounts.create'),
+('financier', 'billing.egress_accounts.update'), ('financier', 'billing.egress_accounts.delete'),
+('financier', 'billing.egress_accounts.credit'), ('financier', 'billing.egress_accounts.export'),
+('financier', 'billing.credits.view'), ('financier', 'billing.credits.export'),
+('financier', 'billing.ledger.view'), ('financier', 'billing.ledger.export')
 ) AS seeds(role_key, permission_key)
 JOIN access_roles roles ON roles.role_key = seeds.role_key
 ON CONFLICT (role_key, permission_key) DO NOTHING
@@ -286,6 +291,30 @@ FROM legacy_roles CROSS JOIN (VALUES
 ) AS permissions(permission_key)
 ON CONFLICT (role_key, permission_key) DO NOTHING
 "#,
+    r#"
+DELETE FROM access_role_permissions
+WHERE permission_key IN (
+    'billing.accounts.view', 'billing.accounts.export', 'billing.accounts.credit',
+    'billing.reconcile'
+)
+"#,
+    "DELETE FROM access_menu_items WHERE item_key = 'accounts'",
+    r#"
+DELETE FROM access_permissions
+WHERE permission_key IN (
+    'billing.accounts.view', 'billing.accounts.export', 'billing.accounts.credit',
+    'billing.reconcile'
+)
+"#,
+    r#"
+DELETE FROM access_role_permissions
+WHERE permission_key LIKE 'billing.rates.%'
+"#,
+    "DELETE FROM access_menu_items WHERE item_key = 'rates'",
+    r#"
+DELETE FROM access_permissions
+WHERE permission_key LIKE 'billing.rates.%'
+"#,
 ];
 
 pub(crate) const SEED_MENU_GROUPS_SQL: &str = r#"
@@ -323,14 +352,15 @@ INSERT INTO access_menu_items
 ('queues', 'call_center', '呼叫队列', '/queues', 'grid', 'queues.view', 20),
 ('agents', 'call_center', '座席监控', '/agents', 'users', 'agents.view', 30),
 ('calls', 'analytics', '通话记录', '/calls', 'phone', 'calls.view', 10),
-('accounts', 'billing', '计费账户', '/billing/accounts', 'users', 'billing.accounts.view', 10),
-('rates', 'billing', '费率管理', '/billing/rates', 'grid', 'billing.rates.view', 20),
-('transactions', 'billing', '账务流水', '/billing/transactions', 'book', 'billing.ledger.view', 30),
+('access_billing_accounts', 'billing', '对接账户', '/billing/access-accounts', 'users', 'billing.access_accounts.view', 10),
+('egress_billing_accounts', 'billing', '落地账户', '/billing/egress-accounts', 'users', 'billing.egress_accounts.view', 20),
+('billing_credits', 'billing', '充值记录', '/billing/credits', 'book', 'billing.credits.view', 30),
+('transactions', 'billing', '账务流水', '/billing/transactions', 'book', 'billing.ledger.view', 50),
 ('security', 'security', '安全策略', '/security', 'shield', 'security.view', 10),
 ('infrastructure', 'security', '集群节点', '/infrastructure', 'alert', 'infrastructure.view', 20),
 ('tenants', 'security', '租户管理', '/tenants', 'building', 'tenants.view', 30),
 ('llm', 'security', '模型配置', '/settings/llm', 'cpu', 'llm.view', 40),
-('access_control', 'security', '账户管理', '/access-control/accounts', 'users', 'access.accounts.view', 50),
+('access_control', 'security', '用户管理', '/access-control/accounts', 'users', 'access.accounts.view', 50),
 ('role_permissions', 'security', '角色权限', '/access-control/roles', 'key', 'access.roles.view', 60),
 ('settings', 'security', '系统设置', '/settings', 'settings', 'settings.view', 70)
 ON CONFLICT (item_key) DO UPDATE SET
@@ -338,3 +368,6 @@ group_key = EXCLUDED.group_key, label = EXCLUDED.label, path = EXCLUDED.path,
 icon_key = EXCLUDED.icon_key, permission_key = EXCLUDED.permission_key,
 sort_order = EXCLUDED.sort_order
 "#;
+
+pub(crate) const REMOVE_LEGACY_BILLING_ACCOUNT_MENU_SQL: &str =
+    "DELETE FROM access_menu_items WHERE item_key = 'accounts'";

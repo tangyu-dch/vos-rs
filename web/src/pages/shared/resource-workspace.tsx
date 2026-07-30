@@ -88,16 +88,29 @@ const moneyFields = new Set([
   'amount',
   'balance_after',
   'cost',
+  'access_amount',
+  'egress_cost',
+  'balance_before',
+  'access_charge_amount',
+  'egress_cost_amount',
 ]);
 
+/** 按点号分隔的 key 从嵌套对象中取值，例如 getNestedValue(row, 'audit.ingress_trunk_id')。 */
+function getNestedValue(source: Entity, key: string): unknown {
+  return key.split('.').reduce<unknown>((acc, segment) => {
+    if (acc && typeof acc === 'object') {
+      return (acc as Record<string, unknown>)[segment];
+    }
+    return undefined;
+  }, source);
+}
+
 function resourcePermission(spec: ResourceSpec, action: string): string {
-  if (spec.path === '/billing/accounts') {
-    if (action === 'credit') return 'billing.accounts.credit';
-    return action === 'export' ? 'billing.accounts.export' : 'billing.accounts.view';
-  }
+  if (spec.path === '/billing/access-accounts') return `billing.access_accounts.${action}`;
+  if (spec.path === '/billing/egress-accounts') return `billing.egress_accounts.${action}`;
+  if (spec.path === '/billing/credits') return `billing.credits.${action}`;
   if (spec.path === '/billing/transactions')
     return action === 'export' ? 'billing.ledger.export' : 'billing.ledger.view';
-  if (spec.path === '/billing/rates') return `billing.rates.${action}`;
   if (spec.path.startsWith('/routing')) return `routing.${action}`;
   if (spec.path === '/extensions') return `extensions.${action}`;
   if (spec.path === '/numbers') return `numbers.${action}`;
@@ -220,6 +233,36 @@ export function FormControl({
       </Select>
     );
   }
+  if (field.kind === 'multiselect') {
+    const options = (field.options || []).map((option) =>
+      typeof option === 'string' ? { label: option, value: option } : option,
+    );
+    const selected = Array.isArray(value)
+      ? value.map((item) => String(item))
+      : value !== undefined && value !== null && value !== ''
+        ? [String(value)]
+        : [];
+    return (
+      <Select
+        variant="bordered"
+        isDisabled={disabled}
+        placeholder={field.placeholder ?? '可选择多项，留空表示暂不关联'}
+        selectionMode="multiple"
+        selectedKeys={new Set(selected)}
+        onSelectionChange={(keys) => {
+          if (keys === 'all') {
+            onChange(options.map((option) => option.value));
+          } else {
+            onChange(Array.from(keys));
+          }
+        }}
+      >
+        {options.map((option) => (
+          <SelectItem key={option.value}>{option.label}</SelectItem>
+        ))}
+      </Select>
+    );
+  }
   if (field.kind === 'secret') {
     return (
       <Input
@@ -269,15 +312,14 @@ export function resourceFormValues(spec: ResourceSpec, row: Entity | null): Enti
       };
     }
     if (spec.path === '/tenants') {
-      // 后端返回 { tenant: {...}, billing_account }，平铺 tenant 字段并提取计费账户摘要
-      const tenant = (row.tenant as Entity | undefined) ?? {};
-      const billingAccount = row.billing_account as Entity | undefined;
-      return {
-        ...tenant,
-        billing_account_summary: billingAccount
-          ? `${billingAccount.username} (余额: ¥${billingAccount.balance ?? 0})`
-          : '—',
-      };
+      // 后端 TenantListItem 使用 #[serde(flatten)]，响应为平铺结构（无嵌套 tenant 对象）
+      // billing_account 为展示用对象，在 resourceSaveValues 中会被剔除，不回传后端
+      return { ...row };
+    }
+    if (spec.path === '/billing/access-accounts' || spec.path === '/billing/egress-accounts') {
+      // 后端列表返回 trunk_ids（关联中继 ID 数组），表单字段为 gateway_ids
+      const trunkIds = Array.isArray(row.trunk_ids) ? row.trunk_ids : [];
+      return { ...row, gateway_ids: trunkIds.map((id) => String(id)) };
     }
     return { ...row };
   }
@@ -337,7 +379,29 @@ export function resourceSaveValues(spec: ResourceSpec, values: Entity, editing: 
   }
   // 移除仅用于展示的关联摘要字段，避免回传后端
   delete result.billing_account_summary;
+  delete result.billing_account;
   delete result.associated_tenants_summary;
+  delete result.associated_gateways_summary;
+  if (['/billing/access-accounts', '/billing/egress-accounts'].includes(spec.path)) {
+    delete result.id;
+    delete result.balance;
+    delete result.account_type;
+    delete result.created_at;
+    delete result.updated_at;
+    // 移除后端列表返回的展示字段，避免回传
+    delete result.trunk_id;
+    delete result.trunk_ids;
+    delete result.tenant_id;
+    delete result.name;
+    // 确保 gateway_ids 为字符串数组
+    if (Array.isArray(result.gateway_ids)) {
+      result.gateway_ids = result.gateway_ids
+        .map((id) => String(id).trim())
+        .filter((id) => id !== '');
+    } else if (result.gateway_ids === undefined || result.gateway_ids === null) {
+      result.gateway_ids = [];
+    }
+  }
   if (!editing) return result;
   spec.fields
     .filter((field) => field.kind === 'secret' && field.preserveEmptyOnEdit)
@@ -495,6 +559,7 @@ export function ResourceWorkspace({
   const [actionRow, setActionRow] = useState<Entity | null>(null);
   const [actionIdempotencyKey, setActionIdempotencyKey] = useState('');
   const [amount, setAmount] = useState<number>(100);
+  const [creditRemark, setCreditRemark] = useState('');
   const [fieldOptions, setFieldOptions] = useState<Record<string, SelectOptionSpec[]>>({});
   const [confirmRow, setConfirmRow] = useState<Entity | null>(null);
   const [detailModalRow, setDetailModalRow] = useState<Entity | null>(null);
@@ -520,15 +585,19 @@ export function ResourceWorkspace({
           ...serverParams,
         };
         if (spec.path === '/extensions') {
-          const [result, regRes, sysRes] = await Promise.all([
+          const [result, regRes, sysRes, tenantsRes] = await Promise.all([
             listResource(spec.path, baseParams),
             api.get<{ items: Entity[] }>('/registrations').catch(() => ({ items: [] as Entity[] })),
             api
               .get<{ configs?: Record<string, string> }>('/infrastructure/settings')
               .catch(() => ({ configs: {} })),
+            api.get<{ items: Entity[] }>('/tenants').catch(() => ({ items: [] as Entity[] })),
           ]);
           const onlineAors = new Set((regRes.items || []).map((r) => String(r.aor ?? '')));
           const sysRealm = (sysRes?.configs as Record<string, string>)?.realm || 'vos-rs (默认)';
+          const tenantMap = new Map<string, string>(
+            (tenantsRes.items || []).map((t) => [String(t.id), String(t.domain || t.name || '')]),
+          );
           const items = (result.items || []).map((user) => {
             const u = String(user.username ?? '');
             const isOnline =
@@ -536,10 +605,17 @@ export function ResourceWorkspace({
               Array.from(onlineAors).some(
                 (aor) => aor.includes(`:${u}@`) || aor.includes(`:${u};`) || aor.endsWith(`:${u}`),
               );
+            const tenantId = user.tenant_id ? String(user.tenant_id) : '';
+            const tenantDomain = tenantId ? tenantMap.get(tenantId) : undefined;
+            const displayRealm = user.realm
+              ? String(user.realm)
+              : tenantDomain
+                ? tenantDomain
+                : sysRealm;
             return {
               ...user,
               sip_domain: user.sip_domain || '127.0.0.1:5060',
-              realm: user.realm ? String(user.realm) : `${sysRealm} (继承系统)`,
+              realm: displayRealm,
               registration_status: isOnline ? 'registered' : 'unregistered',
             };
           });
@@ -549,16 +625,37 @@ export function ResourceWorkspace({
             result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 },
           );
         } else if (spec.path === '/tenants') {
-          // 租户列表：后端返回 { tenant, billing_account }，平铺 tenant 字段为行数据
+          // 租户列表：后端 TenantListItem 使用 #[serde(flatten)]，响应为平铺结构。
+          // billing_summary 为关联对接账户的聚合摘要对象，直接保留供 renderCell 渲染。
+          const result = await listResource(spec.path, baseParams);
+          const items = result.items || [];
+          const filtered = applyClientFilters(spec, items, debouncedFilters);
+          setRows(filtered);
+          setPagination(
+            result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 },
+          );
+        } else if (['/billing/access-accounts', '/billing/egress-accounts'].includes(spec.path)) {
+          // 计费账户列表：后端返回 associated_tenants 数组，平铺为展示字段
           const result = await listResource(spec.path, baseParams);
           const items = (result.items || []).map((row) => {
-            const tenant = (row.tenant as Entity | undefined) ?? {};
-            const billingAccount = row.billing_account as Entity | undefined;
+            const tenants = Array.isArray(row.associated_tenants)
+              ? (row.associated_tenants as Entity[])
+              : [];
+            const gateways = Array.isArray(row.associated_gateways)
+              ? (row.associated_gateways as Entity[])
+              : [];
+            const gatewayId = row.gateway_id ?? gateways[0]?.id;
             return {
-              ...tenant,
-              billing_account_summary: billingAccount
-                ? `${billingAccount.username} (余额: ¥${billingAccount.balance ?? 0})`
-                : '—',
+              ...row,
+              gateway_id: gatewayId,
+              associated_tenants_summary:
+                tenants.length > 0
+                  ? tenants.map((t) => String(t.name ?? t.id ?? '')).join('、')
+                  : '—',
+              associated_gateways_summary:
+                gateways.length > 0
+                  ? gateways.map((gateway) => String(gateway.name ?? gateway.id ?? '')).join('、')
+                  : valueText(gatewayId),
             };
           });
           const filtered = applyClientFilters(spec, items, debouncedFilters);
@@ -566,25 +663,20 @@ export function ResourceWorkspace({
           setPagination(
             result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 },
           );
-        } else if (spec.path === '/billing/accounts') {
-          // 计费账户列表：后端返回 associated_tenants 数组，平铺为展示字段
+        } else if (['/billing/transactions', '/billing/credits'].includes(spec.path)) {
           const result = await listResource(spec.path, baseParams);
-          const items = (result.items || []).map((row) => {
-            const tenants = Array.isArray(row.associated_tenants)
-              ? (row.associated_tenants as Entity[])
-              : [];
-            return {
+          const items = applyClientFilters(
+            spec,
+            (result.items || []).map((row) => ({
               ...row,
-              associated_tenants_summary:
-                tenants.length > 0
-                  ? tenants.map((t) => String(t.name ?? t.id ?? '')).join('、')
-                  : '—',
-            };
-          });
-          const filtered = applyClientFilters(spec, items, debouncedFilters);
-          setRows(filtered);
+              created_at: row.created_at ?? row.occurred_at,
+              transaction_type: row.transaction_type ?? row.entry_type ?? 'call_charge',
+            })),
+            debouncedFilters,
+          );
+          setRows(items);
           setPagination(
-            result.pagination || { page, page_size: 20, total: filtered.length, total_pages: 1 },
+            result.pagination || { page, page_size: 20, total: items.length, total_pages: 1 },
           );
         } else {
           const result = await listResource(spec.path, baseParams);
@@ -717,8 +809,14 @@ export function ResourceWorkspace({
 
   useEffect(() => {
     const needsEgress = spec.fields.some((field) => field.optionsResource === 'egress-trunks');
+    const needsAccess = spec.fields.some((field) => field.optionsResource === 'access-trunks');
     const needsSource = spec.fields.some((field) => field.optionsResource === 'allocation-source');
-    const needsAccounts = spec.fields.some((field) => field.optionsResource === 'accounts');
+    const needsAccessAccounts = spec.fields.some(
+      (field) => field.optionsResource === 'access-accounts',
+    );
+    const needsEgressAccounts = spec.fields.some(
+      (field) => field.optionsResource === 'egress-accounts',
+    );
     const needsTenants = spec.fields.some((field) => field.optionsResource === 'tenants');
     // 筛选器也需要加载动态选项（tenants / accounts）
     const filterNeedsTenants = (spec.serverFilters || []).some(
@@ -728,14 +826,18 @@ export function ResourceWorkspace({
       (f) => f.optionsResource === 'accounts',
     );
     const wantEgress = needsEgress;
+    const wantAccess = needsAccess;
     const wantSource = needsSource;
-    const wantAccounts = needsAccounts || filterNeedsAccounts;
+    const wantAccounts = needsAccessAccounts || needsEgressAccounts || filterNeedsAccounts;
+    const accountsPath = needsEgressAccounts
+      ? '/billing/egress-accounts'
+      : '/billing/access-accounts';
     const wantTenants = needsTenants || filterNeedsTenants;
-    if (!wantEgress && !wantSource && !wantAccounts && !wantTenants) return;
+    if (!wantEgress && !wantAccess && !wantSource && !wantAccounts && !wantTenants) return;
     void Promise.all([
-      wantEgress || wantSource ? listOptions('/trunks') : Promise.resolve([]),
+      wantEgress || wantAccess || wantSource ? listOptions('/trunks') : Promise.resolve([]),
       wantSource ? listOptions('/extensions') : Promise.resolve([]),
-      wantAccounts ? listOptions('/billing/accounts') : Promise.resolve([]),
+      wantAccounts ? listOptions(accountsPath) : Promise.resolve([]),
       wantTenants ? listOptions('/tenants') : Promise.resolve([]),
     ])
       .then(([trunks, extensions, accounts, tenants]) =>
@@ -764,13 +866,22 @@ export function ResourceWorkspace({
             value: String(acc.username),
           })),
           tenant_id: tenants.map((item) => {
-            // 后端 /tenants 列表返回 { tenant: {...}, billing_account }，需提取嵌套租户对象
-            const tenant = (item.tenant as Entity | undefined) ?? item;
+            // 后端 TenantListItem 使用 #[serde(flatten)]，响应为平铺结构
             return {
-              label: String(tenant.name ?? tenant.id ?? item.id ?? ''),
-              value: String(tenant.id ?? item.id ?? ''),
+              label: String(item.name ?? item.id ?? ''),
+              value: String(item.id ?? ''),
             };
           }),
+          gateway_ids: trunks
+            .filter((item) =>
+              wantAccess
+                ? trunkRole(item) === 'access' && Boolean(item.tenant_id)
+                : trunkRole(item) === 'egress',
+            )
+            .map((item) => ({
+              label: String(item.name ?? item.id),
+              value: String(item.id),
+            })),
         }),
       )
       .catch(() =>
@@ -782,6 +893,7 @@ export function ResourceWorkspace({
           billing_account_id: [],
           username: [],
           tenant_id: [],
+          gateway_ids: [],
         }),
       );
   }, [spec.path]);
@@ -877,7 +989,7 @@ export function ResourceWorkspace({
       setEditing(undefined);
       await load();
     } catch (reason) {
-      if (reason instanceof Error) message.error(reason.message);
+      message.error(reason instanceof Error ? reason.message : '操作失败');
     } finally {
       setSaving(false);
     }
@@ -897,12 +1009,13 @@ export function ResourceWorkspace({
       setSaving(true);
       await api.post(
         `${spec.path}/${encodeURIComponent(entityId(actionRow, spec.idKey))}/credit`,
-        { amount },
+        { amount, remark: creditRemark.trim() },
         { headers: { 'Idempotency-Key': actionIdempotencyKey } },
       );
       message.success('充值成功');
       setActionRow(null);
       setActionIdempotencyKey('');
+      setCreditRemark('');
       await load();
     } catch (reason) {
       message.error(reason instanceof Error ? reason.message : '操作失败');
@@ -916,8 +1029,11 @@ export function ResourceWorkspace({
   const hasActiveFilter = hasServerFilter || hasClientFilter;
 
   const visibleFields = spec.fields
-    .filter((field) => !field.showWhen || rows.some((row) => field.showWhen!(row)))
-    .slice(0, 7);
+    .filter(
+      (field) =>
+        !field.tableHidden && (!field.showWhen || rows.some((row) => field.showWhen!(row))),
+    )
+    .slice(0, spec.tableFieldLimit ?? 7);
 
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
   const toggleSecretVisibility = (rowKey: string, fieldKey: string) => {
@@ -926,7 +1042,36 @@ export function ResourceWorkspace({
   };
 
   const renderCell = (row: Entity, field: FieldSpec) => {
-    let value = row[field.key];
+    let value = field.key.includes('.') ? getNestedValue(row, field.key) : row[field.key];
+    // 租户计费摘要：后端返回 billing_summary 对象，展示总余额、账户数与欠费状态
+    if (field.key === 'billing_summary') {
+      const summary = value as
+        | {
+            total_balance?: number | string;
+            overdue_count?: number;
+            account_count?: number;
+            status?: string;
+          }
+        | undefined;
+      if (!summary || !summary.account_count) {
+        return <span className="text-default-400">未关联账户</span>;
+      }
+      const status = summary.status ?? 'normal';
+      const color = status === 'overdue' ? 'danger' : status === 'normal' ? 'success' : 'default';
+      const balance = Number(summary.total_balance ?? 0).toFixed(2);
+      return (
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-tiny">余额 ¥{balance}</span>
+          <span className="text-tiny text-default-400">
+            {summary.account_count} 个账户
+            {summary.overdue_count ? ` · ${summary.overdue_count} 个欠费` : ''}
+          </span>
+          <Chip size="sm" variant="flat" color={color}>
+            {status === 'overdue' ? '欠费' : status === 'normal' ? '正常' : '无账户'}
+          </Chip>
+        </div>
+      );
+    }
     if (field.key === 'registration_status') {
       const registered = value === 'registered';
       return (
@@ -950,11 +1095,7 @@ export function ResourceWorkspace({
     if (field.key === 'tenant_id') {
       // 所属商户：空值显示"全局费率"（费率）或"全局"（分机），有值显示商户名称
       if (value === undefined || value === null || value === '') {
-        return (
-          <span className="text-default-400">
-            {spec.path === '/billing/rates' ? '全局费率' : '全局'}
-          </span>
-        );
+        return <span className="text-default-400">全局</span>;
       }
       const tenantOptions = fieldOptions.tenant_id || [];
       const matched = tenantOptions.find((option) => option.value === String(value));
@@ -1006,7 +1147,11 @@ export function ResourceWorkspace({
     else if (field.kind === 'duration') text = durationSecondsText(value);
     else if (field.kind === 'datetime') text = datetimeText(value);
     else if (moneyFields.has(field.key)) text = moneyText(value);
-    else if (field.kind === 'select') {
+    else if (Array.isArray(value)) {
+      // 数组字段（如 trunk_ids）展示为逗号分隔的列表
+      const items = value.map((item) => String(item)).filter((item) => item !== '');
+      text = items.length > 0 ? items.join('、') : '—';
+    } else if (field.kind === 'select') {
       const options = (field.options || fieldOptions[field.key] || []).map((option) =>
         typeof option === 'string' ? { label: option, value: option } : option,
       );
@@ -1070,9 +1215,7 @@ export function ResourceWorkspace({
                 </Button>
               )}
               {may('import') &&
-                ['/extensions', '/numbers', '/billing/rates', '/routing/rules'].includes(
-                  spec.path,
-                ) && (
+                ['/extensions', '/numbers', '/routing/rules'].includes(spec.path) && (
                   <Button
                     variant="flat"
                     size="sm"
@@ -1296,6 +1439,7 @@ export function ResourceWorkspace({
                                 color="primary"
                                 onPress={() => {
                                   setActionIdempotencyKey(crypto.randomUUID());
+                                  setCreditRemark('');
                                   setActionRow(row);
                                 }}
                                 aria-label="充值"
@@ -1367,7 +1511,12 @@ export function ResourceWorkspace({
           <ModalBody>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-2">
               {spec.fields
-                .filter((field) => !field.readonly && (!field.showWhen || field.showWhen(draft)))
+                .filter(
+                  (field) =>
+                    !field.formHidden &&
+                    !field.readonly &&
+                    (!field.showWhen || field.showWhen(draft)),
+                )
                 .map((field) => {
                   const err = validationErrors[field.key];
                   return (
@@ -1412,6 +1561,7 @@ export function ResourceWorkspace({
           if (!open) {
             setActionRow(null);
             setActionIdempotencyKey('');
+            setCreditRemark('');
           }
         }}
         size="sm"
@@ -1429,6 +1579,17 @@ export function ResourceWorkspace({
                 value={String(amount)}
                 onValueChange={(v) => setAmount(Number(v) || 0)}
               />
+              <div className="mt-4">
+                <FieldLabel label="充值说明" />
+                <Textarea
+                  variant="bordered"
+                  minRows={2}
+                  maxRows={4}
+                  placeholder="填写本次充值的业务说明"
+                  value={creditRemark}
+                  onValueChange={setCreditRemark}
+                />
+              </div>
             </div>
           </ModalBody>
           <ModalFooter>
@@ -1437,6 +1598,7 @@ export function ResourceWorkspace({
               onPress={() => {
                 setActionRow(null);
                 setActionIdempotencyKey('');
+                setCreditRemark('');
               }}
             >
               取消

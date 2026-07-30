@@ -98,11 +98,13 @@ export function ErrorState({ error, retry }: { error: string; retry: () => void 
   return (
     <Card className="border border-danger/30 bg-danger/10">
       <CardBody className="flex flex-row items-center justify-between gap-4 p-4">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-small font-semibold text-danger">数据加载失败</p>
-          <p className="text-tiny text-danger mt-1 opacity-80 truncate">{error}</p>
+          <p className="text-tiny text-danger mt-1 opacity-80 break-words whitespace-pre-wrap">
+            {error}
+          </p>
         </div>
-        <Button size="sm" color="danger" variant="flat" onPress={retry}>
+        <Button size="sm" color="danger" variant="flat" onPress={retry} className="shrink-0">
           重试
         </Button>
       </CardBody>

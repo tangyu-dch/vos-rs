@@ -27,13 +27,6 @@ pub(super) async fn acquire_resource_lease(
         return LeaseOutcome::Acquired(call_core::CallId::new(""));
     };
 
-    ctx.edge_state.call_manager.set_cdr_audit_context(
-        &call_id,
-        ctx.egress_trunk_id.clone(),
-        billing_pulse.map(|pulse| pulse.0),
-        billing_pulse.map(|pulse| pulse.1),
-    );
-
     let lease_error = loop {
         match crate::resource_lease::acquire(ctx.edge_state, &call_id, calculated_max_duration)
             .await
@@ -81,5 +74,61 @@ pub(super) async fn acquire_resource_lease(
         )]);
     }
 
+    freeze_billing_context(ctx, &call_id, billing_pulse).await;
     LeaseOutcome::Acquired(call_id)
+}
+
+async fn freeze_billing_context(
+    ctx: &OutboundContext<'_>,
+    call_id: &call_core::CallId,
+    redis_access_pulse: Option<(u32, f64)>,
+) {
+    let egress_gateway_id = ctx
+        .outbound_invite
+        .as_ref()
+        .map(|plan| plan.gateway_id.clone())
+        .filter(|gateway_id| !gateway_id.is_empty());
+    let egress_account = egress_gateway_id
+        .as_deref()
+        .and_then(|gateway_id| ctx.edge_state.resolve_trunk_billing_account(gateway_id));
+    let tenant_id = ctx.tenant_ctx.tenant_id.as_deref();
+    let callee = ctx.request.uri.user.as_deref().unwrap_or_default();
+    let access_pulse = match (redis_access_pulse, ctx.billing_account.as_deref()) {
+        (Some(pulse), _) => Some(pulse),
+        (None, account) => resolve_account_pulse(ctx.edge_state, account, callee, tenant_id).await,
+    };
+    let egress_pulse =
+        resolve_account_pulse(ctx.edge_state, egress_account.as_deref(), callee, tenant_id).await;
+
+    ctx.edge_state.call_manager.set_cdr_audit_context(
+        call_id,
+        ctx.egress_trunk_id.clone(),
+        access_pulse.map(|pulse| pulse.0),
+        access_pulse.map(|pulse| pulse.1),
+    );
+    ctx.edge_state.call_manager.set_egress_billing_context(
+        call_id,
+        egress_gateway_id,
+        egress_account,
+        egress_pulse.map(|pulse| pulse.0),
+        egress_pulse.map(|pulse| pulse.1),
+    );
+}
+
+async fn resolve_account_pulse(
+    edge_state: &crate::edge_state::EdgeState,
+    account: Option<&str>,
+    callee: &str,
+    tenant_id: Option<&str>,
+) -> Option<(u32, f64)> {
+    let (Some(store), Some(account)) = (edge_state.db_store.as_ref(), account) else {
+        return None;
+    };
+    store
+        .resolve_billing_pulse(account, callee, tenant_id)
+        .await
+        .unwrap_or_else(|error| {
+            warn!(%error, %account, "failed to resolve account pulse rate");
+            None
+        })
 }

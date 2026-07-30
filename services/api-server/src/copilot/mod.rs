@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use time::OffsetDateTime;
 
 use cdr_core::{
-    BillingAccount, CdrEvent, DashboardStats, LlmConfigRecord, SipFlowRecord, SipGateway,
+    BillingAccountRecord, CdrEvent, DashboardStats, LlmConfigRecord, SipFlowRecord, SipGateway,
     SipRegistration,
 };
 
@@ -122,7 +122,7 @@ pub(crate) struct Payload {
     pub(crate) latest_cdr: Option<CdrEvent>,
     pub(crate) sip_flows: Vec<SipFlowRecord>,
     pub(crate) registrations: Vec<SipRegistration>,
-    pub(crate) billing_accounts: Vec<BillingAccount>,
+    pub(crate) billing_accounts: Vec<BillingAccountRecord>,
     pub(crate) gateways: Vec<SipGateway>,
     pub(crate) active_calls: Vec<Value>,
 }
@@ -307,8 +307,23 @@ impl<'a> TelecomCopilotEngine<'a> {
                 }
             }
             CopilotIntent::Billing => {
-                if let Ok(accts) = self.state.store.list_accounts().await {
-                    payload.billing_accounts = accts;
+                use cdr_core::BillingAccountType;
+                let (access, egress) = tokio::join!(
+                    self.state.store.list_billing_accounts_page(
+                        BillingAccountType::Access,
+                        500,
+                        0,
+                        None
+                    ),
+                    self.state.store.list_billing_accounts_page(
+                        BillingAccountType::Egress,
+                        500,
+                        0,
+                        None
+                    ),
+                );
+                if let (Ok(access), Ok(egress)) = (access, egress) {
+                    payload.billing_accounts = access.into_iter().chain(egress).collect();
                 }
             }
             CopilotIntent::Gateway => {
@@ -364,7 +379,7 @@ impl<'a> TelecomCopilotEngine<'a> {
         let url = format!("{}/chat/completions", llm.base_url.trim_end_matches('/'));
         let mut messages = vec![json!({
             "role": "system",
-            "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）以及可调用的工具（Tools），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答与工具调用要求：\n1. **智能数据整理与格式清洗 (AI Reformatting)**：当用户以不规整的自然语言、微信聊天文本、非标准表格或杂乱文本粘贴数据（如分机开户、网关列表、路由规则、资费表等）要求导入时，你必须发挥 AI 智能分析能力，提取出其中的有效字段，将其整理清洗为标准的 CSV 结构文本（如分机: `username,password`，网关: `id,name,ip_address,port`，路由: `id,prefix,gateway_id,priority`，资费: `prefix,rate_per_minute`），然后将清洗好的 CSV 文本传入对应的导入工具 (`vos_import_extensions`, `vos_import_gateways`, `vos_import_routes`, `vos_import_rates`) 进行精准执行！并在回复中向用户展示你清洗好的标准表格明细。\n2. **智能冲突与重复检测**：在进行路由创建、分机开户、网关绑定或 IVR 配置时，如工具返回了 `conflict: true` 冲突警告或目标关联不存在（如路由的目标网关不存在、DID 重复绑定、分机号重复等），必须在回复中明确指出具体的冲突点与原因，并主动给出可替代的解决建议方案（例如建议更换 ID、先创建网关、或使用不同的前缀）。\n3. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析与处理报告 (Report)：结合数据对当前系统状态、业务配置或数据导入/导出结果进行专业解读。\n   - ## 🔍 数据清洗与整理明细 (Cleaned Records)：展示提取清洗后的标准结构表格。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引。\n4. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流。"
+            "content": "你是 vos-rs 电信级 VoIP 软交换平台的智能运维专家 Copilot。你的任务是基于我提供的真实业务数据（JSON）以及可调用的工具（Tools），协助用户进行高效的运维排障、性能分析或系统管理。\n\n回答与工具调用要求：\n1. **智能数据整理与格式清洗 (AI Reformatting)**：当用户以不规整的自然语言、微信聊天文本、非标准表格或杂乱文本粘贴数据（如分机开户、网关列表、路由规则等）要求导入时，你必须发挥 AI 智能分析能力，提取出其中的有效字段，将其整理清洗为标准的 CSV 结构文本（如分机: `username,password`，网关: `id,name,ip_address,port`，路由: `id,prefix,gateway_id,priority`），然后将清洗好的 CSV 文本传入对应的导入工具 (`vos_import_extensions`, `vos_import_gateways`, `vos_import_routes`) 进行精准执行！并在回复中向用户展示你清洗好的标准表格明细。\n2. **智能冲突与重复检测**：在进行路由创建、分机开户、网关绑定或 IVR 配置时，如工具返回了 `conflict: true` 冲突警告或目标关联不存在（如路由的目标网关不存在、DID 重复绑定、分机号重复等），必须在回复中明确指出具体的冲突点与原因，并主动给出可替代的解决建议方案（例如建议更换 ID、先创建网关、或使用不同的前缀）。\n3. **排版规范与美观**：使用清晰的 Markdown 结构。必须包含以下二级标题：\n   - ## 📊 分析与处理报告 (Report)：结合数据对当前系统状态、业务配置或数据导入/导出结果进行专业解读。\n   - ## 🔍 数据清洗与整理明细 (Cleaned Records)：展示提取清洗后的标准结构表格。\n   - ## 💡 建议动作 (Suggested Action)：给出具体、可执行的操作指引。\n4. **生动自然**：语气要专业、自然，像一个资深的 VoIP 架构师在与同事交流。"
         })];
 
         if let Some(hist) = history {
@@ -489,10 +504,17 @@ mod tests {
             caller: Some("1001".into()),
             callee: Some("13800138000".into()),
             started_at_ms: 0,
+            ringing_at_ms: None,
             answered_at_ms: None,
             ended_at_ms: 5000,
             duration_ms: 5000,
             billable_duration_ms: 0,
+            talk_duration_ms: None,
+            ringing_duration_ms: None,
+            access_billable_duration_ms: None,
+            access_charge_amount: None,
+            egress_billable_duration_ms: None,
+            egress_cost_amount: None,
             status: "failed".into(),
             failure_status_code: Some(503),
             failure_reason: Some("Service Unavailable".into()),
@@ -506,6 +528,9 @@ mod tests {
             dtmf_digits: None,
             recording_path: None,
             direction: "outbound".into(),
+            tenant_id: None,
+            tenant_name: None,
+            auth_realm: None,
             audit: cdr_core::CdrAuditSnapshot::default(),
         }
     }

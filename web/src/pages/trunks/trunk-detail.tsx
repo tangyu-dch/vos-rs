@@ -622,6 +622,7 @@ function RegistrationTab({
             <TableHeader>
               <TableColumn key="contact">联系地址</TableColumn>
               <TableColumn key="node">来源 Socket / 节点</TableColumn>
+              <TableColumn key="user_agent">客户端名称</TableColumn>
               <TableColumn key="status">状态</TableColumn>
               <TableColumn key="expires_at">过期时间</TableColumn>
             </TableHeader>
@@ -633,7 +634,14 @@ function RegistrationTab({
                   <TableCell className="font-mono text-tiny">
                     {String(row.contact_uri ?? row.contact ?? '')}
                   </TableCell>
-                  <TableCell>{String(row.received_from ?? row.node ?? '')}</TableCell>
+                  <TableCell className="font-mono text-tiny">
+                    {String(row.received_from ?? row.node ?? '')}
+                  </TableCell>
+                  <TableCell>
+                    {String(row.user_agent ?? '') || (
+                      <span className="text-default-400">未上报</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Chip size="sm" variant="dot" color="success">
                       在线
@@ -699,6 +707,7 @@ function AccessRegistrationStatus({
           <TableHeader>
             <TableColumn key="contact">联系地址</TableColumn>
             <TableColumn key="node">来源 Socket / 节点</TableColumn>
+            <TableColumn key="user_agent">客户端名称</TableColumn>
             <TableColumn key="status">状态</TableColumn>
             <TableColumn key="expires_at">过期时间</TableColumn>
           </TableHeader>
@@ -710,7 +719,12 @@ function AccessRegistrationStatus({
                 <TableCell className="font-mono text-tiny">
                   {String(row.contact_uri ?? row.contact ?? '')}
                 </TableCell>
-                <TableCell>{String(row.received_from ?? row.node ?? '')}</TableCell>
+                <TableCell className="font-mono text-tiny">
+                  {String(row.received_from ?? row.node ?? '')}
+                </TableCell>
+                <TableCell>
+                  {String(row.user_agent ?? '') || <span className="text-default-400">未上报</span>}
+                </TableCell>
                 <TableCell>
                   <Chip size="sm" variant="dot" color="success">
                     在线

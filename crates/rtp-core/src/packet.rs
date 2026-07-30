@@ -262,7 +262,7 @@ pub struct RtpHeaderExtension {
 
 impl RtpHeaderExtension {
     pub fn new(profile: u16, data: Vec<u8>) -> RtpResult<Self> {
-        if data.len() % 4 != 0 {
+        if !data.len().is_multiple_of(4) {
             return Err(RtpError::InvalidExtensionLength);
         }
 
@@ -276,7 +276,9 @@ impl RtpHeaderExtension {
     }
 
     fn validate(&self) -> RtpResult<()> {
-        if self.data.len() % 4 != 0 || self.data.len() / 4 != usize::from(self.length_words) {
+        if !self.data.len().is_multiple_of(4)
+            || self.data.len() / 4 != usize::from(self.length_words)
+        {
             return Err(RtpError::InvalidExtensionLength);
         }
         Ok(())

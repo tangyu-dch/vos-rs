@@ -107,7 +107,7 @@ export function AccessAccountsPage() {
     <section className="flex flex-col gap-4">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-foreground">账户管理</h1>
+          <h1 className="text-lg font-semibold text-foreground">用户管理</h1>
           <p className="mt-1 text-small text-default-500">
             管理控制台登录账户、所属角色、登录状态和认证密码
           </p>

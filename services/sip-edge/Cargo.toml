@@ -39,6 +39,8 @@ stun = "0.17.1"
 libc = "0.2.186"
 num_cpus = "1"
 redis = { version = "0.26.0", features = ["tokio-comp", "connection-manager"] }
+# 用于把 CallSettlementResult.amount (Decimal) 转换为 f64 回写 CDR 计费快照
+rust_decimal = "1.36"
 storage-core = { path = "../../crates/storage-core" }
 reqwest = { version = "0.12", features = ["json"] }
 hmac = "0.12"

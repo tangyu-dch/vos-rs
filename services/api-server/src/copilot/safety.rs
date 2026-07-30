@@ -57,26 +57,26 @@ pub fn tool_policy(name: &str) -> Option<ToolPolicy> {
         "vos_list_extensions" | "vos_export_extensions" => read("/api/users"),
         "vos_list_ivr_menus" => read("/api/v1/ivr/menus"),
         "vos_list_routes" | "vos_export_routes" => read("/api/routes"),
-        "vos_list_billing_accounts" | "vos_export_billing_accounts" => read("/api/accounts"),
-        "vos_list_rates" | "vos_export_rates" => read("/api/rates"),
+        "vos_list_billing_accounts" | "vos_export_billing_accounts" => {
+            read("/api/v1/billing/access-accounts")
+        }
         "vos_create_extension" => write("POST", "/api/users"),
         "vos_create_ivr_menu" | "vos_add_ivr_node" => write("POST", "/api/v1/ivr/menus"),
         "vos_create_gateway" => write("POST", "/api/gateways"),
         "vos_create_route" => write("POST", "/api/routes"),
-        "vos_upsert_rate" => write("POST", "/api/rates"),
         "vos_create_anti_fraud_rule" => write("POST", "/api/anti-fraud/rules"),
         "vos_terminate_call" => high_risk("POST", "/api/calls/id/terminate"),
         "vos_delete_extension" => high_risk("DELETE", "/api/users/id"),
         "vos_delete_ivr_menu" => high_risk("DELETE", "/api/v1/ivr/menus/id"),
         "vos_delete_gateway" => high_risk("DELETE", "/api/gateways/id"),
         "vos_delete_route" => high_risk("DELETE", "/api/routes/id"),
-        "vos_recharge_billing_account" => high_risk("POST", "/api/accounts/id/credit"),
-        "vos_delete_rate" => high_risk("DELETE", "/api/rates/id"),
+        "vos_recharge_billing_account" => {
+            high_risk("POST", "/api/v1/billing/access-accounts/id/credit")
+        }
         "vos_delete_anti_fraud_rule" => high_risk("DELETE", "/api/anti-fraud/rules/id"),
         "vos_import_extensions" => high_risk("POST", "/api/v1/extensions/import"),
         "vos_import_gateways" => high_risk("POST", "/api/gateways/import"),
         "vos_import_routes" => high_risk("POST", "/api/routes/import"),
-        "vos_import_rates" => high_risk("POST", "/api/rates/import"),
         _ => return None,
     };
     Some(policy)
@@ -302,7 +302,6 @@ mod tests {
             "vos_terminate_call",
             "vos_delete_extension",
             "vos_recharge_billing_account",
-            "vos_import_rates",
         ] {
             assert_eq!(
                 tool_policy(name).map(|item| item.risk),
@@ -316,7 +315,7 @@ mod tests {
         for name in [
             "vos_get_dashboard_stats",
             "vos_list_cdrs",
-            "vos_export_rates",
+            "vos_export_billing_accounts",
         ] {
             assert_eq!(
                 tool_policy(name).map(|item| item.risk),
@@ -336,7 +335,7 @@ mod tests {
         let recharge = tool_policy("vos_recharge_billing_account").expect("known tool");
         assert_eq!(
             required_permission(recharge.method, recharge.path),
-            Some("billing.accounts.credit")
+            Some("billing.access_accounts.credit")
         );
         let route = tool_policy("vos_create_route").expect("known tool");
         assert_eq!(
@@ -346,7 +345,7 @@ mod tests {
         let billing = tool_policy("vos_list_billing_accounts").expect("known tool");
         assert_eq!(
             required_permission(billing.method, billing.path),
-            Some("billing.accounts.view")
+            Some("billing.access_accounts.view")
         );
         let extensions = tool_policy("vos_list_extensions").expect("known tool");
         assert_eq!(

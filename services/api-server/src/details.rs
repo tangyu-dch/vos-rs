@@ -204,6 +204,7 @@ mod tests {
             received_from: "192.168.1.100:5060".to_string(),
             expires_at: OffsetDateTime::now_utc(),
             path: vec![],
+            user_agent: None,
             updated_at: None,
         };
         let val = json!(registration);

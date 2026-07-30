@@ -288,44 +288,6 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
         {
             "type": "function",
             "function": {
-                "name": "vos_list_rates",
-                "description": "获取系统呼叫资费费率表。",
-                "parameters": { "type": "object", "properties": {}, "required": [] }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "vos_upsert_rate",
-                "description": "创建或修改呼叫资费费率（指定费率 ID id、号码前缀 prefix、每分钟费率 rate_per_minute）。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string", "description": "费率唯一 ID" },
-                        "prefix": { "type": "string", "description": "号码前缀" },
-                        "rate_per_minute": { "type": "number", "description": "每分钟费率金额" }
-                    },
-                    "required": ["id", "prefix", "rate_per_minute"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "vos_delete_rate",
-                "description": "删除指定的呼叫资费费率。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string", "description": "待删除的费率 ID" }
-                    },
-                    "required": ["id"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "vos_add_ivr_node",
                 "description": "向现有 IVR 菜单添加/配置按键转接节点（指定 IVR ID id、按键 dtmf_key 0-9/*/#、目标动作 action 例如 extension:8001 或 hangup）。支持自然语言指令如‘按 1 转分机 8001’。",
                 "parameters": {
@@ -428,14 +390,6 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
         {
             "type": "function",
             "function": {
-                "name": "vos_export_rates",
-                "description": "导出全量呼叫资费费率表，返回环境自适应的相对 API 下载路径。",
-                "parameters": { "type": "object", "properties": {} }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "vos_export_billing_accounts",
                 "description": "导出全量计费账户及余额摘要，返回环境自适应的相对 API 下载路径。",
                 "parameters": { "type": "object", "properties": {} }
@@ -478,20 +432,6 @@ pub fn get_copilot_tools_schema() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "content": { "type": "string", "description": "由 AI 整理提取出的标准 CSV 格式路由明细 ('id,prefix,gateway_id,priority')" }
-                    },
-                    "required": ["content"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "vos_import_rates",
-                "description": "智能批量导入/更新资费费率表。大模型先自动将杂乱输入清洗整理为标准 CSV ('prefix,rate_per_minute')，再调用本工具下发。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "content": { "type": "string", "description": "由 AI 整理提取出的标准 CSV 格式资费明细 ('prefix,rate_per_minute')" }
                     },
                     "required": ["content"]
                 }

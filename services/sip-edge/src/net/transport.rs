@@ -72,10 +72,9 @@ pub fn read_frame(buf: &mut Vec<u8>) -> Option<Vec<u8>> {
     let (index, delim_len) =
         if let Some(pos) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
             (pos, 4)
-        } else if let Some(pos) = raw.windows(2).position(|window| window == b"\n\n") {
-            (pos, 2)
         } else {
-            return None;
+            let pos = raw.windows(2).position(|window| window == b"\n\n")?;
+            (pos, 2)
         };
 
     let header_part = &raw[..index];

@@ -125,8 +125,14 @@ impl EdgeState {
         let call_id = self
             .inbound_transactions
             .get(&dialog_call_id)
-            .map(|transaction| transaction.dialogs.caller.call_id.clone())
-            .unwrap_or(dialog_call_id);
+            .map(|transaction| {
+                if !transaction.dialogs.caller.call_id.is_empty() {
+                    transaction.dialogs.caller.call_id.clone()
+                } else {
+                    transaction.session_id.clone()
+                }
+            })
+            .unwrap_or_else(|| dialog_call_id.clone());
 
         let msg_method = match &msg {
             sip_core::SipMessageBorrow::Request(req) => req.method.as_str().to_string(),
@@ -187,28 +193,22 @@ impl EdgeState {
             return;
         }
 
-        // Determine direction string for api-server and frontend
-        let dir = if direction == "in" {
-            let is_caller = self
-                .call_caller_addrs
-                .get(&call_id)
-                .map(|addr_guard| *addr_guard == peer_addr)
-                .unwrap_or(false);
-            if is_caller {
+        // Determine direction string by comparing the raw SIP Call-ID header (dialog_call_id)
+        // with the normalized call_id (A-leg caller Call-ID).
+        // If dialog_call_id matches normalized call_id -> A-leg (caller side)
+        // If dialog_call_id differs from normalized call_id -> B-leg (callee/gateway side)
+        let is_a_leg = dialog_call_id == call_id;
+        let dir = if is_a_leg {
+            if direction == "in" {
                 "uac_to_b2bua".to_string()
             } else {
-                "uas_to_b2bua".to_string()
+                "b2bua_to_uac".to_string()
             }
         } else {
-            let is_caller = self
-                .call_caller_addrs
-                .get(&call_id)
-                .map(|addr_guard| *addr_guard == peer_addr)
-                .unwrap_or(false);
-            if is_caller {
-                "b2bua_to_uac".to_string()
-            } else {
+            if direction == "out" {
                 "b2bua_to_uas".to_string()
+            } else {
+                "uas_to_b2bua".to_string()
             }
         };
 

@@ -11,6 +11,14 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     sqlx::query(CREATE_CDR_TABLE_SQL).execute(&mut *tx).await?;
     sqlx::query(MIGRATE_CDR_AUDIT_SQL).execute(&mut *tx).await?;
+    // MIGRATE_CDR_TIMING_BILLING_SQL 包含多条 ALTER TABLE 语句，必须用 raw_sql 执行
+    sqlx::raw_sql(MIGRATE_CDR_TIMING_BILLING_SQL)
+        .execute(&mut *tx)
+        .await?;
+    // 回填历史 CDR 的振铃时长和通话时长（仅更新 NULL 行，幂等）
+    sqlx::raw_sql(BACKFILL_CDR_TIMING_SQL)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(CREATE_CALL_ID_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
@@ -29,6 +37,9 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(CREATE_CDR_CALLEE_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
+    for sql in MIGRATE_CDR_TENANT_REALM_SQL {
+        sqlx::query(sql).execute(&mut *tx).await?;
+    }
     sqlx::query(CREATE_CDR_DIRECTION_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
@@ -55,6 +66,7 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
         CREATE_GATEWAYS_TYPE_INDEX_SQL,
         CREATE_GATEWAYS_PARENT_INDEX_SQL,
         CREATE_GATEWAYS_ACCOUNT_INDEX_SQL,
+        CREATE_GATEWAYS_TENANT_INDEX_SQL,
         CREATE_GATEWAYS_ENABLED_INDEX_SQL,
     ] {
         sqlx::query(index_sql).execute(&mut *tx).await?;
@@ -81,11 +93,17 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(CREATE_TENANTS_ENABLED_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
+    sqlx::query(ADD_GATEWAY_TENANT_FOREIGN_KEY_SQL)
+        .execute(&mut *tx)
+        .await?;
     // tenants 表创建后再为 sip_users 添加 tenant_id 列与索引（引用 tenants(id)）
     sqlx::query(MIGRATE_SIP_USERS_TENANT_SQL)
         .execute(&mut *tx)
         .await?;
     sqlx::query(CREATE_SIP_USERS_TENANT_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_SIP_USERS_UNIQUE_TENANT_USERNAME_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
     sqlx::query(MIGRATION_ADD_ROUTE_WEIGHT)
@@ -98,6 +116,9 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
         .execute(&mut *tx)
         .await?;
     sqlx::query("ALTER TABLE sip_registrations ADD COLUMN IF NOT EXISTS path TEXT")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(MIGRATE_REGISTRATIONS_USER_AGENT_SQL)
         .execute(&mut *tx)
         .await?;
     sqlx::query(CREATE_REGISTRATIONS_EXPIRES_INDEX_SQL)
@@ -121,9 +142,6 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(CREATE_DTMF_CALL_ID_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(CREATE_BILLING_RATES_TABLE_SQL)
-        .execute(&mut *tx)
-        .await?;
     sqlx::query(CREATE_BILLING_ACCOUNTS_TABLE_SQL)
         .execute(&mut *tx)
         .await?;
@@ -131,12 +149,7 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     for migration_sql in MIGRATE_BILLING_ACCOUNTS_SQL {
         sqlx::query(migration_sql).execute(&mut *tx).await?;
     }
-
-    // billing_rates 添加 tenant_id 列与索引（NULL 表示全局费率）
-    sqlx::query(MIGRATE_BILLING_RATES_TENANT_SQL)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(CREATE_BILLING_RATES_TENANT_INDEX_SQL)
+    sqlx::query(MIGRATE_TENANT_ACCOUNT_LINK_SQL)
         .execute(&mut *tx)
         .await?;
 
@@ -149,10 +162,25 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(CREATE_BILLING_CREDITS_TABLE_SQL)
         .execute(&mut *tx)
         .await?;
+    sqlx::raw_sql(MIGRATE_BILLING_CREDITS_SQL)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(CREATE_BILLING_CREDITS_USERNAME_INDEX_SQL)
         .execute(&mut *tx)
         .await?;
+    sqlx::query(CREATE_BILLING_CREDITS_ACCOUNT_INDEX_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(CREATE_BILLING_JOURNAL_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::raw_sql(MIGRATE_BILLING_JOURNAL_SQL)
+        .execute(&mut *tx)
+        .await?;
     sqlx::raw_sql(MIGRATE_BILLING_INTERVALS_SQL)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::raw_sql(MIGRATE_DUAL_CALL_ACCOUNTING_SQL)
         .execute(&mut *tx)
         .await?;
     sqlx::query(CREATE_LEDGER_USERNAME_INDEX_SQL)
@@ -373,6 +401,9 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     }
     sqlx::query(SEED_MENU_GROUPS_SQL).execute(&mut *tx).await?;
     sqlx::query(SEED_MENU_ITEMS_SQL).execute(&mut *tx).await?;
+    sqlx::query(REMOVE_LEGACY_BILLING_ACCOUNT_MENU_SQL)
+        .execute(&mut *tx)
+        .await?;
 
     for migration_sql in termination_schema::MIGRATE_TERMINATION_DOMAIN_SQL {
         sqlx::query(migration_sql).execute(&mut *tx).await?;

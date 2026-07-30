@@ -732,6 +732,23 @@ impl CallManager {
         }
     }
 
+    /// Freezes the selected egress gateway, account and pulse-rating facts.
+    pub fn set_egress_billing_context(
+        &self,
+        call_id: &CallId,
+        gateway_id: Option<String>,
+        account: Option<String>,
+        billing_interval_secs: Option<u32>,
+        price_per_interval: Option<f64>,
+    ) {
+        if let Some(mut call) = self.calls.get_mut(call_id) {
+            call.audit.egress_trunk_id = gateway_id;
+            call.audit.egress_billing_account = account;
+            call.audit.egress_billing_interval_secs = billing_interval_secs;
+            call.audit.egress_price_per_interval = price_per_interval;
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.calls.len()
     }

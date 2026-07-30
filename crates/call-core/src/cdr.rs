@@ -20,6 +20,12 @@ pub struct CdrAuditSnapshot {
     pub fallback_used: bool,
     pub billing_interval_secs: Option<u32>,
     pub price_per_interval: Option<f64>,
+    pub egress_billing_account: Option<String>,
+    pub egress_billing_interval_secs: Option<u32>,
+    pub egress_price_per_interval: Option<f64>,
+    pub tenant_id: Option<String>,
+    pub tenant_name: Option<String>,
+    pub auth_realm: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,10 +62,22 @@ pub struct CallCdr {
     pub caller: Option<String>,
     pub callee: Option<String>,
     pub started_at: SystemTime,
+    #[serde(default)]
+    pub ringing_at: Option<SystemTime>,
     pub answered_at: Option<SystemTime>,
     pub ended_at: SystemTime,
     pub duration: Duration,
     pub billable_duration: Duration,
+    #[serde(default)]
+    pub ringing_duration: Option<Duration>,
+    #[serde(default)]
+    pub access_billable_duration: Option<Duration>,
+    #[serde(default)]
+    pub access_charge_amount: Option<f64>,
+    #[serde(default)]
+    pub egress_billable_duration: Option<Duration>,
+    #[serde(default)]
+    pub egress_cost_amount: Option<f64>,
     pub status: CdrStatus,
     pub failure_cause: Option<FailureCause>,
     pub caller_rtcp_loss_rate: Option<f64>,
@@ -111,18 +129,38 @@ impl CallCdr {
             || !call.outbound_history.is_empty()
             || call.current_candidate_index > 0;
 
+        let answered_duration = call
+            .answered_at
+            .map(|answered_at| elapsed(answered_at, ended_at));
+        let ringing_duration = call
+            .ringing_at
+            .map(|ringing_at| elapsed(ringing_at, call.answered_at.unwrap_or(ended_at)));
+        let (access_billable_duration, access_charge_amount) = billing_snapshot(
+            answered_duration,
+            audit.billing_interval_secs,
+            audit.price_per_interval,
+        );
+        let (egress_billable_duration, egress_cost_amount) = billing_snapshot(
+            answered_duration,
+            audit.egress_billing_interval_secs,
+            audit.egress_price_per_interval,
+        );
+
         Some(Self {
             call_id: call.id.clone(),
-            caller: call.caller.clone(),
+            caller: call.caller.as_deref().and_then(actual_number),
             callee: call.inbound.remote_uri.user.as_ref().map(|u| u.to_string()),
             started_at: call.started_at,
+            ringing_at: call.ringing_at,
             answered_at: call.answered_at,
             ended_at,
             duration: elapsed(call.started_at, ended_at),
-            billable_duration: call
-                .answered_at
-                .map(|answered_at| elapsed(answered_at, ended_at))
-                .unwrap_or_default(),
+            billable_duration: answered_duration.unwrap_or_default(),
+            ringing_duration,
+            access_billable_duration,
+            access_charge_amount,
+            egress_billable_duration,
+            egress_cost_amount,
             status,
             failure_cause: call.failure_cause.clone(),
             caller_rtcp_loss_rate: m.caller_loss_rate,
@@ -142,4 +180,63 @@ impl CallCdr {
 
 fn elapsed(start: SystemTime, end: SystemTime) -> Duration {
     end.duration_since(start).unwrap_or_default()
+}
+
+fn billing_snapshot(
+    duration: Option<Duration>,
+    interval_secs: Option<u32>,
+    price_per_interval: Option<f64>,
+) -> (Option<Duration>, Option<f64>) {
+    let Some(duration) = duration.filter(|value| !value.is_zero()) else {
+        return (None, None);
+    };
+    let Some(interval_secs) = interval_secs.filter(|value| *value > 0) else {
+        return (None, None);
+    };
+    let Some(price_per_interval) = price_per_interval.filter(|value| *value >= 0.0) else {
+        return (None, None);
+    };
+    let interval_millis = u128::from(interval_secs) * 1_000;
+    let pulses = duration.as_millis().div_ceil(interval_millis);
+    let billed_millis = pulses.saturating_mul(interval_millis).min(u64::MAX as u128) as u64;
+    (
+        Some(Duration::from_millis(billed_millis)),
+        Some(pulses as f64 * price_per_interval),
+    )
+}
+
+fn actual_number(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let candidate = trimmed
+        .find("sip:")
+        .map(|index| &trimmed[index + 4..])
+        .unwrap_or(trimmed)
+        .split(['@', ';', '>'])
+        .next()
+        .unwrap_or_default()
+        .trim_matches(['\"', '<', ' ']);
+    (!candidate.is_empty()).then(|| candidate.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{actual_number, billing_snapshot};
+    use std::time::Duration;
+
+    #[test]
+    fn pulse_billing_rounds_partial_interval_up() {
+        let (duration, amount) =
+            billing_snapshot(Some(Duration::from_secs(61)), Some(60), Some(0.5));
+        assert_eq!(duration, Some(Duration::from_secs(120)));
+        assert_eq!(amount, Some(1.0));
+    }
+
+    #[test]
+    fn actual_number_removes_sip_display_and_parameters() {
+        assert_eq!(
+            actual_number("\"1002\" <sip:1002@vos-rs>;tag=abc"),
+            Some("1002".to_string())
+        );
+        assert_eq!(actual_number("1002"), Some("1002".to_string()));
+    }
 }

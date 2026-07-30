@@ -26,8 +26,8 @@ pub struct TenantRecord {
     pub id: String,
     pub name: String,
     pub domain: String,
-    pub max_concurrent_calls: i64,
-    pub max_cps: i64,
+    pub max_concurrent_calls: i32,
+    pub max_cps: i32,
     pub cross_tenant_policy: String,
     pub recording_enabled: Option<bool>,
     pub allowed_gateway_ids: Option<serde_json::Value>,
@@ -47,9 +47,9 @@ pub struct UpsertTenantInput {
     pub name: String,
     pub domain: String,
     #[serde(default)]
-    pub max_concurrent_calls: i64,
+    pub max_concurrent_calls: i32,
     #[serde(default)]
-    pub max_cps: i64,
+    pub max_cps: i32,
     #[serde(default = "default_cross_tenant_policy")]
     pub cross_tenant_policy: String,
     #[serde(default)]

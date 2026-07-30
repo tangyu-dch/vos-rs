@@ -41,6 +41,7 @@ pub async fn list_registrations(
             "AOR(用户标识)",
             "联系地址",
             "接收地址",
+            "客户端名称",
             "过期时间",
             "更新时间",
         ];
@@ -50,6 +51,7 @@ pub async fn list_registrations(
                 item.aor.clone(),
                 item.contact_uri.clone(),
                 item.received_from.clone(),
+                item.user_agent.clone().unwrap_or_default(),
                 item.expires_at.to_string(),
                 item.updated_at.map(|t| t.to_string()).unwrap_or_default(),
             ]);

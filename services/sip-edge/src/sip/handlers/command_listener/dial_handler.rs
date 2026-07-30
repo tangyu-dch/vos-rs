@@ -104,8 +104,8 @@ pub(super) async fn handle_dial(
     let external_call_id = uuid::Uuid::new_v4().to_string();
     edge_state.bind_gateway_dialog(&session_id, &external_call_id);
 
-    let target_addr = if outbound_uri.port.is_some() {
-        format!("{}:{}", outbound_uri.host, outbound_uri.port.unwrap())
+    let target_addr = if let Some(port) = outbound_uri.port {
+        format!("{}:{}", outbound_uri.host, port)
     } else {
         format!("{}:5060", outbound_uri.host)
     };

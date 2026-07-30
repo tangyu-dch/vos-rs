@@ -271,21 +271,30 @@ pub(super) async fn resolve_call_source(
                 if mode == "ip_allowlist" || is_auth_bypass {
                     call_source = Some(call_core::CallSource::new("trunk", trunk_id));
                 } else if mode == "ip_and_digest" {
+                    let realm = edge_state.resolve_auth_realm(request).await;
                     let auth_res = edge_state
-                        .verify_sip_auth(&edge_config.auth, request, true)
+                        .verify_sip_auth(&edge_config.auth, request, true, realm.as_deref())
                         .await;
                     match auth_res {
                         AuthDecision::Challenge => {
                             return Err(vec![PendingDatagram::new(
                                 peer.to_string(),
-                                proxy_unauthorized_for_request(request, &edge_config.auth),
+                                proxy_unauthorized_for_request(
+                                    request,
+                                    &edge_config.auth,
+                                    realm.as_deref(),
+                                ),
                             )]);
                         }
                         AuthDecision::ChallengeWithFailure => {
                             edge_state.sbc_engine.register_auth_failure(peer.ip());
                             return Err(vec![PendingDatagram::new(
                                 peer.to_string(),
-                                proxy_unauthorized_for_request(request, &edge_config.auth),
+                                proxy_unauthorized_for_request(
+                                    request,
+                                    &edge_config.auth,
+                                    realm.as_deref(),
+                                ),
                             )]);
                         }
                         _ => {
@@ -320,21 +329,22 @@ pub(super) async fn resolve_call_source(
             .or_else(|| EdgeState::username_from_request(request))
             .unwrap_or_default();
         let is_trunk = edge_state.is_registered_access_username(&username);
+        let realm = edge_state.resolve_auth_realm(request).await;
         let auth_res = edge_state
-            .verify_sip_auth(&edge_config.auth, request, is_trunk)
+            .verify_sip_auth(&edge_config.auth, request, is_trunk, realm.as_deref())
             .await;
         match auth_res {
             AuthDecision::Challenge => {
                 return Err(vec![PendingDatagram::new(
                     peer.to_string(),
-                    proxy_unauthorized_for_request(request, &edge_config.auth),
+                    proxy_unauthorized_for_request(request, &edge_config.auth, realm.as_deref()),
                 )]);
             }
             AuthDecision::ChallengeWithFailure => {
                 edge_state.sbc_engine.register_auth_failure(peer.ip());
                 return Err(vec![PendingDatagram::new(
                     peer.to_string(),
-                    proxy_unauthorized_for_request(request, &edge_config.auth),
+                    proxy_unauthorized_for_request(request, &edge_config.auth, realm.as_deref()),
                 )]);
             }
             _ => {
@@ -359,19 +369,12 @@ pub(super) async fn resolve_call_source(
     }
 
     let source = call_source.expect("source must be resolved here");
-    // 计费账户优先级：租户策略 > per-user/per-trunk
-    // 当租户策略指定了 billing_account_id 时，强制使用该账户进行结算，
-    // 覆盖 per-user/per-trunk 的默认行为（适用于预付费租户或统一计费场景）。
-    let billing_account = edge_state
-        .tenant_billing_account(Some(tenant_ctx))
-        .map(|id| id.to_string())
-        .or_else(|| {
-            if source.source_type == "extension" {
-                Some(source.source_id.clone())
-            } else {
-                edge_state.resolve_trunk_billing_account(&source.source_id)
-            }
-        });
+    // 租户只负责开户和网关隔离，费用始终落在实际接入账户。
+    let billing_account = if source.source_type == "extension" {
+        Some(source.source_id.clone())
+    } else {
+        edge_state.resolve_trunk_billing_account(&source.source_id)
+    };
 
     Ok(CallResolution {
         source,

@@ -82,7 +82,7 @@ impl PostgresCdrStore {
 mod tests {
     use super::*;
     use crate::schema::*;
-    use crate::utils::{extract_sip_user, match_rate};
+    use crate::utils::extract_sip_user;
 
     #[test]
     fn test_extract_sip_user() {
@@ -93,24 +93,23 @@ mod tests {
     }
 
     #[test]
-    fn test_match_rate() {
-        let rates = vec![("86".to_string(), 0.5), ("8613".to_string(), 0.3)];
-        assert_eq!(match_rate("8613800138000", &rates), 0.3);
-        assert_eq!(match_rate("861012345678", &rates), 0.5);
-        assert_eq!(match_rate("12345", &rates), 0.0);
-    }
-
-    #[test]
     fn test_cdr_event_roundtrip() {
         let event = CdrEvent {
             call_id: "test-123".to_string(),
             caller: Some("sip:1001@host".to_string()),
             callee: Some("sip:1002@host".to_string()),
             started_at_ms: 1000000,
+            ringing_at_ms: Some(1000500),
             answered_at_ms: Some(1001000),
             ended_at_ms: 1010000,
             duration_ms: 10000,
             billable_duration_ms: 9000,
+            talk_duration_ms: Some(9000),
+            ringing_duration_ms: Some(500),
+            access_billable_duration_ms: Some(60_000),
+            access_charge_amount: Some(0.05),
+            egress_billable_duration_ms: Some(60_000),
+            egress_cost_amount: Some(0.03),
             status: "answered".to_string(),
             failure_status_code: None,
             failure_reason: None,
@@ -124,6 +123,9 @@ mod tests {
             dtmf_digits: None,
             recording_path: None,
             direction: "outbound".to_string(),
+            tenant_id: Some("t1".to_string()),
+            tenant_name: Some("Tenant 1".to_string()),
+            auth_realm: Some("realm1.com".to_string()),
             audit: call_core::CdrAuditSnapshot {
                 source_type: Some("trunk".to_string()),
                 source_id: Some("access-a".to_string()),
@@ -161,6 +163,7 @@ mod tests {
             "reg_password",
             "parent_gateway_id",
             "account_id BIGINT",
+            "tenant_id TEXT",
             "enabled BOOLEAN",
         ] {
             assert!(CREATE_SIP_GATEWAYS_TABLE_SQL.contains(column));
@@ -172,6 +175,23 @@ mod tests {
             "updated_at TIMESTAMPTZ",
         ] {
             assert!(CREATE_NUMBER_INVENTORY_TABLE_SQL.contains(column));
+        }
+    }
+
+    #[test]
+    fn test_billing_account_schema_separates_account_types_and_keeps_journal_time() {
+        assert!(CREATE_BILLING_ACCOUNTS_TABLE_SQL.contains("account_type TEXT"));
+        assert!(CREATE_BILLING_ACCOUNTS_TABLE_SQL.contains("billing_interval_secs"));
+        assert!(CREATE_BILLING_JOURNAL_SQL.contains("occurred_at TIMESTAMPTZ"));
+        for entry_type in [
+            "credit",
+            "call_charge",
+            "call_cost",
+            "adjustment",
+            "refund",
+            "reversal",
+        ] {
+            assert!(CREATE_BILLING_JOURNAL_SQL.contains(entry_type));
         }
     }
 

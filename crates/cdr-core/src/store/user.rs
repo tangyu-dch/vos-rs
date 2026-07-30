@@ -27,6 +27,19 @@ impl PostgresCdrStore {
         Ok(())
     }
 
+    pub async fn update_user_tenant(
+        &self,
+        username: &str,
+        tenant_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE sip_users SET tenant_id = $1 WHERE username = $2")
+            .bind(tenant_id)
+            .bind(username)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn list_users(&self) -> Result<Vec<SipUser>, sqlx::Error> {
         let rows =
             sqlx::query("SELECT username, tenant_id, created_at FROM sip_users ORDER BY username")

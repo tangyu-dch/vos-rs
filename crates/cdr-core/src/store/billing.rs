@@ -1,307 +1,71 @@
-use crate::models::{
-    BillingAccount, BillingRate, CreditAccountOutcome, LedgerEntry, RateUpsert, ReconcileResult,
-};
-use crate::utils;
+use crate::models::{CallSettlementInput, CallSettlementResult, LedgerEntry};
 use crate::PostgresCdrStore;
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use sqlx::Row;
-use time::OffsetDateTime;
 use tracing::warn;
 
 impl PostgresCdrStore {
-    pub async fn list_rates(&self) -> Result<Vec<BillingRate>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, tenant_id, created_at FROM billing_rates \
-             ORDER BY length(prefix) DESC, prefix",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        let mut rates = Vec::with_capacity(rows.len());
-        for row in rows {
-            rates.push(BillingRate {
-                id: row.get(0),
-                prefix: row.get(1),
-                rate_per_minute: row.get(2),
-                billing_interval_secs: row.get(3),
-                price_per_interval: row.get(4),
-                description: row.get(5),
-                tenant_id: row.get(6),
-                created_at: row.get(7),
-            });
-        }
-        Ok(rates)
-    }
-
-    /// 按页读取费率配置。
-    pub async fn list_rates_page(
-        &self,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<BillingRate>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, tenant_id, created_at \
-              FROM billing_rates ORDER BY length(prefix) DESC, prefix LIMIT $1 OFFSET $2",
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| BillingRate {
-                id: row.get(0),
-                prefix: row.get(1),
-                rate_per_minute: row.get(2),
-                billing_interval_secs: row.get(3),
-                price_per_interval: row.get(4),
-                description: row.get(5),
-                tenant_id: row.get(6),
-                created_at: row.get(7),
-            })
-            .collect())
-    }
-
-    /// 按租户 ID 读取费率列表（仅返回该租户的专属费率，不含全局费率）。
-    pub async fn list_rates_by_tenant(
-        &self,
-        tenant_id: &str,
-    ) -> Result<Vec<BillingRate>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, prefix, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), description, tenant_id, created_at \
-              FROM billing_rates WHERE tenant_id = $1 ORDER BY length(prefix) DESC, prefix",
-        )
-        .bind(tenant_id)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| BillingRate {
-                id: row.get(0),
-                prefix: row.get(1),
-                rate_per_minute: row.get(2),
-                billing_interval_secs: row.get(3),
-                price_per_interval: row.get(4),
-                description: row.get(5),
-                tenant_id: row.get(6),
-                created_at: row.get(7),
-            })
-            .collect())
-    }
-
-    /// 返回费率配置总数。
-    pub async fn count_rates(&self) -> Result<i64, sqlx::Error> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM billing_rates")
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(row.0)
-    }
-
-    pub async fn upsert_rate(&self, input: &RateUpsert<'_>) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT INTO billing_rates (id, prefix, rate_per_minute, billing_interval_secs, price_per_interval, description, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7) \
-             ON CONFLICT (id) DO UPDATE SET prefix=EXCLUDED.prefix, rate_per_minute=EXCLUDED.rate_per_minute, billing_interval_secs=EXCLUDED.billing_interval_secs, price_per_interval=EXCLUDED.price_per_interval, description=EXCLUDED.description, tenant_id=EXCLUDED.tenant_id",
-        )
-        .bind(input.id)
-        .bind(input.prefix)
-        .bind(input.rate_per_minute)
-        .bind(input.billing_interval_secs)
-        .bind(input.price_per_interval)
-        .bind(input.description)
-        .bind(input.tenant_id)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn delete_rate(&self, id: &str) -> Result<bool, sqlx::Error> {
-        let r = sqlx::query("DELETE FROM billing_rates WHERE id=$1")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(r.rows_affected() > 0)
-    }
-
-    // ===== 计费：账户 =====
-    pub async fn list_accounts(&self) -> Result<Vec<BillingAccount>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, username, CAST(balance AS NUMERIC), CAST(credit_limit AS NUMERIC), currency, created_at FROM billing_accounts ORDER BY username",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            out.push(BillingAccount {
-                id: row.get(0),
-                username: row.get(1),
-                balance: row.get(2),
-                credit_limit: row.get(3),
-                currency: row.get(4),
-                created_at: row.get(5),
-            });
-        }
-        Ok(out)
-    }
-
-    /// 按页读取计费账户，可选按关键字在 SQL 层过滤。
-    ///
-    /// - `q`：对 username 做大小写不敏感的 LIKE 匹配
-    pub async fn list_accounts_page(
-        &self,
-        limit: i64,
-        offset: i64,
-        q: Option<&str>,
-    ) -> Result<Vec<BillingAccount>, sqlx::Error> {
-        let like = q.map(|s| format!("%{s}%"));
-        let rows = sqlx::query(
-            "SELECT id, username, CAST(balance AS NUMERIC), CAST(credit_limit AS NUMERIC), currency, created_at FROM billing_accounts \
-             WHERE ($3::TEXT IS NULL OR LOWER(username) LIKE LOWER($3)) \
-             ORDER BY username LIMIT $1 OFFSET $2",
-        )
-        .bind(limit)
-        .bind(offset)
-        .bind(like)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| BillingAccount {
-                id: row.get(0),
-                username: row.get(1),
-                balance: row.get(2),
-                credit_limit: row.get(3),
-                currency: row.get(4),
-                created_at: row.get(5),
-            })
-            .collect())
-    }
-
-    /// 返回与 `list_accounts_page` 相同过滤条件下的计费账户总数。
-    pub async fn count_accounts(&self, q: Option<&str>) -> Result<i64, sqlx::Error> {
-        let like = q.map(|s| format!("%{s}%"));
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM billing_accounts \
-             WHERE ($1::TEXT IS NULL OR LOWER(username) LIKE LOWER($1))",
-        )
-        .bind(like)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(row.0)
-    }
-
-    pub async fn credit_account(
-        &self,
-        username: &str,
-        amount: Decimal,
-        idempotency_key: &str,
-    ) -> Result<CreditAccountOutcome, sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(idempotency_key)
-            .execute(&mut *tx)
-            .await?;
-
-        let existing: Option<(String, Decimal, Decimal)> = sqlx::query_as(
-            "SELECT username, CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC) \
-             FROM billing_credits WHERE idempotency_key = $1",
-        )
-        .bind(idempotency_key)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if let Some((existing_username, existing_amount, balance_after)) = existing {
-            tx.commit().await?;
-            if existing_username == username && existing_amount == amount {
-                return Ok(CreditAccountOutcome::Replayed(balance_after));
-            }
-            return Ok(CreditAccountOutcome::Conflict);
-        }
-
-        let balance: Decimal = sqlx::query_scalar(
-            "INSERT INTO billing_accounts (username, balance) VALUES ($1, $2) \
-             ON CONFLICT (username) DO UPDATE SET balance = billing_accounts.balance + $2 \
-             RETURNING CAST(balance AS NUMERIC)",
-        )
-        .bind(username)
-        .bind(amount)
-        .fetch_one(&mut *tx)
-        .await?;
-        sqlx::query(
-            "INSERT INTO billing_credits (idempotency_key, username, amount, balance_after) \
-             VALUES ($1, $2, $3, $4)",
-        )
-        .bind(idempotency_key)
-        .bind(username)
-        .bind(amount)
-        .bind(balance)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(CreditAccountOutcome::Applied(balance))
-    }
-
     // ===== 实时计费 =====
 
-    pub async fn check_balance(
+    /// 按账户级费率解析计费脉冲（周期秒数 + 周期价格）。
+    ///
+    /// 计费规则完全由账户配置决定：对接账户的 `billing_interval_secs` /
+    /// `price_per_interval` 用于向客户计费，落地账户的同名字段用于向供应商计成本。
+    pub async fn resolve_billing_pulse(
         &self,
         username: &str,
-        callee: &str,
-        tenant_id: Option<&str>,
-    ) -> Result<(bool, Decimal, Decimal), sqlx::Error> {
-        let balance: Decimal = sqlx::query_scalar(
-            "SELECT COALESCE(CAST(balance AS NUMERIC), 0.0) FROM billing_accounts WHERE username=$1",
+        _callee: &str,
+        _tenant_id: Option<&str>,
+    ) -> Result<Option<(u32, f64)>, sqlx::Error> {
+        let rate: Option<(i32, Decimal)> = sqlx::query_as(
+            "SELECT billing_interval_secs, price_per_interval \
+               FROM billing_accounts \
+              WHERE username = $1 AND enabled AND deleted_at IS NULL \
+                AND price_per_interval > 0",
         )
         .bind(username)
         .fetch_optional(&self.pool)
-        .await?
-        .unwrap_or(Decimal::ZERO);
+        .await?;
 
-        // 费率查找：优先匹配租户专属费率（tenant_id = $3），回退到全局费率（tenant_id IS NULL）。
-        let rate: Decimal = sqlx::query_scalar(
-            "SELECT COALESCE(CAST(rate_per_minute AS NUMERIC), 0.0) FROM billing_rates \
-              WHERE $2 LIKE prefix || '%' \
-              AND ($3::text IS NULL AND tenant_id IS NULL OR tenant_id = $3) \
-              ORDER BY tenant_id IS NULL ASC, length(prefix) DESC LIMIT 1",
-        )
-        .bind(username)
-        .bind(callee)
-        .bind(tenant_id)
-        .fetch_optional(&self.pool)
-        .await?
-        .unwrap_or(Decimal::ZERO);
-
-        let has_balance = balance > Decimal::ZERO || rate.is_zero();
-        Ok((has_balance, balance, rate))
+        Ok(rate.and_then(|(interval, price)| {
+            u32::try_from(interval)
+                .ok()
+                .zip(price.to_f64())
+                .filter(|(seconds, amount)| *seconds > 0 && *amount >= 0.0)
+        }))
     }
 
-    pub async fn settle_call(
+    /// Settles either the access charge or egress cost for a completed call.
+    pub async fn settle_call_entry(
         &self,
-        call_id: &str,
-        username: &str,
-        callee: &str,
-        duration_ms: i64,
-        tenant_id: Option<&str>,
-    ) -> Result<Option<Decimal>, sqlx::Error> {
-        if username.is_empty() || duration_ms <= 0 {
+        input: CallSettlementInput<'_>,
+    ) -> Result<Option<CallSettlementResult>, sqlx::Error> {
+        if input.username.is_empty()
+            || input.duration_ms <= 0
+            || !matches!(input.entry_type, "call_charge" | "call_cost")
+        {
             return Ok(None);
         }
 
         let exists: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM billing_ledger WHERE call_id=$1")
-                .bind(call_id)
+            sqlx::query_scalar("SELECT 1 FROM billing_ledger WHERE call_id=$1 AND entry_type=$2")
+                .bind(input.call_id)
+                .bind(input.entry_type)
                 .fetch_optional(&self.pool)
                 .await?;
         if exists.is_some() {
             return Ok(None);
         }
 
-        // 费率查找：优先匹配租户专属费率（tenant_id = $2），回退到全局费率（tenant_id IS NULL）。
+        // 费率直接取自账户配置（对接账户向客户计费，落地账户向供应商计成本）。
         let rate: Option<(i32, Decimal)> = sqlx::query_as(
-            "SELECT billing_interval_secs, price_per_interval FROM billing_rates \
-              WHERE $1 LIKE prefix || '%' \
-              AND ($2::text IS NULL AND tenant_id IS NULL OR tenant_id = $2) \
-              ORDER BY tenant_id IS NULL ASC, length(prefix) DESC LIMIT 1",
+            "SELECT billing_interval_secs, price_per_interval \
+               FROM billing_accounts \
+              WHERE username = $1 AND enabled AND deleted_at IS NULL \
+                AND price_per_interval > 0",
         )
-        .bind(callee)
-        .bind(tenant_id)
+        .bind(input.username)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -309,7 +73,7 @@ impl PostgresCdrStore {
             return Ok(None);
         };
 
-        let amount = pulse_amount(duration_ms, interval_secs, price);
+        let amount = pulse_amount(input.duration_ms, interval_secs, price);
         if amount.is_zero() {
             return Ok(None);
         }
@@ -318,30 +82,34 @@ impl PostgresCdrStore {
         let updated = sqlx::query(
             "UPDATE billing_accounts \
               SET balance = balance - $1 \
-              WHERE username = $2 AND balance - $1 >= -credit_limit \
+              WHERE username = $2 AND enabled AND deleted_at IS NULL \
+                AND account_type = CASE WHEN $3 = 'call_charge' THEN 'access' ELSE 'egress' END \
+                AND balance - $1 >= -credit_limit \
               RETURNING balance",
         )
         .bind(amount)
-        .bind(username)
+        .bind(input.username)
+        .bind(input.entry_type)
         .fetch_optional(&mut *tx)
         .await?;
 
         let new_bal = match updated {
             Some(row) => row.get::<Decimal, _>(0),
             None => {
-                warn!(%username, %amount, call_id, "实时扣费失败：余额不足或账户未配置");
+                warn!(username = input.username, %amount, call_id = input.call_id, entry_type = input.entry_type, "实时扣费失败：余额不足或账户未配置");
                 tx.rollback().await?;
                 return Ok(None);
             }
         };
 
         sqlx::query(
-            "INSERT INTO billing_ledger (call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after) \
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            "INSERT INTO billing_ledger (call_id, entry_type, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after) \
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
         )
-        .bind(call_id)
-        .bind(username)
-        .bind(duration_ms)
+        .bind(input.call_id)
+        .bind(input.entry_type)
+        .bind(input.username)
+        .bind(input.duration_ms)
         .bind(price * Decimal::from(60) / Decimal::from(interval_secs))
         .bind(interval_secs)
         .bind(price)
@@ -350,53 +118,39 @@ impl PostgresCdrStore {
         .execute(&mut *tx)
         .await?;
 
+        sqlx::query(
+            "INSERT INTO billing_journal ( \
+                account_id, account_type, entry_type, amount, balance_before, balance_after, \
+                call_id, operator_username, remark, idempotency_key \
+             ) \
+             SELECT id, account_type, $2, -$3, $4 + $3, $4, $1, 'system', \
+                '通话自动结算', $1 || ':' || $2 \
+             FROM billing_accounts WHERE username = $5 \
+             ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",
+        )
+        .bind(input.call_id)
+        .bind(input.entry_type)
+        .bind(amount)
+        .bind(new_bal)
+        .bind(input.username)
+        .execute(&mut *tx)
+        .await?;
+
         tx.commit().await?;
-        Ok(Some(new_bal))
+        Ok(Some(CallSettlementResult {
+            balance_after: new_bal,
+            billed_duration_ms: pulse_duration_ms(input.duration_ms, interval_secs),
+            amount,
+        }))
     }
 
     // ===== 计费：扣费明细 =====
-    pub async fn list_ledger(
-        &self,
-        username: Option<&str>,
-    ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
-        let rows = if let Some(u) = username {
-            sqlx::query(
-                "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
-                  FROM billing_ledger WHERE username=$1 ORDER BY created_at DESC LIMIT 500",
-            )
-            .bind(u)
-            .fetch_all(&self.pool)
-            .await?
-        } else {
-            sqlx::query(
-                "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
-                  FROM billing_ledger ORDER BY created_at DESC LIMIT 500",
-            )
-            .fetch_all(&self.pool)
-            .await?
-        };
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            out.push(LedgerEntry {
-                id: row.get(0),
-                call_id: row.get(1),
-                username: row.get(2),
-                duration_ms: row.get(3),
-                rate_per_minute: row.get(4),
-                billing_interval_secs: row.get(5),
-                price_per_interval: row.get(6),
-                amount: row.get(7),
-                balance_after: row.get(8),
-                created_at: row.get(9),
-            });
-        }
-        Ok(out)
-    }
 
-    /// 按页读取扣费明细，支持按账户和时间范围筛选。
+    /// 按页读取扣费明细，支持按账户、时间范围和流水类型筛选。
     ///
     /// - `username`：精确匹配账户名
     /// - `start`/`end`：按 created_at 做 >= / <= 过滤
+    /// - `entry_type`：按流水类型过滤（call_charge / call_cost）
     pub async fn list_ledger_page(
         &self,
         username: Option<&str>,
@@ -404,13 +158,15 @@ impl PostgresCdrStore {
         end: Option<time::OffsetDateTime>,
         limit: i64,
         offset: i64,
+        entry_type: Option<&str>,
     ) -> Result<Vec<LedgerEntry>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, call_id, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
+            "SELECT id, call_id, entry_type, username, duration_ms, CAST(rate_per_minute AS NUMERIC), billing_interval_secs, CAST(price_per_interval AS NUMERIC), CAST(amount AS NUMERIC), CAST(balance_after AS NUMERIC), created_at \
               FROM billing_ledger \
               WHERE ($1::TEXT IS NULL OR username = $1) \
                 AND ($2::TIMESTAMPTZ IS NULL OR created_at >= $2) \
                 AND ($3::TIMESTAMPTZ IS NULL OR created_at <= $3) \
+                AND ($6::TEXT IS NULL OR entry_type = $6) \
               ORDER BY created_at DESC, id DESC LIMIT $4 OFFSET $5",
         )
         .bind(username)
@@ -418,6 +174,7 @@ impl PostgresCdrStore {
         .bind(end)
         .bind(limit)
         .bind(offset)
+        .bind(entry_type)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -425,14 +182,15 @@ impl PostgresCdrStore {
             .map(|row| LedgerEntry {
                 id: row.get(0),
                 call_id: row.get(1),
-                username: row.get(2),
-                duration_ms: row.get(3),
-                rate_per_minute: row.get(4),
-                billing_interval_secs: row.get(5),
-                price_per_interval: row.get(6),
-                amount: row.get(7),
-                balance_after: row.get(8),
-                created_at: row.get(9),
+                entry_type: row.get(2),
+                username: row.get(3),
+                duration_ms: row.get(4),
+                rate_per_minute: row.get(5),
+                billing_interval_secs: row.get(6),
+                price_per_interval: row.get(7),
+                amount: row.get(8),
+                balance_after: row.get(9),
+                created_at: row.get(10),
             })
             .collect())
     }
@@ -443,124 +201,22 @@ impl PostgresCdrStore {
         username: Option<&str>,
         start: Option<time::OffsetDateTime>,
         end: Option<time::OffsetDateTime>,
+        entry_type: Option<&str>,
     ) -> Result<i64, sqlx::Error> {
         let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM billing_ledger \
              WHERE ($1::TEXT IS NULL OR username = $1) \
                AND ($2::TIMESTAMPTZ IS NULL OR created_at >= $2) \
-               AND ($3::TIMESTAMPTZ IS NULL OR created_at <= $3)",
+               AND ($3::TIMESTAMPTZ IS NULL OR created_at <= $3) \
+               AND ($4::TEXT IS NULL OR entry_type = $4)",
         )
         .bind(username)
         .bind(start)
         .bind(end)
+        .bind(entry_type)
         .fetch_one(&self.pool)
         .await?;
         Ok(row.0)
-    }
-
-    pub async fn reconcile_billing(
-        &self,
-        start: OffsetDateTime,
-        end: OffsetDateTime,
-    ) -> Result<ReconcileResult, sqlx::Error> {
-        let rate_rows = sqlx::query(
-            "SELECT prefix, billing_interval_secs, price_per_interval FROM billing_rates ORDER BY length(prefix) DESC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        let rates: Vec<(String, i32, Decimal)> = rate_rows
-            .into_iter()
-            .map(|r| (r.get(0), r.get(1), r.get(2)))
-            .collect();
-
-        let cdr_rows = sqlx::query(
-            "SELECT call_id, caller, callee, billable_duration_ms FROM call_cdrs \
-               WHERE status='answered' AND started_at >= $1 AND started_at <= $2",
-        )
-        .bind(start)
-        .bind(end)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut tx = self.pool.begin().await?;
-        let mut processed: i64 = 0;
-        let mut skipped: i64 = 0;
-        let mut total_amount = Decimal::ZERO;
-
-        for row in cdr_rows {
-            let call_id: String = row.get(0);
-            let caller: Option<String> = row.get(1);
-            let callee: Option<String> = row.get(2);
-            let billable_ms: i64 = row.get(3);
-
-            let exists: Option<i64> =
-                sqlx::query_scalar("SELECT 1 FROM billing_ledger WHERE call_id=$1")
-                    .bind(&call_id)
-                    .fetch_optional(&mut *tx)
-                    .await?;
-            if exists.is_some() {
-                skipped += 1;
-                continue;
-            }
-
-            let user = caller
-                .as_deref()
-                .and_then(utils::extract_sip_user)
-                .unwrap_or("");
-            if user.is_empty() {
-                skipped += 1;
-                continue;
-            }
-            let callee_str = callee.unwrap_or_default();
-            let Some((interval_secs, price)) = match_pulse_rate(&callee_str, &rates) else {
-                skipped += 1;
-                continue;
-            };
-            let amount = pulse_amount(billable_ms, interval_secs, price);
-
-            let updated_row = sqlx::query(
-                "UPDATE billing_accounts \
-                  SET balance = balance - $1 \
-                  WHERE username = $2 AND balance - $1 >= -credit_limit \
-                  RETURNING balance",
-            )
-            .bind(amount)
-            .bind(user)
-            .fetch_optional(&mut *tx)
-            .await?;
-
-            let new_bal = match updated_row {
-                Some(row) => row.get::<Decimal, _>(0),
-                None => {
-                    warn!(%user, %amount, "扣除余额失败：余额不足以支付当前呼叫费用或账户未配置");
-                    skipped += 1;
-                    continue;
-                }
-            };
-
-            sqlx::query(
-                "INSERT INTO billing_ledger (call_id, username, duration_ms, rate_per_minute, billing_interval_secs, price_per_interval, amount, balance_after) \
-                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-            )
-            .bind(&call_id)
-            .bind(user)
-            .bind(billable_ms)
-            .bind(price * Decimal::from(60) / Decimal::from(interval_secs))
-            .bind(interval_secs)
-            .bind(price)
-            .bind(amount)
-            .bind(new_bal)
-            .execute(&mut *tx)
-            .await?;
-            processed += 1;
-            total_amount += amount;
-        }
-        tx.commit().await?;
-        Ok(ReconcileResult {
-            processed,
-            skipped,
-            total_amount,
-        })
     }
 }
 
@@ -574,16 +230,21 @@ pub fn pulse_amount(duration_ms: i64, interval_secs: i32, price: Decimal) -> Dec
     Decimal::from(pulses) * price
 }
 
-fn match_pulse_rate(callee: &str, rates: &[(String, i32, Decimal)]) -> Option<(i32, Decimal)> {
-    rates
-        .iter()
-        .find(|(prefix, _, _)| callee.starts_with(prefix))
-        .map(|(_, interval, price)| (*interval, *price))
+/// Calculates billed milliseconds by rounding any partial interval upward.
+pub fn pulse_duration_ms(duration_ms: i64, interval_secs: i32) -> i64 {
+    if duration_ms <= 0 || interval_secs <= 0 {
+        return 0;
+    }
+    let interval_ms = i64::from(interval_secs) * 1_000;
+    duration_ms
+        .saturating_add(interval_ms - 1)
+        .saturating_div(interval_ms)
+        .saturating_mul(interval_ms)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::pulse_amount;
+    use super::{pulse_amount, pulse_duration_ms};
     use rust_decimal::Decimal;
 
     #[test]
@@ -593,5 +254,12 @@ mod tests {
         assert_eq!(pulse_amount(61_000, 60, Decimal::from(1)), Decimal::from(2));
         let price = Decimal::new(5, 2); // 0.05
         assert_eq!(pulse_amount(45_000, 6, price), Decimal::new(40, 2)); // 0.40
+    }
+
+    #[test]
+    fn pulse_duration_rounds_sixty_one_seconds_to_two_minutes() {
+        assert_eq!(pulse_duration_ms(61_000, 60), 120_000);
+        assert_eq!(pulse_duration_ms(60_000, 60), 60_000);
+        assert_eq!(pulse_duration_ms(0, 60), 0);
     }
 }

@@ -14,10 +14,24 @@ pub struct CdrEvent {
     pub caller: Option<String>,
     pub callee: Option<String>,
     pub started_at_ms: i64,
+    #[serde(default)]
+    pub ringing_at_ms: Option<i64>,
     pub answered_at_ms: Option<i64>,
     pub ended_at_ms: i64,
     pub duration_ms: i64,
     pub billable_duration_ms: i64,
+    #[serde(default)]
+    pub talk_duration_ms: Option<i64>,
+    #[serde(default)]
+    pub ringing_duration_ms: Option<i64>,
+    #[serde(default)]
+    pub access_billable_duration_ms: Option<i64>,
+    #[serde(default)]
+    pub access_charge_amount: Option<f64>,
+    #[serde(default)]
+    pub egress_billable_duration_ms: Option<i64>,
+    #[serde(default)]
+    pub egress_cost_amount: Option<f64>,
     pub status: String,
     pub failure_status_code: Option<u16>,
     pub failure_reason: Option<String>,
@@ -32,6 +46,12 @@ pub struct CdrEvent {
     pub recording_path: Option<String>,
     pub direction: String,
     #[serde(default)]
+    pub tenant_id: Option<String>,
+    #[serde(default)]
+    pub tenant_name: Option<String>,
+    #[serde(default)]
+    pub auth_realm: Option<String>,
+    #[serde(default)]
     pub audit: CdrAuditSnapshot,
 }
 
@@ -42,10 +62,19 @@ impl CdrEvent {
             caller: cdr.caller.clone(),
             callee: cdr.callee.clone(),
             started_at_ms: system_time_millis(cdr.started_at),
+            ringing_at_ms: cdr.ringing_at.map(system_time_millis),
             answered_at_ms: cdr.answered_at.map(system_time_millis),
             ended_at_ms: system_time_millis(cdr.ended_at),
             duration_ms: duration_millis(cdr.duration),
             billable_duration_ms: duration_millis(cdr.billable_duration),
+            talk_duration_ms: cdr
+                .answered_at
+                .map(|_| duration_millis(cdr.billable_duration)),
+            ringing_duration_ms: cdr.ringing_duration.map(duration_millis),
+            access_billable_duration_ms: cdr.access_billable_duration.map(duration_millis),
+            access_charge_amount: cdr.access_charge_amount,
+            egress_billable_duration_ms: cdr.egress_billable_duration.map(duration_millis),
+            egress_cost_amount: cdr.egress_cost_amount,
             status: cdr.status.as_str().to_string(),
             failure_status_code: cdr
                 .failure_cause
@@ -62,6 +91,9 @@ impl CdrEvent {
             dtmf_digits: cdr.dtmf_digits.clone(),
             recording_path: cdr.recording_path.clone(),
             direction: cdr.direction.clone(),
+            tenant_id: cdr.audit.tenant_id.clone(),
+            tenant_name: cdr.audit.tenant_name.clone(),
+            auth_realm: cdr.audit.auth_realm.clone(),
             audit: cdr.audit.clone(),
         }
     }

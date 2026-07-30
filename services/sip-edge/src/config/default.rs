@@ -82,7 +82,7 @@ impl Default for EdgeConfig {
             sipflow_retention_days: 7,
             sip_transaction_timeout_secs: 32,
             sip_t1_initial_ms: 500,
-            tenant_enabled: false,
+            tenant_enabled: true,
             tenant_refresh_interval_secs: 60,
         }
     }

@@ -89,14 +89,14 @@ const KNOWN_PERMISSION_TARGETS: &[(&str, &str)] = &[
     ("POST", "/api/v1/calls/:call_id/actions/stop-monitor"),
     ("GET", "/api/v1/reports/summary"),
     ("GET", "/api/v1/reports/export"),
-    ("GET|POST", "/api/v1/billing/rates"),
-    ("POST", "/api/v1/billing/rates/import"),
-    ("GET", "/api/v1/billing/rates/import-template"),
-    ("PUT|DELETE", "/api/v1/billing/rates/:id"),
-    ("GET", "/api/v1/billing/accounts"),
-    ("POST", "/api/v1/billing/accounts/:username/credit"),
+    ("GET|POST", "/api/v1/billing/access-accounts"),
+    ("PUT|DELETE", "/api/v1/billing/access-accounts/:id"),
+    ("POST", "/api/v1/billing/access-accounts/:id/credit"),
+    ("GET|POST", "/api/v1/billing/egress-accounts"),
+    ("PUT|DELETE", "/api/v1/billing/egress-accounts/:id"),
+    ("POST", "/api/v1/billing/egress-accounts/:id/credit"),
+    ("GET", "/api/v1/billing/credits"),
     ("GET", "/api/v1/billing/transactions"),
-    ("POST", "/api/v1/billing/reconciliations"),
     ("GET|POST", "/api/v1/security/anti-fraud/policies"),
     ("PUT|DELETE", "/api/v1/security/anti-fraud/policies/:id"),
     ("GET", "/api/v1/security/anti-fraud/settings"),
@@ -168,14 +168,7 @@ const KNOWN_PERMISSION_TARGETS: &[(&str, &str)] = &[
     ("GET", "/api/reports/summary"),
     ("GET", "/api/reports/export"),
     ("GET", "/api/reports/daily"),
-    ("GET|POST", "/api/rates"),
-    ("PUT|DELETE", "/api/rates/:id"),
-    ("POST", "/api/rates/import"),
-    ("GET", "/api/rates/import-template"),
-    ("GET", "/api/accounts"),
-    ("POST", "/api/accounts/:username/credit"),
     ("GET", "/api/ledger"),
-    ("POST", "/api/billing/reconcile"),
     ("GET", "/api/calls/active"),
     ("POST", "/api/calls/:call_id/terminate"),
     ("GET", "/api/route-preview"),
@@ -351,17 +344,18 @@ pub fn required_permission(method: &str, path: &str) -> Option<&'static str> {
             "calls.view"
         });
     }
-    if path.starts_with("/api/v1/billing/accounts") || path.starts_with("/api/accounts") {
-        return Some(if method == "GET" && path.contains("export") {
-            "billing.accounts.export"
-        } else if method == "GET" {
-            "billing.accounts.view"
-        } else {
-            "billing.accounts.credit"
-        });
+    if path.starts_with("/api/v1/billing/access-accounts") {
+        return billing_account_permission(method, path, "billing.access_accounts");
     }
-    if path.starts_with("/api/v1/billing/rates") || path.starts_with("/api/rates") {
-        return resource_permission(method, path, "billing.rates");
+    if path.starts_with("/api/v1/billing/egress-accounts") {
+        return billing_account_permission(method, path, "billing.egress_accounts");
+    }
+    if path.starts_with("/api/v1/billing/credits") {
+        return Some(if path.contains("export") {
+            "billing.credits.export"
+        } else {
+            "billing.credits.view"
+        });
     }
     if path.starts_with("/api/v1/billing/transactions") || path.starts_with("/api/ledger") {
         return Some(if path.contains("export") {
@@ -369,11 +363,6 @@ pub fn required_permission(method: &str, path: &str) -> Option<&'static str> {
         } else {
             "billing.ledger.view"
         });
-    }
-    if path.starts_with("/api/v1/billing/reconciliations")
-        || path.starts_with("/api/billing/reconcile")
-    {
-        return Some("billing.reconcile");
     }
     if path.starts_with("/api/v1/security/audit-logs") || path.starts_with("/api/audit-logs") {
         return Some("security.audit");
@@ -473,6 +462,39 @@ fn resource_permission(method: &str, path: &str, resource: &str) -> Option<&'sta
     permission_key(resource, action)
 }
 
+fn billing_account_permission(method: &str, path: &str, resource: &str) -> Option<&'static str> {
+    let action = if path.ends_with("/credit") {
+        "credit"
+    } else if method == "GET" && path.contains("export") {
+        "export"
+    } else if method == "GET" {
+        "view"
+    } else if method == "POST" {
+        "create"
+    } else if matches!(method, "PUT" | "PATCH") {
+        "update"
+    } else if method == "DELETE" {
+        "delete"
+    } else {
+        return None;
+    };
+    match (resource, action) {
+        ("billing.access_accounts", "view") => Some("billing.access_accounts.view"),
+        ("billing.access_accounts", "create") => Some("billing.access_accounts.create"),
+        ("billing.access_accounts", "update") => Some("billing.access_accounts.update"),
+        ("billing.access_accounts", "delete") => Some("billing.access_accounts.delete"),
+        ("billing.access_accounts", "credit") => Some("billing.access_accounts.credit"),
+        ("billing.access_accounts", "export") => Some("billing.access_accounts.export"),
+        ("billing.egress_accounts", "view") => Some("billing.egress_accounts.view"),
+        ("billing.egress_accounts", "create") => Some("billing.egress_accounts.create"),
+        ("billing.egress_accounts", "update") => Some("billing.egress_accounts.update"),
+        ("billing.egress_accounts", "delete") => Some("billing.egress_accounts.delete"),
+        ("billing.egress_accounts", "credit") => Some("billing.egress_accounts.credit"),
+        ("billing.egress_accounts", "export") => Some("billing.egress_accounts.export"),
+        _ => None,
+    }
+}
+
 fn permission_key(resource: &str, action: &str) -> Option<&'static str> {
     match (resource, action) {
         ("extensions", "view") => Some("extensions.view"),
@@ -499,12 +521,6 @@ fn permission_key(resource: &str, action: &str) -> Option<&'static str> {
         ("routing", "delete") => Some("routing.delete"),
         ("routing", "import") => Some("routing.import"),
         ("routing", "export") => Some("routing.export"),
-        ("billing.rates", "view") => Some("billing.rates.view"),
-        ("billing.rates", "create") => Some("billing.rates.create"),
-        ("billing.rates", "update") => Some("billing.rates.update"),
-        ("billing.rates", "delete") => Some("billing.rates.delete"),
-        ("billing.rates", "import") => Some("billing.rates.import"),
-        ("billing.rates", "export") => Some("billing.rates.export"),
         ("queues", "view") => Some("queues.view"),
         ("queues", "create") => Some("queues.create"),
         ("queues", "update") => Some("queues.update"),
@@ -599,8 +615,8 @@ mod tests {
             Some("extensions.delete")
         );
         assert_eq!(
-            required_permission("POST", "/api/v1/billing/accounts/a/credit"),
-            Some("billing.accounts.credit")
+            required_permission("POST", "/api/v1/billing/access-accounts/a/credit"),
+            Some("billing.access_accounts.credit")
         );
         assert_eq!(
             required_permission("GET", "/api/v1/call-center/queues?export=true"),
@@ -615,8 +631,20 @@ mod tests {
             Some("tenants.export")
         );
         assert_eq!(
-            required_permission("GET", "/api/v1/billing/accounts?export=true"),
-            Some("billing.accounts.export")
+            required_permission("GET", "/api/v1/billing/access-accounts?export=true"),
+            Some("billing.access_accounts.export")
+        );
+        assert_eq!(
+            required_permission("POST", "/api/v1/billing/access-accounts"),
+            Some("billing.access_accounts.create")
+        );
+        assert_eq!(
+            required_permission("POST", "/api/v1/billing/egress-accounts/42/credit"),
+            Some("billing.egress_accounts.credit")
+        );
+        assert_eq!(
+            required_permission("GET", "/api/v1/billing/credits?export=true"),
+            Some("billing.credits.export")
         );
         assert_eq!(
             required_permission("GET", "/api/v1/billing/transactions?export=true"),
@@ -785,10 +813,8 @@ mod tests {
             ("GET", "/api/v1/calls/id/sipflow"),
             ("POST", "/api/v1/calls/id/actions/stop-monitor"),
             ("GET", "/api/v1/reports/export"),
-            ("POST", "/api/v1/billing/accounts/alice/credit"),
-            ("DELETE", "/api/v1/billing/rates/1"),
+            ("POST", "/api/v1/billing/access-accounts/42/credit"),
             ("GET", "/api/v1/billing/transactions"),
-            ("POST", "/api/v1/billing/reconciliations"),
             ("GET", "/api/v1/security/audit-logs"),
             ("PUT", "/api/v1/security/anti-fraud/settings/enabled"),
             ("POST", "/api/v1/infrastructure/settings"),
@@ -803,8 +829,7 @@ mod tests {
             ("POST", "/api/users/import"),
             ("PUT", "/api/gateways/id"),
             ("GET", "/api/reports/summary"),
-            ("GET", "/api/accounts"),
-            ("POST", "/api/billing/reconcile"),
+            ("GET", "/api/ledger"),
             ("POST", "/api/calls/id/terminate"),
             ("GET", "/api/media/metrics"),
             ("PUT", "/api/anti-fraud/config/enabled"),

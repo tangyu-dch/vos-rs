@@ -60,10 +60,19 @@ impl AuthConfig {
         !self.users.is_empty()
     }
 
-    pub fn challenge_header_with_nonce(&self, nonce: &str) -> String {
+    /// 生成带指定 realm 的 WWW-Authenticate / Proxy-Authenticate 头。
+    ///
+    /// `realm_override` 为 Some 时使用传入的 realm（如租户域名），
+    /// 为 None 时回退到配置的默认 realm。
+    pub fn challenge_header_with_nonce_and_realm(
+        &self,
+        nonce: &str,
+        realm_override: Option<&str>,
+    ) -> String {
+        let realm = realm_override.unwrap_or(&self.realm);
         format!(
             "Digest realm=\"{}\", nonce=\"{}\", algorithm=MD5, qop=\"auth\"",
-            self.realm, nonce
+            realm, nonce
         )
     }
     pub fn select_nonce(&self) -> String {
@@ -148,6 +157,7 @@ impl AuthConfig {
             password,
             self.is_enabled() || db_store.is_some(),
             replay_cache,
+            None,
         )
     }
 
@@ -179,12 +189,16 @@ impl AuthConfig {
     }
 
     /// 使用已从 Redis 取得的凭据验证 Digest，不访问数据库。
+    ///
+    /// `realm_override` 为 Some 时使用传入的 realm 进行验证（如租户域名），
+    /// 为 None 时回退到配置的默认 realm。
     pub(crate) fn verify_request_with_password(
         &self,
         request: &SipRequest,
         password: Option<String>,
         auth_required: bool,
         replay_cache: Option<&DashMap<String, u64>>,
+        realm_override: Option<&str>,
     ) -> AuthDecision {
         if !auth_required {
             return AuthDecision::Disabled;
@@ -257,10 +271,18 @@ impl AuthConfig {
             return AuthDecision::ChallengeWithFailure;
         };
 
+        let effective_realm = realm_override.unwrap_or(&self.realm);
+        if let Some(req_realm) = params.get("realm") {
+            if req_realm.trim() != effective_realm.trim() {
+                tracing::warn!(req_realm = %req_realm, expected_realm = %effective_realm, "realm mismatch in digest header");
+                return AuthDecision::ChallengeWithFailure;
+            }
+        }
+
         let expected = DigestExpectation {
             username,
             password: &password,
-            realm: &self.realm,
+            realm: effective_realm,
             nonce,
             method: request.method.as_str(),
         };

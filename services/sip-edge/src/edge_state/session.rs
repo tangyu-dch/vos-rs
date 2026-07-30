@@ -81,10 +81,26 @@ impl EdgeState {
     pub(crate) fn bind_gateway_dialog(&self, session_id: &str, gateway_call_id: &str) {
         if let Some(mut transaction) = self.inbound_transactions.get_mut(session_id) {
             transaction.dialogs.gateway.call_id = gateway_call_id.to_string();
+            let caller_call_id = transaction.dialogs.caller.call_id.clone();
             let session_id = transaction.session_id.clone();
             drop(transaction);
             self.inbound_transactions
                 .index_dialog(&session_id, gateway_call_id);
+
+            // Inherit whitelist & caller addr mapping if caller leg was already indexed
+            let canonical_key = if !caller_call_id.is_empty() {
+                caller_call_id
+            } else {
+                session_id
+            };
+            if self.matched_call_ids.contains_key(&canonical_key) {
+                self.matched_call_ids
+                    .insert(gateway_call_id.to_string(), std::time::Instant::now());
+            }
+            if let Some(addr_guard) = self.call_caller_addrs.get(&canonical_key) {
+                self.call_caller_addrs
+                    .insert(gateway_call_id.to_string(), *addr_guard);
+            }
         }
     }
 

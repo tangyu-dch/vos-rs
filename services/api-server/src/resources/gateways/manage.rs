@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use cdr_core::SipGateway;
+use cdr_core::{BillingAccountType, SipGateway};
 
 use super::{
     access_ha1, reject_unsupported_egress_secret, validate_gateway, CreateGatewayRequest,
@@ -67,6 +67,14 @@ pub async fn create_gateway(
             .as_deref()
             .is_some_and(|value| !value.is_empty()),
     )?;
+    validate_gateway_billing_links(
+        &state,
+        role,
+        req.account_id,
+        req.tenant_id.as_deref(),
+        req.enabled.unwrap_or(true),
+    )
+    .await?;
     let access_password_hash = access_password.as_deref().and_then(|password| {
         Some(access_ha1(
             access_username.as_deref()?,
@@ -113,6 +121,7 @@ pub async fn create_gateway(
         current_concurrent: Some(0),
         circuit_state: Some("closed".to_string()),
         account_id: req.account_id,
+        tenant_id: req.tenant_id,
         max_concurrent: req.max_concurrent,
         enabled: req.enabled,
         created_at: None,
@@ -234,6 +243,16 @@ pub async fn update_gateway(
             .is_some_and(|value| !value.is_empty())
             || old.has_access_password,
     )?;
+    let account_id = req.account_id.or(old.account_id);
+    let tenant_id = req.tenant_id.clone().or_else(|| old.tenant_id.clone());
+    validate_gateway_billing_links(
+        &state,
+        role,
+        account_id,
+        tenant_id.as_deref(),
+        req.enabled.or(old.enabled).unwrap_or(true),
+    )
+    .await?;
     let access_password_hash = if uses_access_digest {
         req.access_password.as_deref().and_then(|password| {
             Some(access_ha1(
@@ -282,7 +301,8 @@ pub async fn update_gateway(
         virtual_caller,
         current_concurrent: old.current_concurrent,
         circuit_state: old.circuit_state.clone(),
-        account_id: req.account_id.or(old.account_id),
+        account_id,
+        tenant_id,
         max_concurrent: req.max_concurrent.or(old.max_concurrent),
         enabled: req.enabled.or(old.enabled),
         created_at: old.created_at,
@@ -296,4 +316,58 @@ pub async fn update_gateway(
         })?;
     crate::resources::routes::publish_route_reload(&state.nats_client).await;
     Ok(StatusCode::OK)
+}
+
+async fn validate_gateway_billing_links(
+    state: &AppState,
+    role: &str,
+    account_id: Option<i64>,
+    tenant_id: Option<&str>,
+    enabled: bool,
+) -> Result<(), ApiError> {
+    let expected_type = if role == "access" {
+        BillingAccountType::Access
+    } else {
+        BillingAccountType::Egress
+    };
+    let Some(account_id) = account_id else {
+        if enabled {
+            return Err(ApiError::internal(if role == "access" {
+                "参数无效: 启用对接网关前必须关联对接账户"
+            } else {
+                "参数无效: 启用落地网关前必须关联落地账户"
+            }));
+        }
+        return Ok(());
+    };
+    let account_matches = state
+        .store
+        .billing_account_matches_type(account_id, expected_type)
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    if !account_matches {
+        return Err(ApiError::internal(if role == "access" {
+            "参数无效: 对接网关只能关联已启用的对接账户"
+        } else {
+            "参数无效: 落地网关只能关联已启用的落地账户"
+        }));
+    }
+    if role != "access" {
+        return Ok(());
+    }
+    let tenant_id = tenant_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::internal("参数无效: 对接网关必须关联租户"))?;
+    let tenant_exists = state
+        .store
+        .active_tenant_exists(tenant_id)
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    if !tenant_exists {
+        return Err(ApiError::internal(
+            "参数无效: 对接网关关联的租户不存在或未启用",
+        ));
+    }
+    Ok(())
 }

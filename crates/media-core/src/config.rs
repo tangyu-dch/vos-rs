@@ -99,7 +99,7 @@ impl MediaConfig {
 }
 
 fn even_port_at_or_above(port: u16) -> Option<u16> {
-    if port % 2 == 0 {
+    if port.is_multiple_of(2) {
         Some(port)
     } else {
         port.checked_add(1)
@@ -107,7 +107,7 @@ fn even_port_at_or_above(port: u16) -> Option<u16> {
 }
 
 fn even_port_at_or_below(port: u16) -> Option<u16> {
-    if port % 2 == 0 {
+    if port.is_multiple_of(2) {
         Some(port)
     } else {
         port.checked_sub(1)
