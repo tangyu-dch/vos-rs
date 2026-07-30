@@ -289,8 +289,15 @@ export const callerPools: ResourceSpec = {
   description: '维护虚拟主叫别名、选号算法和真实号码成员。',
   path: '/caller-pools',
   idKey: 'id',
-  detailPath: '/caller-pools',
   createLabel: '新建号码池',
+  customRowAction: {
+    label: '配置成员',
+    icon: 'Network',
+    color: 'primary',
+    onPress: (row) => {
+      window.location.hash = `#/caller-pools/${encodeURIComponent(String(row.id))}`;
+    },
+  },
   // 后端无分页/筛选，使用客户端筛选
   serverFilters: [
     {
@@ -361,8 +368,15 @@ export const egressGroups: ResourceSpec = {
   description: '定义来源允许使用的落地范围、目的地能力和故障边界。',
   path: '/egress-groups',
   idKey: 'id',
-  detailPath: '/egress-groups',
   createLabel: '新建分组',
+  customRowAction: {
+    label: '配置成员',
+    icon: 'Network',
+    color: 'primary',
+    onPress: (row) => {
+      window.location.hash = `#/egress-groups/${encodeURIComponent(String(row.id))}`;
+    },
+  },
   // 后端无分页/筛选，使用客户端筛选
   serverFilters: [
     {
