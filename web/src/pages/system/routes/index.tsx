@@ -1,12 +1,9 @@
-// 系统管理 - 路由策略编排
-// 主视图: 表格定义路由规则 (含时间路由字段)
-// 每条规则支持独立的可视化拓扑编排 (点击"拓扑编排"按钮弹出画布)
-// 画布节点配置与表格字段双向绑定
-
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import {
   Button,
   Chip,
+  Card,
+  CardBody,
   Input,
   Modal,
   ModalContent,
@@ -14,116 +11,13 @@ import {
   ModalBody,
   ModalFooter,
 } from '@heroui/react';
-import { Send, GitBranch, X } from 'lucide-react';
+import { Send, Route as RouteIcon, ArrowRight, ShieldCheck, Cpu } from 'lucide-react';
 import { api } from '@/services/client';
 import { ResourceWorkspace } from '@/components/resource-workspace';
-import type { ResourceSpec } from '@/pages/shared/types';
+import { sipRoutes } from '@/pages/shared/resource-specs';
 import type { Entity } from '@/services/resources';
-import { message } from '@/utils/toast';
-import { RouteTopologyEditor, type RouteRuleFields } from '@/components/ivr/route-rule-binding';
 
 export function RoutesPage() {
-  // 当前正在编辑拓扑的规则 (null 表示未打开)
-  const [topoRule, setTopoRule] = useState<RouteRuleFields | null>(null);
-  // 拓扑应用后的字段变更 (暂存,等用户在表格中保存)
-  const [pendingChanges, setPendingChanges] = useState<Partial<RouteRuleFields>>({});
-
-  // 路由规则 table spec - 含完整时间路由字段
-  const routeSpec: ResourceSpec = useMemo(
-    () => ({
-      title: '路由策略',
-      description:
-        '按优先级匹配、改写号码并选择中继；支持时间段路由与权重分流。每条规则可独立编排可视化拓扑。',
-      path: '/routing/rules',
-      idKey: 'id',
-      createLabel: '新建路由规则',
-      fields: [
-        { key: 'id', label: '规则 ID', formHidden: true, readonly: true },
-        { key: 'prefix', label: '匹配前缀', placeholder: '留空表示匹配全部号码' },
-        { key: 'priority', label: '优先级', kind: 'number', required: true, defaultValue: 100 },
-        {
-          key: 'gateway_id',
-          label: '目标中继',
-          kind: 'select',
-          optionsResource: 'egress-trunks',
-          required: true,
-          placeholder: '选择已存在的落地中继',
-        },
-        { key: 'cost', label: '路由成本', kind: 'number', required: true, defaultValue: 0 },
-        { key: 'weight', label: '分流权重', kind: 'number', min: 1, defaultValue: 100 },
-        // 时间路由字段
-        {
-          key: 'time_start',
-          label: '生效开始 (HH:MM)',
-          placeholder: '08:00',
-          pattern: /^([01]\d|2[0-3]):[0-5]\d$/,
-          patternMessage: '请输入 HH:MM 格式的时间',
-        },
-        {
-          key: 'time_end',
-          label: '生效结束 (HH:MM)',
-          placeholder: '22:00',
-          pattern: /^([01]\d|2[0-3]):[0-5]\d$/,
-          patternMessage: '请输入 HH:MM 格式的时间',
-        },
-        {
-          key: 'weekdays',
-          label: '生效星期 (1-7, 逗号分隔)',
-          placeholder: '1,2,3,4,5 (周一到周五)',
-        },
-        {
-          key: 'timezone',
-          label: '时区',
-          placeholder: 'Asia/Shanghai',
-          defaultValue: 'Asia/Shanghai',
-        },
-        // 主叫过滤
-        {
-          key: 'caller_pattern',
-          label: '主叫匹配模式',
-          placeholder: '13800138000 或 138* (留空表示不过滤)',
-        },
-        // 失败处理
-        {
-          key: 'failover_strategy',
-          label: '失败回退策略',
-          kind: 'select',
-          options: [
-            { label: '拒绝呼叫', value: 'reject' },
-            { label: '尝试下一条规则', value: 'next_rule' },
-            { label: '播放忙音', value: 'play_busy' },
-          ],
-          defaultValue: 'next_rule',
-        },
-      ],
-      // 每行自定义操作: 拓扑编排按钮 (图标按钮 + Tooltip)
-      customRowAction: {
-        label: '拓扑编排',
-        icon: 'GitBranch',
-        color: 'primary',
-        onPress: (row: Entity) => {
-          const rule: RouteRuleFields = {
-            id: String(row.id ?? ''),
-            prefix: row.prefix ? String(row.prefix) : undefined,
-            priority: row.priority ? Number(row.priority) : undefined,
-            gateway_id: row.gateway_id ? String(row.gateway_id) : undefined,
-            cost: row.cost !== undefined ? Number(row.cost) : undefined,
-            weight: row.weight ? Number(row.weight) : undefined,
-            time_start: row.time_start ? String(row.time_start) : undefined,
-            time_end: row.time_end ? String(row.time_end) : undefined,
-            weekdays: row.weekdays ? String(row.weekdays) : undefined,
-            timezone: row.timezone ? String(row.timezone) : undefined,
-            caller_pattern: row.caller_pattern ? String(row.caller_pattern) : undefined,
-            failover_strategy: row.failover_strategy ? String(row.failover_strategy) : undefined,
-          };
-          setPendingChanges({});
-          setTopoRule(rule);
-        },
-      },
-    }),
-    [],
-  );
-
   // 路由仿真
   const [simOpen, setSimOpen] = useState(false);
   const [simLoading, setSimLoading] = useState(false);
@@ -152,16 +46,51 @@ export function RoutesPage() {
     }
   };
 
-  const handleApplyTopology = (changes: Partial<RouteRuleFields>) => {
-    setPendingChanges(changes);
-    message.success('拓扑配置已应用,请在表格中点击"编辑"按钮保存到后端');
-  };
-
   return (
-    <>
+    <div className="space-y-4">
+      {/* 传显 CRS 拓扑全景指引 Banner */}
+      <Card className="bg-gradient-to-r from-slate-900/90 via-purple-950/40 to-blue-950/40 border border-purple-500/20 shadow-md">
+        <CardBody className="p-4">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400">
+                <RouteIcon className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-slate-100 flex items-center gap-2">
+                  CRS 呼出路由控制中心
+                  <Chip size="sm" color="secondary" variant="flat">极简选路</Chip>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  按开户租户与被叫前缀精准寻路，自动完成加头剪切改写，顺延并发选路。
+                </p>
+              </div>
+            </div>
+
+            {/* 可视化选路拓扑链 */}
+            <div className="flex items-center gap-2 text-xs bg-slate-900/80 px-3.5 py-2 rounded-lg border border-slate-800">
+              <div className="flex items-center gap-1.5 text-slate-300">
+                <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                <span>开户租户/请求</span>
+              </div>
+              <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
+              <div className="flex items-center gap-1.5 text-purple-300 font-medium">
+                <RouteIcon className="w-3.5 h-3.5 text-purple-400" />
+                <span>前缀最长匹配</span>
+              </div>
+              <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
+              <div className="flex items-center gap-1.5 text-emerald-300">
+                <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+                <span>落地物理中继</span>
+              </div>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+
       {/* 主视图: 表格 (基于 ResourceWorkspace) */}
       <ResourceWorkspace
-        spec={routeSpec}
+        spec={sipRoutes}
         headerActionsPermission="routing.simulate"
         headerActions={
           <Button
@@ -175,100 +104,6 @@ export function RoutesPage() {
           </Button>
         }
       />
-
-      {/* 路由规则拓扑编排 */}
-      <Modal
-        isOpen={topoRule !== null}
-        onOpenChange={(o) => !o && setTopoRule(null)}
-        size="full"
-        scrollBehavior="inside"
-        hideCloseButton
-        classNames={{
-          base: 'h-screen max-h-screen w-screen max-w-screen',
-          wrapper: 'h-screen max-h-screen',
-        }}
-      >
-        <ModalContent className="h-full">
-          {() => (
-            <>
-              <ModalHeader className="flex flex-col gap-0 p-0 border-b border-default-200 shrink-0 overflow-hidden">
-                <div className="bg-content1 px-5 py-4 flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-lg bg-default-100 border border-default-200 flex items-center justify-center shrink-0">
-                      <GitBranch className="w-5 h-5 text-primary" />
-                    </div>
-                    <div className="flex flex-col gap-0.5 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-base font-semibold text-foreground">
-                          路由规则编排
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        {topoRule && (
-                          <Chip
-                            size="sm"
-                            variant="flat"
-                            color="primary"
-                            className="h-5 text-[10px] font-mono"
-                          >
-                            规则：{topoRule.id}
-                          </Chip>
-                        )}
-                        {Object.keys(pendingChanges).length > 0 && (
-                          <Chip
-                            size="sm"
-                            variant="flat"
-                            color="warning"
-                            className="h-5 text-[10px]"
-                          >
-                            {Object.keys(pendingChanges).length} 项变更待保存
-                          </Chip>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <Button
-                    isIconOnly
-                    size="sm"
-                    variant="light"
-                    onPress={() => setTopoRule(null)}
-                    aria-label="关闭"
-                    className="shrink-0"
-                  >
-                    <X className="w-4 h-4 text-default-500" />
-                  </Button>
-                </div>
-              </ModalHeader>
-              <ModalBody className="flex-1 min-h-0 p-4 overflow-hidden flex flex-col gap-2">
-                {topoRule && (
-                  <div className="flex-1 min-h-0">
-                    <RouteTopologyEditor rule={topoRule} onChange={handleApplyTopology} />
-                  </div>
-                )}
-                {Object.keys(pendingChanges).length > 0 && (
-                  <div className="shrink-0 p-3 bg-warning/5 rounded-lg border border-warning/20">
-                    <p className="text-xs font-medium text-foreground mb-2">
-                      待应用的字段变更（需在表格中编辑并保存后生效）：
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(pendingChanges).map(([k, v]) => (
-                        <Chip key={k} size="sm" variant="flat">
-                          <span className="font-mono">{k}</span>: {String(v ?? '(空)')}
-                        </Chip>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </ModalBody>
-              <ModalFooter className="shrink-0">
-                <Button variant="flat" onPress={() => setTopoRule(null)}>
-                  关闭
-                </Button>
-              </ModalFooter>
-            </>
-          )}
-        </ModalContent>
-      </Modal>
 
       {/* 路由仿真 Modal */}
       <Modal isOpen={simOpen} onOpenChange={(o) => !o && setSimOpen(false)} size="4xl">
@@ -385,6 +220,6 @@ export function RoutesPage() {
           </ModalFooter>
         </ModalContent>
       </Modal>
-    </>
+    </div>
   );
 }

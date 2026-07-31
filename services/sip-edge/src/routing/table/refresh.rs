@@ -139,7 +139,7 @@ pub(crate) async fn reload_routes_from_database(
 
     let mut routes = Vec::new();
     let now_hhmm = cdr_core::current_hhmm();
-    for (id, prefix, priority, gateway_id, cost, weight, time_start, time_end) in db_routes {
+    for (id, prefix, priority, gateway_id, cost, weight, time_start, time_end, tenant_id, strip_prefix, add_prefix) in db_routes {
         let Ok(priority) = u16::try_from(priority) else {
             warn!(route_id = %id, priority, "skipping route with an invalid priority");
             continue;
@@ -157,17 +157,19 @@ pub(crate) async fn reload_routes_from_database(
         }
         if let Some(targets) = endpoint_routes.get(&gateway_id) {
             for endpoint_route in targets {
-                routes.push(
-                    Route::with_cost_and_weight(
-                        format!("{id}:{}", endpoint_route.id),
-                        prefix.clone(),
-                        priority,
-                        cost,
-                        weight as u32,
-                        endpoint_route.target.clone(),
-                    )
-                    .with_endpoint_priority(endpoint_route.endpoint_priority),
-                );
+                let mut route = Route::with_cost_and_weight(
+                    format!("{id}:{}", endpoint_route.id),
+                    prefix.clone(),
+                    priority,
+                    cost,
+                    weight as u32,
+                    endpoint_route.target.clone(),
+                )
+                .with_endpoint_priority(endpoint_route.endpoint_priority);
+                route.tenant_id = tenant_id.clone();
+                route.strip_prefix = strip_prefix.clone();
+                route.add_prefix = add_prefix.clone();
+                routes.push(route);
             }
         }
     }

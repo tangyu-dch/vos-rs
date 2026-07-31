@@ -165,8 +165,11 @@ pub struct SipRoute {
     pub weight: i32,
     pub time_start: Option<String>,
     pub time_end: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub topology: Option<serde_json::Value>,
+    pub tenant_id: Option<String>,
+    #[serde(default)]
+    pub strip_prefix: Option<String>,
+    #[serde(default)]
+    pub add_prefix: Option<String>,
     #[serde(
         with = "time::serde::rfc3339::option",
         default,

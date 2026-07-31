@@ -15,11 +15,14 @@ impl PostgresCdrStore {
             i32,
             Option<String>,
             Option<String>,
+            Option<String>,
+            String,
+            String,
         )>,
         sqlx::Error,
     > {
         let rows = sqlx::query(
-            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end FROM sip_routes",
+            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, tenant_id, strip_prefix, add_prefix FROM sip_routes",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -33,8 +36,11 @@ impl PostgresCdrStore {
             let weight: i32 = row.get(5);
             let time_start: Option<String> = row.get(6);
             let time_end: Option<String> = row.get(7);
+            let tenant_id: Option<String> = row.get(8);
+            let strip_prefix: String = row.get(9);
+            let add_prefix: String = row.get(10);
             routes.push((
-                id, prefix, priority, gateway_id, cost, weight, time_start, time_end,
+                id, prefix, priority, gateway_id, cost, weight, time_start, time_end, tenant_id, strip_prefix, add_prefix
             ));
         }
         Ok(routes)
@@ -51,11 +57,15 @@ impl PostgresCdrStore {
         weight: i32,
         time_start: Option<&str>,
         time_end: Option<&str>,
-        topology: Option<&serde_json::Value>,
+        tenant_id: Option<&str>,
+        strip_prefix: Option<&str>,
+        add_prefix: Option<&str>,
     ) -> Result<(), sqlx::Error> {
+        let strip = strip_prefix.unwrap_or("");
+        let add = add_prefix.unwrap_or("");
         sqlx::query(
-            "INSERT INTO sip_routes (id, prefix, priority, gateway_id, cost, weight, time_start, time_end, topology) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, '{}'::jsonb)) \
+            "INSERT INTO sip_routes (id, prefix, priority, gateway_id, cost, weight, time_start, time_end, tenant_id, strip_prefix, add_prefix) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              ON CONFLICT (id) DO UPDATE \
              SET prefix = EXCLUDED.prefix, \
                  priority = EXCLUDED.priority, \
@@ -64,7 +74,9 @@ impl PostgresCdrStore {
                  weight = EXCLUDED.weight, \
                  time_start = EXCLUDED.time_start, \
                  time_end = EXCLUDED.time_end, \
-                 topology = EXCLUDED.topology"
+                 tenant_id = EXCLUDED.tenant_id, \
+                 strip_prefix = EXCLUDED.strip_prefix, \
+                 add_prefix = EXCLUDED.add_prefix"
         )
         .bind(id)
         .bind(prefix)
@@ -74,7 +86,9 @@ impl PostgresCdrStore {
         .bind(weight)
         .bind(time_start)
         .bind(time_end)
-        .bind(topology)
+        .bind(tenant_id)
+        .bind(strip)
+        .bind(add)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -87,7 +101,7 @@ impl PostgresCdrStore {
         priority: i32,
         gateway_id: &str,
     ) -> Result<(), sqlx::Error> {
-        self.insert_route_with_cost(id, prefix, priority, gateway_id, 0.0, 1, None, None, None)
+        self.insert_route_with_cost(id, prefix, priority, gateway_id, 0.0, 1, None, None, None, None, None)
             .await
     }
 
@@ -103,12 +117,16 @@ impl PostgresCdrStore {
         weight: i32,
         time_start: Option<&str>,
         time_end: Option<&str>,
-        topology: Option<&serde_json::Value>,
+        tenant_id: Option<&str>,
+        strip_prefix: Option<&str>,
+        add_prefix: Option<&str>,
     ) -> Result<bool, sqlx::Error> {
+        let strip = strip_prefix.unwrap_or("");
+        let add = add_prefix.unwrap_or("");
         let result = sqlx::query(
             "UPDATE sip_routes \
              SET prefix = $2, priority = $3, gateway_id = $4, cost = $5, weight = $6, \
-                 time_start = $7, time_end = $8, topology = COALESCE($9, topology) \
+                 time_start = $7, time_end = $8, tenant_id = $9, strip_prefix = $10, add_prefix = $11 \
              WHERE id = $1",
         )
         .bind(id)
@@ -119,7 +137,9 @@ impl PostgresCdrStore {
         .bind(weight)
         .bind(time_start)
         .bind(time_end)
-        .bind(topology)
+        .bind(tenant_id)
+        .bind(strip)
+        .bind(add)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
@@ -127,7 +147,7 @@ impl PostgresCdrStore {
 
     pub async fn list_routes_full(&self) -> Result<Vec<SipRoute>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, topology, created_at FROM sip_routes ORDER BY priority, id"
+            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, tenant_id, strip_prefix, add_prefix, created_at FROM sip_routes ORDER BY priority, id"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -142,8 +162,10 @@ impl PostgresCdrStore {
                 weight: row.get(5),
                 time_start: row.get(6),
                 time_end: row.get(7),
-                topology: row.get(8),
-                created_at: row.get(9),
+                tenant_id: row.get(8),
+                strip_prefix: row.get(9),
+                add_prefix: row.get(10),
+                created_at: row.get(11),
             });
         }
         Ok(routes)
@@ -156,7 +178,7 @@ impl PostgresCdrStore {
         offset: i64,
     ) -> Result<Vec<SipRoute>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, topology, created_at \
+            "SELECT id, prefix, priority, gateway_id, cost, weight, time_start, time_end, tenant_id, strip_prefix, add_prefix, created_at \
               FROM sip_routes ORDER BY priority, id LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -174,8 +196,10 @@ impl PostgresCdrStore {
                 weight: row.get(5),
                 time_start: row.get(6),
                 time_end: row.get(7),
-                topology: row.get(8),
-                created_at: row.get(9),
+                tenant_id: row.get(8),
+                strip_prefix: row.get(9),
+                add_prefix: row.get(10),
+                created_at: row.get(11),
             })
             .collect())
     }

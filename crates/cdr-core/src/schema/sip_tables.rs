@@ -119,7 +119,9 @@ CREATE TABLE IF NOT EXISTS sip_routes (
     gateway_id TEXT NOT NULL REFERENCES sip_gateways(id) ON DELETE CASCADE,
     cost DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     weight INTEGER NOT NULL DEFAULT 100,
-    topology JSONB NOT NULL DEFAULT '{}'::jsonb,
+    tenant_id TEXT,
+    strip_prefix TEXT NOT NULL DEFAULT '',
+    add_prefix TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 "#;
@@ -127,8 +129,14 @@ CREATE TABLE IF NOT EXISTS sip_routes (
 pub(crate) const MIGRATION_ADD_ROUTE_WEIGHT: &str =
     "ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS weight INTEGER NOT NULL DEFAULT 100";
 
-pub(crate) const MIGRATION_ADD_ROUTE_TOPOLOGY: &str =
-    "ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS topology JSONB NOT NULL DEFAULT '{}'::jsonb";
+pub(crate) const MIGRATION_ADD_ROUTE_TENANT_ID: &str =
+    "ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS tenant_id TEXT";
+
+pub(crate) const MIGRATION_ADD_ROUTE_STRIP_PREFIX: &str =
+    "ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS strip_prefix TEXT NOT NULL DEFAULT ''";
+
+pub(crate) const MIGRATION_ADD_ROUTE_ADD_PREFIX: &str =
+    "ALTER TABLE sip_routes ADD COLUMN IF NOT EXISTS add_prefix TEXT NOT NULL DEFAULT ''";
 
 pub(crate) const CREATE_SIP_REGISTRATIONS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS sip_registrations (

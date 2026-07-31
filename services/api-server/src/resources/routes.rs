@@ -4,7 +4,6 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
-use serde_json::Value as JsonValue;
 
 use crate::{normalize_page, ApiError, AppState, PageQuery, PaginatedResponse};
 
@@ -18,9 +17,9 @@ pub struct CreateRouteRequest {
     pub weight: Option<i32>,
     pub time_start: Option<String>,
     pub time_end: Option<String>,
-    /// 可视化拓扑编排数据 (节点 + 边 + 视口), 由前端 route-rule-binding 画布保存
-    #[serde(default)]
-    pub topology: Option<JsonValue>,
+    pub tenant_id: Option<String>,
+    pub strip_prefix: Option<String>,
+    pub add_prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,9 +31,9 @@ pub struct UpdateRouteRequest {
     pub weight: Option<i32>,
     pub time_start: Option<String>,
     pub time_end: Option<String>,
-    /// 可视化拓扑编排数据 (节点 + 边 + 视口), 由前端 route-rule-binding 画布保存
-    #[serde(default)]
-    pub topology: Option<JsonValue>,
+    pub tenant_id: Option<String>,
+    pub strip_prefix: Option<String>,
+    pub add_prefix: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -203,7 +202,9 @@ pub async fn create_route(
             weight,
             req.time_start.as_deref(),
             req.time_end.as_deref(),
-            req.topology.as_ref(),
+            req.tenant_id.as_deref(),
+            req.strip_prefix.as_deref(),
+            req.add_prefix.as_deref(),
         )
         .await
         .map_err(|e| ApiError {
@@ -239,7 +240,9 @@ pub async fn update_route(
             weight,
             req.time_start.as_deref(),
             req.time_end.as_deref(),
-            req.topology.as_ref(),
+            req.tenant_id.as_deref(),
+            req.strip_prefix.as_deref(),
+            req.add_prefix.as_deref(),
         )
         .await
         .map_err(|e| ApiError {

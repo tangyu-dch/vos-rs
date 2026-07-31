@@ -109,7 +109,13 @@ pub(crate) async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(MIGRATION_ADD_ROUTE_WEIGHT)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(MIGRATION_ADD_ROUTE_TOPOLOGY)
+    sqlx::query(MIGRATION_ADD_ROUTE_TENANT_ID)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(MIGRATION_ADD_ROUTE_STRIP_PREFIX)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(MIGRATION_ADD_ROUTE_ADD_PREFIX)
         .execute(&mut *tx)
         .await?;
     sqlx::query(CREATE_SIP_REGISTRATIONS_TABLE_SQL)

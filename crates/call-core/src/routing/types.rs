@@ -197,6 +197,15 @@ pub struct Route {
     /// 权重越高，被选为第一候选的概率越大
     /// 默认为 100
     pub weight: u32,
+    /// 所属租户标识 (None 表示通用路由)
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    /// 呼出号码需剪切的前缀
+    #[serde(default)]
+    pub strip_prefix: String,
+    /// 呼出号码需前置添加的前缀
+    #[serde(default)]
+    pub add_prefix: String,
     /// Priority of a signaling endpoint within the same gateway.
     ///
     /// Route priority is evaluated first; this value only orders multiple
@@ -220,6 +229,9 @@ impl Route {
             priority,
             cost: 0.0,
             weight: 100,
+            tenant_id: None,
+            strip_prefix: String::new(),
+            add_prefix: String::new(),
             endpoint_priority: 0,
             target,
         }
@@ -238,6 +250,9 @@ impl Route {
             priority,
             cost,
             weight: 100,
+            tenant_id: None,
+            strip_prefix: String::new(),
+            add_prefix: String::new(),
             endpoint_priority: 0,
             target,
         }
@@ -257,6 +272,9 @@ impl Route {
             priority,
             cost,
             weight,
+            tenant_id: None,
+            strip_prefix: String::new(),
+            add_prefix: String::new(),
             endpoint_priority: 0,
             target,
         }

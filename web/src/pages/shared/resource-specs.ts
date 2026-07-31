@@ -454,3 +454,38 @@ export const tenants: ResourceSpec = {
     { key: 'recording_enabled', label: '启用录音', kind: 'switch', defaultValue: true },
   ],
 };
+
+export const sipRoutes: ResourceSpec = {
+  title: '呼出路由',
+  description: '按开户租户与被叫前缀精准寻路，配置号段改写与落地中继。',
+  path: '/routes',
+  idKey: 'id',
+  createLabel: '新建路由规则',
+  serverFilters: [
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索前缀或目标中继...' },
+    { param: 'tenant_id', label: '所属租户', kind: 'select', optionsResource: 'tenants' },
+  ],
+  fields: [
+    { key: 'prefix', label: '匹配前缀', required: true, placeholder: '例如 86 或 010 (留空为全局默认)' },
+    {
+      key: 'tenant_id',
+      label: '所属租户',
+      kind: 'select',
+      optionsResource: 'tenants',
+      placeholder: '选择开户租户 (留空为公共路由)',
+    },
+    {
+      key: 'gateway_id',
+      label: '目标落地中继',
+      kind: 'select',
+      optionsResource: 'egress-trunks',
+      required: true,
+      placeholder: '选择落地中继线路',
+    },
+    { key: 'strip_prefix', label: '剪切前缀', placeholder: '呼出前剥离的前缀，如 0' },
+    { key: 'add_prefix', label: '加头前缀', placeholder: '呼出前前置添加的前缀，如 86' },
+    { key: 'priority', label: '优先级', kind: 'number', defaultValue: 100, required: true },
+    { key: 'weight', label: '权重', kind: 'number', defaultValue: 100, required: true },
+    { key: 'cost', label: '路由成本', kind: 'number', defaultValue: 0 },
+  ],
+};
