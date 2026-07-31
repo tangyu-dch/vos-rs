@@ -8,20 +8,15 @@ import ErrorBoundary from '@/components/ErrorBoundary';
 import { DashboardPage } from '@/pages/operations/dashboard';
 import { ActiveCallsPage } from '@/pages/operations/active-calls';
 import { CallDetailPage } from '@/pages/operations/call-detail';
-import { ExtensionsPage } from '@/pages/numbers/extensions';
 import { NumbersPage } from '@/pages/numbers/numbers';
 import { DidDestinationsPage } from '@/pages/numbers/did-destinations';
 import { CallerPoolsPage } from '@/pages/numbers/caller-pools';
-import ExtensionDetailPage from '@/pages/numbers/extension-detail';
 import CallerPoolDetailPage from '@/pages/numbers/caller-pool-detail';
 import { AccessTrunksPage } from '@/pages/trunks/access-trunks';
 import { EgressTrunksPage } from '@/pages/trunks/egress-trunks';
 import { EgressGroupsPage } from '@/pages/trunks/egress-groups';
 import TrunkDetailPage from '@/pages/trunks/trunk-detail';
 import EgressGroupDetailPage from '@/pages/trunks/egress-group-detail';
-import AgentsPage from '@/pages/call-center/agents';
-import QueuesPage from '@/pages/call-center/queues';
-import IvrPage from '@/pages/call-center/ivr';
 import { AccessBillingAccountsPage } from '@/pages/billing/access-accounts';
 import { EgressBillingAccountsPage } from '@/pages/billing/egress-accounts';
 import { CreditsPage } from '@/pages/billing/credits';
@@ -119,22 +114,7 @@ function PrivateConsole() {
               </ProtectedPage>
             }
           />
-          <Route
-            path="/extensions"
-            element={
-              <ProtectedPage path="/extensions">
-                <ExtensionsPage />
-              </ProtectedPage>
-            }
-          />
-          <Route
-            path="/extensions/:id"
-            element={
-              <ProtectedPage path="/extensions">
-                <ExtensionDetailPage />
-              </ProtectedPage>
-            }
-          />
+
           <Route
             path="/numbers"
             element={
@@ -215,30 +195,7 @@ function PrivateConsole() {
               </ProtectedPage>
             }
           />
-          <Route
-            path="/queues"
-            element={
-              <ProtectedPage path="/queues">
-                <QueuesPage />
-              </ProtectedPage>
-            }
-          />
-          <Route
-            path="/agents"
-            element={
-              <ProtectedPage path="/agents">
-                <AgentsPage />
-              </ProtectedPage>
-            }
-          />
-          <Route
-            path="/ivr"
-            element={
-              <ProtectedPage path="/ivr">
-                <IvrPage />
-              </ProtectedPage>
-            }
-          />
+
 
           <Route
             path="/routing"
