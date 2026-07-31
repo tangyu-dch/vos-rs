@@ -47,18 +47,18 @@ export const extensions: ResourceSpec = {
 
 export const accessTrunks: ResourceSpec = {
   title: '接入中继',
-  description: '配置客户接入认证、安全防范与主叫匹配规则。',
+  description: '配置对端网关接入或 SIP 注册终端，支持 IP 白名单与动态账号鉴权。',
   path: '/trunks',
   params: { role: 'access' },
   idKey: 'id',
   detailPath: '/trunks/access',
   createLabel: '新建接入中继',
   serverFilters: [
-    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索中继标识或主机地址' },
+    { param: 'q', label: '搜索', kind: 'keyword', placeholder: '搜索中继标识、IP 或注册用户' },
     { param: 'enabled', label: '启用状态', kind: 'status', options: ENABLED_FILTER_OPTIONS },
   ],
   fields: [
-    { key: 'id', label: '中继标识', required: true, placeholder: '例如 customer-a' },
+    { key: 'id', label: '中继标识 / 接入账号', required: true, placeholder: '例如 trunk-customer-a 或 1001' },
     {
       key: 'tenant_id',
       label: '所属租户',
@@ -69,13 +69,13 @@ export const accessTrunks: ResourceSpec = {
     },
     {
       key: 'access_auth_mode',
-      label: '认证方式',
+      label: '接入认证模式',
       kind: 'select',
       required: true,
       options: [
-        { label: '地址白名单', value: 'ip_allowlist' },
-        { label: '注册认证', value: 'digest_register' },
-        { label: '组合认证', value: 'ip_and_digest' },
+        { label: 'IP 白名单对接 (对端 Server/网关网桥)', value: 'ip_allowlist' },
+        { label: 'SIP 账号动态注册 (软电话/分机/终端)', value: 'digest_register' },
+        { label: 'IP + 账号组合双重鉴权', value: 'ip_and_digest' },
       ],
       defaultValue: 'ip_allowlist',
     },
