@@ -320,13 +320,11 @@ WHERE permission_key LIKE 'billing.rates.%'
 pub(crate) const SEED_MENU_GROUPS_SQL: &str = r#"
 INSERT INTO access_menu_groups (group_key, label, icon_key, sort_order) VALUES
 ('operations', '运行监控', 'activity', 10),
-('messages', '智能运维', 'bot', 20),
-('number_pools', '号码路由', 'book', 30),
-('trunks', '中继管理', 'server', 40),
-('call_center', '呼叫中心', 'grid', 50),
-('analytics', '通话分析', 'phone', 60),
-('billing', '计费账务', 'book', 70),
-('security', '系统管理', 'shield', 80)
+('routing', '路由控制', 'fork', 20),
+('trunks', '中继线路', 'server', 30),
+('analytics', '话单分析', 'phone', 40),
+('billing', '计费账务', 'book', 50),
+('security', '系统平台', 'shield', 60)
 ON CONFLICT (group_key) DO UPDATE SET
 label = EXCLUDED.label, icon_key = EXCLUDED.icon_key, sort_order = EXCLUDED.sort_order
 "#;
@@ -336,26 +334,20 @@ INSERT INTO access_menu_items
 (item_key, group_key, label, path, icon_key, permission_key, sort_order) VALUES
 ('overview', 'operations', '运行总览', '/overview', 'dashboard', 'overview.view', 10),
 ('rwi', 'operations', '实时控制', '/rwi', 'radio', 'calls.monitor', 20),
-('copilot', 'messages', '智能助手', '/copilot', 'bot', 'copilot.use', 10),
-('active_calls', 'operations', '活跃通话', '/calls/active', 'phone', 'calls.view', 40),
-('notifications', 'messages', '消息通知', '/notifications', 'bell', 'notifications.view', 20),
-('announcements', 'messages', '公告管理', '/announcements', 'book', 'announcements.view', 30),
-('numbers', 'number_pools', '号码库', '/numbers', 'book', 'numbers.view', 10),
-('caller_pools', 'number_pools', '号码池组', '/caller-pools', 'grid', 'termination.view', 20),
-('did', 'number_pools', '呼入目标', '/did-destinations', 'branch', 'termination.view', 30),
+('active_calls', 'operations', '活跃通话', '/calls/active', 'phone', 'calls.view', 30),
+('copilot', 'operations', '智能助手', '/copilot', 'bot', 'copilot.use', 40),
+('routes', 'routing', '呼出路由', '/routing', 'fork', 'routing.view', 10),
+('numbers', 'routing', '真实号码库', '/numbers', 'book', 'numbers.view', 20),
+('caller_pools', 'routing', '号码池组', '/caller-pools', 'grid', 'termination.view', 30),
+('did', 'routing', '呼入目标', '/did-destinations', 'branch', 'termination.view', 40),
 ('access_trunks', 'trunks', '接入中继', '/trunks/access', 'server', 'trunks.view', 10),
 ('egress_trunks', 'trunks', '落地中继', '/trunks/egress', 'server', 'trunks.view', 20),
 ('egress_groups', 'trunks', '落地分组', '/egress-groups', 'branch', 'termination.view', 30),
-('extensions', 'call_center', '分机管理', '/extensions', 'users', 'extensions.view', 10),
-('routes', 'call_center', '呼出路由', '/routing', 'fork', 'routing.view', 20),
-('ivr', 'call_center', '语音导航', '/ivr', 'branch', 'ivr.view', 30),
-('queues', 'call_center', '呼叫队列', '/queues', 'grid', 'queues.view', 40),
-('agents', 'call_center', '座席监控', '/agents', 'users', 'agents.view', 50),
-('calls', 'analytics', '通话记录', '/calls', 'phone', 'calls.view', 10),
+('calls', 'analytics', '话单 CDR', '/calls', 'phone', 'calls.view', 10),
 ('access_billing_accounts', 'billing', '对接账户', '/billing/access-accounts', 'users', 'billing.access_accounts.view', 10),
 ('egress_billing_accounts', 'billing', '落地账户', '/billing/egress-accounts', 'users', 'billing.egress_accounts.view', 20),
 ('billing_credits', 'billing', '充值记录', '/billing/credits', 'book', 'billing.credits.view', 30),
-('transactions', 'billing', '账务流水', '/billing/transactions', 'book', 'billing.ledger.view', 50),
+('transactions', 'billing', '账务流水', '/billing/transactions', 'book', 'billing.ledger.view', 40),
 ('security', 'security', '安全策略', '/security', 'shield', 'security.view', 10),
 ('infrastructure', 'security', '集群节点', '/infrastructure', 'alert', 'infrastructure.view', 20),
 ('tenants', 'security', '租户管理', '/tenants', 'building', 'tenants.view', 30),
@@ -370,4 +362,4 @@ sort_order = EXCLUDED.sort_order
 "#;
 
 pub(crate) const REMOVE_LEGACY_BILLING_ACCOUNT_MENU_SQL: &str =
-    "DELETE FROM access_menu_items WHERE item_key = 'accounts'";
+    "DELETE FROM access_menu_items WHERE item_key IN ('accounts', 'extensions', 'ivr', 'queues', 'agents', 'notifications', 'announcements'); DELETE FROM access_menu_groups WHERE group_key IN ('call_center', 'messages', 'subscribers', 'number_pools');";
