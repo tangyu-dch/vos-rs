@@ -458,7 +458,7 @@ export const tenants: ResourceSpec = {
 export const sipRoutes: ResourceSpec = {
   title: '呼出路由',
   description: '按开户租户与被叫前缀精准寻路，配置号段改写与落地中继。',
-  path: '/routes',
+  path: '/routing/rules',
   idKey: 'id',
   createLabel: '新建路由规则',
   serverFilters: [
