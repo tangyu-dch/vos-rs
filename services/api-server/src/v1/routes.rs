@@ -12,7 +12,7 @@ use crate::{
     copilot::stream as copilot_stream,
     dashboard, details, llm_configs, notifications, recording,
     resources::{
-        call_center, gateways, ivr_menus, numbers, prompts, registrations, routes, tenants, users,
+        gateways, numbers, registrations, routes, tenants, users,
     },
     system::{audit, system},
     termination, AppState,
@@ -446,45 +446,7 @@ pub(super) fn infrastructure_routes() -> Router<AppState> {
         )
 }
 
-pub(super) fn call_center_routes() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/call-center/queues",
-            get(call_center::list_queues).post(call_center::create_queue),
-        )
-        .route(
-            "/api/v1/call-center/queues/:id",
-            put(call_center::update_queue).delete(call_center::delete_queue),
-        )
-        .route(
-            "/api/v1/call-center/agents",
-            get(call_center::list_agents).post(call_center::create_agent),
-        )
-        .route(
-            "/api/v1/call-center/agents/:id",
-            put(call_center::update_agent).delete(call_center::delete_agent),
-        )
-}
 
-pub(super) fn ivr_routes() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/ivr/menus",
-            get(ivr_menus::list_menus).post(ivr_menus::create_menu),
-        )
-        .route(
-            "/api/v1/ivr/menus/:id",
-            get(ivr_menus::get_menu)
-                .put(ivr_menus::update_menu)
-                .delete(ivr_menus::delete_menu),
-        )
-        .route("/api/v1/ivr/prompts", get(prompts::list_prompts))
-        .route("/api/v1/ivr/prompts/upload", post(prompts::upload_prompt))
-        .route(
-            "/api/v1/ivr/prompts/:filename",
-            get(prompts::get_prompt).delete(prompts::delete_prompt),
-        )
-}
 
 pub(super) fn tenant_routes() -> Router<AppState> {
     Router::new()
